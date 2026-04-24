@@ -1,0 +1,120 @@
+# =============================================================================
+# Render Blueprint for FinMatrix Backend
+# https://render.com/docs/blueprint-spec
+#
+# Deploy:
+#   1. Push this repo to GitHub.
+#   2. On https://dashboard.render.com click "New +" -> "Blueprint".
+#   3. Connect the repo. Render reads THIS file and provisions everything.
+#
+# This creates:
+#   - One web service running our Dockerfile
+#   - One managed Postgres 15 database (free tier = 90 days, then ~$7/mo
+#     for basic-256mb, or swap to external Neon for permanent free)
+#   - All env vars wired. Secrets auto-generated on first deploy.
+# =============================================================================
+
+databases:
+  - name: finmatrix-db
+    plan: free                # 90-day trial; upgrade to basic-256mb when it expires
+    databaseName: finmatrix
+    user: finmatrix_user
+    postgresMajorVersion: "15"
+    region: oregon            # pick: oregon | frankfurt | singapore | ohio | virginia
+
+services:
+  - type: web
+    name: finmatrix-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free                # free web service sleeps after 15m idle; upgrade to starter ($7/mo) for always-on
+    region: oregon            # MUST match the database region
+    healthCheckPath: /api/v1/health
+    # NOTE: preDeployCommand is a paid-plan feature. On the free plan we run
+    # migrations on app startup instead (DB_MIGRATIONS_RUN=true below).
+    # Once you upgrade to Starter ($7/mo) you can uncomment the next line and
+    # set DB_MIGRATIONS_RUN=false for stricter deploy gating:
+    # preDeployCommand: "node dist/database/run-migrations.js"
+    autoDeploy: true
+
+    envVars:
+      # --- Wire DATABASE_URL from the managed DB above ---
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finmatrix-db
+          property: connectionString
+
+      # --- App ---
+      - key: NODE_ENV
+        value: production
+      - key: API_PREFIX
+        value: api/v1
+      - key: APP_NAME
+        value: FinMatrix
+      - key: APP_URL
+        # Render substitutes this with the service's public URL at build time.
+        sync: false
+        # If your Blueprint version doesn't support sync:false for hostnames, set
+        # this manually to https://finmatrix-api.onrender.com after first deploy.
+
+      # --- DB flags ---
+      - key: DB_SYNCHRONIZE
+        value: "false"
+      - key: DB_LOGGING
+        value: "false"
+      - key: DB_SSL
+        value: "true"
+      - key: DB_SSL_REJECT_UNAUTHORIZED
+        value: "false"          # Render managed Postgres uses a self-signed chain
+      - key: DB_POOL_MAX
+        value: "10"
+      - key: DB_POOL_MIN
+        value: "2"
+      - key: DB_MIGRATIONS_RUN
+        value: "true"           # Free plan: run migrations on boot. Flip to false when using preDeployCommand on paid plan.
+
+      # --- JWT (auto-generated on first deploy) ---
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+
+      # --- Security ---
+      - key: BCRYPT_ROUNDS
+        value: "12"
+      - key: CORS_ORIGINS
+        # Replace with your real frontend origin(s) after first deploy, comma-separated.
+        # No wildcards in prod.
+        sync: false
+      - key: THROTTLE_TTL
+        value: "60"
+      - key: THROTTLE_LIMIT
+        value: "100"
+      - key: COOKIE_SECRET
+        generateValue: true
+
+      # --- Logging ---
+      - key: LOG_LEVEL
+        value: info
+      - key: LOG_PRETTY
+        value: "false"
+
+      # --- Uploads (Render fs is ephemeral on restart; use S3 for persistence) ---
+      - key: UPLOAD_MAX_SIZE_MB
+        value: "5"
+      - key: UPLOAD_STORAGE_PATH
+        value: /tmp/storage
+
+      # --- Email (disabled until you configure SMTP) ---
+      - key: EMAIL_ENABLED
+        value: "false"
+
+      # --- Feature flags ---
+      - key: SWAGGER_ENABLED
+        value: "false"
+      - key: SWAGGER_PATH
+        value: api/docs
