@@ -1,0 +1,31 @@
+{
+  "name": "FinMatrix Backend",
+  "description": "Production-ready NestJS backend for FinMatrix",
+  "repository": "https://github.com/yourusername/finmatrix-backend",
+  "keywords": ["nestjs", "postgresql", "accounting"],
+  "buildpacks": [
+    { "url": "https://github.com/heroku/heroku-buildpack-nodejs" }
+  ],
+  "addons": [
+    "heroku-postgresql:mini"
+  ],
+  "env": {
+    "NODE_ENV": { "value": "production" },
+    "API_PREFIX": { "value": "api/v1" },
+    "BCRYPT_ROUNDS": { "value": "12" },
+    "JWT_ACCESS_EXPIRES_IN": { "value": "15m" },
+    "JWT_REFRESH_EXPIRES_IN": { "value": "30d" },
+    "THROTTLE_TTL": { "value": "60" },
+    "THROTTLE_LIMIT": { "value": "100" },
+    "LOG_LEVEL": { "value": "info" },
+    "LOG_PRETTY": { "value": "false" },
+    "SWAGGER_ENABLED": { "value": "false" }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "stack": "heroku-24"
+}
