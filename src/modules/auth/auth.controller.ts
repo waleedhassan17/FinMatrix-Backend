@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import {
@@ -23,6 +24,7 @@ export class AuthController {
 
   @Post('signup')
   @PublicRoute()
+  @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
   @ApiOperation({ summary: 'Register a new user (admin or delivery).' })
   signup(@Body() dto: SignupDto) {
     return this.auth.signup(dto);
@@ -31,6 +33,7 @@ export class AuthController {
   @Post('signin')
   @PublicRoute()
   @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOperation({ summary: 'Authenticate with email + password.' })
   signin(@Body() dto: SigninDto) {
     return this.auth.signin(dto);
@@ -39,6 +42,7 @@ export class AuthController {
   @Post('forgot-password')
   @PublicRoute()
   @HttpCode(200)
+  @Throttle({ default: { limit: 3, ttl: 900_000 } })
   @ApiOperation({ summary: 'Request password reset link.' })
   forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.auth.forgotPassword(dto);
@@ -47,6 +51,7 @@ export class AuthController {
   @Post('reset-password')
   @PublicRoute()
   @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @ApiOperation({ summary: 'Validate reset token and set a new password.' })
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto);

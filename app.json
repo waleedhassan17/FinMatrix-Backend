@@ -1,8 +1,8 @@
 {
   "name": "FinMatrix Backend",
-  "description": "Production-ready NestJS backend for FinMatrix",
+  "description": "Production-ready NestJS backend for FinMatrix (accounting + delivery).",
   "repository": "https://github.com/yourusername/finmatrix-backend",
-  "keywords": ["nestjs", "postgresql", "accounting"],
+  "keywords": ["nestjs", "postgresql", "accounting", "typeorm"],
   "buildpacks": [
     { "url": "https://github.com/heroku/heroku-buildpack-nodejs" }
   ],
@@ -10,16 +10,40 @@
     "heroku-postgresql:mini"
   ],
   "env": {
-    "NODE_ENV": { "value": "production" },
-    "API_PREFIX": { "value": "api/v1" },
-    "BCRYPT_ROUNDS": { "value": "12" },
-    "JWT_ACCESS_EXPIRES_IN": { "value": "15m" },
+    "NODE_ENV":               { "value": "production" },
+    "API_PREFIX":             { "value": "api/v1" },
+    "APP_NAME":               { "value": "FinMatrix" },
+    "APP_URL":                { "description": "Public HTTPS URL of the app (e.g. https://finmatrix.herokuapp.com). REQUIRED." },
+
+    "DB_SYNCHRONIZE":               { "value": "false" },
+    "DB_LOGGING":                   { "value": "false" },
+    "DB_SSL":                       { "value": "true" },
+    "DB_SSL_REJECT_UNAUTHORIZED":   { "value": "false" },
+    "DB_POOL_MAX":                  { "value": "10" },
+    "DB_POOL_MIN":                  { "value": "2" },
+    "DB_MIGRATIONS_RUN":            { "value": "false", "description": "Migrations run via Procfile release phase; keep false." },
+
+    "JWT_SECRET":             { "generator": "secret", "description": "32+ char random; leave as generator unless you have your own." },
+    "JWT_ACCESS_EXPIRES_IN":  { "value": "15m" },
+    "JWT_REFRESH_SECRET":     { "generator": "secret", "description": "MUST differ from JWT_SECRET." },
     "JWT_REFRESH_EXPIRES_IN": { "value": "30d" },
-    "THROTTLE_TTL": { "value": "60" },
-    "THROTTLE_LIMIT": { "value": "100" },
-    "LOG_LEVEL": { "value": "info" },
-    "LOG_PRETTY": { "value": "false" },
-    "SWAGGER_ENABLED": { "value": "false" }
+
+    "BCRYPT_ROUNDS":          { "value": "12" },
+    "CORS_ORIGINS":           { "description": "Comma-separated list of your frontend origins, e.g. https://app.finmatrix.pk" },
+    "THROTTLE_TTL":           { "value": "60" },
+    "THROTTLE_LIMIT":         { "value": "100" },
+    "COOKIE_SECRET":          { "generator": "secret" },
+
+    "LOG_LEVEL":              { "value": "info" },
+    "LOG_PRETTY":             { "value": "false" },
+
+    "UPLOAD_MAX_SIZE_MB":     { "value": "5" },
+    "UPLOAD_STORAGE_PATH":    { "value": "/tmp/storage", "description": "Heroku fs is ephemeral; for real uploads use S3." },
+
+    "EMAIL_ENABLED":          { "value": "false" },
+
+    "SWAGGER_ENABLED":        { "value": "false" },
+    "SWAGGER_PATH":           { "value": "api/docs" }
   },
   "formation": {
     "web": {
@@ -27,5 +51,8 @@
       "size": "basic"
     }
   },
-  "stack": "heroku-24"
+  "stack": "heroku-24",
+  "scripts": {
+    "postdeploy": "node dist/database/run-migrations.js"
+  }
 }

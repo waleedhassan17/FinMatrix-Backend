@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import * as PDFDocument from 'pdfkit';
+import PDFDocument from 'pdfkit';
 import { Readable } from 'stream';
 import { Invoice } from './entities/invoice.entity';
 import { Customer } from '../customers/entities/customer.entity';

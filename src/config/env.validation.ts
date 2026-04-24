@@ -7,11 +7,15 @@ export const envValidationSchema = Joi.object({
   APP_NAME: Joi.string().default('FinMatrix'),
   APP_URL: Joi.string().uri().required(),
 
-  DB_HOST: Joi.string().required(),
+  // Accept either a single DATABASE_URL (Heroku/Render/Neon/...) OR the
+  // discrete DB_* fields. When DATABASE_URL is set the discrete fields are
+  // ignored by database.config.ts.
+  DATABASE_URL: Joi.string().uri({ scheme: ['postgres', 'postgresql'] }).optional(),
+  DB_HOST: Joi.string().when('DATABASE_URL', { is: Joi.exist(), then: Joi.optional(), otherwise: Joi.required() }),
   DB_PORT: Joi.number().default(5432),
-  DB_USERNAME: Joi.string().required(),
-  DB_PASSWORD: Joi.string().min(12).required(),
-  DB_NAME: Joi.string().required(),
+  DB_USERNAME: Joi.string().when('DATABASE_URL', { is: Joi.exist(), then: Joi.optional(), otherwise: Joi.required() }),
+  DB_PASSWORD: Joi.string().min(12).when('DATABASE_URL', { is: Joi.exist(), then: Joi.optional(), otherwise: Joi.required() }),
+  DB_NAME: Joi.string().when('DATABASE_URL', { is: Joi.exist(), then: Joi.optional(), otherwise: Joi.required() }),
   DB_SYNCHRONIZE: Joi.boolean().default(false),
   DB_LOGGING: Joi.boolean().default(false),
   DB_SSL: Joi.boolean().default(false),

@@ -6,13 +6,13 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: finmatrix
-      POSTGRES_USER: finmatrix_user
-      POSTGRES_PASSWORD: finmatrix_pass_change_me
+      POSTGRES_DB: ${DB_NAME:-finmatrix}
+      POSTGRES_USER: ${DB_USERNAME:-finmatrix_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-finmatrix_pass_change_me}
     volumes:
       - finmatrix_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U finmatrix_user -d finmatrix"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-finmatrix_user} -d ${DB_NAME:-finmatrix}"]
       interval: 5s
       timeout: 5s
       retries: 5
