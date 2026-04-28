@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post,
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import { CreateInventoryUpdateRequestDto, ReviewRequestDto } from './dto/inventory-approval.dto';
@@ -46,9 +47,10 @@ export class InventoryApprovalsController {
   @Roles('admin', 'staff')
   review(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewRequestDto,
   ) {
-    return this.svc.review(companyId, id, dto, 'user-id');
+    return this.svc.review(companyId, id, dto, user.id);
   }
 }

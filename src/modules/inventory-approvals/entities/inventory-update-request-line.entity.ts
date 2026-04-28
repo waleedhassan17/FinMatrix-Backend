@@ -20,6 +20,9 @@ export class InventoryUpdateRequestLine {
   @Column({ type: 'uuid', name: 'item_id' })
   itemId!: string;
 
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'item_name' })
+  itemName!: string | null;
+
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'before_qty' })
   beforeQty!: string;
 

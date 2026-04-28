@@ -14,7 +14,7 @@
 | Default response envelope | `{ "success": true, "data": <payload> }` |
 | Error envelope | `{ "success": false, "error": { "code": "...", "message": "..." } }` with a non-2xx HTTP status |
 | Content type | `application/json` (unless noted — e.g. PDF endpoints return `application/pdf`) |
-| Total endpoints | **170** across **30 modules** |
+| Total endpoints | **177** across **30 modules** |
 | Rate limits | Global: 100 req/min per IP. `/auth/signin`: 5/min. `/auth/signup`: 3/hour. `/auth/forgot-password`: 3/15min. `/auth/reset-password`: 5/15min. Over-limit returns **`429 Too Many Requests`**. |
 
 ---
@@ -279,6 +279,28 @@ Below is the list of every route, grouped by module. `{param}` = path parameter.
 | PATCH  | `/shadow-inventory/{id}` | AUTH+COMPANY | Update. |
 | POST   | `/shadow-inventory/sync/{personnelId}` | AUTH+COMPANY | Sync from central → personnel's shadow copy. |
 
+### 📸 `inventory-update-requests` — Bill Photo Capture & Approval
+
+Replaces the legacy digital-signature delivery proof with a photo of the customer-signed bill. The DP uploads the photo, creating a pending `InventoryUpdateRequest`. Admin reviews; real inventory only mutates on approval.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST   | `/deliveries/{id}/bill-photo` | AUTH+COMPANY (DP) | Upload bill photo + submit inventory changes for approval. Multipart: `photo` (image, max 8 MB), `signedBy`, `source`, `changes` (JSON). Returns `{ requestId, deliveryId, photoUrl, uploadedAt }`. |
+| GET    | `/inventory-update-requests` | AUTH+COMPANY (admin) | Paginated list of requests. Filter: `?status=pending\|approved\|rejected\|all&page=1&pageSize=20`. Returns `{ items[], total, page, pageSize }` with nested `changes[]` and `proof` block. |
+| GET    | `/inventory-update-requests/{id}` | AUTH+COMPANY (admin or owning DP) | Single request detail. Same shape as list item. |
+| POST   | `/inventory-update-requests/{id}/approve` | AUTH+COMPANY (admin) | Approve → mutates real inventory, marks shadow synced. Body: `{ reviewerComment? }`. 409 if not pending, 422 if negative stock. |
+| POST   | `/inventory-update-requests/{id}/reject` | AUTH+COMPANY (admin) | Reject → no inventory mutation. Body: `{ reviewerComment }` (min 5 chars). 409 if not pending. |
+| GET    | `/inventory-update-requests/{id}/bill-photo` | AUTH+COMPANY | Stream the stored bill-photo image. Returns `image/jpeg`. |
+
+**Errors:** `400` missing fields, `403` not assigned, `404` not found, `409` duplicate / already reviewed, `413` file too large, `415` unsupported image type, `422` negative stock.
+
+**Notifications emitted:**
+| Trigger | Target | Category | Title |
+|---|---|---|---|
+| Bill photo submitted | admin | `inventory_approvals` | "Bill photo received — review needed" |
+| Approved | owning DP | `approval_results` | "Inventory request approved" |
+| Rejected | owning DP | `approval_results` | "Inventory request rejected" |
+
 ### 🚚 `deliveries` · `delivery-personnel` · `agencies`
 
 | Method | Path | Auth | Purpose |
@@ -469,4 +491,5 @@ Bump this doc whenever an endpoint shape changes. Breaking changes require a ver
 
 | Date | Change |
 |---|---|
+| 2026-04-29 | Added 7 endpoints: bill-photo capture (`POST /deliveries/{id}/bill-photo`), inventory-update-requests CRUD (`GET` list, `GET` single, `POST` approve, `POST` reject, `GET` bill-photo stream). Total: 177. |
 | 2026-04-24 | Initial 170-endpoint reference. |

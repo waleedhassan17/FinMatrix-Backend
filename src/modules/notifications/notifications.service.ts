@@ -34,4 +34,51 @@ export class NotificationsService {
     const count = await this.repo.count({ where: { userId, isRead: false } });
     return { count };
   }
+
+  /**
+   * Create a notification row for a single user. Used by other modules
+   * (deliveries, inventory-approvals, ...). Errors are swallowed and logged
+   * because notification delivery should never break the calling business
+   * transaction.
+   */
+  async create(input: {
+    companyId: string;
+    userId: string;
+    type: string;
+    title: string;
+    message: string;
+    data?: Record<string, unknown>;
+  }): Promise<Notification | null> {
+    try {
+      const row = this.repo.create({
+        companyId: input.companyId,
+        userId: input.userId,
+        type: input.type,
+        title: input.title,
+        message: input.message,
+        data: input.data ?? null,
+        isRead: false,
+        readAt: null,
+      });
+      return await this.repo.save(row);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[notifications] create failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Broadcast to all users of a given role within a company.
+   */
+  async createForRole(_companyId: string, _role: string, _payload: {
+    type: string;
+    title: string;
+    message: string;
+    data?: Record<string, unknown>;
+  }): Promise<void> {
+    // Resolution requires a UsersRepository lookup; left as a TODO so we
+    // don't introduce a circular dep here. Callers that already know the
+    // target user IDs should use create() directly.
+  }
 }

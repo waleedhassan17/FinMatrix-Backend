@@ -42,6 +42,19 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
 
+  // -------- Bill-photo capture (replaces digital signature) --------
+  @Column({ type: 'text', nullable: true, name: 'bill_photo_url' })
+  billPhotoUrl!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'bill_photo_storage_key' })
+  billPhotoStorageKey!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'bill_photo_captured_at' })
+  billPhotoCapturedAt!: Date | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'bill_signed_by' })
+  billSignedBy!: string | null;
+
   @OneToMany(() => DeliveryItem, (i) => i.delivery, { cascade: true })
   items!: DeliveryItem[];
 }

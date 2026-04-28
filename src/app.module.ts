@@ -51,6 +51,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { HealthModule } from './modules/health/health.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
+import { StorageModule } from './common/storage/storage.module';
 
 @Module({
   imports: [
@@ -108,6 +109,7 @@ import { envValidationSchema } from './config/env.validation';
     SettingsModule,
     ReportsModule,
     HealthModule,
+    StorageModule,
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
