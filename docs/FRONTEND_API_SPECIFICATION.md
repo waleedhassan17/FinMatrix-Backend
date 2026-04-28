@@ -1,5 +1,8 @@
 # FinMatrix: Master Frontend API Specification
 
+> **Base URL:** `https://finmatrix-api.onrender.com`
+> **Swagger API Docs:** `https://finmatrix-api.onrender.com/api/docs`
+
 This document is the **single source of truth** for all REST API endpoints required by the FinMatrix React Native frontend.
 
 ---
