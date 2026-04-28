@@ -79,4 +79,27 @@ export class AuthController {
   signout(@CurrentUser() user: AuthenticatedUser) {
     return this.auth.signout(user.id);
   }
+
+  @Post('verify-email')
+  @PublicRoute()
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Verify user email with token.' })
+  verifyEmail(@Body('token') token: string) {
+    return this.auth.verifyEmail(token);
+  }
+
+  @Post('resend-verification')
+  @PublicRoute()
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Resend verification email.' })
+  resendVerification(@Body('email') email: string) {
+    return this.auth.resendVerification(email);
+  }
+
+  @Get('check-verification')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Check if current user email is verified.' })
+  checkVerification(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.checkVerification(user.id);
+  }
 }

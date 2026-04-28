@@ -4,7 +4,7 @@ import { Repository, DataSource } from 'typeorm';
 import { BankAccount } from './entities/bank-account.entity';
 import { BankTransaction } from './entities/bank-transaction.entity';
 import { Reconciliation } from './entities/reconciliation.entity';
-import { CreateBankAccountDto, UpdateBankAccountDto, CreateBankTransactionDto, ReconcileDto, BankAccountQueryDto } from './dto/banking.dto';
+import { CreateBankAccountDto, UpdateBankAccountDto, CreateBankTransactionDto, ReconcileDto, BankAccountQueryDto, BankTransactionQueryDto, CreateTransferDto } from './dto/banking.dto';
 import { toDecimal } from '../../common/utils/money.util';
 
 @Injectable()
@@ -57,6 +57,83 @@ export class BankingService {
     return { data, total, page, limit };
   }
 
+  async listAllTransactions(companyId: string, query: BankTransactionQueryDto, page: number, limit: number) {
+    const qb = this.txRepo.createQueryBuilder('t').where('t.companyId = :cid', { cid: companyId });
+    if (query.bankAccountId) {
+      qb.andWhere('t.bankAccountId = :bid', { bid: query.bankAccountId });
+    }
+    if (query.isReconciled !== undefined) {
+      qb.andWhere('t.isCleared = :cleared', { cleared: query.isReconciled });
+    }
+    qb.orderBy('t.date', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
+  }
+
+  async listUnreconciledTransactions(companyId: string, bankAccountId?: string) {
+    const qb = this.txRepo.createQueryBuilder('t')
+      .where('t.companyId = :cid AND t.isCleared = false', { cid: companyId })
+      .orderBy('t.date', 'ASC');
+    if (bankAccountId) {
+      qb.andWhere('t.bankAccountId = :bid', { bid: bankAccountId });
+    }
+    const data = await qb.getMany();
+    return { data, total: data.length };
+  }
+
+  async createTransfer(companyId: string, dto: CreateTransferDto, userId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const accRepo = em.getRepository(BankAccount);
+      const txRepo = em.getRepository(BankTransaction);
+
+      const fromAccount = await accRepo.findOne({ where: { id: dto.fromAccountId, companyId } });
+      const toAccount = await accRepo.findOne({ where: { id: dto.toAccountId, companyId } });
+
+      if (!fromAccount || !toAccount) {
+        throw new NotFoundException('One or both bank accounts not found');
+      }
+
+      const amount = toDecimal(dto.amount);
+      const fromBalance = toDecimal(fromAccount.balance).minus(amount);
+      const toBalance = toDecimal(toAccount.balance).plus(amount);
+
+      fromAccount.balance = fromBalance.toFixed(4);
+      toAccount.balance = toBalance.toFixed(4);
+
+      await accRepo.save([fromAccount, toAccount]);
+
+      const fromTx = txRepo.create({
+        companyId,
+        bankAccountId: dto.fromAccountId,
+        date: dto.date,
+        type: 'transfer' as any,
+        payee: toAccount.name,
+        amount: dto.amount,
+        balance: fromBalance.toFixed(4),
+        memo: dto.memo ?? 'Outgoing transfer',
+        isCleared: false,
+      } as any);
+
+      const toTx = txRepo.create({
+        companyId,
+        bankAccountId: dto.toAccountId,
+        date: dto.date,
+        type: 'transfer' as any,
+        payee: fromAccount.name,
+        amount: dto.amount,
+        balance: toBalance.toFixed(4),
+        memo: dto.memo ?? 'Incoming transfer',
+        isCleared: false,
+      } as any);
+
+      await txRepo.save(fromTx);
+      await txRepo.save(toTx);
+
+      return { fromTransaction: fromTx, toTransaction: toTx, journalEntry: null };
+    });
+  }
+
   async createTransaction(companyId: string, dto: CreateBankTransactionDto, userId: string) {
     return this.dataSource.transaction(async (em) => {
       const accRepo = em.getRepository(BankAccount);
@@ -99,31 +176,42 @@ export class BankingService {
       const account = await accRepo.findOne({ where: { id: bankAccountId, companyId } });
       if (!account) throw new NotFoundException('Bank account not found');
 
-      const txs = await txRepo.find({
-        where: { companyId, bankAccountId, isCleared: false },
-        order: { date: 'ASC' },
-      });
+      let difference = toDecimal(dto.endingBalance).minus(toDecimal(dto.beginningBalance));
 
-      for (const tx of txs) {
-        if (tx.date <= dto.endDate) {
+      if (dto.clearedTransactionIds && dto.clearedTransactionIds.length > 0) {
+        const txs = await txRepo.createQueryBuilder('t')
+          .where('t.companyId = :cid AND t.bankAccountId = :bid AND t.id IN (:...ids)', { 
+            cid: companyId, 
+            bid: bankAccountId,
+            ids: dto.clearedTransactionIds 
+          }).getMany();
+
+        for (const tx of txs) {
           tx.isCleared = true;
           tx.clearedDate = new Date();
-          await txRepo.save(tx);
+          
+          if (tx.type === 'expense' || tx.type === 'fee' || tx.type === 'check') {
+             difference = difference.plus(toDecimal(tx.amount));
+          } else {
+             difference = difference.minus(toDecimal(tx.amount));
+          }
         }
+        await txRepo.save(txs);
       }
 
       const rec = recRepo.create({
         companyId,
         bankAccountId,
-        statementDate: dto.endDate,
-        statementBeginningBalance: account.balance,
+        statementDate: dto.statementDate,
+        statementBeginningBalance: dto.beginningBalance,
         statementEndingBalance: dto.endingBalance,
         clearedBalance: account.balance,
-        difference: '0',
+        difference: difference.toFixed(4),
         status: 'completed',
         completedAt: new Date(),
         completedBy: userId,
       } as any);
+
       account.lastReconciled = new Date();
       await accRepo.save(account);
       return recRepo.save(rec);

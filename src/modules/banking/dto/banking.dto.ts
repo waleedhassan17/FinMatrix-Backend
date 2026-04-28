@@ -23,11 +23,29 @@ export class CreateBankTransactionDto {
   @ApiProperty() @IsNumberString() amount!: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() memo?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isReconciled?: boolean;
+}
+
+export class BankTransactionQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID() bankAccountId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isReconciled?: boolean;
+}
+
+export class CreateTransferDto {
+  @ApiProperty() @IsUUID() fromAccountId!: string;
+  @ApiProperty() @IsUUID() toAccountId!: string;
+  @ApiProperty() @IsNumberString() amount!: string;
+  @ApiProperty() @IsString() date!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() memo?: string;
 }
 
 export class ReconcileDto {
-  @ApiProperty() @IsString() endDate!: string;
+  @ApiProperty() @IsUUID() bankAccountId!: string;
+  @ApiProperty() @IsString() statementDate!: string;
+  @ApiProperty() @IsNumberString() beginningBalance!: string;
   @ApiProperty() @IsNumberString() endingBalance!: string;
+  @ApiProperty() @IsString({ each: true }) clearedTransactionIds!: string[];
+  @ApiPropertyOptional() @IsOptional() @IsUUID() adjustmentTransactionId?: string | null;
 }
 
 export class BankAccountQueryDto {

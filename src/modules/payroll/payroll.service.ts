@@ -98,4 +98,26 @@ export class PayrollService {
     run.status = dto.status as any;
     return this.runRepo.save(run);
   }
+
+  async getWorksheet(companyId: string) {
+    const empRepo = this.dataSource.getRepository(Employee);
+    const employees = await empRepo.find({ where: { companyId, status: 'active' } });
+    
+    return employees.map(emp => {
+      const gross = toDecimal(emp.salary);
+      // Rough default deductions for the worksheet estimation
+      const tax = gross.times(0.15); // 15% estimated tax
+      const net = gross.minus(tax);
+      return {
+        employeeId: emp.id,
+        firstName: emp.firstName,
+        lastName: emp.lastName,
+        department: emp.department,
+        baseSalary: emp.salary,
+        estimatedGross: gross.toFixed(4),
+        estimatedTaxes: tax.toFixed(4),
+        estimatedNet: net.toFixed(4),
+      };
+    });
+  }
 }

@@ -4,7 +4,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { BankingService } from './banking.service';
-import { CreateBankAccountDto, UpdateBankAccountDto, CreateBankTransactionDto, ReconcileDto, BankAccountQueryDto } from './dto/banking.dto';
+import { CreateBankAccountDto, UpdateBankAccountDto, CreateBankTransactionDto, ReconcileDto, BankAccountQueryDto, BankTransactionQueryDto, CreateTransferDto } from './dto/banking.dto';
 
 @ApiTags('Banking')
 @ApiBearerAuth()
@@ -72,6 +72,26 @@ export class BankingController {
     return this.svc.listTransactions(companyId, id, page, limit);
   }
 
+  @Get('transactions')
+  @Roles('admin', 'staff')
+  listAllTransactions(
+    @CurrentCompany() companyId: string,
+    @Query() query: BankTransactionQueryDto,
+    @Query('page', ParseIntPipe) page = 1,
+    @Query('limit', ParseIntPipe) limit = 20,
+  ) {
+    return this.svc.listAllTransactions(companyId, query, page, limit);
+  }
+
+  @Post('transfers')
+  @Roles('admin', 'staff')
+  createTransfer(
+    @CurrentCompany() companyId: string,
+    @Body() dto: CreateTransferDto,
+  ) {
+    return this.svc.createTransfer(companyId, dto, 'user-id');
+  }
+
   @Post('transactions')
   @Roles('admin', 'staff')
   createTransaction(
@@ -81,14 +101,22 @@ export class BankingController {
     return this.svc.createTransaction(companyId, dto, 'user-id');
   }
 
-  @Post('accounts/:id/reconcile')
+  @Get('reconciliations/unreconciled')
   @Roles('admin', 'staff')
-  reconcile(
+  listUnreconciledTransactions(
     @CurrentCompany() companyId: string,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: { bankAccountId?: string },
+  ) {
+    return this.svc.listUnreconciledTransactions(companyId, query.bankAccountId);
+  }
+
+  @Post('reconciliations')
+  @Roles('admin', 'staff')
+  reconcileGlobal(
+    @CurrentCompany() companyId: string,
     @Body() dto: ReconcileDto,
   ) {
-    return this.svc.reconcile(companyId, id, dto, 'user-id');
+    return this.svc.reconcile(companyId, dto.bankAccountId, dto, 'user-id');
   }
 
   @Get('accounts/:id/reconciliations')

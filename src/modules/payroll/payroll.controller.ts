@@ -23,9 +23,15 @@ export class PayrollController {
     return this.svc.list(companyId, page, limit);
   }
 
-  @Post()
+  @Get('worksheet')
   @Roles('admin', 'staff')
-  create(
+  worksheet(@CurrentCompany() companyId: string) {
+    return this.svc.getWorksheet(companyId);
+  }
+
+  @Post('runs')
+  @Roles('admin', 'staff')
+  createRun(
     @CurrentCompany() companyId: string,
     @Body() dto: CreatePayrollRunDto,
   ) {

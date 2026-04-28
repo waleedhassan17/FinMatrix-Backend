@@ -22,6 +22,7 @@ import { CreditMemosService } from './credit-memos.service';
 import {
   ApplyCreditMemoDto,
   CreateCreditMemoDto,
+  RefundCreditMemoDto,
 } from './dto/credit-memo.dto';
 import {
   ParsePaginationPipe,
@@ -61,5 +62,15 @@ export class CreditMemosController {
     @Body() dto: ApplyCreditMemoDto,
   ) {
     return this.service.apply(companyId, creditId, dto);
+  }
+
+  @Post(':creditId/refund')
+  @Roles('admin')
+  refund(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+    @Body() dto: RefundCreditMemoDto,
+  ) {
+    return this.service.refund(companyId, creditId, dto);
   }
 }

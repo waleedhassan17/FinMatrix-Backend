@@ -34,6 +34,12 @@ import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { InvoiceLineItem } from '../../modules/invoices/entities/invoice-line-item.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
 import { BillLineItem } from '../../modules/bills/entities/bill-line-item.entity';
+import { SalesOrder } from '../../modules/sales-orders/entities/sales-order.entity';
+import { PurchaseOrder } from '../../modules/purchase-orders/entities/purchase-order.entity';
+import { Budget } from '../../modules/budgets/entities/budget.entity';
+import { PayrollRun } from '../../modules/payroll/entities/payroll-run.entity';
+import { Employee } from '../../modules/employees/entities/employee.entity';
+import { Paystub } from '../../modules/payroll/entities/paystub.entity';
 import {
   DEFAULT_CHART_OF_ACCOUNTS,
 } from '../../modules/accounts/accounts.constants';
@@ -60,6 +66,7 @@ async function run() {
       InventoryItem, Delivery, DeliveryItem,
       DeliveryPersonnelProfile, ShadowInventorySnapshot, Agency,
       Invoice, InvoiceLineItem, Bill, BillLineItem,
+      SalesOrder, PurchaseOrder, Budget, PayrollRun, Employee, Paystub,
     ],
     synchronize: true,
   });
@@ -512,6 +519,79 @@ async function run() {
     console.log(`  DP #2:  haseeb@metromatrix.com    / ${DP_PASSWORD}`);
     console.log(`  Company invite code: ${company.inviteCode}`);
     console.log('  ─────────────────────────────────────────────');
+
+    // =================================================================
+    // 12. DUMMY SALES ORDERS, PURCHASE ORDERS, BUDGETS, PAYROLL
+    // =================================================================
+    const allCusts = await m.find(Customer, { where: { companyId: company.id } });
+    const allVends = await m.find(Vendor, { where: { companyId: company.id } });
+
+    const soCount = await m.countBy(SalesOrder, { companyId: company.id });
+    if (soCount === 0 && allCusts.length > 0) {
+      await m.save(m.create(SalesOrder, {
+        companyId: company.id,
+        customerId: allCusts[0].id,
+        orderDate: new Date(),
+        status: 'draft',
+        subtotal: '5000.00',
+        taxAmount: '500.00',
+        total: '5500.00'
+      } as any));
+    }
+
+    const poCount = await m.countBy(PurchaseOrder, { companyId: company.id });
+    if (poCount === 0 && allVends.length > 0) {
+      await m.save(m.create(PurchaseOrder, {
+        companyId: company.id,
+        vendorId: allVends[0].id,
+        orderDate: new Date(),
+        status: 'draft',
+        subtotal: '2000.00',
+        taxAmount: '200.00',
+        total: '2200.00'
+      } as any));
+    }
+
+    const budgetCount = await m.countBy(Budget, { companyId: company.id });
+    if (budgetCount === 0) {
+      await m.save(m.create(Budget, {
+        companyId: company.id,
+        name: 'Annual Operations 2026',
+        fiscalYear: 2026,
+        status: 'active'
+      } as any));
+    }
+
+    const empCount = await m.countBy(Employee, { companyId: company.id });
+    if (empCount === 0) {
+      const emp = await m.save(m.create(Employee, {
+        companyId: company.id,
+        firstName: 'John',
+        lastName: 'Doe',
+        email: 'john.doe@metromatrix.com',
+        phone: '555-1234',
+        department: 'Operations',
+        jobTitle: 'Manager',
+        employmentType: 'full_time',
+        salary: '60000.00',
+        status: 'active',
+        hireDate: new Date()
+      } as any));
+
+      await m.save(m.create(PayrollRun, {
+        companyId: company.id,
+        payPeriod: 'April 2026',
+        periodStart: new Date('2026-04-01'),
+        periodEnd: new Date('2026-04-30'),
+        payDate: new Date('2026-04-30'),
+        status: 'draft',
+        totalGross: '5000.00',
+        totalDeductions: '750.00',
+        totalNet: '4250.00',
+        createdBy: admin.id,
+      } as any));
+    }
+
     console.log('\n  Data created:');
     console.log('    • 3 users (1 admin, 2 delivery personnel)');
     console.log('    • 1 company (MetroMatrix — FMCG Distribution)');

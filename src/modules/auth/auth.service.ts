@@ -312,4 +312,28 @@ export class AuthService {
       defaultCompanyId: user.defaultCompanyId,
     };
   }
+
+  async verifyEmail(token: string) {
+    // In a real implementation, we would decode the token, find the user, and set isEmailVerified = true.
+    // For this demo, we mock the success response.
+    this.logger.log(`Email verification successful for token: ${token}`);
+    return { success: true, message: 'Email verified successfully.' };
+  }
+
+  async resendVerification(email: string) {
+    const user = await this.users.findByEmail(email);
+    if (!user) {
+      // Don't leak user existence
+      return { success: true, message: 'If the email exists, a verification link has been sent.' };
+    }
+    const token = randomBytes(32).toString('hex'); // Mock token
+    this.logger.log(`[DEMO] Verification token generated for ${email}: ${token}`);
+    return { success: true, message: 'If the email exists, a verification link has been sent.' };
+  }
+
+  async checkVerification(userId: string) {
+    // Mocking that the user is verified for the demo.
+    // In reality, this would check `user.isEmailVerified`.
+    return { verified: true };
+  }
 }

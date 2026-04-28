@@ -36,3 +36,10 @@ export class ApplyCreditMemoDto {
   @ApiProperty() @IsUUID() invoiceId!: string;
   @ApiProperty() @IsNumberString() amount!: string;
 }
+
+export class RefundCreditMemoDto {
+  @ApiProperty() @IsString() method!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
+  @ApiProperty() @IsNumberString() amount!: string;
+  @ApiProperty() @IsDateString() date!: string;
+}

@@ -32,7 +32,7 @@ import {
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
-  @Post('receive')
+  @Post()
   @Roles('admin')
   @ApiOperation({
     summary: 'Receive customer payment. Auto-applies if no applications given.',

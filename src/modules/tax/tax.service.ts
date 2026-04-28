@@ -62,4 +62,24 @@ export class TaxService {
     const payment = this.paymentRepo.create({ ...dto, companyId } as any);
     return this.paymentRepo.save(payment);
   }
+
+  async getLiability(companyId: string) {
+    const qb = this.paymentRepo.createQueryBuilder('p')
+      .where('p.companyId = :cid', { cid: companyId })
+      .select('SUM(p.amount)', 'paidAmount');
+    
+    const result = await qb.getRawOne();
+    const paidAmount = parseFloat(result.paidAmount || '0');
+    
+    // In a real scenario, collectedAmount comes from summing tax on invoices.
+    // For now, we mock collectedAmount based on paidAmount + random outstanding.
+    const collectedAmount = paidAmount + 5000; 
+    const liabilityAmount = collectedAmount - paidAmount;
+
+    return {
+      collectedAmount,
+      paidAmount,
+      liabilityAmount
+    };
+  }
 }

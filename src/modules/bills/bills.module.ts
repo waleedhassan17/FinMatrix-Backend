@@ -7,6 +7,7 @@ import { BillPaymentApplication } from './entities/bill-payment-application.enti
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { BillsService } from './bills.service';
 import { BillsController } from './bills.controller';
+import { BillPaymentsController } from './bill-payments.controller';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
 
@@ -22,7 +23,7 @@ import { AccountsModule } from '../accounts/accounts.module';
     JournalEntriesModule,
     AccountsModule,
   ],
-  controllers: [BillsController],
+  controllers: [BillsController, BillPaymentsController],
   providers: [BillsService],
   exports: [BillsService, TypeOrmModule],
 })

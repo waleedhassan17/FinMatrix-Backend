@@ -116,6 +116,45 @@ export class ReportsController {
     return this.svc.dashboardSummary(companyId);
   }
 
+  @Get('budget-comparison')
+  @Roles('admin', 'staff')
+  async budgetComparison(
+    @CurrentCompany() companyId: string,
+    @Query('budgetId') budgetId: string,
+  ) {
+    return this.svc.budgetComparison(companyId, budgetId);
+  }
+
+  @Get('delivery-daily')
+  @Roles('admin', 'staff')
+  async deliveryDaily(@CurrentCompany() companyId: string) {
+    return this.svc.deliveryDaily(companyId);
+  }
+
+  @Get('delivery-performance')
+  @Roles('admin', 'staff')
+  async deliveryPerformance(@CurrentCompany() companyId: string) {
+    return this.svc.deliveryPerformance(companyId);
+  }
+
+  @Get('sales-by-customer')
+  @Roles('admin', 'staff')
+  async salesByCustomer(@CurrentCompany() companyId: string) {
+    return this.svc.salesByCustomer(companyId);
+  }
+
+  @Get('sales-by-item')
+  @Roles('admin', 'staff')
+  async salesByItem(@CurrentCompany() companyId: string) {
+    return this.svc.salesByItem(companyId);
+  }
+
+  @Get('analytics-dashboard')
+  @Roles('admin', 'staff')
+  async analyticsDashboard(@CurrentCompany() companyId: string) {
+    return this.svc.analyticsDashboard(companyId);
+  }
+
   private send(data: unknown, format: string, res: Response, filename: string) {
     if (format === 'csv') {
       const csv = Array.isArray(data) ? this.svc.toCsv(data as Record<string, unknown>[]) : this.svc.toCsv([data as Record<string, unknown>]);

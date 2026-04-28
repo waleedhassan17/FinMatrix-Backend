@@ -9,7 +9,7 @@ import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/t
 @ApiTags('Tax')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard)
-@Controller('tax')
+@Controller('taxes')
 export class TaxController {
   constructor(private readonly svc: TaxService) {}
 
@@ -78,5 +78,11 @@ export class TaxController {
     @Body() dto: CreateTaxPaymentDto,
   ) {
     return this.svc.createPayment(companyId, dto);
+  }
+
+  @Get('liability')
+  @Roles('admin', 'staff')
+  getLiability(@CurrentCompany() companyId: string) {
+    return this.svc.getLiability(companyId);
   }
 }

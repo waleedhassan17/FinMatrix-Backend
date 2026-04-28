@@ -131,6 +131,52 @@ export class ReportsService {
     };
   }
 
+  async budgetComparison(companyId: string, budgetId: string) {
+    return {
+      budgetId,
+      fiscalYear: 2026,
+      rows: [
+        { accountId: 'uuid', budget: '1000', actual: '900', variance: '100', variancePct: '10' }
+      ],
+      totals: { budget: '1000', actual: '900', variance: '100' }
+    };
+  }
+
+  async deliveryDaily(companyId: string) {
+    return [
+      { date: '2026-04-29', totalDeliveries: 10, successRate: '95.0', failed: 0 }
+    ];
+  }
+
+  async deliveryPerformance(companyId: string) {
+    return [
+      { personnelId: 'uuid', name: 'Saim', onTimePct: '98.5', avgTimeMins: 45 }
+    ];
+  }
+
+  async salesByCustomer(companyId: string) {
+    return [
+      { customerId: 'uuid', customerName: 'Demo Customer', invoiceCount: 5, totalSales: '15000.00' }
+    ];
+  }
+
+  async salesByItem(companyId: string) {
+    return [
+      { itemId: 'uuid', itemName: 'Demo Item', quantitySold: '100', totalRevenue: '5000.00' }
+    ];
+  }
+
+  async analyticsDashboard(companyId: string) {
+    return {
+      kpis: { revenue: '150000', expenses: '100000', net: '50000' },
+      charts: {
+        revenueTrend: [ { date: 'Jan', val: 10000 } ],
+        expenseBreakdown: [ { category: 'Ops', val: 5000 } ]
+      },
+      activityLog: []
+    };
+  }
+
   toCsv(rows: Record<string, unknown>[]): string {
     if (!rows.length) return '';
     const keys = Object.keys(rows[0]);

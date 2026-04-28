@@ -82,4 +82,23 @@ export class AgenciesController {
   ) {
     return this.svc.toggleConnected(companyId, id, isConnected);
   }
+
+  @Post(':id/inventory')
+  @Roles('admin')
+  assignInventory(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() payload: { itemId: string, quantity: string },
+  ) {
+    return this.svc.assignInventory(companyId, id, payload.itemId, payload.quantity);
+  }
+
+  @Post(':id/sync-inventory')
+  @Roles('admin')
+  syncInventory(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.syncInventory(companyId, id);
+  }
 }

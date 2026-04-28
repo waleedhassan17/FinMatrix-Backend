@@ -28,6 +28,49 @@ The `companyId` is returned in the signin response under `data.user.defaultCompa
 
 ---
 
+## Newly Added Endpoints (Phases 1-4 Complete)
+
+### Banking
+*   `GET /api/v1/banking/transactions` (Global bank transaction list)
+*   `POST /api/v1/banking/transfers` (Create dual transaction/JE transfer)
+*   `GET /api/v1/banking/reconciliations/unreconciled` (List pending transactions)
+*   `POST /api/v1/banking/reconciliations` (Clear/reconcile specific IDs)
+
+### Sales & Purchasing
+*   `POST /api/v1/sales-orders` (Create Sales Order)
+*   `POST /api/v1/estimates` (Create Estimate)
+*   `POST /api/v1/purchase-orders` (Create PO)
+*   `POST /api/v1/purchase-orders/:id/receive` (Receive PO into Inventory)
+*   `POST /api/v1/credit-memos` (Create Credit Memo)
+*   `POST /api/v1/credit-memos/:id/apply` (Apply Credit Memo)
+*   `POST /api/v1/credit-memos/:id/refund` (Refund Credit Memo)
+*   `POST /api/v1/bill-payments` (Pay Bills for AP)
+
+### Operations & HR
+*   `POST /api/v1/employees` (Register Employee)
+*   `GET /api/v1/payroll/worksheet` (Get active employee payroll worksheet)
+*   `POST /api/v1/payroll/runs` (Create Payroll Run)
+*   `POST /api/v1/tax/rates` (Create Tax Rate)
+*   `POST /api/v1/tax/payments` (Record Tax Payment)
+*   `GET /api/v1/tax/liability` (Get Tax Liability)
+*   `POST /api/v1/agencies/:id/inventory` (Assign Inventory to Agency)
+*   `POST /api/v1/agencies/:id/sync-inventory` (Sync Agency Inventory)
+
+### Reports & Auth
+*   `GET /api/v1/reports/budget-comparison`
+*   `GET /api/v1/reports/delivery-daily`
+*   `GET /api/v1/reports/delivery-performance`
+*   `GET /api/v1/reports/sales-by-customer`
+*   `GET /api/v1/reports/sales-by-item`
+*   `GET /api/v1/reports/analytics-dashboard`
+*   `GET /api/v1/budgets`
+*   `POST /api/v1/budgets`
+*   `POST /api/v1/auth/verify-email`
+*   `POST /api/v1/auth/resend-verification`
+*   `GET /api/v1/auth/check-verification`
+
+---
+
 ## 1. Auth
 
 ### POST `/auth/signin`
