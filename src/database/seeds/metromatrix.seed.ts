@@ -44,8 +44,8 @@ loadEnv();
 // =====================================================================
 // PASSWORDS
 // =====================================================================
-const ADMIN_PASSWORD = 'MetroMatrix2026!';
-const DP_PASSWORD = 'Delivery2026!';
+const ADMIN_PASSWORD = '123456';
+const DP_PASSWORD = '123456';
 
 async function run() {
   const ds = new DataSource({

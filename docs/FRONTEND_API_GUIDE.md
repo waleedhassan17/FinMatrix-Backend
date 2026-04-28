@@ -10,9 +10,9 @@
 
 | Role | Email | Password |
 |---|---|---|
-| **Admin** | `waleedhassansfd@gmail.com` | `MetroMatrix2026!` |
-| **DP #1** | `saim@metromatrix.com` | `Delivery2026!` |
-| **DP #2** | `haseeb@metromatrix.com` | `Delivery2026!` |
+| **Admin** | `waleedhassansfd@gmail.com` | `123456` |
+| **DP #1** | `saim@metromatrix.com` | `123456` |
+| **DP #2** | `haseeb@metromatrix.com` | `123456` |
 
 ---
 
@@ -33,7 +33,7 @@ The `companyId` is returned in the signin response under `data.user.defaultCompa
 ### POST `/auth/signin`
 ```json
 // Request
-{ "email": "waleedhassansfd@gmail.com", "password": "MetroMatrix2026!" }
+{ "email": "waleedhassansfd@gmail.com", "password": "123456" }
 
 // Response 200
 {
@@ -467,7 +467,7 @@ npm run start:dev
 # 5. Test signin
 curl -X POST http://localhost:3000/api/v1/auth/signin \
   -H "Content-Type: application/json" \
-  -d '{"email":"waleedhassansfd@gmail.com","password":"MetroMatrix2026!"}'
+  -d '{"email":"waleedhassansfd@gmail.com","password":"123456"}'
 ```
 
 The response will contain `accessToken` and `user.defaultCompanyId`. Use these for all subsequent requests.
