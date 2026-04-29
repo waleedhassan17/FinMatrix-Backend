@@ -68,6 +68,9 @@ async function run() {
   const dbUrl = process.env.DATABASE_URL;
   const parsed = dbUrl ? parseDatabaseUrl(dbUrl) : null;
 
+  const isProd = process.env.NODE_ENV === 'production';
+  const useSsl = isProd || !!dbUrl;
+
   const ds = new DataSource({
     type: 'postgres',
     host: parsed?.host ?? process.env.DB_HOST ?? 'localhost',
@@ -77,6 +80,7 @@ async function run() {
     database: parsed?.database ?? process.env.DB_NAME ?? 'finmatrix',
     entities: [__dirname + '/../../**/*.entity{.ts,.js}'],
     synchronize: true,
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
   });
   await ds.initialize();
   console.log('> Connected. Seeding MetroMatrix production data…\n');
