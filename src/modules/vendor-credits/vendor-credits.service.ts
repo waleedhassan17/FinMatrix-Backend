@@ -176,4 +176,40 @@ export class VendorCreditsService {
       return credit;
     });
   }
+
+  async getById(companyId: string, id: string): Promise<VendorCredit> {
+    const credit = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
+    if (!credit) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Vendor credit not found' });
+    return credit;
+  }
+
+  async update(companyId: string, id: string, dto: CreateVendorCreditDto): Promise<VendorCredit> {
+    return this.dataSource.transaction(async (manager) => {
+      const credit = await manager.findOne(VendorCredit, { where: { id, companyId }, relations: { lines: true } });
+      if (!credit) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Vendor credit not found' });
+      if (dto.date !== undefined) credit.date = dto.date;
+      if (dto.reason !== undefined) credit.reason = dto.reason;
+      if (dto.lines) {
+        let total = new Decimal(0);
+        const calc = dto.lines.map((l, i) => {
+          const amt = toDecimal(l.amount);
+          total = total.plus(amt);
+          return { accountId: l.accountId, description: l.description, amount: amt.toFixed(4), lineOrder: i };
+        });
+        credit.total = total.toFixed(4);
+        await manager.delete(VendorCreditLine, { vendorCreditId: credit.id });
+        const lines = calc.map((l) => manager.create(VendorCreditLine, { vendorCreditId: credit.id, ...l }));
+        await manager.save(lines);
+        credit.lines = lines;
+      }
+      await manager.save(credit);
+      return this.getById(companyId, id);
+    });
+  }
+
+  async delete(companyId: string, id: string) {
+    const credit = await this.getById(companyId, id);
+    await this.repo.softRemove(credit);
+    return { id, deleted: true };
+  }
 }

@@ -224,6 +224,18 @@ export class EstimatesService {
     });
   }
 
+  async delete(companyId: string, id: string) {
+    const e = await this.getById(companyId, id);
+    await this.repo.softRemove(e);
+    return { id, deleted: true };
+  }
+
+  async send(companyId: string, id: string): Promise<Estimate> {
+    const e = await this.getById(companyId, id);
+    if (e.status === 'draft') e.status = 'sent';
+    return this.repo.save(e);
+  }
+
   private computeTotals(
     lines: EstimateLineDto[],
     discountAmountStr: string,

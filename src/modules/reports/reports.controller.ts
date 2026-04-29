@@ -155,6 +155,31 @@ export class ReportsController {
     return this.svc.analyticsDashboard(companyId);
   }
 
+  @Get('trial-balance')
+  @Roles('admin', 'staff')
+  async trialBalance(
+    @CurrentCompany() companyId: string,
+    @Query('asOfDate') asOfDate: string,
+    @Query('format') format = 'json',
+    @Res() res: Response,
+  ) {
+    const data = await this.svc.trialBalance(companyId, asOfDate);
+    return this.send(data, format, res, 'trial-balance');
+  }
+
+  @Get('aging')
+  @Roles('admin', 'staff')
+  async aging(
+    @CurrentCompany() companyId: string,
+    @Query('asOfDate') asOfDate: string,
+    @Query('type') type: 'ar' | 'ap',
+    @Query('format') format = 'json',
+    @Res() res: Response,
+  ) {
+    const data = await this.svc.aging(companyId, asOfDate, type);
+    return this.send(data, format, res, 'aging');
+  }
+
   private send(data: unknown, format: string, res: Response, filename: string) {
     if (format === 'csv') {
       const csv = Array.isArray(data) ? this.svc.toCsv(data as Record<string, unknown>[]) : this.svc.toCsv([data as Record<string, unknown>]);

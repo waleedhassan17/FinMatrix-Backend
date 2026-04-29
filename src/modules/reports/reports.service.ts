@@ -177,6 +177,34 @@ export class ReportsService {
     };
   }
 
+  async trialBalance(companyId: string, asOfDate?: string) {
+    const qb = this.dataSource.query(
+      `SELECT a.id, a.account_number as "accountNumber", a.name, a.type, a.sub_type as "subType", COALESCE(SUM(g.debit::numeric),0) as debits, COALESCE(SUM(g.credit::numeric),0) as credits, a.balance::numeric as balance FROM accounts a LEFT JOIN general_ledger g ON g.account_id = a.id WHERE a.company_id=$1 GROUP BY a.id, a.account_number, a.name, a.type, a.sub_type, a.balance ORDER BY a.account_number`,
+      [companyId],
+    );
+    return qb;
+  }
+
+  async aging(companyId: string, asOfDate: string, type: 'ar' | 'ap') {
+    if (type === 'ar') {
+      const qb = this.invoiceRepo.createQueryBuilder('i')
+        .select('i.customerId', 'entityId')
+        .addSelect('SUM(i.balanceDue::numeric)', 'balance')
+        .addSelect('i.invoiceDate', 'date')
+        .where('i.companyId = :cid AND i.status != :paid', { cid: companyId, paid: 'paid' })
+        .groupBy('i.customerId, i.invoiceDate');
+      return qb.getRawMany();
+    } else {
+      const qb = this.billRepo.createQueryBuilder('b')
+        .select('b.vendorId', 'entityId')
+        .addSelect('SUM(b.balance::numeric)', 'balance')
+        .addSelect('b.billDate', 'date')
+        .where('b.companyId = :cid AND b.status != :paid', { cid: companyId, paid: 'paid' })
+        .groupBy('b.vendorId, b.billDate');
+      return qb.getRawMany();
+    }
+  }
+
   toCsv(rows: Record<string, unknown>[]): string {
     if (!rows.length) return '';
     const keys = Object.keys(rows[0]);

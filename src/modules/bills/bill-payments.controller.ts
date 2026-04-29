@@ -1,8 +1,11 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
+  ParseIntPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -24,6 +27,17 @@ import { PayBillsDto } from './dto/bill.dto';
 @Controller('bill-payments')
 export class BillPaymentsController {
   constructor(private readonly bills: BillsService) {}
+
+  @Get()
+  @Roles('admin', 'staff')
+  list(
+    @CurrentCompany() companyId: string,
+    @Query('billId') billId: string,
+    @Query('page', ParseIntPipe) page = 1,
+    @Query('limit', ParseIntPipe) limit = 20,
+  ) {
+    return this.bills.listPayments(companyId, billId, page, limit);
+  }
 
   @Post()
   @Roles('admin')

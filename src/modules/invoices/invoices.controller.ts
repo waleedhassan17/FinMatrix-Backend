@@ -24,6 +24,7 @@ import {
   AuthenticatedUser,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
+import { Delete } from '@nestjs/common';
 import { InvoicesService } from './invoices.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import {
@@ -135,5 +136,14 @@ export class InvoicesController {
     );
     const stream = this.pdf.render(invoice, customer, company);
     stream.pipe(res);
+  }
+
+  @Delete(':invoiceId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+  ) {
+    return this.invoices.delete(companyId, invoiceId);
   }
 }

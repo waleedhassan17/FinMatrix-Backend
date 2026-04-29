@@ -111,6 +111,15 @@ export class DeliveriesController {
     return this.svc.listIssues(companyId, id, page, limit);
   }
 
+  @Post('assign')
+  @Roles('admin', 'staff')
+  assign(
+    @CurrentCompany() companyId: string,
+    @Body() dto: { deliveryIds: string[]; personnelId: string },
+  ) {
+    return this.svc.assignDeliveries(companyId, dto.deliveryIds, dto.personnelId);
+  }
+
   @Get('my/assigned')
   @Roles('delivery')
   myDeliveries(

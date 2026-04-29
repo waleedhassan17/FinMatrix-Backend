@@ -191,6 +191,12 @@ export class AccountsService {
     return acc;
   }
 
+  async delete(companyId: string, id: string) {
+    const account = await this.getById(companyId, id);
+    await this.repo.softRemove(account);
+    return { id, deleted: true };
+  }
+
   private summarize(accounts: Account[]) {
     const totals: Record<AccountType, string> = {
       asset: '0',

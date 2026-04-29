@@ -17,6 +17,7 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto } from './dto/agency.dto';
+import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Agencies')
 @ApiBearerAuth()
@@ -100,5 +101,15 @@ export class AgenciesController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.svc.syncInventory(companyId, id);
+  }
+
+  @Patch(':id/toggle-active')
+  @Roles('admin')
+  @HttpCode(200)
+  toggleActive(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.toggleActive(companyId, id);
   }
 }

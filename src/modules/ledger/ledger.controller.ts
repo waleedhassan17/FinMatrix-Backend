@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompanyGuard } from '../../common/guards/company.guard';
@@ -25,5 +25,16 @@ export class LedgerController {
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
     return this.ledger.list(companyId, query, pagination);
+  }
+
+  @Get(':accountId')
+  @ApiOperation({ summary: 'GL entries scoped to one account.' })
+  byAccount(
+    @CurrentCompany() companyId: string,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Query() query: LedgerQueryDto,
+    @Query(ParsePaginationPipe) pagination: PaginationParams,
+  ) {
+    return this.ledger.list(companyId, { ...query, accountId }, pagination);
   }
 }

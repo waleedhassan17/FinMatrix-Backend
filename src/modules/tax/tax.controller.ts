@@ -17,10 +17,11 @@ export class TaxController {
   @Roles('admin', 'staff')
   listRates(
     @CurrentCompany() companyId: string,
+    @Query('isActive') isActive: string,
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
-    return this.svc.listRates(companyId, page, limit);
+    return this.svc.listRates(companyId, page, limit, isActive === 'true');
   }
 
   @Post('rates')
@@ -82,7 +83,10 @@ export class TaxController {
 
   @Get('liability')
   @Roles('admin', 'staff')
-  getLiability(@CurrentCompany() companyId: string) {
-    return this.svc.getLiability(companyId);
+  getLiability(
+    @CurrentCompany() companyId: string,
+    @Query('asOfDate') asOfDate: string,
+  ) {
+    return this.svc.getLiability(companyId, asOfDate);
   }
 }

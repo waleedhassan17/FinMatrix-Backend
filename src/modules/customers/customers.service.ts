@@ -188,6 +188,18 @@ export class CustomersService {
     });
   }
 
+  async delete(companyId: string, id: string) {
+    const c = await this.getById(companyId, id);
+    await this.repo.softRemove(c);
+    return { id, deleted: true };
+  }
+
+  async toggleActive(companyId: string, id: string) {
+    const c = await this.getById(companyId, id);
+    c.isActive = !c.isActive;
+    return this.repo.save(c);
+  }
+
   async statement(companyId: string, id: string, query: StatementQueryDto) {
     const customer = await this.getById(companyId, id);
 

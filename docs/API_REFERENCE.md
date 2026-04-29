@@ -14,7 +14,7 @@
 | Default response envelope | `{ "success": true, "data": <payload> }` |
 | Error envelope | `{ "success": false, "error": { "code": "...", "message": "..." } }` with a non-2xx HTTP status |
 | Content type | `application/json` (unless noted — e.g. PDF endpoints return `application/pdf`) |
-| Total endpoints | **177** across **30 modules** |
+| Total endpoints | **217** across **31 modules** |
 | Rate limits | Global: 100 req/min per IP. `/auth/signin`: 5/min. `/auth/signup`: 3/hour. `/auth/forgot-password`: 3/15min. `/auth/reset-password`: 5/15min. Over-limit returns **`429 Too Many Requests`**. |
 
 ---
@@ -398,8 +398,56 @@ Replaces the legacy digital-signature delivery proof with a photo of the custome
 | GET    | `/audit` | AUTH+COMPANY | Audit log. Filters: userId, resourceType, dateFrom/To. |
 | GET    | `/audit/summary` | AUTH+COMPANY | Counts per action. |
 | GET    | `/audit/resource/{type}/{id}` | AUTH+COMPANY | Full trail for one resource. |
+| GET    | `/audit-logs` | AUTH+COMPANY | Alias for audit logs list. |
+| GET    | `/audit-logs/summary` | AUTH+COMPANY | Audit summary by module. |
 | GET    | `/settings` | AUTH+COMPANY | Company preferences. |
 | PATCH  | `/settings` | AUTH+COMPANY | Update. |
+| GET    | `/settings/preferences` | AUTH+COMPANY | Preferences alias. |
+| PATCH  | `/settings/preferences` | AUTH+COMPANY | Update preferences. |
+| GET    | `/settings/company-profile` | AUTH+COMPANY | Company profile. |
+| PATCH  | `/settings/company-profile` | AUTH+COMPANY | Update company profile. |
+| GET    | `/settings/companies` | AUTH+COMPANY | List companies for user. |
+| POST   | `/settings/companies` | AUTH+COMPANY | Create company stub. |
+| GET    | `/settings/users` | AUTH+COMPANY | List users stub. |
+| PATCH  | `/settings/users/{id}` | AUTH+COMPANY | Update user. |
+| DELETE | `/settings/users/{id}` | AUTH+COMPANY | Remove user stub. |
+| PATCH  | `/settings/users/{id}/role` | AUTH+COMPANY | Update user role. |
+| POST   | `/settings/users/invite` | AUTH+COMPANY | Invite user stub. |
+| GET    | `/settings/export` | AUTH+COMPANY | Export data stub. |
+| POST   | `/settings/import` | AUTH+COMPANY | Import data stub. |
+| POST   | `/settings/clear-demo-data` | AUTH+COMPANY | Clear demo data stub. |
+| DELETE | `/customers/{id}` | AUTH+COMPANY | Delete customer. |
+| PATCH  | `/customers/{id}/toggle-active` | AUTH+COMPANY | Toggle customer active. |
+| DELETE | `/vendors/{id}` | AUTH+COMPANY | Delete vendor. |
+| PATCH  | `/vendors/{id}/toggle-active` | AUTH+COMPANY | Toggle vendor active. |
+| DELETE | `/bills/{id}` | AUTH+COMPANY | Delete bill. |
+| GET    | `/bill-payments` | AUTH+COMPANY | List bill payments. |
+| GET    | `/credit-memos/{id}` | AUTH+COMPANY | Get credit memo. |
+| PATCH  | `/credit-memos/{id}` | AUTH+COMPANY | Update credit memo. |
+| DELETE | `/credit-memos/{id}` | AUTH+COMPANY | Delete credit memo. |
+| POST   | `/credit-memos/{id}/void` | AUTH+COMPANY | Void credit memo. |
+| GET    | `/vendor-credits/{id}` | AUTH+COMPANY | Get vendor credit. |
+| PATCH  | `/vendor-credits/{id}` | AUTH+COMPANY | Update vendor credit. |
+| DELETE | `/vendor-credits/{id}` | AUTH+COMPANY | Delete vendor credit. |
+| PATCH  | `/sales-orders/{id}` | AUTH+COMPANY | Update sales order. |
+| DELETE | `/sales-orders/{id}` | AUTH+COMPANY | Delete sales order. |
+| POST   | `/sales-orders/{id}/send` | AUTH+COMPANY | Send sales order. |
+| DELETE | `/estimates/{id}` | AUTH+COMPANY | Delete estimate. |
+| POST   | `/estimates/{id}/send` | AUTH+COMPANY | Send estimate. |
+| PATCH  | `/purchase-orders/{id}` | AUTH+COMPANY | Update PO. |
+| DELETE | `/purchase-orders/{id}` | AUTH+COMPANY | Delete PO. |
+| PATCH  | `/purchase-orders/{id}/status` | AUTH+COMPANY | Update PO status. |
+| DELETE | `/payments/{id}` | AUTH+COMPANY | Delete payment. |
+| DELETE | `/invoices/{id}` | AUTH+COMPANY | Delete invoice. |
+| DELETE | `/accounts/{id}` | AUTH+COMPANY | Delete account. |
+| GET    | `/taxes/liability` | AUTH+COMPANY | Tax liability (with asOfDate). |
+| POST   | `/budgets/copy-from-last-year` | AUTH+COMPANY | Copy budget. |
+| GET    | `/payroll/pay-stubs/{id}` | AUTH+COMPANY | Pay stubs for run. |
+| GET    | `/reports/trial-balance` | AUTH+COMPANY | Trial balance. |
+| GET    | `/reports/aging` | AUTH+COMPANY | Aging (AR/AP). |
+| GET    | `/ledger/{accountId}` | AUTH+COMPANY | GL by account. |
+| GET    | `/search` | AUTH+COMPANY | Global search. |
+| POST   | `/deliveries/assign` | AUTH+COMPANY | Bulk assign deliveries. |
 | GET    | `/health` | public | Liveness. `200 ok`. |
 | GET    | `/health/db` | public | DB probe. |
 | GET    | `/health/ready` | public | Full readiness (DB + memory + disk). |
@@ -491,5 +539,6 @@ Bump this doc whenever an endpoint shape changes. Breaking changes require a ver
 
 | Date | Change |
 |---|---|
+| 2026-04-29 | Added 40+ missing endpoints: delete/toggle-active for customers, vendors, bills, invoices, payments, accounts; credit-memo/vendor-credit get/update/delete/void; sales-order/estimate/purchase-order update/delete/send/status; PO status; tax rate isActive filter; tax liability asOfDate; budget copy-from-last-year; payroll pay-stubs; reports trial-balance & aging; ledger by-account; bill-payments list; deliveries bulk assign; search module; audit-logs alias; settings preferences/company-profile/users/export/import/clear-demo. Total: 217 across 31 modules. |
 | 2026-04-29 | Added 7 endpoints: bill-photo capture (`POST /deliveries/{id}/bill-photo`), inventory-update-requests CRUD (`GET` list, `GET` single, `POST` approve, `POST` reject, `GET` bill-photo stream). Total: 177. |
 | 2026-04-24 | Initial 170-endpoint reference. |

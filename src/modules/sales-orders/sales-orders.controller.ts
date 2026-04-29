@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -73,12 +75,40 @@ export class SalesOrdersController {
 
   @Post(':orderId/create-invoice')
   @Roles('admin')
-  @HttpCode(200)
   createInvoice(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', ParseUUIDPipe) orderId: string,
   ) {
     return this.service.createInvoice(companyId, user.id, orderId);
+  }
+
+  @Patch(':orderId')
+  @Roles('admin')
+  update(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Body() dto: CreateSalesOrderDto,
+  ) {
+    return this.service.update(companyId, orderId, dto);
+  }
+
+  @Delete(':orderId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.service.delete(companyId, orderId);
+  }
+
+  @Post(':orderId/send')
+  @Roles('admin')
+  @HttpCode(200)
+  send(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.service.send(companyId, orderId);
   }
 }

@@ -22,6 +22,7 @@ import {
   StatementQueryDto,
   UpdateCustomerDto,
 } from './dto/customer.dto';
+import { Delete, HttpCode } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -96,5 +97,24 @@ export class CustomersController {
     @Query() query: StatementQueryDto,
   ) {
     return this.customers.statement(companyId, customerId, query);
+  }
+
+  @Delete(':customerId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    return this.customers.delete(companyId, customerId);
+  }
+
+  @Patch(':customerId/toggle-active')
+  @Roles('admin')
+  @HttpCode(200)
+  toggleActive(
+    @CurrentCompany() companyId: string,
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    return this.customers.toggleActive(companyId, customerId);
   }
 }

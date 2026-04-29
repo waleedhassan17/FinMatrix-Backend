@@ -5,6 +5,7 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { PayrollService } from './payroll.service';
 import { CreatePayrollRunDto, UpdatePayrollRunDto } from './dto/payroll.dto';
+import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Payroll')
 @ApiBearerAuth()
@@ -55,5 +56,15 @@ export class PayrollController {
     @Body() dto: UpdatePayrollRunDto,
   ) {
     return this.svc.updateStatus(companyId, id, dto);
+  }
+
+  @Get('pay-stubs/:payrollRunId')
+  @Roles('admin', 'staff')
+  @HttpCode(200)
+  payStubs(
+    @CurrentCompany() companyId: string,
+    @Param('payrollRunId', ParseUUIDPipe) payrollRunId: string,
+  ) {
+    return this.svc.getPayStubs(companyId, payrollRunId);
   }
 }

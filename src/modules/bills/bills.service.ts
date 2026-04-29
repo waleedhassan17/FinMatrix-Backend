@@ -351,6 +351,21 @@ export class BillsService {
     return bill;
   }
 
+  async delete(companyId: string, id: string) {
+    const b = await this.getById(companyId, id);
+    await this.billRepo.softRemove(b);
+    return { id, deleted: true };
+  }
+
+  async listPayments(companyId: string, billId: string | undefined, page: number, limit: number) {
+    const qb = this.paymentRepo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
+    if (billId) qb.andWhere('p.id IN (SELECT bill_payment_id FROM bill_payment_applications WHERE bill_id = :bid)', { bid: billId });
+    qb.orderBy('p.paymentDate', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
+  }
+
   private computeTotals(lines: BillLineDto[]): BillTotals {
     let subtotal = new Decimal(0);
     let tax = new Decimal(0);

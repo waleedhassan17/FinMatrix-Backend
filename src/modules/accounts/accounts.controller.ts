@@ -21,6 +21,7 @@ import {
   ListAccountsQueryDto,
   UpdateAccountDto,
 } from './dto/account.dto';
+import { Delete } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -92,5 +93,15 @@ export class AccountsController {
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
     return this.accounts.transactions(companyId, accountId, pagination);
+  }
+
+  @Delete(':accountId')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Delete account.' })
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+  ) {
+    return this.accounts.delete(companyId, accountId);
   }
 }

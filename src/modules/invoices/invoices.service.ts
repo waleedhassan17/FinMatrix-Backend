@@ -428,6 +428,12 @@ export class InvoicesService {
     });
   }
 
+  async delete(companyId: string, id: string) {
+    const inv = await this.getById(companyId, id);
+    await this.repo.softRemove(inv);
+    return { id, deleted: true };
+  }
+
   // ------- Payment hook (called by payments module) -------
 
   async applyPayment(

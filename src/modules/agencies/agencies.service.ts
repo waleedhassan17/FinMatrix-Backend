@@ -45,6 +45,12 @@ export class AgenciesService {
     return { id, deleted: true };
   }
 
+  async toggleActive(companyId: string, id: string) {
+    const item = await this.getById(companyId, id);
+    item.isActive = !item.isActive;
+    return this.repo.save(item);
+  }
+
   async toggleConnected(companyId: string, id: string, isConnected: boolean) {
     const item = await this.getById(companyId, id);
     item.isConnected = isConnected;

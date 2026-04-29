@@ -58,6 +58,32 @@ export class BudgetsService {
     return this.budgetRepo.save(b);
   }
 
+  async copyFromLastYear(companyId: string, sourceFiscalYear: number, targetFiscalYear: number, name: string, userId: string) {
+    const source = await this.budgetRepo.findOne({ where: { companyId, fiscalYear: sourceFiscalYear }, relations: ['lines'] });
+    if (!source) throw new NotFoundException('Source budget not found');
+    return this.dataSource.transaction(async (em) => {
+      const budgetRepo = em.getRepository(Budget);
+      const lineRepo = em.getRepository(BudgetLine);
+      const budget = Object.assign(new Budget(), {
+        companyId,
+        name,
+        fiscalYear: targetFiscalYear,
+        status: 'draft',
+        totalBudget: source.totalBudget,
+        createdBy: userId,
+      } as any);
+      await budgetRepo.save(budget);
+      const lines = (source.lines ?? []).map((l) => Object.assign(new BudgetLine(), {
+        budgetId: budget.id,
+        accountId: l.accountId,
+        annualTotal: l.annualTotal,
+        monthlyAmounts: l.monthlyAmounts ?? [],
+      } as any));
+      await lineRepo.save(lines);
+      return { ...budget, lines };
+    });
+  }
+
   async remove(companyId: string, id: string) {
     const b = await this.getById(companyId, id);
     await this.budgetRepo.softRemove(b);

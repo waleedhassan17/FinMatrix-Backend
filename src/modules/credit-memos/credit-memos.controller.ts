@@ -24,6 +24,7 @@ import {
   CreateCreditMemoDto,
   RefundCreditMemoDto,
 } from './dto/credit-memo.dto';
+import { Delete, HttpCode, Patch } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -72,5 +73,43 @@ export class CreditMemosController {
     @Body() dto: RefundCreditMemoDto,
   ) {
     return this.service.refund(companyId, creditId, dto);
+  }
+
+  @Get(':creditId')
+  @Roles('admin', 'staff')
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+  ) {
+    return this.service.getById(companyId, creditId);
+  }
+
+  @Patch(':creditId')
+  @Roles('admin')
+  update(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+    @Body() dto: CreateCreditMemoDto,
+  ) {
+    return this.service.update(companyId, creditId, dto);
+  }
+
+  @Delete(':creditId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+  ) {
+    return this.service.delete(companyId, creditId);
+  }
+
+  @Post(':creditId/void')
+  @Roles('admin')
+  @HttpCode(200)
+  voidMemo(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+  ) {
+    return this.service.void(companyId, creditId);
   }
 }

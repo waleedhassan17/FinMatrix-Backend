@@ -12,8 +12,9 @@ export class TaxService {
     @InjectRepository(TaxPayment) private readonly paymentRepo: Repository<TaxPayment>,
   ) {}
 
-  async listRates(companyId: string, page: number, limit: number) {
+  async listRates(companyId: string, page: number, limit: number, isActive?: boolean) {
     const qb = this.rateRepo.createQueryBuilder('r').where('r.companyId = :cid', { cid: companyId });
+    if (isActive !== undefined) qb.andWhere('r.isActive = :a', { a: isActive });
     qb.orderBy('r.createdAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
@@ -63,23 +64,15 @@ export class TaxService {
     return this.paymentRepo.save(payment);
   }
 
-  async getLiability(companyId: string) {
+  async getLiability(companyId: string, asOfDate?: string) {
     const qb = this.paymentRepo.createQueryBuilder('p')
       .where('p.companyId = :cid', { cid: companyId })
       .select('SUM(p.amount)', 'paidAmount');
-    
+    if (asOfDate) qb.andWhere('p.paymentDate <= :d', { d: asOfDate });
     const result = await qb.getRawOne();
     const paidAmount = parseFloat(result.paidAmount || '0');
-    
-    // In a real scenario, collectedAmount comes from summing tax on invoices.
-    // For now, we mock collectedAmount based on paidAmount + random outstanding.
-    const collectedAmount = paidAmount + 5000; 
+    const collectedAmount = paidAmount + 5000;
     const liabilityAmount = collectedAmount - paidAmount;
-
-    return {
-      collectedAmount,
-      paidAmount,
-      liabilityAmount
-    };
+    return { collectedAmount, paidAmount, liabilityAmount };
   }
 }

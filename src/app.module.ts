@@ -48,6 +48,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AuditModule } from './modules/audit/audit.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { SearchModule } from './modules/search/search.module';
 import { HealthModule } from './modules/health/health.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
@@ -108,6 +109,7 @@ import { StorageModule } from './common/storage/storage.module';
     AuditModule,
     SettingsModule,
     ReportsModule,
+    SearchModule,
     HealthModule,
     StorageModule,
     LoggerModule.forRootAsync({

@@ -21,6 +21,7 @@ import {
   ListVendorsQueryDto,
   UpdateVendorDto,
 } from './dto/vendor.dto';
+import { Delete, HttpCode } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -80,5 +81,24 @@ export class VendorsController {
     @Param('vendorId', ParseUUIDPipe) vendorId: string,
   ) {
     return this.vendors.payments(companyId, vendorId);
+  }
+
+  @Delete(':vendorId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+  ) {
+    return this.vendors.delete(companyId, vendorId);
+  }
+
+  @Patch(':vendorId/toggle-active')
+  @Roles('admin')
+  @HttpCode(200)
+  toggleActive(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+  ) {
+    return this.vendors.toggleActive(companyId, vendorId);
   }
 }

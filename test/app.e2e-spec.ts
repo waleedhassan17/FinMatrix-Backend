@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AppModule } from './../src/app.module';
 
 describe('Health (e2e)', () => {
@@ -25,7 +25,7 @@ describe('Health (e2e)', () => {
     return request(app.getHttpServer())
       .get('/api/v1/health')
       .expect(200)
-      .expect((res) => {
+      .expect((res: any) => {
         expect(res.body.success).toBe(true);
         expect(res.body.data.status).toBe('ok');
         expect(res.body.data.service).toBe('finmatrix-backend');

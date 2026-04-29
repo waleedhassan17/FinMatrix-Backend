@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -85,5 +87,35 @@ export class PurchaseOrdersController {
     @Body() dto: CreateBillFromPoDto,
   ) {
     return this.service.createBill(companyId, user.id, poId, dto);
+  }
+
+  @Patch(':poId')
+  @Roles('admin')
+  update(
+    @CurrentCompany() companyId: string,
+    @Param('poId', ParseUUIDPipe) poId: string,
+    @Body() dto: CreatePurchaseOrderDto,
+  ) {
+    return this.service.update(companyId, poId, dto);
+  }
+
+  @Delete(':poId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('poId', ParseUUIDPipe) poId: string,
+  ) {
+    return this.service.delete(companyId, poId);
+  }
+
+  @Patch(':poId/status')
+  @Roles('admin')
+  @HttpCode(200)
+  status(
+    @CurrentCompany() companyId: string,
+    @Param('poId', ParseUUIDPipe) poId: string,
+    @Body('status') status: string,
+  ) {
+    return this.service.updateStatus(companyId, poId, status as any);
   }
 }

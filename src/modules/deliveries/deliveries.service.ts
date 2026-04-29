@@ -85,6 +85,19 @@ export class DeliveriesService {
     });
   }
 
+  async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string) {
+    const deliveries = await this.repo.find({ where: deliveryIds.map((id) => ({ id, companyId })) });
+    for (const d of deliveries) {
+      d.personnelId = personnelId;
+      if (d.status === 'unassigned') {
+        d.status = 'pending';
+        d.assignedAt = new Date();
+      }
+    }
+    await this.repo.save(deliveries);
+    return { assigned: deliveries.length, deliveryIds, personnelId };
+  }
+
   async update(companyId: string, id: string, dto: UpdateDeliveryDto) {
     const d = await this.getById(companyId, id);
     if (dto.personnelId !== undefined && dto.personnelId !== d.personnelId) {

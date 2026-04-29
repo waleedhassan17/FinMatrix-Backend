@@ -20,6 +20,9 @@ export class Agency extends BaseCompanyEntity {
   @Column({ type: 'jsonb', nullable: true })
   contact!: Record<string, unknown> | null;
 
+  @Column({ type: 'boolean', default: true })
+  isActive!: boolean;
+
   @Column({ type: 'boolean', default: false, name: 'is_connected' })
   isConnected!: boolean;
 

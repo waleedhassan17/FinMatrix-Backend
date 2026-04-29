@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -84,5 +85,24 @@ export class EstimatesController {
     @Param('estimateId', ParseUUIDPipe) estimateId: string,
   ) {
     return this.service.convertToInvoice(companyId, user.id, estimateId);
+  }
+
+  @Delete(':estimateId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('estimateId', ParseUUIDPipe) estimateId: string,
+  ) {
+    return this.service.delete(companyId, estimateId);
+  }
+
+  @Post(':estimateId/send')
+  @Roles('admin')
+  @HttpCode(200)
+  send(
+    @CurrentCompany() companyId: string,
+    @Param('estimateId', ParseUUIDPipe) estimateId: string,
+  ) {
+    return this.service.send(companyId, estimateId);
   }
 }

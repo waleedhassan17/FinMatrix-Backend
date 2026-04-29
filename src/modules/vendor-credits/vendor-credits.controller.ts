@@ -23,6 +23,7 @@ import {
   ApplyVendorCreditDto,
   CreateVendorCreditDto,
 } from './dto/vendor-credit.dto';
+import { Delete, Patch } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -61,5 +62,33 @@ export class VendorCreditsController {
     @Body() dto: ApplyVendorCreditDto,
   ) {
     return this.service.apply(companyId, creditId, dto);
+  }
+
+  @Get(':creditId')
+  @Roles('admin', 'staff')
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+  ) {
+    return this.service.getById(companyId, creditId);
+  }
+
+  @Patch(':creditId')
+  @Roles('admin')
+  update(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+    @Body() dto: CreateVendorCreditDto,
+  ) {
+    return this.service.update(companyId, creditId, dto);
+  }
+
+  @Delete(':creditId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('creditId', ParseUUIDPipe) creditId: string,
+  ) {
+    return this.service.delete(companyId, creditId);
   }
 }

@@ -208,6 +208,52 @@ export class PurchaseOrdersService {
     });
   }
 
+  async update(companyId: string, id: string, dto: CreatePurchaseOrderDto): Promise<PurchaseOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const po = await manager.findOne(PurchaseOrder, { where: { id, companyId }, relations: { lines: true } });
+      if (!po) throw new NotFoundException({ code: 'NOT_FOUND', message: 'PO not found' });
+      if (dto.orderDate !== undefined) po.orderDate = dto.orderDate;
+      if (dto.expectedDate !== undefined) po.expectedDate = dto.expectedDate;
+      if (dto.notes !== undefined) po.notes = dto.notes;
+      if (dto.lines) {
+        let subtotal = new Decimal(0);
+        let tax = new Decimal(0);
+        const calc = dto.lines.map((l, i) => {
+          const qty = toDecimal(l.orderedQty);
+          const cost = toDecimal(l.unitCost);
+          const rate = toDecimal(l.taxRate ?? '0');
+          const base = qty.times(cost);
+          const t = base.times(rate).dividedBy(100);
+          subtotal = subtotal.plus(base);
+          tax = tax.plus(t);
+          return { description: l.description, orderedQty: qty.toFixed(4), receivedQty: '0', unitCost: cost.toFixed(4), taxRate: rate.toFixed(4), lineTotal: base.plus(t).toFixed(4), itemId: l.itemId ?? null, accountId: l.accountId ?? null, lineOrder: i };
+        });
+        const total = subtotal.plus(tax);
+        po.subtotal = subtotal.toFixed(4);
+        po.taxAmount = tax.toFixed(4);
+        po.total = total.toFixed(4);
+        await manager.delete(PurchaseOrderLine, { orderId: po.id });
+        const lines = calc.map((l) => manager.create(PurchaseOrderLine, { ...l, orderId: po.id }));
+        await manager.save(lines);
+        po.lines = lines;
+      }
+      await manager.save(po);
+      return this.getById(companyId, id);
+    });
+  }
+
+  async delete(companyId: string, id: string) {
+    const po = await this.getById(companyId, id);
+    await this.repo.softRemove(po);
+    return { id, deleted: true };
+  }
+
+  async updateStatus(companyId: string, id: string, status: PurchaseOrderStatus): Promise<PurchaseOrder> {
+    const po = await this.getById(companyId, id);
+    po.status = status;
+    return this.repo.save(po);
+  }
+
   private deriveStatus(lines: PurchaseOrderLine[]): PurchaseOrderStatus {
     let allReceived = true;
     let anyReceived = false;

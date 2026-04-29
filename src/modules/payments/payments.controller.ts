@@ -20,6 +20,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { PaymentsService } from './payments.service';
 import { ListPaymentsQueryDto, ReceivePaymentDto } from './dto/payment.dto';
+import { Delete } from '@nestjs/common';
 import {
   ParsePaginationPipe,
   PaginationParams,
@@ -69,5 +70,14 @@ export class PaymentsController {
     @Param('paymentId', ParseUUIDPipe) paymentId: string,
   ) {
     return this.payments.getById(companyId, paymentId);
+  }
+
+  @Delete(':paymentId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('paymentId', ParseUUIDPipe) paymentId: string,
+  ) {
+    return this.payments.delete(companyId, paymentId);
   }
 }

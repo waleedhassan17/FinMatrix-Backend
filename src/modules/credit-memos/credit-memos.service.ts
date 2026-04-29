@@ -252,9 +252,60 @@ export class CreditMemosService {
       memo.balance = subtractMoney(memo.total, memo.amountApplied).toFixed(4);
       await manager.save(memo);
 
-      // We should theoretically create a journal entry here (CR Bank, DR AR) 
+      // We should theoretically create a journal entry here (CR Bank, DR AR)
       // but omitting full GL booking for simplicity based on prompt scope.
       return memo;
     });
+  }
+
+  async getById(companyId: string, id: string): Promise<CreditMemo> {
+    const memo = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
+    if (!memo) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Credit memo not found' });
+    return memo;
+  }
+
+  async update(companyId: string, id: string, dto: CreateCreditMemoDto): Promise<CreditMemo> {
+    return this.dataSource.transaction(async (manager) => {
+      const memo = await manager.findOne(CreditMemo, { where: { id, companyId }, relations: { lines: true } });
+      if (!memo) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Credit memo not found' });
+      if (dto.date !== undefined) memo.date = dto.date;
+      if (dto.reason !== undefined) memo.reason = dto.reason;
+      if (dto.lines) {
+        let subtotal = new Decimal(0);
+        let tax = new Decimal(0);
+        const calc = dto.lines.map((l, i) => {
+          const qty = toDecimal(l.quantity);
+          const price = toDecimal(l.unitPrice);
+          const rate = toDecimal(l.taxRate ?? '0');
+          const base = qty.times(price);
+          const t = base.times(rate).dividedBy(100);
+          subtotal = subtotal.plus(base);
+          tax = tax.plus(t);
+          return { description: l.description, quantity: qty.toFixed(4), unitPrice: price.toFixed(4), taxRate: rate.toFixed(4), lineTotal: base.plus(t).toFixed(4), lineOrder: i };
+        });
+        const total = subtotal.plus(tax);
+        memo.subtotal = subtotal.toFixed(4);
+        memo.taxAmount = tax.toFixed(4);
+        memo.total = total.toFixed(4);
+        await manager.delete(CreditMemoLine, { creditMemoId: memo.id });
+        const lines = calc.map((l) => manager.create(CreditMemoLine, { creditMemoId: memo.id, ...l }));
+        await manager.save(lines);
+        memo.lines = lines;
+      }
+      await manager.save(memo);
+      return this.getById(companyId, id);
+    });
+  }
+
+  async delete(companyId: string, id: string) {
+    const memo = await this.getById(companyId, id);
+    await this.repo.softRemove(memo);
+    return { id, deleted: true };
+  }
+
+  async void(companyId: string, id: string): Promise<CreditMemo> {
+    const memo = await this.getById(companyId, id);
+    memo.status = 'voided' as any;
+    return this.repo.save(memo);
   }
 }

@@ -5,6 +5,7 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { BudgetsService } from './budgets.service';
 import { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Budgets')
 @ApiBearerAuth()
@@ -58,5 +59,15 @@ export class BudgetsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.svc.remove(companyId, id);
+  }
+
+  @Post('copy-from-last-year')
+  @Roles('admin')
+  @HttpCode(200)
+  copy(
+    @CurrentCompany() companyId: string,
+    @Body() dto: { sourceFiscalYear: number; targetFiscalYear: number; name: string },
+  ) {
+    return this.svc.copyFromLastYear(companyId, dto.sourceFiscalYear, dto.targetFiscalYear, dto.name, 'user-id');
   }
 }

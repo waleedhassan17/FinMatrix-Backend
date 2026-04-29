@@ -30,6 +30,9 @@ export class CreditMemo extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'amount_applied' })
   amountApplied!: string;
 
+  @Column({ type: 'varchar', length: 20, default: 'open' })
+  status!: string;
+
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   balance!: string;
 

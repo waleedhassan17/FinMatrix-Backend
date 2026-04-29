@@ -207,6 +207,52 @@ export class SalesOrdersService {
     });
   }
 
+  async update(companyId: string, id: string, dto: CreateSalesOrderDto): Promise<SalesOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.findOne(SalesOrder, { where: { id, companyId }, relations: { lines: true } });
+      if (!order) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Order not found' });
+      if (dto.orderDate !== undefined) order.orderDate = dto.orderDate;
+      if (dto.expectedDate !== undefined) order.expectedDate = dto.expectedDate;
+      if (dto.notes !== undefined) order.notes = dto.notes;
+      if (dto.lines) {
+        let subtotal = new Decimal(0);
+        let tax = new Decimal(0);
+        const calc = dto.lines.map((l, i) => {
+          const qty = toDecimal(l.orderedQty);
+          const price = toDecimal(l.unitPrice);
+          const rate = toDecimal(l.taxRate ?? '0');
+          const base = qty.times(price);
+          const t = base.times(rate).dividedBy(100);
+          subtotal = subtotal.plus(base);
+          tax = tax.plus(t);
+          return { description: l.description, orderedQty: qty.toFixed(4), fulfilledQty: '0', unitPrice: price.toFixed(4), taxRate: rate.toFixed(4), lineTotal: base.plus(t).toFixed(4), itemId: l.itemId ?? null, lineOrder: i };
+        });
+        const total = subtotal.plus(tax);
+        order.subtotal = subtotal.toFixed(4);
+        order.taxAmount = tax.toFixed(4);
+        order.total = total.toFixed(4);
+        await manager.delete(SalesOrderLine, { orderId: order.id });
+        const lines = calc.map((l) => manager.create(SalesOrderLine, { ...l, orderId: order.id }));
+        await manager.save(lines);
+        order.lines = lines;
+      }
+      await manager.save(order);
+      return this.getById(companyId, id);
+    });
+  }
+
+  async delete(companyId: string, id: string) {
+    const o = await this.getById(companyId, id);
+    await this.repo.softRemove(o);
+    return { id, deleted: true };
+  }
+
+  async send(companyId: string, id: string): Promise<SalesOrder> {
+    const o = await this.getById(companyId, id);
+    if (o.status === 'draft') o.status = 'open';
+    return this.repo.save(o);
+  }
+
   private deriveStatus(lines: SalesOrderLine[]): SalesOrderStatus {
     let allFulfilled = true;
     let anyFulfilled = false;

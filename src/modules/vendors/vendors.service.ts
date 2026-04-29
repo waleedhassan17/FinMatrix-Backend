@@ -103,6 +103,18 @@ export class VendorsService {
     return this.repo.save(v);
   }
 
+  async delete(companyId: string, id: string) {
+    const v = await this.getById(companyId, id);
+    await this.repo.softRemove(v);
+    return { id, deleted: true };
+  }
+
+  async toggleActive(companyId: string, id: string) {
+    const v = await this.getById(companyId, id);
+    v.isActive = !v.isActive;
+    return this.repo.save(v);
+  }
+
   async bills(companyId: string, id: string) {
     await this.getById(companyId, id);
     return this.billRepo.find({

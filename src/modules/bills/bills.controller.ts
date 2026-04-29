@@ -20,6 +20,7 @@ import {
   AuthenticatedUser,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
+import { Delete } from '@nestjs/common';
 import { BillsService } from './bills.service';
 import {
   CreateBillDto,
@@ -85,5 +86,14 @@ export class BillsController {
     @Body() dto: PayBillsDto,
   ) {
     return this.bills.pay(companyId, user.id, dto);
+  }
+
+  @Delete(':billId')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('billId', ParseUUIDPipe) billId: string,
+  ) {
+    return this.bills.delete(companyId, billId);
   }
 }

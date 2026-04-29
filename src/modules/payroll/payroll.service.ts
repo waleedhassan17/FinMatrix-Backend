@@ -90,6 +90,11 @@ export class PayrollService {
     });
   }
 
+  async getPayStubs(companyId: string, payrollRunId: string) {
+    const run = await this.getById(companyId, payrollRunId);
+    return run.paystubs ?? [];
+  }
+
   async updateStatus(companyId: string, id: string, dto: UpdatePayrollRunDto) {
     const run = await this.getById(companyId, id);
     const current = run.status as string;

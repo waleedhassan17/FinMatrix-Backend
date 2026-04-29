@@ -210,6 +210,12 @@ export class PaymentsService {
     });
   }
 
+  async delete(companyId: string, id: string) {
+    const p = await this.getById(companyId, id);
+    await this.repo.softRemove(p);
+    return { id, deleted: true };
+  }
+
   private async autoApply(
     companyId: string,
     customerId: string,
