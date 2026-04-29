@@ -40,9 +40,12 @@ export interface AuthResult {
     displayName: string;
     role: UserRole;
     phone: string | null;
+    companyId: string | null;
     defaultCompanyId: string | null;
   };
   tokens: TokenPair;
+  companyId: string | null;
+  company: { id: string; name: string } | null;
 }
 
 @Injectable()
@@ -125,7 +128,12 @@ export class AuthService {
     });
 
     const tokens = await this.issueTokens(result.user, result.companyId, dto.role);
-    return { user: this.toPublicUser(result.user), tokens };
+    return {
+      user: this.toPublicUser(result.user, result.companyId),
+      tokens,
+      companyId: result.companyId,
+      company: result.companyId ? { id: result.companyId, name: dto.companyCode ?? '' } : null,
+    };
   }
 
   async signin(dto: SigninDto): Promise<AuthResult> {
@@ -154,7 +162,12 @@ export class AuthService {
     const role: UserRole = (membership?.role ?? user.role) as UserRole;
 
     const tokens = await this.issueTokens(user, companyId, role);
-    return { user: this.toPublicUser(user), tokens };
+    return {
+      user: this.toPublicUser(user, companyId),
+      tokens,
+      companyId,
+      company: membership?.company ? { id: membership.company.id, name: membership.company.name } : null,
+    };
   }
 
   async refresh(refreshToken: string): Promise<TokenPair> {
@@ -241,20 +254,26 @@ export class AuthService {
   async getMe(userId: string): Promise<{
     user: ReturnType<AuthService['toPublicUser']>;
     companies: { id: string; name: string; role: UserRole; inviteCode: string }[];
+    companyId: string | null;
+    company: { id: string; name: string } | null;
   }> {
     const user = await this.users.getByIdOrFail(userId);
     const memberships = await this.userCompanyRepo.find({
       where: { userId: user.id },
       relations: { company: true },
     });
+    const primary = memberships[0] ?? null;
+    const companyId = primary?.companyId ?? user.defaultCompanyId ?? null;
     return {
-      user: this.toPublicUser(user),
+      user: this.toPublicUser(user, companyId),
       companies: memberships.map((m) => ({
         id: m.companyId,
         name: m.company.name,
         role: m.role,
         inviteCode: m.company.inviteCode,
       })),
+      companyId,
+      company: primary?.company ? { id: primary.company.id, name: primary.company.name } : null,
     };
   }
 
@@ -302,13 +321,14 @@ export class AuthService {
     return createHash('sha256').update(token).digest('hex');
   }
 
-  private toPublicUser(user: User) {
+  private toPublicUser(user: User, companyId?: string | null) {
     return {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
       role: user.role,
       phone: user.phone,
+      companyId: companyId ?? user.defaultCompanyId ?? null,
       defaultCompanyId: user.defaultCompanyId,
     };
   }
