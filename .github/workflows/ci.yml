@@ -1,4 +1,4 @@
-name: CI & Render Deploy
+name: CI & Deploy
 
 on:
   push:
@@ -19,20 +19,20 @@ jobs:
       - run: npm run build
       - run: npx tsc --noEmit
 
-  deploy:
+  deploy-railway:
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy to Render
+      - name: Deploy to Railway
         env:
-          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          if [ -n "$RENDER_DEPLOY_HOOK" ]; then
-            curl -X POST "$RENDER_DEPLOY_HOOK"
-            echo "Render deploy triggered via hook"
+          if [ -n "$RAILWAY_TOKEN" ]; then
+            npm install -g @railway/cli
+            railway up --service=finmatrix-api
+            echo "Railway deploy triggered"
           else
-            echo "No RENDER_DEPLOY_HOOK secret set. Skipping webhook trigger."
-            echo "Render auto-deploy from Git is already enabled in render.yaml."
+            echo "No RAILWAY_TOKEN secret set. Skipping Railway deploy."
           fi
