@@ -600,8 +600,9 @@ async function run() {
     console.log('    • Shadow inventory snapshots for both DPs');
     console.log('    • 2 agencies (TCS Express, Leopards)');
     console.log('    • 8 deliveries with items (various statuses)');
-    console.log('\n  Now start the server: npm run start:dev');
-    console.log('  Then log in at: POST /api/v1/auth/signin\n');
+    console.log('\n  Production API: https://finmatrix-api-830293a85dd8.herokuapp.com/api/v1');
+    console.log('  Local dev:      npm run start:dev');
+    console.log('  Auth endpoint:  POST /api/v1/auth/signin\n');
   });
 
   await ds.destroy();

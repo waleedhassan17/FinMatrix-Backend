@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Base URL (production) | `https://finmatrix-api.onrender.com/api/v1` |
+| Base URL (production) | `https://finmatrix-api-830293a85dd8.herokuapp.com/api/v1` |
 | Base URL (local) | `http://localhost:3000/api/v1` (or `3100` if port 3000 is in use) |
 | Auth scheme | `Authorization: Bearer <accessToken>` (JWT) |
 | Default response envelope | `{ "success": true, "data": <payload> }` |
@@ -510,7 +510,7 @@ HTTP `400 Bad Request`:
 
 ## 5. Frontend integration checklist
 
-- [ ] Set `VITE_API_BASE_URL=https://finmatrix-api.onrender.com/api/v1` (or `http://localhost:3000/api/v1`).
+- [ ] Set `VITE_API_BASE_URL=https://finmatrix-api-830293a85dd8.herokuapp.com/api/v1` (or `http://localhost:3000/api/v1`).
 - [ ] Add an axios/fetch interceptor that injects `Authorization: Bearer <accessToken>` and `x-company-id: <activeCompanyId>` on every request.
 - [ ] On `401`, call `/auth/refresh-token` exactly once, retry the original request. If that also fails, redirect to login.
 - [ ] Store `refreshToken` in `httpOnly` cookie (best) or `localStorage` (simpler). Never expose it to third-party scripts.

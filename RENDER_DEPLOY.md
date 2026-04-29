@@ -56,7 +56,7 @@ on the final deploy URL / your frontend:
 
 1. Go to **finmatrix-api** → **Environment**.
 2. Set:
-   - **`APP_URL`** → `https://finmatrix-api.onrender.com`
+   - **`APP_URL`** → `https://finmatrix-api-830293a85dd8.herokuapp.com`
      (or whatever hostname Render assigned — see the top of the service page)
    - **`CORS_ORIGINS`** → your frontend origin(s), e.g.
      `https://app.your-domain.com` (comma-separated, no wildcards).
@@ -70,7 +70,7 @@ temporarily so you can hit the API from your local React dev server.
 ## 3. Smoke-test
 
 ```bash
-APP=https://finmatrix-api.onrender.com
+APP=https://finmatrix-api-830293a85dd8.herokuapp.com
 
 # Wake it up (first request after idle takes 30-60s)
 curl -s "$APP/api/v1/health"        | jq
@@ -87,7 +87,7 @@ All three should return `"status":"ok"`.
 Demo seeds must **never** run against prod. Use the API:
 
 ```bash
-APP=https://finmatrix-api.onrender.com
+APP=https://finmatrix-api-830293a85dd8.herokuapp.com
 BASE="$APP/api/v1"
 
 # 1. Signup
