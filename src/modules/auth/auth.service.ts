@@ -155,8 +155,9 @@ export class AuthService {
     const membership = user.defaultCompanyId
       ? await this.userCompanyRepo.findOne({
           where: { userId: user.id, companyId: user.defaultCompanyId },
+          relations: { company: true },
         })
-      : await this.userCompanyRepo.findOne({ where: { userId: user.id } });
+      : await this.userCompanyRepo.findOne({ where: { userId: user.id }, relations: { company: true } });
 
     const companyId = membership?.companyId ?? null;
     const role: UserRole = (membership?.role ?? user.role) as UserRole;
