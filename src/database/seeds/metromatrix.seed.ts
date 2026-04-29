@@ -47,6 +47,17 @@ import { generateInviteCode } from '../../common/utils/reference-generator.util'
 
 loadEnv();
 
+function parseDatabaseUrl(url: string) {
+  const u = new URL(url);
+  return {
+    host: u.hostname,
+    port: parseInt(u.port || '5432', 10),
+    username: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: u.pathname.replace(/^\//, ''),
+  };
+}
+
 // =====================================================================
 // PASSWORDS
 // =====================================================================
@@ -54,13 +65,16 @@ const ADMIN_PASSWORD = '123456';
 const DP_PASSWORD = '123456';
 
 async function run() {
+  const dbUrl = process.env.DATABASE_URL;
+  const parsed = dbUrl ? parseDatabaseUrl(dbUrl) : null;
+
   const ds = new DataSource({
     type: 'postgres',
-    host: process.env.DB_HOST ?? 'localhost',
-    port: parseInt(process.env.DB_PORT ?? '5432', 10),
-    username: process.env.DB_USERNAME ?? 'finmatrix_user',
-    password: process.env.DB_PASSWORD ?? 'finmatrix_pass_change_me',
-    database: process.env.DB_NAME ?? 'finmatrix',
+    host: parsed?.host ?? process.env.DB_HOST ?? 'localhost',
+    port: parsed?.port ?? parseInt(process.env.DB_PORT ?? '5432', 10),
+    username: parsed?.username ?? process.env.DB_USERNAME ?? 'finmatrix_user',
+    password: parsed?.password ?? process.env.DB_PASSWORD ?? 'finmatrix_pass_change_me',
+    database: parsed?.database ?? process.env.DB_NAME ?? 'finmatrix',
     entities: [__dirname + '/../../**/*.entity{.ts,.js}'],
     synchronize: true,
   });
