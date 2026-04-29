@@ -61,13 +61,7 @@ async function run() {
     username: process.env.DB_USERNAME ?? 'finmatrix_user',
     password: process.env.DB_PASSWORD ?? 'finmatrix_pass_change_me',
     database: process.env.DB_NAME ?? 'finmatrix',
-    entities: [
-      User, Company, UserCompany, Account, Customer, Vendor,
-      InventoryItem, Delivery, DeliveryItem,
-      DeliveryPersonnelProfile, ShadowInventorySnapshot, Agency,
-      Invoice, InvoiceLineItem, Bill, BillLineItem,
-      SalesOrder, PurchaseOrder, Budget, PayrollRun, Employee, Paystub,
-    ],
+    entities: [__dirname + '/../../**/*.entity{.ts,.js}'],
     synchronize: true,
   });
   await ds.initialize();
@@ -531,6 +525,7 @@ async function run() {
       await m.save(m.create(SalesOrder, {
         companyId: company.id,
         customerId: allCusts[0].id,
+        orderNumber: 'SO-001',
         orderDate: new Date(),
         status: 'draft',
         subtotal: '5000.00',
@@ -544,6 +539,7 @@ async function run() {
       await m.save(m.create(PurchaseOrder, {
         companyId: company.id,
         vendorId: allVends[0].id,
+        poNumber: 'PO-001',
         orderDate: new Date(),
         status: 'draft',
         subtotal: '2000.00',
@@ -558,7 +554,8 @@ async function run() {
         companyId: company.id,
         name: 'Annual Operations 2026',
         fiscalYear: 2026,
-        status: 'active'
+        status: 'active',
+        createdBy: admin.id,
       } as any));
     }
 
