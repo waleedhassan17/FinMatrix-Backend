@@ -1,7 +1,7 @@
 # FinMatrix: Master Frontend API Specification
 
-> **Base URL:** `https://finmatrix-api-830293a85dd8.herokuapp.com`
-> **Swagger API Docs:** `https://finmatrix-api-830293a85dd8.herokuapp.com/api/docs`
+> **Base URL:** `https://finmatrix-api-a824f23fbd72.herokuapp.com`
+> **Swagger API Docs:** `https://finmatrix-api-a824f23fbd72.herokuapp.com/api/docs`
 
 This document is the **single source of truth** for all REST API endpoints required by the FinMatrix React Native frontend.
 

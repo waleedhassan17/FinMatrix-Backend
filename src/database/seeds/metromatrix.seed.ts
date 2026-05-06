@@ -618,7 +618,7 @@ async function run() {
     console.log('    • Shadow inventory snapshots for both DPs');
     console.log('    • 2 agencies (TCS Express, Leopards)');
     console.log('    • 8 deliveries with items (various statuses)');
-    console.log('\n  Production API: https://finmatrix-api-830293a85dd8.herokuapp.com/api/v1');
+    console.log('\n  Production API: https://finmatrix-api-a824f23fbd72.herokuapp.com/api/v1');
     console.log('  Local dev:      npm run start:dev');
     console.log('  Auth endpoint:  POST /api/v1/auth/signin\n');
   });

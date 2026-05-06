@@ -1,7 +1,7 @@
 # FinMatrix Backend — Frontend Integration Guide
 
-> **Base URL:** `https://finmatrix-api-830293a85dd8.herokuapp.com/api/v1`
-> **Swagger:** `https://finmatrix-api-830293a85dd8.herokuapp.com/api/docs` (if enabled in prod)
+> **Base URL:** `https://finmatrix-api-a824f23fbd72.herokuapp.com/api/v1`
+> **Swagger:** `https://finmatrix-api-a824f23fbd72.herokuapp.com/api/docs` (if enabled in prod)
 > **All responses** use envelope: `{ "success": true, "data": <payload> }` or `{ "success": false, "error": { "code": "...", "message": "..." } }`
 
 ---
