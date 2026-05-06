@@ -1,38 +1,39 @@
-import { Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationQueryDto } from './dto/notification.dto';
-import { JwtAuthGuard } from '../../modules/auth/guards/jwt-auth.guard';
+import { CompanyGuard } from '../../common/guards/company.guard';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(CompanyGuard)
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly svc: NotificationsService) {}
 
   @Get()
   list(
+    @CurrentUser() user: AuthenticatedUser,
     @Query() query: NotificationQueryDto,
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
-    @Query('userId') userId: string,
   ) {
-    return this.svc.list(userId, query, page, limit);
+    return this.svc.list(user.id, query, page, limit);
   }
 
   @Get('unread-count')
-  unreadCount(@Query('userId') userId: string) {
-    return this.svc.unreadCount(userId);
+  unreadCount(@CurrentUser() user: AuthenticatedUser) {
+    return this.svc.unreadCount(user.id);
   }
 
   @Patch(':id/read')
-  markRead(@Param('id', ParseUUIDPipe) id: string, @Query('userId') userId: string) {
-    return this.svc.markRead(userId, id);
+  markRead(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.svc.markRead(user.id, id);
   }
 
   @Post('read-all')
-  markAllRead(@Query('userId') userId: string) {
-    return this.svc.markAllRead(userId);
+  markAllRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.svc.markAllRead(user.id);
   }
 }

@@ -769,22 +769,34 @@ async function run() {
     // 17. SALES ORDERS, PURCHASE ORDERS, BUDGETS, PAYROLL
     // =================================================================
     const soCount = await m.countBy(SalesOrder, { companyId: company.id });
-    if (soCount === 0 && allCusts.length > 0) {
-      await m.save([
-        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[0].id, orderNumber: 'SO-001', orderDate: new Date(), status: 'open', subtotal: '84000.00', taxAmount: '14280.00', total: '98280.00' } as any),
-        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[1].id, orderNumber: 'SO-002', orderDate: new Date(), status: 'draft', subtotal: '37000.00', taxAmount: '6290.00', total: '43290.00' } as any),
-        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[2].id, orderNumber: 'SO-003', orderDate: new Date(), status: 'fulfilled', subtotal: '52000.00', taxAmount: '8840.00', total: '60840.00' } as any),
-      ]);
-      console.log('  ✓ 3 sales orders created');
+    if (soCount < 3 && allCusts.length > 0) {
+      const soData = [
+        { customerId: allCusts[0].id, orderNumber: 'SO-001', status: 'open', subtotal: '84000.00', taxAmount: '14280.00', total: '98280.00' },
+        { customerId: allCusts[1].id, orderNumber: 'SO-002', status: 'draft', subtotal: '37000.00', taxAmount: '6290.00', total: '43290.00' },
+        { customerId: allCusts[2].id, orderNumber: 'SO-003', status: 'fulfilled', subtotal: '52000.00', taxAmount: '8840.00', total: '60840.00' },
+      ];
+      for (const so of soData) {
+        const exists = await m.findOne(SalesOrder, { where: { companyId: company.id, orderNumber: so.orderNumber } as any });
+        if (!exists) {
+          await m.save(m.create(SalesOrder, { companyId: company.id, ...so, orderDate: new Date() } as any));
+        }
+      }
+      console.log('  ✓ 3 sales orders ensured');
     }
 
     const poCount = await m.countBy(PurchaseOrder, { companyId: company.id });
-    if (poCount === 0 && allVends.length > 0) {
-      await m.save([
-        m.create(PurchaseOrder, { companyId: company.id, vendorId: allVends[0].id, poNumber: 'PO-001', orderDate: new Date(), status: 'draft', subtotal: '185000.00', taxAmount: '31450.00', total: '216450.00' } as any),
-        m.create(PurchaseOrder, { companyId: company.id, vendorId: allVends[1].id, poNumber: 'PO-002', orderDate: new Date(), status: 'received', subtotal: '90000.00', taxAmount: '15300.00', total: '105300.00' } as any),
-      ]);
-      console.log('  ✓ 2 purchase orders created');
+    if (poCount < 2 && allVends.length > 0) {
+      const poData = [
+        { vendorId: allVends[0].id, poNumber: 'PO-001', status: 'draft', subtotal: '185000.00', taxAmount: '31450.00', total: '216450.00' },
+        { vendorId: allVends[1].id, poNumber: 'PO-002', status: 'received', subtotal: '90000.00', taxAmount: '15300.00', total: '105300.00' },
+      ];
+      for (const po of poData) {
+        const exists = await m.findOne(PurchaseOrder, { where: { companyId: company.id, poNumber: po.poNumber } as any });
+        if (!exists) {
+          await m.save(m.create(PurchaseOrder, { companyId: company.id, ...po, orderDate: new Date() } as any));
+        }
+      }
+      console.log('  ✓ 2 purchase orders ensured');
     }
 
     const budgetCount = await m.countBy(Budget, { companyId: company.id });
@@ -800,13 +812,19 @@ async function run() {
     }
 
     const empCount = await m.countBy(Employee, { companyId: company.id });
-    if (empCount === 0) {
-      await m.save([
-        m.create(Employee, { companyId: company.id, firstName: 'Ahmad', lastName: 'Khan', email: 'ahmad.khan@metromatrix.com', phone: '+92-300-1110001', department: 'Operations', jobTitle: 'Operations Manager', employmentType: 'full_time', salary: '120000.00', status: 'active', hireDate: new Date('2024-06-01') } as any),
-        m.create(Employee, { companyId: company.id, firstName: 'Fatima', lastName: 'Noor', email: 'fatima.noor@metromatrix.com', phone: '+92-300-1110002', department: 'Accounting', jobTitle: 'Accountant', employmentType: 'full_time', salary: '85000.00', status: 'active', hireDate: new Date('2024-08-15') } as any),
-        m.create(Employee, { companyId: company.id, firstName: 'Usman', lastName: 'Ali', email: 'usman.ali@metromatrix.com', phone: '+92-300-1110003', department: 'Warehouse', jobTitle: 'Warehouse Supervisor', employmentType: 'full_time', salary: '65000.00', status: 'active', hireDate: new Date('2025-01-10') } as any),
-      ]);
-      console.log('  ✓ 3 employees created');
+    if (empCount < 3) {
+      const empData = [
+        { firstName: 'Ahmad', lastName: 'Khan', email: 'ahmad.khan@metromatrix.com', phone: '+92-300-1110001', department: 'Operations', jobTitle: 'Operations Manager', salary: '120000.00', hireDate: new Date('2024-06-01') },
+        { firstName: 'Fatima', lastName: 'Noor', email: 'fatima.noor@metromatrix.com', phone: '+92-300-1110002', department: 'Accounting', jobTitle: 'Accountant', salary: '85000.00', hireDate: new Date('2024-08-15') },
+        { firstName: 'Usman', lastName: 'Ali', email: 'usman.ali@metromatrix.com', phone: '+92-300-1110003', department: 'Warehouse', jobTitle: 'Warehouse Supervisor', salary: '65000.00', hireDate: new Date('2025-01-10') },
+      ];
+      for (const e of empData) {
+        const exists = await m.findOne(Employee, { where: { companyId: company.id, email: e.email } as any });
+        if (!exists) {
+          await m.save(m.create(Employee, { companyId: company.id, ...e, employmentType: 'full_time', status: 'active' } as any));
+        }
+      }
+      console.log('  ✓ 3 employees ensured');
 
       await m.save(m.create(PayrollRun, {
         companyId: company.id,

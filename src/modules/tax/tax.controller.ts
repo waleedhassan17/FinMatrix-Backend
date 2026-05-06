@@ -21,7 +21,8 @@ export class TaxController {
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
-    return this.svc.listRates(companyId, page, limit, isActive === 'true');
+    const active = isActive === undefined ? undefined : isActive === 'true';
+    return this.svc.listRates(companyId, page, limit, active);
   }
 
   @Post('rates')
