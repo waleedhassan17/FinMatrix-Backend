@@ -4,6 +4,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { DeliveriesService } from './deliveries.service';
 import {
@@ -12,6 +13,8 @@ import {
   DeliveryStatusUpdateDto,
   DeliveryQueryDto,
   DeliveryIssueDto,
+  CaptureSignatureDto,
+  ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 
 @ApiTags('Deliveries')
@@ -129,5 +132,46 @@ export class DeliveriesController {
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
     return this.svc.myDeliveries(companyId, personnelId, page, limit);
+  }
+
+  @Get('my/dashboard')
+  @Roles('delivery')
+  myDashboard(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.myDashboard(companyId, user.id);
+  }
+
+  @Get('my/history')
+  @Roles('delivery')
+  myHistory(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('page', ParseIntPipe) page = 1,
+    @Query('limit', ParseIntPipe) limit = 20,
+  ) {
+    return this.svc.myHistory(companyId, user.id, page, limit);
+  }
+
+  @Post(':id/signature')
+  @Roles('delivery')
+  captureSignature(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CaptureSignatureDto,
+  ) {
+    return this.svc.captureSignature(companyId, id, dto);
+  }
+
+  @Post(':id/confirm')
+  @Roles('delivery')
+  confirmDelivery(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ConfirmDeliveryDto,
+  ) {
+    return this.svc.confirmDelivery(companyId, id, dto, user.id);
   }
 }

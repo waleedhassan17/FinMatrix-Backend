@@ -5,6 +5,7 @@ import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
 import { DeliveryStatusHistory } from './entities/delivery-status-history.entity';
 import { DeliveryIssue } from './entities/delivery-issue.entity';
+import { DeliverySignature } from './entities/delivery-signature.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
 import {
   CreateDeliveryDto,
@@ -12,6 +13,8 @@ import {
   DeliveryStatusUpdateDto,
   DeliveryQueryDto,
   DeliveryIssueDto,
+  CaptureSignatureDto,
+  ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 import { DeliveryStatus } from '../../types';
 
@@ -31,6 +34,7 @@ export class DeliveriesService {
     @InjectRepository(DeliveryItem) private readonly itemRepo: Repository<DeliveryItem>,
     @InjectRepository(DeliveryStatusHistory) private readonly historyRepo: Repository<DeliveryStatusHistory>,
     @InjectRepository(DeliveryIssue) private readonly issueRepo: Repository<DeliveryIssue>,
+    @InjectRepository(DeliverySignature) private readonly signatureRepo: Repository<DeliverySignature>,
     @InjectRepository(DeliveryPersonnelProfile) private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
     private readonly dataSource: DataSource,
   ) {}
@@ -194,6 +198,81 @@ export class DeliveriesService {
       .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
       .andWhere('d.status IN (:...statuses)', { statuses: ['pending', 'picked_up', 'in_transit', 'arrived'] })
       .orderBy('d.createdAt', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
+  }
+
+  async myDashboard(companyId: string, personnelId: string) {
+    const today = new Date().toISOString().split('T')[0];
+    const all = await this.repo.find({
+      where: { companyId, personnelId },
+    });
+    const todayDeliveries = all.filter(
+      (d) => d.createdAt && d.createdAt.toISOString().split('T')[0] === today,
+    );
+    const assigned = todayDeliveries.length;
+    const completed = todayDeliveries.filter((d) => d.status === 'delivered').length;
+    const inTransit = todayDeliveries.filter((d) => d.status === 'in_transit').length;
+    const remaining = assigned - completed;
+    const progress = assigned > 0 ? Math.round((completed / assigned) * 100) : 0;
+    const nextDelivery = all.find((d) =>
+      ['pending', 'picked_up', 'in_transit', 'arrived'].includes(d.status),
+    );
+    return {
+      today: { assigned, completed, inTransit, remaining, progress },
+      nextDelivery: nextDelivery ?? null,
+    };
+  }
+
+  async captureSignature(companyId: string, deliveryId: string, dto: CaptureSignatureDto) {
+    const d = await this.getById(companyId, deliveryId);
+    const sig = this.signatureRepo.create({
+      deliveryId: d.id,
+      imageUrl: dto.signatureImage,
+      signerName: dto.signerName ?? null,
+      capturedAt: new Date(),
+    });
+    await this.signatureRepo.save(sig);
+    return { deliveryId: d.id, signature: sig };
+  }
+
+  async confirmDelivery(companyId: string, deliveryId: string, dto: ConfirmDeliveryDto, userId: string) {
+    const d = await this.getById(companyId, deliveryId);
+    if (!['arrived', 'in_transit'].includes(d.status)) {
+      throw new BadRequestException('Delivery must be arrived or in_transit to confirm');
+    }
+
+    // Update delivered/returned quantities on items
+    for (const item of dto.deliveredItems) {
+      await this.itemRepo.update(
+        { deliveryId: d.id, itemId: item.itemId },
+        { deliveredQty: item.deliveredQty, returnedQty: item.returnedQty ?? '0' },
+      );
+    }
+
+    // Update status to delivered
+    d.status = 'delivered';
+    d.completedAt = new Date();
+    await this.repo.save(d);
+
+    // Record status history
+    const history = this.historyRepo.create({
+      deliveryId,
+      status: 'delivered',
+      notes: dto.notes ?? 'Customer confirmed receipt',
+      changedBy: userId,
+    });
+    await this.historyRepo.save(history);
+
+    return { deliveryId: d.id, status: 'delivered', completedAt: d.completedAt };
+  }
+
+  async myHistory(companyId: string, personnelId: string, page: number, limit: number) {
+    const qb = this.repo.createQueryBuilder('d')
+      .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
+      .andWhere('d.status IN (:...statuses)', { statuses: ['delivered', 'failed', 'returned', 'cancelled'] })
+      .orderBy('d.completedAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
     return { data, total, page, limit };

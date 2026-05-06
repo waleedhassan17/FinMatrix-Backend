@@ -62,4 +62,13 @@ export class DeliveryPersonnelController {
   ) {
     return this.svc.toggleAvailability(companyId, userId);
   }
+
+  @Post(':userId/reset-password')
+  @Roles('admin')
+  resetPassword(
+    @CurrentCompany() companyId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.svc.resetPassword(companyId, userId);
+  }
 }

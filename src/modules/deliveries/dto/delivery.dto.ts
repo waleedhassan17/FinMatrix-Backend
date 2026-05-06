@@ -58,3 +58,20 @@ export class DeliveryIssueDto {
   @ApiProperty() @IsString() notes!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() photoUrl?: string;
 }
+
+export class CaptureSignatureDto {
+  @ApiProperty() @IsString() signatureImage!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() signerName?: string;
+}
+
+export class ConfirmDeliveryItemDto {
+  @ApiProperty() @IsUUID() itemId!: string;
+  @ApiProperty() @IsNumberString() deliveredQty!: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumberString() returnedQty?: string;
+}
+
+export class ConfirmDeliveryDto {
+  @ApiPropertyOptional() @IsOptional() customerVerified?: boolean;
+  @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmDeliveryItemDto) deliveredItems!: ConfirmDeliveryItemDto[];
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { DeliveryPersonnelProfile } from './entities/delivery-personnel-profile.entity';
 import { CreatePersonnelDto, UpdatePersonnelDto } from './dto/delivery-personnel.dto';
 
@@ -9,6 +10,7 @@ export class DeliveryPersonnelService {
   constructor(
     @InjectRepository(DeliveryPersonnelProfile)
     private readonly repo: Repository<DeliveryPersonnelProfile>,
+    private readonly dataSource: DataSource,
   ) {}
 
   async list(companyId: string, page: number, limit: number, status?: string) {
@@ -43,5 +45,22 @@ export class DeliveryPersonnelService {
     const p = await this.getById(companyId, userId);
     p.isAvailable = !p.isAvailable;
     return this.repo.save(p);
+  }
+
+  async resetPassword(companyId: string, userId: string) {
+    const p = await this.getById(companyId, userId);
+    const tempPassword = `Del@${Math.floor(1000 + Math.random() * 9000)}`;
+    const hash = await bcrypt.hash(tempPassword, 10);
+    await this.dataSource
+      .createQueryBuilder()
+      .update('users')
+      .set({ passwordHash: hash })
+      .where('id = :id', { id: p.userId })
+      .execute();
+    return {
+      userId: p.userId,
+      credentials: { email: p.userId, temporaryPassword: tempPassword },
+      message: 'Password reset. Share credentials securely.',
+    };
   }
 }
