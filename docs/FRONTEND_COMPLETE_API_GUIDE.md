@@ -1201,17 +1201,46 @@ PATCH /deliveries/:id/status                         Delivery Auth
 ```
 **Valid Transitions:** `pending` → `picked_up` → `in_transit` → `arrived` → `delivered`/`failed`
 
-### 5.4 Capture Signature
+### 5.4 Upload Bill Photo (replaces digital signature)
 ```
-POST /deliveries/:id/signature                       Delivery Auth
+POST /deliveries/:deliveryId/bill-photo              Delivery Auth
+Content-Type: multipart/form-data
 ```
-**Request:**
+**Form Fields:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `photo` | file | ✅ | JPEG/PNG/WebP, max 8 MB |
+| `signedBy` | string | ✅ | Customer name on the bill |
+| `source` | string | ✅ | `"camera"` or `"gallery"` |
+| `note` | string | ❌ | Optional note |
+| `changes` | string (JSON) | ✅ | JSON array of item changes |
+
+**`changes` field format (JSON-stringified array):**
+```json
+[
+  {
+    "itemId": "uuid",
+    "itemName": "Habib Cooking Oil 5L",
+    "beforeQty": 450,
+    "deliveredQty": 20,
+    "returnedQty": 0
+  }
+]
+```
+
+**Response (201):**
 ```json
 {
-  "signatureImage": "data:image/png;base64,iVBORw0KGgo...",
-  "signerName": "Muhammad Ahmed"
+  "success": true,
+  "data": {
+    "requestId": "uuid",
+    "deliveryId": "uuid",
+    "photoUrl": "https://...",
+    "uploadedAt": "2026-04-15T10:30:00Z"
+  }
 }
 ```
+**Note:** This creates a pending `InventoryUpdateRequest`. Admin must approve it before inventory is updated.
 
 ### 5.5 Confirm Customer Receipt
 ```
@@ -1254,11 +1283,41 @@ Returns completed/failed/returned/cancelled deliveries.
 ## 6. Inventory Approvals (4 APIs)
 **Base path:** `/inventory-approvals`
 
+> **FLOW:** DP uploads bill photo → creates pending request → Admin reviews photo → clicks Approve → inventory automatically updated + shadow inventory synced. If rejected, DP is notified and nothing changes.
+
 ### 6.1 Get Pending Approvals
 ```
 GET /inventory-approvals                             Admin Auth
 ```
 **Query:** `?status=pending&page=1&limit=20`
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "deliveryId": "uuid",
+      "deliveryReference": "DEL-A1B2C3D4",
+      "personnelId": "uuid",
+      "personnelName": "Saim Raza",
+      "routeLabel": "Route · 2026-04-15",
+      "submittedAt": "2026-04-15T10:30:00Z",
+      "status": "pending",
+      "changes": [
+        { "itemId": "uuid", "itemName": "Habib Cooking Oil 5L", "beforeQty": 450, "deliveredQty": 20, "returnedQty": 0 }
+      ],
+      "proof": {
+        "billPhotoUri": "https://...",
+        "signedBy": "Customer Name",
+        "verificationMethod": "bill_photo",
+        "billPhotoCapturedAt": "2026-04-15T10:30:00Z"
+      }
+    }
+  ],
+  "total": 1, "page": 1, "pageSize": 20
+}
+```
 
 ### 6.2 Get Request Detail
 ```
@@ -1269,7 +1328,7 @@ GET /inventory-approvals/:id                         Admin Auth
 ```
 POST /inventory-approvals                            Delivery Auth
 ```
-(Usually auto-created after delivery confirm)
+(Auto-created when DP uploads bill photo via `POST /deliveries/:id/bill-photo`)
 
 ### 6.4 Approve / Reject Request
 ```
@@ -1278,17 +1337,27 @@ PATCH /inventory-approvals/:id/review                Admin Auth
 **Request (Approve):**
 ```json
 {
-  "decision": "approved",
-  "notes": "Verified against signature"
+  "action": "approved",
+  "notes": "Bill photo verified, customer signature confirmed"
 }
 ```
+**What happens on approval:**
+1. Each inventory item's `quantityOnHand` is **automatically** decremented by `deliveredQty` and incremented by `returnedQty`
+2. `InventoryMovement` records are created for audit trail
+3. Shadow inventory rows are marked as `synced`
+4. DP receives a notification: "Inventory changes approved"
+
 **Request (Reject):**
 ```json
 {
-  "decision": "rejected",
-  "notes": "Signature mismatch"
+  "action": "rejected",
+  "notes": "Photo unclear, items don't match bill"
 }
 ```
+**What happens on rejection:**
+- No inventory changes occur
+- Shadow inventory rows marked `rejected`
+- DP receives a notification to re-submit
 
 ---
 

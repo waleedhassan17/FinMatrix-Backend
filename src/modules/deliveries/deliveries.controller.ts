@@ -154,16 +154,6 @@ export class DeliveriesController {
     return this.svc.myHistory(companyId, user.id, page, limit);
   }
 
-  @Post(':id/signature')
-  @Roles('delivery')
-  captureSignature(
-    @CurrentCompany() companyId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CaptureSignatureDto,
-  ) {
-    return this.svc.captureSignature(companyId, id, dto);
-  }
-
   @Post(':id/confirm')
   @Roles('delivery')
   confirmDelivery(

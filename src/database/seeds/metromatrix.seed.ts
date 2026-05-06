@@ -40,6 +40,12 @@ import { Budget } from '../../modules/budgets/entities/budget.entity';
 import { PayrollRun } from '../../modules/payroll/entities/payroll-run.entity';
 import { Employee } from '../../modules/employees/entities/employee.entity';
 import { Paystub } from '../../modules/payroll/entities/paystub.entity';
+import { JournalEntry } from '../../modules/journal-entries/entities/journal-entry.entity';
+import { JournalEntryLine } from '../../modules/journal-entries/entities/journal-entry-line.entity';
+import { BankAccount } from '../../modules/banking/entities/bank-account.entity';
+import { BankTransaction } from '../../modules/banking/entities/bank-transaction.entity';
+import { TaxRate } from '../../modules/tax/entities/tax-rate.entity';
+import { Notification } from '../../modules/notifications/entities/notification.entity';
 import {
   DEFAULT_CHART_OF_ACCOUNTS,
 } from '../../modules/accounts/accounts.constants';
@@ -533,37 +539,252 @@ async function run() {
     console.log('  ─────────────────────────────────────────────');
 
     // =================================================================
-    // 12. DUMMY SALES ORDERS, PURCHASE ORDERS, BUDGETS, PAYROLL
+    // 12. INVOICES (5 invoices with line items)
     // =================================================================
     const allCusts = await m.find(Customer, { where: { companyId: company.id } });
     const allVends = await m.find(Vendor, { where: { companyId: company.id } });
+    const allAccounts = await m.find(Account, { where: { companyId: company.id } });
+    const salesAccount = allAccounts.find(a => a.name.includes('Sales') || a.type === 'revenue') ?? allAccounts[0];
+    const cashAccount = allAccounts.find(a => a.name.includes('Cash') || a.subType === 'Cash') ?? allAccounts[0];
+    const arAccount = allAccounts.find(a => a.name.includes('Receivable') || a.subType === 'Accounts Receivable') ?? allAccounts[0];
+    const apAccount = allAccounts.find(a => a.name.includes('Payable') || a.subType === 'Accounts Payable') ?? allAccounts[0];
+    const expenseAccount = allAccounts.find(a => a.type === 'expense') ?? allAccounts[0];
 
+    const invoiceCount = await m.countBy(Invoice, { companyId: company.id });
+    if (invoiceCount === 0 && allCusts.length > 0) {
+      const invoiceData = [
+        { num: 'INV-001', cust: 0, status: 'sent', subtotal: '42000', tax: '7140', total: '49140', paid: '49140', balance: '0', date: '2026-04-01', due: '2026-05-01' },
+        { num: 'INV-002', cust: 1, status: 'sent', subtotal: '18500', tax: '3145', total: '21645', paid: '10000', balance: '11645', date: '2026-04-05', due: '2026-05-05' },
+        { num: 'INV-003', cust: 2, status: 'sent', subtotal: '56000', tax: '9520', total: '65520', paid: '0', balance: '65520', date: '2026-04-10', due: '2026-05-10' },
+        { num: 'INV-004', cust: 3, status: 'draft', subtotal: '27500', tax: '4675', total: '32175', paid: '0', balance: '32175', date: '2026-04-15', due: '2026-05-15' },
+        { num: 'INV-005', cust: 4, status: 'void', subtotal: '8000', tax: '1360', total: '9360', paid: '0', balance: '0', date: '2026-03-20', due: '2026-04-20' },
+      ];
+      for (const inv of invoiceData) {
+        const invoice = await m.save(m.create(Invoice, {
+          companyId: company.id,
+          customerId: allCusts[inv.cust].id,
+          invoiceNumber: inv.num,
+          invoiceDate: inv.date,
+          dueDate: inv.due,
+          subtotal: inv.subtotal,
+          discountType: 'none',
+          discountValue: '0',
+          discountAmount: '0',
+          taxAmount: inv.tax,
+          total: inv.total,
+          amountPaid: inv.paid,
+          balance: inv.balance,
+          status: inv.status as any,
+          notes: `Auto-generated invoice for ${allCusts[inv.cust].name}`,
+          paymentTerms: 'net30',
+          createdBy: admin.id,
+        }));
+        // Add 2-3 line items
+        const numLines = 2 + (inv.cust % 2);
+        for (let i = 0; i < numLines && i < items.length; i++) {
+          const item = items[(inv.cust + i) % items.length];
+          const qty = 10 + inv.cust * 5;
+          const unitPrice = Number(item.sellingPrice);
+          const lineTotal = qty * unitPrice;
+          const taxAmt = lineTotal * 0.17;
+          await m.save(m.create(InvoiceLineItem, {
+            invoiceId: invoice.id,
+            description: item.name,
+            quantity: String(qty),
+            unitPrice: item.sellingPrice,
+            taxRate: '17',
+            taxAmount: taxAmt.toFixed(4),
+            lineTotal: (lineTotal + taxAmt).toFixed(4),
+            accountId: salesAccount?.id ?? null,
+            lineOrder: i,
+          }));
+        }
+      }
+      console.log('  ✓ 5 invoices with line items created');
+    }
+
+    // =================================================================
+    // 13. BILLS (4 bills from vendors)
+    // =================================================================
+    const billCount = await m.countBy(Bill, { companyId: company.id });
+    if (billCount === 0 && allVends.length > 0) {
+      const billData = [
+        { num: 'BILL-001', vendor: 0, status: 'open', subtotal: '92500', tax: '15725', total: '108225', paid: '0', date: '2026-04-02', due: '2026-05-02' },
+        { num: 'BILL-002', vendor: 1, status: 'open', subtotal: '45000', tax: '7650', total: '52650', paid: '52650', date: '2026-03-28', due: '2026-04-28' },
+        { num: 'BILL-003', vendor: 2, status: 'draft', subtotal: '78000', tax: '13260', total: '91260', paid: '0', date: '2026-04-12', due: '2026-05-12' },
+        { num: 'BILL-004', vendor: 3, status: 'open', subtotal: '12000', tax: '2040', total: '14040', paid: '7000', date: '2026-04-08', due: '2026-05-08' },
+      ];
+      for (const b of billData) {
+        const bill = await m.save(m.create(Bill, {
+          companyId: company.id,
+          vendorId: allVends[b.vendor].id,
+          billNumber: b.num,
+          billDate: b.date,
+          dueDate: b.due,
+          subtotal: b.subtotal,
+          taxAmount: b.tax,
+          total: b.total,
+          amountPaid: b.paid,
+          balance: String(Number(b.total) - Number(b.paid)),
+          status: b.status as any,
+          memo: `Purchase from ${allVends[b.vendor].companyName}`,
+          createdBy: admin.id,
+        } as any));
+        // Add line items
+        for (let i = 0; i < 2; i++) {
+          const item = items[(b.vendor * 2 + i) % items.length];
+          await m.save(m.create(BillLineItem, {
+            billId: bill.id,
+            accountId: expenseAccount?.id ?? null,
+            description: `${item.name} — bulk purchase`,
+            amount: String(Number(b.subtotal) / 2),
+            taxRate: '17',
+            lineOrder: i,
+          } as any));
+        }
+      }
+      console.log('  ✓ 4 bills with line items created');
+    }
+
+    // =================================================================
+    // 14. JOURNAL ENTRIES (3 posted + 1 draft)
+    // =================================================================
+    const jeCount = await m.countBy(JournalEntry, { companyId: company.id });
+    if (jeCount === 0) {
+      const jeData = [
+        { ref: 'JE-001', date: '2026-04-01', memo: 'Opening balances', status: 'posted', amount: '500000' },
+        { ref: 'JE-002', date: '2026-04-10', memo: 'Monthly rent payment', status: 'posted', amount: '45000' },
+        { ref: 'JE-003', date: '2026-04-15', memo: 'Utility bills payment', status: 'posted', amount: '12000' },
+        { ref: 'JE-004', date: '2026-04-20', memo: 'Inventory purchase adjustment', status: 'draft', amount: '25000' },
+      ];
+      for (const je of jeData) {
+        const entry = await m.save(m.create(JournalEntry, {
+          companyId: company.id,
+          reference: je.ref,
+          date: je.date,
+          memo: je.memo,
+          status: je.status as any,
+          totalDebits: je.amount,
+          totalCredits: je.amount,
+          createdBy: admin.id,
+          postedBy: je.status === 'posted' ? admin.id : null,
+          postedAt: je.status === 'posted' ? new Date() : null,
+        }));
+        // Debit + Credit lines
+        await m.save(m.create(JournalEntryLine, {
+          entryId: entry.id,
+          accountId: expenseAccount?.id ?? allAccounts[0].id,
+          description: je.memo + ' (debit)',
+          debit: je.amount,
+          credit: '0',
+          lineOrder: 0,
+        }));
+        await m.save(m.create(JournalEntryLine, {
+          entryId: entry.id,
+          accountId: cashAccount?.id ?? allAccounts[1].id,
+          description: je.memo + ' (credit)',
+          debit: '0',
+          credit: je.amount,
+          lineOrder: 1,
+        }));
+      }
+      console.log('  ✓ 4 journal entries created (3 posted, 1 draft)');
+    }
+
+    // =================================================================
+    // 15. BANK ACCOUNTS + TRANSACTIONS
+    // =================================================================
+    const bankCount = await m.countBy(BankAccount, { companyId: company.id });
+    if (bankCount === 0) {
+      const checking = await m.save(m.create(BankAccount, {
+        companyId: company.id,
+        name: 'MCB Business Account',
+        bankName: 'MCB Bank',
+        accountNumber: '0012-3456789-001',
+        accountType: 'checking',
+        balance: '1250000',
+        linkedAccountId: cashAccount?.id ?? allAccounts[0].id,
+        lastReconciled: null,
+        isActive: true,
+      }));
+      const savings = await m.save(m.create(BankAccount, {
+        companyId: company.id,
+        name: 'HBL Savings',
+        bankName: 'Habib Bank Limited',
+        accountNumber: '9876-5432100-002',
+        accountType: 'savings',
+        balance: '3500000',
+        linkedAccountId: allAccounts.length > 1 ? allAccounts[1].id : allAccounts[0].id,
+        lastReconciled: null,
+        isActive: true,
+      }));
+
+      // Add transactions to checking account
+      const txns = [
+        { type: 'deposit', payee: 'Tariq General Store', ref: 'PMT-001', amount: '49140', memo: 'INV-001 payment received' },
+        { type: 'deposit', payee: 'Al-Madina Mart', ref: 'PMT-002', amount: '10000', memo: 'Partial payment INV-002' },
+        { type: 'expense', payee: 'Habib Oil Mills', ref: 'CHK-101', amount: '108225', memo: 'BILL-001 payment' },
+        { type: 'expense', payee: 'Office Rent', ref: 'CHK-102', amount: '45000', memo: 'April rent' },
+        { type: 'expense', payee: 'K-Electric', ref: 'CHK-103', amount: '12000', memo: 'Utility bill' },
+        { type: 'deposit', payee: 'Sales Collection', ref: 'DEP-001', amount: '85000', memo: 'Daily collection' },
+        { type: 'transfer', payee: 'HBL Savings', ref: 'TRF-001', amount: '100000', memo: 'Monthly savings transfer' },
+      ];
+      let runningBalance = 1250000;
+      for (const tx of txns) {
+        if (tx.type === 'deposit') runningBalance += Number(tx.amount);
+        else runningBalance -= Number(tx.amount);
+        await m.save(m.create(BankTransaction, {
+          companyId: company.id,
+          bankAccountId: checking.id,
+          date: '2026-04-15',
+          type: tx.type as any,
+          payee: tx.payee,
+          reference: tx.ref,
+          amount: tx.amount,
+          balance: String(runningBalance),
+          accountId: tx.type === 'deposit' ? arAccount?.id : expenseAccount?.id ?? null,
+          memo: tx.memo,
+          isCleared: tx.type !== 'transfer',
+          clearedDate: tx.type !== 'transfer' ? new Date() : null,
+        }));
+      }
+      console.log('  ✓ 2 bank accounts + 7 transactions created');
+    }
+
+    // =================================================================
+    // 16. TAX RATES
+    // =================================================================
+    const taxCount = await m.countBy(TaxRate, { companyId: company.id });
+    if (taxCount === 0) {
+      await m.save([
+        m.create(TaxRate, { companyId: company.id, name: 'GST (17%)', rate: '17', type: 'sales' as any, authority: 'FBR', isActive: true, isDefault: true }),
+        m.create(TaxRate, { companyId: company.id, name: 'Withholding Tax (4.5%)', rate: '4.5', type: 'income' as any, authority: 'FBR', isActive: true, isDefault: false }),
+        m.create(TaxRate, { companyId: company.id, name: 'Excise Duty (5%)', rate: '5', type: 'sales' as any, authority: 'Provincial', isActive: true, isDefault: false }),
+        m.create(TaxRate, { companyId: company.id, name: 'Zero-rated (Export)', rate: '0', type: 'sales' as any, authority: 'FBR', isActive: true, isDefault: false }),
+      ]);
+      console.log('  ✓ 4 tax rates created (GST, WHT, Excise, Zero-rated)');
+    }
+
+    // =================================================================
+    // 17. SALES ORDERS, PURCHASE ORDERS, BUDGETS, PAYROLL
+    // =================================================================
     const soCount = await m.countBy(SalesOrder, { companyId: company.id });
     if (soCount === 0 && allCusts.length > 0) {
-      await m.save(m.create(SalesOrder, {
-        companyId: company.id,
-        customerId: allCusts[0].id,
-        orderNumber: 'SO-001',
-        orderDate: new Date(),
-        status: 'draft',
-        subtotal: '5000.00',
-        taxAmount: '500.00',
-        total: '5500.00'
-      } as any));
+      await m.save([
+        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[0].id, orderNumber: 'SO-001', orderDate: new Date(), status: 'open', subtotal: '84000.00', taxAmount: '14280.00', total: '98280.00' } as any),
+        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[1].id, orderNumber: 'SO-002', orderDate: new Date(), status: 'draft', subtotal: '37000.00', taxAmount: '6290.00', total: '43290.00' } as any),
+        m.create(SalesOrder, { companyId: company.id, customerId: allCusts[2].id, orderNumber: 'SO-003', orderDate: new Date(), status: 'fulfilled', subtotal: '52000.00', taxAmount: '8840.00', total: '60840.00' } as any),
+      ]);
+      console.log('  ✓ 3 sales orders created');
     }
 
     const poCount = await m.countBy(PurchaseOrder, { companyId: company.id });
     if (poCount === 0 && allVends.length > 0) {
-      await m.save(m.create(PurchaseOrder, {
-        companyId: company.id,
-        vendorId: allVends[0].id,
-        poNumber: 'PO-001',
-        orderDate: new Date(),
-        status: 'draft',
-        subtotal: '2000.00',
-        taxAmount: '200.00',
-        total: '2200.00'
-      } as any));
+      await m.save([
+        m.create(PurchaseOrder, { companyId: company.id, vendorId: allVends[0].id, poNumber: 'PO-001', orderDate: new Date(), status: 'draft', subtotal: '185000.00', taxAmount: '31450.00', total: '216450.00' } as any),
+        m.create(PurchaseOrder, { companyId: company.id, vendorId: allVends[1].id, poNumber: 'PO-002', orderDate: new Date(), status: 'received', subtotal: '90000.00', taxAmount: '15300.00', total: '105300.00' } as any),
+      ]);
+      console.log('  ✓ 2 purchase orders created');
     }
 
     const budgetCount = await m.countBy(Budget, { companyId: company.id });
@@ -575,23 +796,17 @@ async function run() {
         status: 'active',
         createdBy: admin.id,
       } as any));
+      console.log('  ✓ 1 budget created');
     }
 
     const empCount = await m.countBy(Employee, { companyId: company.id });
     if (empCount === 0) {
-      const emp = await m.save(m.create(Employee, {
-        companyId: company.id,
-        firstName: 'John',
-        lastName: 'Doe',
-        email: 'john.doe@metromatrix.com',
-        phone: '555-1234',
-        department: 'Operations',
-        jobTitle: 'Manager',
-        employmentType: 'full_time',
-        salary: '60000.00',
-        status: 'active',
-        hireDate: new Date()
-      } as any));
+      await m.save([
+        m.create(Employee, { companyId: company.id, firstName: 'Ahmad', lastName: 'Khan', email: 'ahmad.khan@metromatrix.com', phone: '+92-300-1110001', department: 'Operations', jobTitle: 'Operations Manager', employmentType: 'full_time', salary: '120000.00', status: 'active', hireDate: new Date('2024-06-01') } as any),
+        m.create(Employee, { companyId: company.id, firstName: 'Fatima', lastName: 'Noor', email: 'fatima.noor@metromatrix.com', phone: '+92-300-1110002', department: 'Accounting', jobTitle: 'Accountant', employmentType: 'full_time', salary: '85000.00', status: 'active', hireDate: new Date('2024-08-15') } as any),
+        m.create(Employee, { companyId: company.id, firstName: 'Usman', lastName: 'Ali', email: 'usman.ali@metromatrix.com', phone: '+92-300-1110003', department: 'Warehouse', jobTitle: 'Warehouse Supervisor', employmentType: 'full_time', salary: '65000.00', status: 'active', hireDate: new Date('2025-01-10') } as any),
+      ]);
+      console.log('  ✓ 3 employees created');
 
       await m.save(m.create(PayrollRun, {
         companyId: company.id,
@@ -600,11 +815,27 @@ async function run() {
         periodEnd: new Date('2026-04-30'),
         payDate: new Date('2026-04-30'),
         status: 'draft',
-        totalGross: '5000.00',
-        totalDeductions: '750.00',
-        totalNet: '4250.00',
+        totalGross: '270000.00',
+        totalDeductions: '40500.00',
+        totalNet: '229500.00',
         createdBy: admin.id,
       } as any));
+      console.log('  ✓ 1 payroll run created');
+    }
+
+    // =================================================================
+    // 18. NOTIFICATIONS (admin dashboard alerts)
+    // =================================================================
+    const notifCount = await m.countBy(Notification, { userId: admin.id } as any);
+    if (notifCount === 0) {
+      await m.save([
+        m.create(Notification, { userId: admin.id, companyId: company.id, type: 'invoice', title: 'Invoice overdue', message: 'INV-003 for Iqbal Grocery is overdue by 5 days', isRead: false, data: {} } as any),
+        m.create(Notification, { userId: admin.id, companyId: company.id, type: 'inventory', title: 'Low stock alert', message: 'Dalda Banaspati Ghee 2.5kg is below reorder point (320 < 100)', isRead: false, data: {} } as any),
+        m.create(Notification, { userId: admin.id, companyId: company.id, type: 'delivery', title: 'Delivery completed', message: 'Saim Raza completed delivery to Tariq General Store', isRead: true, data: {} } as any),
+        m.create(Notification, { userId: admin.id, companyId: company.id, type: 'payment', title: 'Payment received', message: 'PKR 49,140 received from Tariq General Store', isRead: true, data: {} } as any),
+        m.create(Notification, { userId: saim.id, companyId: company.id, type: 'delivery', title: 'New delivery assigned', message: 'You have a new delivery for Al-Madina Mart', isRead: false, data: {} } as any),
+      ]);
+      console.log('  ✓ 5 notifications created');
     }
 
     console.log('\n  Data created:');
@@ -614,10 +845,18 @@ async function run() {
     console.log('    • 8 customers (retail shops)');
     console.log('    • 5 vendors (oil mills, detergent factories)');
     console.log('    • 12 inventory items (cooking oil, detergents, cleaners)');
+    console.log('    • 5 invoices with line items');
+    console.log('    • 4 bills with line items');
+    console.log('    • 4 journal entries (3 posted, 1 draft)');
+    console.log('    • 2 bank accounts + 7 transactions');
+    console.log('    • 4 tax rates (GST, WHT, Excise, Zero)');
+    console.log('    • 3 sales orders, 2 purchase orders');
+    console.log('    • 1 budget, 3 employees, 1 payroll run');
     console.log('    • 2 delivery personnel profiles');
     console.log('    • Shadow inventory snapshots for both DPs');
     console.log('    • 2 agencies (TCS Express, Leopards)');
     console.log('    • 8 deliveries with items (various statuses)');
+    console.log('    • 5 notifications');
     console.log('\n  Production API: https://finmatrix-api-a824f23fbd72.herokuapp.com/api/v1');
     console.log('  Local dev:      npm run start:dev');
     console.log('  Auth endpoint:  POST /api/v1/auth/signin\n');
