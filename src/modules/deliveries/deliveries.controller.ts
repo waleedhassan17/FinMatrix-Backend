@@ -13,7 +13,6 @@ import {
   DeliveryStatusUpdateDto,
   DeliveryQueryDto,
   DeliveryIssueDto,
-  CaptureSignatureDto,
   ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 
@@ -42,6 +41,37 @@ export class DeliveriesController {
     @Body() dto: CreateDeliveryDto,
   ) {
     return this.svc.create(companyId, dto, 'user-id');
+  }
+
+  @Get('my/assigned')
+  @Roles('delivery')
+  myDeliveries(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('page', ParseIntPipe) page = 1,
+    @Query('limit', ParseIntPipe) limit = 20,
+  ) {
+    return this.svc.myDeliveries(companyId, user.id, page, limit);
+  }
+
+  @Get('my/dashboard')
+  @Roles('delivery')
+  myDashboard(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.myDashboard(companyId, user.id);
+  }
+
+  @Get('my/history')
+  @Roles('delivery')
+  myHistory(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('page', ParseIntPipe) page = 1,
+    @Query('limit', ParseIntPipe) limit = 20,
+  ) {
+    return this.svc.myHistory(companyId, user.id, page, limit);
   }
 
   @Get(':id')
@@ -121,37 +151,6 @@ export class DeliveriesController {
     @Body() dto: { deliveryIds: string[]; personnelId: string },
   ) {
     return this.svc.assignDeliveries(companyId, dto.deliveryIds, dto.personnelId);
-  }
-
-  @Get('my/assigned')
-  @Roles('delivery')
-  myDeliveries(
-    @CurrentCompany() companyId: string,
-    @Query('personnelId') personnelId: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
-  ) {
-    return this.svc.myDeliveries(companyId, personnelId, page, limit);
-  }
-
-  @Get('my/dashboard')
-  @Roles('delivery')
-  myDashboard(
-    @CurrentCompany() companyId: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    return this.svc.myDashboard(companyId, user.id);
-  }
-
-  @Get('my/history')
-  @Roles('delivery')
-  myHistory(
-    @CurrentCompany() companyId: string,
-    @CurrentUser() user: AuthenticatedUser,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
-  ) {
-    return this.svc.myHistory(companyId, user.id, page, limit);
   }
 
   @Post(':id/confirm')
