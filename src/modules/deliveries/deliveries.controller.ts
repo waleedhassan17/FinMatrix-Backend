@@ -39,8 +39,9 @@ export class DeliveriesController {
   create(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateDeliveryDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.create(companyId, dto, 'user-id');
+    return this.svc.create(companyId, dto, user.id);
   }
 
   @Get('my/assigned')
@@ -108,8 +109,9 @@ export class DeliveriesController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DeliveryStatusUpdateDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.updateStatus(companyId, id, dto, 'user-id');
+    return this.svc.updateStatus(companyId, id, dto, user.id);
   }
 
   @Get(':id/history')
@@ -129,8 +131,9 @@ export class DeliveriesController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DeliveryIssueDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.reportIssue(companyId, id, dto, 'user-id');
+    return this.svc.reportIssue(companyId, id, dto, user.id);
   }
 
   @Get(':id/issues')

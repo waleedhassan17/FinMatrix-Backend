@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post,
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { PayrollService } from './payroll.service';
 import { CreatePayrollRunDto, UpdatePayrollRunDto } from './dto/payroll.dto';
@@ -35,8 +36,9 @@ export class PayrollController {
   createRun(
     @CurrentCompany() companyId: string,
     @Body() dto: CreatePayrollRunDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.create(companyId, dto, 'user-id');
+    return this.svc.create(companyId, dto, user.id);
   }
 
   @Get(':id')

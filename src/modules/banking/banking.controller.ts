@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, ParseUUIDPipe, Patc
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { BankingService } from './banking.service';
 import { CreateBankAccountDto, UpdateBankAccountDto, CreateBankTransactionDto, ReconcileDto, BankAccountQueryDto, BankTransactionQueryDto, CreateTransferDto } from './dto/banking.dto';
@@ -88,8 +89,9 @@ export class BankingController {
   createTransfer(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateTransferDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.createTransfer(companyId, dto, 'user-id');
+    return this.svc.createTransfer(companyId, dto, user.id);
   }
 
   @Post('transactions')
@@ -97,8 +99,9 @@ export class BankingController {
   createTransaction(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateBankTransactionDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.createTransaction(companyId, dto, 'user-id');
+    return this.svc.createTransaction(companyId, dto, user.id);
   }
 
   @Get('reconciliations/unreconciled')
@@ -115,8 +118,9 @@ export class BankingController {
   reconcileGlobal(
     @CurrentCompany() companyId: string,
     @Body() dto: ReconcileDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.reconcile(companyId, dto.bankAccountId, dto, 'user-id');
+    return this.svc.reconcile(companyId, dto.bankAccountId, dto, user.id);
   }
 
   @Get('accounts/:id/reconciliations')

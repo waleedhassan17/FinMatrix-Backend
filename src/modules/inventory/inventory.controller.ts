@@ -13,6 +13,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { InventoryService } from './inventory.service';
 import {
@@ -87,8 +88,9 @@ export class InventoryController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AdjustQuantityDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.adjust(companyId, dto, 'user-id');
+    return this.svc.adjust(companyId, dto, user.id);
   }
 
   @Get('items/:id/movements')
@@ -108,8 +110,9 @@ export class InventoryController {
   createTransfer(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateStockTransferDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.createTransfer(companyId, dto, 'user-id');
+    return this.svc.createTransfer(companyId, dto, user.id);
   }
 
   @Patch('transfers/:id/complete')
@@ -127,8 +130,9 @@ export class InventoryController {
   createCount(
     @CurrentCompany() companyId: string,
     @Body() dto: CreatePhysicalCountDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.createCount(companyId, dto, 'user-id');
+    return this.svc.createCount(companyId, dto, user.id);
   }
 
   // Movements

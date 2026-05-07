@@ -67,22 +67,24 @@ export class ReportsService {
   async arAging(companyId: string) {
     const qb = this.invoiceRepo.createQueryBuilder('i')
       .select('i.customerId', 'customerId')
-      .addSelect('SUM(i.balanceDue::numeric)', 'balance')
-      .addSelect('i.invoiceDate', 'invoiceDate')
+      .addSelect('SUM(i.balance::numeric)', 'balance')
+      .addSelect('MIN(i.invoiceDate)', 'oldestInvoiceDate')
+      .addSelect('COUNT(i.id)', 'invoiceCount')
       .where('i.companyId = :cid AND i.status != :paid', { cid: companyId, paid: 'paid' })
-      .groupBy('i.customerId, i.invoiceDate')
-      .orderBy('i.invoiceDate', 'ASC');
+      .groupBy('i.customerId')
+      .orderBy('MIN(i.invoiceDate)', 'ASC');
     return qb.getRawMany();
   }
 
   async apAging(companyId: string) {
     const qb = this.billRepo.createQueryBuilder('b')
       .select('b.vendorId', 'vendorId')
-      .addSelect('SUM(b.balanceDue::numeric)', 'balance')
-      .addSelect('b.billDate', 'billDate')
+      .addSelect('SUM(b.balance::numeric)', 'balance')
+      .addSelect('MIN(b.billDate)', 'oldestBillDate')
+      .addSelect('COUNT(b.id)', 'billCount')
       .where('b.companyId = :cid AND b.status != :paid', { cid: companyId, paid: 'paid' })
-      .groupBy('b.vendorId, b.billDate')
-      .orderBy('b.billDate', 'ASC');
+      .groupBy('b.vendorId')
+      .orderBy('MIN(b.billDate)', 'ASC');
     return qb.getRawMany();
   }
 
@@ -189,18 +191,20 @@ export class ReportsService {
     if (type === 'ar') {
       const qb = this.invoiceRepo.createQueryBuilder('i')
         .select('i.customerId', 'entityId')
-        .addSelect('SUM(i.balanceDue::numeric)', 'balance')
-        .addSelect('i.invoiceDate', 'date')
+        .addSelect('SUM(i.balance::numeric)', 'balance')
+        .addSelect('MIN(i.invoiceDate)', 'date')
+        .addSelect('COUNT(i.id)', 'count')
         .where('i.companyId = :cid AND i.status != :paid', { cid: companyId, paid: 'paid' })
-        .groupBy('i.customerId, i.invoiceDate');
+        .groupBy('i.customerId');
       return qb.getRawMany();
     } else {
       const qb = this.billRepo.createQueryBuilder('b')
         .select('b.vendorId', 'entityId')
         .addSelect('SUM(b.balance::numeric)', 'balance')
-        .addSelect('b.billDate', 'date')
+        .addSelect('MIN(b.billDate)', 'date')
+        .addSelect('COUNT(b.id)', 'count')
         .where('b.companyId = :cid AND b.status != :paid', { cid: companyId, paid: 'paid' })
-        .groupBy('b.vendorId, b.billDate');
+        .groupBy('b.vendorId');
       return qb.getRawMany();
     }
   }

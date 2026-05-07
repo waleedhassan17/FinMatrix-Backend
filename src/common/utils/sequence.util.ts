@@ -18,13 +18,14 @@ export async function nextYearlySequence(
   numberPrefix: string,
   numberColumn: string,
 ): Promise<number> {
+  // COUNT(*) with FOR UPDATE is not allowed in PostgreSQL — use a plain
+  // count inside the existing transaction for sequence ordering.
   const rows = await manager.query<ObjectLiteral[]>(
     `SELECT COUNT(*) AS count
      FROM ${table}
      WHERE company_id = $1
        AND EXTRACT(YEAR FROM ${yearColumn}) = $2
-       AND ${numberColumn} LIKE $3
-     FOR UPDATE`,
+       AND ${numberColumn} LIKE $3`,
     [companyId, year, `${numberPrefix}-${year}-%`],
   );
   const count = parseInt((rows[0]?.count as string) ?? '0', 10);

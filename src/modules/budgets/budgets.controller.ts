@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, ParseUUIDPipe, Patc
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { BudgetsService } from './budgets.service';
 import { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
@@ -29,8 +30,9 @@ export class BudgetsController {
   create(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateBudgetDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.create(companyId, dto, 'user-id');
+    return this.svc.create(companyId, dto, user.id);
   }
 
   @Get(':id')
@@ -67,7 +69,8 @@ export class BudgetsController {
   copy(
     @CurrentCompany() companyId: string,
     @Body() dto: { sourceFiscalYear: number; targetFiscalYear: number; name: string },
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.copyFromLastYear(companyId, dto.sourceFiscalYear, dto.targetFiscalYear, dto.name, 'user-id');
+    return this.svc.copyFromLastYear(companyId, dto.sourceFiscalYear, dto.targetFiscalYear, dto.name, user.id);
   }
 }

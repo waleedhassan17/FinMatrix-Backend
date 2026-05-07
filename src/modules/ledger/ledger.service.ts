@@ -28,6 +28,14 @@ export class LedgerService {
     if (query.accountId) {
       qb.andWhere('g.accountId = :aid', { aid: query.accountId });
     }
+    // Compute totals first (no ORDER BY — aggregate query doesn't need it).
+    const totalsRaw = await qb
+      .clone()
+      .select('SUM(g.debit)', 'debit')
+      .addSelect('SUM(g.credit)', 'credit')
+      .getRawOne<{ debit: string | null; credit: string | null }>();
+
+    // Apply ordering only for the paginated data query.
     qb.orderBy('g.date', 'ASC').addOrderBy('g.createdAt', 'ASC');
 
     const [data, total] = await qb
@@ -35,13 +43,6 @@ export class LedgerService {
       .take(pagination.limit)
       .skip(pagination.skip)
       .getManyAndCount();
-
-    // Compute totals across the full filter (not just current page).
-    const totalsRaw = await qb
-      .clone()
-      .select('SUM(g.debit)', 'debit')
-      .addSelect('SUM(g.credit)', 'credit')
-      .getRawOne<{ debit: string | null; credit: string | null }>();
 
     const totalDebits = toDecimal(totalsRaw?.debit ?? 0).toFixed(4);
     const totalCredits = toDecimal(totalsRaw?.credit ?? 0).toFixed(4);
