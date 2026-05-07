@@ -56,11 +56,12 @@ export class PostingService {
     manager: EntityManager,
     companyId: string,
   ): Promise<string> {
+    // pessimistic_write (FOR UPDATE) is not allowed on aggregate queries in
+    // PostgreSQL — use a plain COUNT inside the existing transaction instead.
     const res = await manager
       .createQueryBuilder(JournalEntry, 'e')
       .select('COUNT(*)', 'count')
       .where('e.companyId = :companyId', { companyId })
-      .setLock('pessimistic_write')
       .getRawOne<{ count: string }>();
     const count = parseInt(res?.count ?? '0', 10);
     return formatJournalRef(count + 1);

@@ -15,15 +15,17 @@ import { BillStatus, PaymentMethod } from '../../../types';
 import { PAYMENT_METHODS } from '../../payments/dto/payment.dto';
 
 export class BillLineDto {
-  @ApiProperty() @IsUUID() accountId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
   @ApiProperty() @IsString() description!: string;
-  @ApiProperty() @IsNumberString() amount!: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumberString() amount?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumberString() quantity?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumberString() unitPrice?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() taxRate?: string;
 }
 
 export class CreateBillDto {
   @ApiProperty() @IsUUID() vendorId!: string;
-  @ApiProperty() @IsString() billNumber!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() billNumber?: string;
   @ApiProperty() @IsDateString() billDate!: string;
   @ApiProperty() @IsDateString() dueDate!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() memo?: string;

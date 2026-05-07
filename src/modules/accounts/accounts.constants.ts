@@ -106,3 +106,4 @@ export const ACCT_AR = '1100';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
 export const ACCT_SALES_REVENUE = '4000';
+export const ACCT_COGS = '5000';

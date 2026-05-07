@@ -29,8 +29,10 @@ import {
 } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_AP } from '../accounts/accounts.constants';
+import { ACCT_AP, ACCT_COGS } from '../accounts/accounts.constants';
 import { BillStatus } from '../../types';
+import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { formatBillRef } from '../../common/utils/reference-generator.util';
 
 interface BillTotals {
   subtotal: string;
@@ -117,13 +119,35 @@ export class BillsService {
         });
       }
 
-      const totals = this.computeTotals(dto.lines);
+      // Auto-generate billNumber if caller omits it (mirrors invoice behaviour).
+      let billNumber = dto.billNumber;
+      if (!billNumber) {
+        const year = new Date(dto.billDate).getFullYear();
+        const seq = await nextYearlySequence(
+          manager, 'bills', companyId, year, 'bill_date', 'BILL', 'bill_number',
+        );
+        billNumber = formatBillRef(year, seq);
+      }
+
+      // Resolve missing accountId on lines → fallback to COGS account.
+      const cogsAccount = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
+      const resolvedLines = dto.lines.map((l) => ({
+        ...l,
+        accountId: l.accountId ?? cogsAccount?.id ?? '',
+        amount: l.amount ?? (
+          l.quantity && l.unitPrice
+            ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
+            : '0'
+        ),
+      }));
+
+      const totals = this.computeTotals(resolvedLines);
       const status: BillStatus = dto.status ?? 'open';
 
       const bill = manager.create(Bill, {
         companyId,
         vendorId: vendor.id,
-        billNumber: dto.billNumber,
+        billNumber,
         billDate: dto.billDate,
         dueDate: dto.dueDate,
         subtotal: totals.subtotal,
@@ -151,6 +175,7 @@ export class BillsService {
       return bill;
     });
   }
+
 
   async update(
     companyId: string,
@@ -180,7 +205,17 @@ export class BillsService {
       if (dto.memo !== undefined) bill.memo = dto.memo;
 
       if (dto.lines) {
-        const totals = this.computeTotals(dto.lines);
+        const cogsAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
+        const resolvedUpdateLines = dto.lines.map((l) => ({
+          ...l,
+          accountId: l.accountId ?? cogsAcct?.id ?? '',
+          amount: l.amount ?? (
+            l.quantity && l.unitPrice
+              ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
+              : '0'
+          ),
+        }));
+        const totals = this.computeTotals(resolvedUpdateLines);
         bill.subtotal = totals.subtotal;
         bill.taxAmount = totals.taxAmount;
         bill.total = totals.total;
@@ -366,7 +401,9 @@ export class BillsService {
     return { data, total, page, limit };
   }
 
-  private computeTotals(lines: BillLineDto[]): BillTotals {
+  private computeTotals(
+    lines: Array<BillLineDto & { accountId: string; amount: string }>,
+  ): BillTotals {
     let subtotal = new Decimal(0);
     let tax = new Decimal(0);
     const calc = lines.map((l, i) => {
