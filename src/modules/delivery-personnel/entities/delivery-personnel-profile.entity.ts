@@ -48,6 +48,15 @@ export class DeliveryPersonnelProfile {
   @Column({ type: 'decimal', precision: 5, scale: 2, default: 100, name: 'on_time_rate' })
   onTimeRate!: string;
 
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, name: 'current_lat' })
+  currentLat!: string | null;
+
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, name: 'current_lng' })
+  currentLng!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'location_updated_at' })
+  locationUpdatedAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 

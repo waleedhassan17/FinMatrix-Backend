@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsEnum, IsNumberString, IsArray, IsUUID, Length } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsEnum, IsNumberString, IsArray, IsUUID, Length, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPersonnelStatus } from '../../../types';
 
@@ -17,4 +17,9 @@ export class UpdatePersonnelDto {
   @ApiPropertyOptional() @IsOptional() @IsNumberString() maxLoad?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isAvailable?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsEnum(['active', 'on_leave', 'inactive'] as DeliveryPersonnelStatus[]) status?: DeliveryPersonnelStatus;
+}
+
+export class UpdateLocationDto {
+  @ApiProperty({ description: 'GPS latitude' }) @IsNumber() lat!: number;
+  @ApiProperty({ description: 'GPS longitude' }) @IsNumber() lng!: number;
 }

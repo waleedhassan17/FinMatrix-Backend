@@ -4,9 +4,10 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { DeliveryPersonnelService } from './delivery-personnel.service';
-import { CreatePersonnelDto, UpdatePersonnelDto } from './dto/delivery-personnel.dto';
+import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
 
 @ApiTags('Delivery Personnel')
 @ApiBearerAuth()
@@ -33,6 +34,16 @@ export class DeliveryPersonnelController {
     @Body() dto: CreatePersonnelDto,
   ) {
     return this.svc.create(companyId, dto);
+  }
+
+  @Patch('location')
+  @Roles('delivery')
+  updateLocation(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateLocationDto,
+  ) {
+    return this.svc.updateLocation(companyId, user.id, dto.lat, dto.lng);
   }
 
   @Get(':userId')

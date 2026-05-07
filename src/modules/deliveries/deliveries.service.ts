@@ -277,4 +277,62 @@ export class DeliveriesService {
     const [data, total] = await qb.getManyAndCount();
     return { data, total, page, limit };
   }
+
+  async getMapData(companyId: string) {
+    // All active (non-terminal) deliveries
+    const activeDeliveries = await this.repo
+      .createQueryBuilder('d')
+      .where('d.companyId = :cid', { cid: companyId })
+      .andWhere('d.status IN (:...statuses)', {
+        statuses: ['pending', 'picked_up', 'in_transit', 'arrived'],
+      })
+      .leftJoinAndSelect('d.items', 'items')
+      .orderBy('d.createdAt', 'DESC')
+      .getMany();
+
+    // All personnel with location data
+    const allPersonnel = await this.personnelRepo.find({ where: { companyId } });
+
+    const personnelMap = new Map(allPersonnel.map(p => [p.userId, p]));
+
+    // Build markers — one per active delivery that has a located DP
+    const markers = activeDeliveries.map(d => {
+      const personnel = d.personnelId ? personnelMap.get(d.personnelId) : undefined;
+      return {
+        deliveryId: d.id,
+        status: d.status,
+        priority: d.priority,
+        customerId: d.customerId,
+        personnelId: d.personnelId ?? null,
+        itemCount: d.items?.length ?? 0,
+        assignedAt: d.assignedAt,
+        createdAt: d.createdAt,
+        personnel: personnel
+          ? {
+              vehicleType: personnel.vehicleType,
+              rating: personnel.rating,
+              isAvailable: personnel.isAvailable,
+              lat: personnel.currentLat ? parseFloat(personnel.currentLat) : null,
+              lng: personnel.currentLng ? parseFloat(personnel.currentLng) : null,
+              locationUpdatedAt: personnel.locationUpdatedAt,
+            }
+          : null,
+      };
+    });
+
+    // Summary stats
+    const allForSummary = await this.repo.find({ where: { companyId } });
+    const summary = {
+      total: allForSummary.length,
+      pending: allForSummary.filter(d => d.status === 'pending').length,
+      inTransit: allForSummary.filter(d => ['picked_up', 'in_transit', 'arrived'].includes(d.status)).length,
+      delivered: allForSummary.filter(d => d.status === 'delivered').length,
+      failed: allForSummary.filter(d => d.status === 'failed').length,
+      unassigned: allForSummary.filter(d => d.status === 'unassigned').length,
+    };
+
+    const locatedPersonnel = allPersonnel.filter(p => p.currentLat !== null).length;
+
+    return { markers, summary, locatedPersonnel };
+  }
 }

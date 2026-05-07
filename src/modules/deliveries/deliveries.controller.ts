@@ -75,6 +75,12 @@ export class DeliveriesController {
     return this.svc.myHistory(companyId, user.id, page, limit);
   }
 
+  @Get('map-data')
+  @Roles('admin', 'staff')
+  getMapData(@CurrentCompany() companyId: string) {
+    return this.svc.getMapData(companyId);
+  }
+
   @Get(':id')
   @Roles('admin', 'staff', 'delivery')
   get(

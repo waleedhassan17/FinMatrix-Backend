@@ -47,6 +47,14 @@ export class DeliveryPersonnelService {
     return this.repo.save(p);
   }
 
+  async updateLocation(companyId: string, userId: string, lat: number, lng: number) {
+    const p = await this.getById(companyId, userId);
+    p.currentLat = lat.toFixed(7);
+    p.currentLng = lng.toFixed(7);
+    p.locationUpdatedAt = new Date();
+    return this.repo.save(p);
+  }
+
   async resetPassword(companyId: string, userId: string) {
     const p = await this.getById(companyId, userId);
     const tempPassword = `Del@${Math.floor(1000 + Math.random() * 9000)}`;
