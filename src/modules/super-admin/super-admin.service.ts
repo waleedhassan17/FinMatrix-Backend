@@ -140,6 +140,7 @@ export class SuperAdminService {
         });
         const subscription = await this.subRepo.findOne({
           where: { companyId: c.id, status: 'active' },
+          relations: { plan: true },
         });
         return {
           id: c.id,
@@ -158,12 +159,14 @@ export class SuperAdminService {
     );
 
     return {
-      data: enriched,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
+      data: {
+        data: enriched,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
       },
     };
   }
@@ -298,8 +301,10 @@ export class SuperAdminService {
     );
 
     return {
-      data: enriched,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      data: {
+        data: enriched,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
     };
   }
 
