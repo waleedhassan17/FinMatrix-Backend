@@ -8,9 +8,9 @@
  *
  * After running, you can log in and test EVERY feature end-to-end:
  *
- *   Admin:     waleedhassansfd@gmail.com / MetroMatrix2026!
- *   DP #1:     saim@metromatrix.com      / Delivery2026!
- *   DP #2:     haseeb@metromatrix.com    / Delivery2026!
+ *   Admin:     metromatrix@gmail.com     / 123456
+ *   DP #1:     saim@metromatrix.com      / 123456
+ *   DP #2:     haseeb@metromatrix.com    / 123456
  *
  *   Company invite code: printed in console output.
  */
@@ -67,8 +67,9 @@ function parseDatabaseUrl(url: string) {
 // =====================================================================
 // PASSWORDS
 // =====================================================================
+const ADMIN_EMAIL    = 'metromatrix@gmail.com';
 const ADMIN_PASSWORD = '123456';
-const DP_PASSWORD = '123456';
+const DP_PASSWORD    = '123456';
 
 async function run() {
   const dbUrl = process.env.DATABASE_URL;
@@ -98,26 +99,26 @@ async function run() {
     const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
     const dpHash = await bcrypt.hash(DP_PASSWORD, 12);
 
-    let admin = await m.findOneBy(User, { email: 'waleedhassansfd@gmail.com' });
+    let admin = await m.findOneBy(User, { email: ADMIN_EMAIL });
     if (!admin) {
       admin = await m.save(
         m.create(User, {
-          email: 'waleedhassansfd@gmail.com',
+          email: ADMIN_EMAIL,
           passwordHash: adminHash,
-          displayName: 'Waleed Hassan',
+          displayName: 'MetroMatrix Admin',
           phone: '+92-300-1234567',
           role: 'admin',
           isActive: true,
           defaultCompanyId: null,
         }),
       );
-      console.log('  ✓ Admin user created: waleedhassansfd@gmail.com');
+      console.log(`  ✓ Admin user created: ${ADMIN_EMAIL}`);
     } else {
-      // Update password to make sure it's current
       admin.passwordHash = adminHash;
       admin.isActive = true;
+      if (admin.role !== 'admin') admin.role = 'admin';
       await m.save(admin);
-      console.log('  ✓ Admin user exists, password updated');
+      console.log(`  ✓ Admin user exists, password updated: ${ADMIN_EMAIL}`);
     }
 
     let saim = await m.findOneBy(User, { email: 'saim@metromatrix.com' });
@@ -528,11 +529,11 @@ async function run() {
     // DONE
     // =================================================================
     console.log('\n' + '='.repeat(60));
-    console.log('  MetroMatrix seed completed successfully!');
+    console.log(`  MetroMatrix seed completed! Admin: ${ADMIN_EMAIL}`);
     console.log('='.repeat(60));
     console.log('\n  Login Credentials:');
     console.log('  ─────────────────────────────────────────────');
-    console.log(`  Admin:  waleedhassansfd@gmail.com / ${ADMIN_PASSWORD}`);
+    console.log(`  Admin:  ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
     console.log(`  DP #1:  saim@metromatrix.com      / ${DP_PASSWORD}`);
     console.log(`  DP #2:  haseeb@metromatrix.com    / ${DP_PASSWORD}`);
     console.log(`  Company invite code: ${company.inviteCode}`);
