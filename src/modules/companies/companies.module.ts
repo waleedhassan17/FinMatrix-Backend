@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Company } from './entities/company.entity';
 import { UserCompany } from './entities/user-company.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { SubscriptionPlan } from '../super-admin/entities/subscription-plan.entity';
+import { CompanySubscription } from '../super-admin/entities/company-subscription.entity';
 import { UsersModule } from '../users/users.module';
 import { CompaniesService } from './companies.service';
 import { CompaniesController } from './companies.controller';
@@ -10,7 +12,7 @@ import { CompaniesController } from './companies.controller';
 @Module({
   imports: [
     UsersModule,
-    TypeOrmModule.forFeature([Company, UserCompany, Account]),
+    TypeOrmModule.forFeature([Company, UserCompany, Account, SubscriptionPlan, CompanySubscription]),
   ],
   controllers: [CompaniesController],
   providers: [CompaniesService],

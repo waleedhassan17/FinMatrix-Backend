@@ -4,7 +4,7 @@ import { Request } from 'express';
 export interface AuthenticatedUser {
   id: string;
   email: string;
-  role: 'admin' | 'delivery' | 'staff';
+  role: 'admin' | 'delivery' | 'staff' | 'super_admin';
   companyId: string | null;
 }
 

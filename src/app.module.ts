@@ -51,6 +51,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SearchModule } from './modules/search/search.module';
 import { HealthModule } from './modules/health/health.module';
+import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
@@ -113,6 +114,7 @@ import { StorageModule } from './common/storage/storage.module';
     SearchModule,
     HealthModule,
     StorageModule,
+    SuperAdminModule,
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

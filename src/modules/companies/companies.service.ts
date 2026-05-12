@@ -18,6 +18,8 @@ import {
 import { generateInviteCode } from '../../common/utils/reference-generator.util';
 import { Account } from '../accounts/entities/account.entity';
 import { DEFAULT_CHART_OF_ACCOUNTS } from '../accounts/accounts.constants';
+import { SubscriptionPlan } from '../super-admin/entities/subscription-plan.entity';
+import { CompanySubscription } from '../super-admin/entities/company-subscription.entity';
 
 @Injectable()
 export class CompaniesService {
@@ -28,6 +30,10 @@ export class CompaniesService {
     private readonly userCompanyRepo: Repository<UserCompany>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly planRepo: Repository<SubscriptionPlan>,
+    @InjectRepository(CompanySubscription)
+    private readonly subRepo: Repository<CompanySubscription>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -210,6 +216,43 @@ export class CompaniesService {
       code: 'INTERNAL_ERROR',
       message: 'Unable to generate a unique invite code',
     });
+  }
+
+  // ── Self-Subscribe (company admin picks own plan) ──────────────────────────
+  async selfSubscribe(companyId: string, planId: string, userId: string) {
+    if (!companyId) throw new BadRequestException('No company associated with your account');
+
+    const plan = await this.planRepo.findOne({ where: { id: planId, isActive: true } });
+    if (!plan) throw new NotFoundException('Subscription plan not found');
+
+    const membership = await this.userCompanyRepo.findOne({
+      where: { userId, companyId },
+    });
+    if (!membership) throw new ForbiddenException('You are not a member of this company');
+
+    // Cancel existing active/trial subscriptions
+    await this.dataSource
+      .createQueryBuilder()
+      .update(CompanySubscription)
+      .set({ status: 'cancelled' })
+      .where('company_id = :cid AND status IN (:...s)', {
+        cid: companyId,
+        s: ['active', 'trial'],
+      })
+      .execute();
+
+    const isFree = parseFloat(plan.priceMonthly) === 0;
+    const sub = this.subRepo.create({
+      companyId,
+      planId: plan.id,
+      status: isFree ? 'trial' : 'active',
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: isFree ? null : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+      notes: isFree ? 'Free plan — self-selected during onboarding' : null,
+      assignedBy: userId,
+    });
+    const saved = await this.subRepo.save(sub);
+    return { ...saved, plan };
   }
 
   private async seedDefaultChartOfAccounts(

@@ -26,7 +26,9 @@
     "seed:coa": "ts-node -r tsconfig-paths/register src/database/seeds/default-chart-of-accounts.seed.ts",
     "seed:demo": "ts-node -r tsconfig-paths/register src/database/seeds/demo-data.seed.ts",
     "seed:metromatrix": "ts-node -r tsconfig-paths/register src/database/seeds/metromatrix.seed.ts",
-    "seed:metromatrix:prod": "node dist/database/seeds/metromatrix.seed.js"
+    "seed:metromatrix:prod": "node dist/database/seeds/metromatrix.seed.js",
+    "seed:superadmin": "ts-node -r tsconfig-paths/register src/database/seeds/super-admin-seed.ts",
+    "seed:superadmin:prod": "node -r module-alias/register dist/database/seeds/super-admin-seed.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

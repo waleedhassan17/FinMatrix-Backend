@@ -40,6 +40,18 @@ export class Company extends BaseEntity {
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
 
+  @Column({ type: 'varchar', length: 20, default: 'active', nullable: true })
+  status!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
+  rejectionReason!: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'reviewed_by' })
+  reviewedBy!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'reviewed_at' })
+  reviewedAt!: Date | null;
+
   @OneToMany(() => UserCompany, (uc) => uc.company)
   memberships!: UserCompany[];
 }

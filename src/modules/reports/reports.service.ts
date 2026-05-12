@@ -119,17 +119,109 @@ export class ReportsService {
   }
 
   async dashboardSummary(companyId: string) {
-    const [invoiceTotal, billTotal, itemCount, deliveryCount] = await Promise.all([
-      this.invoiceRepo.createQueryBuilder('i').select('COALESCE(SUM(i.total::numeric),0)', 'total').where('i.companyId = :cid', { cid: companyId }).getRawOne(),
-      this.billRepo.createQueryBuilder('b').select('COALESCE(SUM(b.total::numeric),0)', 'total').where('b.companyId = :cid', { cid: companyId }).getRawOne(),
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const monthEnd = now.toISOString().slice(0, 10);
+
+    const [
+      invoiceTotal,
+      billTotal,
+      outstandingAR,
+      pendingAP,
+      itemCount,
+      deliveryStats,
+      recentInvoices,
+      recentBills,
+    ] = await Promise.all([
+      this.invoiceRepo.createQueryBuilder('i')
+        .select('COALESCE(SUM(i.total::numeric),0)', 'total')
+        .where('i.companyId = :cid AND i.invoiceDate BETWEEN :s AND :e', { cid: companyId, s: monthStart, e: monthEnd })
+        .getRawOne(),
+      this.billRepo.createQueryBuilder('b')
+        .select('COALESCE(SUM(b.total::numeric),0)', 'total')
+        .where('b.companyId = :cid AND b.billDate BETWEEN :s AND :e', { cid: companyId, s: monthStart, e: monthEnd })
+        .getRawOne(),
+      this.invoiceRepo.createQueryBuilder('i')
+        .select('COALESCE(SUM(i.balance::numeric),0)', 'balance')
+        .where('i.companyId = :cid AND i.status NOT IN (:...statuses)', { cid: companyId, statuses: ['paid', 'void'] })
+        .getRawOne(),
+      this.billRepo.createQueryBuilder('b')
+        .select('COALESCE(SUM(b.balance::numeric),0)', 'balance')
+        .where('b.companyId = :cid AND b.status NOT IN (:...statuses)', { cid: companyId, statuses: ['paid', 'void'] })
+        .getRawOne(),
       this.itemRepo.count({ where: { companyId } }),
-      this.deliveryRepo.count({ where: { companyId } }),
+      this.deliveryRepo.createQueryBuilder('d')
+        .select('d.status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .where('d.companyId = :cid', { cid: companyId })
+        .groupBy('d.status')
+        .getRawMany(),
+      this.invoiceRepo.createQueryBuilder('i')
+        .where('i.companyId = :cid', { cid: companyId })
+        .orderBy('i.createdAt', 'DESC')
+        .limit(5)
+        .getMany(),
+      this.billRepo.createQueryBuilder('b')
+        .where('b.companyId = :cid', { cid: companyId })
+        .orderBy('b.createdAt', 'DESC')
+        .limit(5)
+        .getMany(),
     ]);
+
+    const deliveryBreakdown: Record<string, number> = { pending: 0, assigned: 0, in_transit: 0, delivered: 0, failed: 0, cancelled: 0 };
+    let deliveryTotal = 0;
+    for (const row of deliveryStats) {
+      deliveryBreakdown[row.status] = parseInt(row.count, 10);
+      deliveryTotal += parseInt(row.count, 10);
+    }
+
+    const recentTransactions = [
+      ...recentInvoices.map(inv => ({
+        id: inv.id,
+        type: 'invoice' as const,
+        description: inv.invoiceNumber,
+        date: inv.invoiceDate,
+        amount: parseFloat(inv.total),
+        status: inv.status,
+      })),
+      ...recentBills.map(bill => ({
+        id: bill.id,
+        type: 'bill' as const,
+        description: bill.billNumber,
+        date: bill.billDate,
+        amount: parseFloat(bill.total),
+        status: bill.status,
+      })),
+    ]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8);
+
+    const overdueInvoicesCount = recentInvoices.filter(
+      inv => inv.status !== 'paid' && inv.status !== 'void' && new Date(inv.dueDate) < now,
+    ).length;
+
+    const alerts: { id: string; message: string; severity: 'red' | 'amber' | 'blue' }[] = [];
+    if (overdueInvoicesCount > 0) {
+      alerts.push({ id: 'overdue', message: `${overdueInvoicesCount} overdue invoice(s) require attention.`, severity: 'red' });
+    }
+    if (parseFloat(pendingAP?.balance ?? '0') > 0) {
+      alerts.push({ id: 'pending_bills', message: `You have pending bills totalling PKR ${parseFloat(pendingAP?.balance ?? '0').toLocaleString()}.`, severity: 'amber' });
+    }
+    if (deliveryBreakdown.pending > 0) {
+      alerts.push({ id: 'pending_delivery', message: `${deliveryBreakdown.pending} delivery order(s) awaiting assignment.`, severity: 'blue' });
+    }
+
     return {
       totalRevenue: parseFloat(invoiceTotal?.total ?? '0'),
       totalExpenses: parseFloat(billTotal?.total ?? '0'),
+      outstandingAR: parseFloat(outstandingAR?.balance ?? '0'),
+      pendingAP: parseFloat(pendingAP?.balance ?? '0'),
       inventoryItems: itemCount,
-      totalDeliveries: deliveryCount,
+      deliveryBreakdown,
+      deliveryTotal,
+      recentTransactions,
+      alerts,
+      period: { startDate: monthStart, endDate: monthEnd },
     };
   }
 

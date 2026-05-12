@@ -3,7 +3,7 @@
  * Populated incrementally starting in Phase 1.
  */
 
-export type UserRole = 'admin' | 'delivery' | 'staff';
+export type UserRole = 'admin' | 'delivery' | 'staff' | 'super_admin';
 
 export type AccountType =
   | 'asset'

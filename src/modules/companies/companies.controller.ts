@@ -87,4 +87,13 @@ export class CompaniesController {
   ) {
     return this.companies.regenerateCode(user.id, companyId);
   }
+
+  @Post('subscribe')
+  @ApiOperation({ summary: 'Select a subscription plan for your company (onboarding).' })
+  subscribe(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: { planId: string },
+  ) {
+    return this.companies.selfSubscribe(user.companyId ?? '', dto.planId, user.id);
+  }
 }
