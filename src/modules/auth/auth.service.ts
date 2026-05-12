@@ -159,8 +159,10 @@ export class AuthService {
         })
       : await this.userCompanyRepo.findOne({ where: { userId: user.id }, relations: { company: true } });
 
-    const companyId = membership?.companyId ?? null;
-    const role: UserRole = (membership?.role ?? user.role) as UserRole;
+    // super_admin is a platform-level role — never let a company membership override it
+    const isSuperAdmin = user.role === 'super_admin';
+    const companyId = isSuperAdmin ? null : (membership?.companyId ?? null);
+    const role: UserRole = isSuperAdmin ? 'super_admin' : ((membership?.role ?? user.role) as UserRole);
 
     const tokens = await this.issueTokens(user, companyId, role);
     return {
