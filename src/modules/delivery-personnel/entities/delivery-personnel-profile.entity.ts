@@ -11,6 +11,7 @@ import { DeliveryPersonnelStatus } from '../../../types';
 @Entity('delivery_personnel_profiles')
 @Index(['companyId', 'status'])
 @Index(['companyId', 'isAvailable'])
+@Index(['companyId', 'locationUpdatedAt'])
 export class DeliveryPersonnelProfile {
   @PrimaryColumn({ type: 'uuid', name: 'user_id' })
   userId!: string;
@@ -53,6 +54,15 @@ export class DeliveryPersonnelProfile {
 
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, name: 'current_lng' })
   currentLng!: string | null;
+
+  @Column({ type: 'float', nullable: true })
+  heading!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  speed!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  accuracy!: number | null;
 
   @Column({ type: 'timestamptz', nullable: true, name: 'location_updated_at' })
   locationUpdatedAt!: Date | null;

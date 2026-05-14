@@ -43,7 +43,16 @@ export class DeliveryPersonnelController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: UpdateLocationDto,
   ) {
-    return this.svc.updateLocation(companyId, user.id, dto.lat, dto.lng);
+    return this.svc.updateLocation(companyId, user.id, dto);
+  }
+
+  @Get(':userId/location')
+  @Roles('admin', 'staff')
+  getLocation(
+    @CurrentCompany() companyId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.svc.getLocation(companyId, userId);
   }
 
   @Get(':userId')

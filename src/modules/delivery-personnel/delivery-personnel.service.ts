@@ -1,9 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { DeliveryPersonnelProfile } from './entities/delivery-personnel-profile.entity';
-import { CreatePersonnelDto, UpdatePersonnelDto } from './dto/delivery-personnel.dto';
+import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
+import { Delivery } from '../deliveries/entities/delivery.entity';
+import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
 
 @Injectable()
 export class DeliveryPersonnelService {
@@ -47,12 +49,56 @@ export class DeliveryPersonnelService {
     return this.repo.save(p);
   }
 
-  async updateLocation(companyId: string, userId: string, lat: number, lng: number) {
+  async updateLocation(companyId: string, userId: string, dto: UpdateLocationDto) {
     const p = await this.getById(companyId, userId);
-    p.currentLat = lat.toFixed(7);
-    p.currentLng = lng.toFixed(7);
+    p.currentLat = dto.lat.toFixed(7);
+    p.currentLng = dto.lng.toFixed(7);
+    p.heading = dto.heading ?? null;
+    p.speed = dto.speed ?? null;
+    p.accuracy = dto.accuracy ?? null;
     p.locationUpdatedAt = new Date();
-    return this.repo.save(p);
+    await this.repo.save(p);
+
+    // Log location for any active delivery
+    const activeDelivery = await this.dataSource.getRepository(Delivery).findOne({
+      where: {
+        personnelId: userId,
+        companyId,
+        status: In(['picked_up', 'in_transit', 'arrived']),
+      },
+    });
+
+    if (activeDelivery) {
+      const log = this.dataSource.getRepository(DeliveryLocationLog).create({
+        deliveryId: activeDelivery.id,
+        personnelId: userId,
+        lat: dto.lat,
+        lng: dto.lng,
+        heading: dto.heading ?? null,
+        speed: dto.speed ?? null,
+        accuracy: dto.accuracy ?? null,
+        status: activeDelivery.status,
+      });
+      await this.dataSource.getRepository(DeliveryLocationLog).save(log);
+    }
+
+    return { success: true };
+  }
+
+  async getLocation(companyId: string, userId: string) {
+    const p = await this.getById(companyId, userId);
+    const isOnline =
+      !!p.locationUpdatedAt &&
+      Date.now() - p.locationUpdatedAt.getTime() < 2 * 60 * 1000;
+    return {
+      lat: p.currentLat ? parseFloat(p.currentLat) : null,
+      lng: p.currentLng ? parseFloat(p.currentLng) : null,
+      heading: p.heading,
+      speed: p.speed,
+      accuracy: p.accuracy,
+      locationUpdatedAt: p.locationUpdatedAt,
+      isOnline,
+    };
   }
 
   async resetPassword(companyId: string, userId: string) {

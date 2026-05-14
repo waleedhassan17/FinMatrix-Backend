@@ -6,6 +6,7 @@ import { DeliveryItem } from './entities/delivery-item.entity';
 import { DeliveryStatusHistory } from './entities/delivery-status-history.entity';
 import { DeliveryIssue } from './entities/delivery-issue.entity';
 import { DeliverySignature } from './entities/delivery-signature.entity';
+import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
 import {
   CreateDeliveryDto,
@@ -35,6 +36,7 @@ export class DeliveriesService {
     @InjectRepository(DeliveryStatusHistory) private readonly historyRepo: Repository<DeliveryStatusHistory>,
     @InjectRepository(DeliveryIssue) private readonly issueRepo: Repository<DeliveryIssue>,
     @InjectRepository(DeliverySignature) private readonly signatureRepo: Repository<DeliverySignature>,
+    @InjectRepository(DeliveryLocationLog) private readonly locationLogRepo: Repository<DeliveryLocationLog>,
     @InjectRepository(DeliveryPersonnelProfile) private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
     private readonly dataSource: DataSource,
   ) {}
@@ -278,7 +280,31 @@ export class DeliveriesService {
     return { data, total, page, limit };
   }
 
+  async getLocationHistory(companyId: string, deliveryId: string) {
+    // Verify delivery belongs to company
+    await this.getById(companyId, deliveryId);
+    const points = await this.locationLogRepo.find({
+      where: { deliveryId },
+      order: { createdAt: 'ASC' },
+      select: ['lat', 'lng', 'heading', 'speed', 'status', 'createdAt'],
+    });
+    return {
+      deliveryId,
+      points: points.map(p => ({
+        lat: p.lat,
+        lng: p.lng,
+        heading: p.heading,
+        speed: p.speed,
+        status: p.status,
+        timestamp: p.createdAt,
+      })),
+    };
+  }
+
   async getMapData(companyId: string) {
+    const now = Date.now();
+    const ONLINE_THRESHOLD = 2 * 60 * 1000;
+
     // All active (non-terminal) deliveries
     const activeDeliveries = await this.repo
       .createQueryBuilder('d')
@@ -314,7 +340,13 @@ export class DeliveriesService {
               isAvailable: personnel.isAvailable,
               lat: personnel.currentLat ? parseFloat(personnel.currentLat) : null,
               lng: personnel.currentLng ? parseFloat(personnel.currentLng) : null,
+              heading: personnel.heading,
+              speed: personnel.speed,
+              accuracy: personnel.accuracy,
               locationUpdatedAt: personnel.locationUpdatedAt,
+              isOnline:
+                !!personnel.locationUpdatedAt &&
+                now - personnel.locationUpdatedAt.getTime() < ONLINE_THRESHOLD,
             }
           : null,
       };

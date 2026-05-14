@@ -81,6 +81,15 @@ export class DeliveriesController {
     return this.svc.getMapData(companyId);
   }
 
+  @Get(':id/location-history')
+  @Roles('admin', 'staff')
+  locationHistory(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.getLocationHistory(companyId, id);
+  }
+
   @Get(':id')
   @Roles('admin', 'staff', 'delivery')
   get(

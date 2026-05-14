@@ -22,4 +22,8 @@ export class UpdatePersonnelDto {
 export class UpdateLocationDto {
   @ApiProperty({ description: 'GPS latitude' }) @IsNumber() lat!: number;
   @ApiProperty({ description: 'GPS longitude' }) @IsNumber() lng!: number;
+  @ApiPropertyOptional({ description: 'Compass heading (degrees)' }) @IsOptional() @IsNumber() heading?: number;
+  @ApiPropertyOptional({ description: 'Speed (m/s)' }) @IsOptional() @IsNumber() speed?: number;
+  @ApiPropertyOptional({ description: 'GPS accuracy (meters)' }) @IsOptional() @IsNumber() accuracy?: number;
+  @ApiPropertyOptional({ description: 'Client-side timestamp (epoch ms)' }) @IsOptional() @IsNumber() timestamp?: number;
 }
