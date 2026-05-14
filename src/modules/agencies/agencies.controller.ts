@@ -16,7 +16,7 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto } from './dto/agency.dto';
+import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto } from './dto/agency.dto';
 import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Agencies')
@@ -99,8 +99,9 @@ export class AgenciesController {
   syncInventory(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SyncInventoryDto,
   ) {
-    return this.svc.syncInventory(companyId, id);
+    return this.svc.syncInventory(companyId, id, dto.inventory);
   }
 
   @Patch(':id/toggle-active')

@@ -26,6 +26,24 @@ export class Agency extends BaseCompanyEntity {
   @Column({ type: 'boolean', default: false, name: 'is_connected' })
   isConnected!: boolean;
 
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  inventory!: AgencyInventoryItem[];
+
   @Column({ type: 'timestamptz', nullable: true, name: 'last_sync_at' })
   lastSyncAt!: Date | null;
+}
+
+export interface AgencyInventoryItem {
+  itemId: string;
+  itemName: string;
+  name: string;
+  sku: string;
+  category: string;
+  unitOfMeasure: string;
+  unitCost: number;
+  sellingPrice: number;
+  quantity: number;
+  quantityOnHand: number;
+  reorderLevel: number;
+  reorderPoint: number;
 }

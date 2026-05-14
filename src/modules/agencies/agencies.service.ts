@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Agency } from './entities/agency.entity';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto } from './dto/agency.dto';
+import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto } from './dto/agency.dto';
 
 @Injectable()
 export class AgenciesService {
@@ -74,20 +74,13 @@ export class AgenciesService {
     };
   }
 
-  async syncInventory(companyId: string, id: string) {
+  async syncInventory(companyId: string, id: string, inventory: AgencyInventoryItemDto[]) {
     const item = await this.getById(companyId, id);
-    
+
+    item.inventory = inventory as any;
     item.lastSyncAt = new Date();
     await this.repo.save(item);
 
-    return {
-      success: true,
-      data: {
-        agencyId: item.id,
-        lastSyncAt: item.lastSyncAt,
-        status: 'synced',
-        itemsSynced: 0 // Mocked 0 items for now
-      }
-    };
+    return item;
   }
 }
