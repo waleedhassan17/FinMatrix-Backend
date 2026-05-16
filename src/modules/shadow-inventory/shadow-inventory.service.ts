@@ -16,7 +16,18 @@ export class ShadowInventoryService {
     if (personnelId) qb.andWhere('s.personnelId = :pid', { pid: personnelId });
     qb.orderBy('s.createdAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
-    const [data, total] = await qb.getManyAndCount();
+    const [rows, total] = await qb.getManyAndCount();
+    const data = rows.map((s) => ({
+      id: s.id,
+      personnelId: s.personnelId,
+      itemId: s.itemId,
+      itemName: s.itemName,
+      quantity: Number(s.currentQty),
+      originalQty: Number(s.originalQty),
+      currentQty: Number(s.currentQty),
+      syncStatus: s.syncStatus,
+      updatedAt: s.lastSyncAt ?? s.updatedAt,
+    }));
     return { data, total, page, limit };
   }
 

@@ -65,6 +65,11 @@ export class SubmitBillPhotoDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
 
+  @ApiPropertyOptional() @IsOptional() @IsString() deliveryReference?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() personnelId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() personnelName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() routeLabel?: string;
+
   /**
    * Multipart sends `changes` as a JSON string. The controller parses it
    * and validates the resulting array against BillPhotoChangeDto.

@@ -60,12 +60,13 @@ export class InventoryApprovalsService {
   async list(companyId: string, status: string | undefined, page: number, limit: number) {
     const qb = this.reqRepo
       .createQueryBuilder('r')
+      .leftJoinAndMapMany('r.lines', InventoryUpdateRequestLine, 'l', 'l.request_id = r.id')
       .where('r.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('r.status = :s', { s: status });
     qb.orderBy('r.submittedAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
-    const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    const [rows, total] = await qb.getManyAndCount();
+    return rows.map((r) => this.formatRequest(r));
   }
 
   async getById(companyId: string, id: string) {
@@ -204,9 +205,9 @@ export class InventoryApprovalsService {
         companyId,
         deliveryId,
         personnelId: callerUserId,
-        personnelName: resolvedName,
-        deliveryReference: `DEL-${deliveryId.slice(0, 8).toUpperCase()}`,
-        routeLabel: this.formatRouteLabel(delivery),
+        personnelName: body.personnelName ?? resolvedName,
+        deliveryReference: body.deliveryReference ?? delivery.referenceNo ?? `DEL-${deliveryId.slice(0, 8).toUpperCase()}`,
+        routeLabel: body.routeLabel ?? this.formatRouteLabel(delivery),
         status: 'pending',
         shadowStatus: 'pending',
         submittedAt: now,
@@ -214,6 +215,7 @@ export class InventoryApprovalsService {
         proofVerificationMethod: 'bill_photo',
         proofVerifiedBy: resolvedName,
         proofVerifiedAt: now,
+        approvalNotes: body.note ?? null,
       });
       await reqRepo.save(req);
 
@@ -262,7 +264,33 @@ export class InventoryApprovalsService {
         );
       }
 
-      // 9) Notify admins (best-effort)
+      // 9) Upsert shadow_inventory for each change item
+      const shadowRepo = em.getRepository(ShadowInventorySnapshot);
+      for (const c of changes) {
+        let shadow = await shadowRepo.findOne({
+          where: { companyId, personnelId: callerUserId, itemId: c.itemId },
+        });
+        if (shadow) {
+          shadow.currentQty = String(Number(shadow.currentQty) - c.deliveredQty + c.returnedQty);
+          shadow.lastSyncAt = now;
+          shadow.syncStatus = 'pending';
+        } else {
+          const item = itemById.get(c.itemId);
+          shadow = shadowRepo.create({
+            companyId,
+            personnelId: callerUserId,
+            itemId: c.itemId,
+            itemName: item?.name ?? c.itemName,
+            originalQty: String(c.beforeQty),
+            currentQty: String(c.beforeQty - c.deliveredQty + c.returnedQty),
+            lastSyncAt: now,
+            syncStatus: 'pending',
+          });
+        }
+        await shadowRepo.save(shadow);
+      }
+
+      // 10) Notify admins (best-effort)
       void this.notifyAdmins(companyId, {
         type: 'inventory_approvals',
         title: 'Bill photo received — review needed',
@@ -395,18 +423,27 @@ export class InventoryApprovalsService {
         );
       }
 
-      // Mark shadow inventory rows for this delivery's items as synced
+      // Zero-out / delete shadow inventory entries for approved items
       if (req.lines.length > 0) {
         await shadowRepo
           .createQueryBuilder()
           .update()
-          .set({ syncStatus: 'synced', lastSyncAt: new Date() })
+          .set({ currentQty: '0', syncStatus: 'synced', lastSyncAt: new Date() })
           .where('company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)', {
             cid: companyId,
             pid: req.personnelId,
             itemIds: req.lines.map((l) => l.itemId),
           })
           .execute();
+      }
+
+      // Set delivery status to 'delivered' if not already
+      const deliveryRepo = em.getRepository(Delivery);
+      const delivery = await deliveryRepo.findOne({ where: { id: req.deliveryId, companyId } });
+      if (delivery && delivery.status !== 'delivered') {
+        delivery.status = 'delivered';
+        delivery.completedAt = new Date();
+        await deliveryRepo.save(delivery);
       }
 
       const now = new Date();
@@ -473,18 +510,21 @@ export class InventoryApprovalsService {
       req.rejectReason = dto.reviewerComment;
       await reqRepo.save(req);
 
-      // Mark related shadow rows as rejected (so the DP app knows to drop them)
+      // Revert shadow_inventory: undo the qty changes from submitBillPhoto
       if (req.lines.length > 0) {
-        await shadowRepo
-          .createQueryBuilder()
-          .update()
-          .set({ syncStatus: 'rejected' as never })
-          .where('company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)', {
-            cid: companyId,
-            pid: req.personnelId,
-            itemIds: req.lines.map((l) => l.itemId),
-          })
-          .execute();
+        for (const line of req.lines) {
+          const shadow = await shadowRepo.findOne({
+            where: { companyId, personnelId: req.personnelId, itemId: line.itemId },
+          });
+          if (shadow) {
+            shadow.currentQty = String(
+              Number(shadow.currentQty) + Number(line.deliveredQty) - Number(line.returnedQty),
+            );
+            shadow.syncStatus = 'rejected' as never;
+            shadow.lastSyncAt = now;
+            await shadowRepo.save(shadow);
+          }
+        }
       }
 
       await auditRepo.save(
@@ -613,13 +653,9 @@ export class InventoryApprovalsService {
         returnedQty: Number(l.returnedQty),
       })),
       proof: {
-        signatureBase64: '',
         signedBy: r.proofSignedBy,
-        verificationMethod: r.proofVerificationMethod,
-        verifiedBy: r.proofVerifiedBy,
-        verifiedAt: r.proofVerifiedAt,
         billPhotoUri: r.proofBillPhotoUrl,
-        billPhotoCapturedAt: r.proofBillPhotoCapturedAt,
+        note: r.approvalNotes ?? null,
       },
     };
   }
