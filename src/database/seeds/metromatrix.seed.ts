@@ -464,10 +464,18 @@ async function run() {
     // =================================================================
     const allCustomers = await m.find(Customer, { where: { companyId: company.id } });
     // Clear old deliveries + items + approval requests for idempotency
-    await m.delete(InventoryUpdateRequestLine, {});
-    await m.delete(InventoryUpdateRequest, { companyId: company.id });
-    await m.delete(DeliveryItem, {});
-    await m.delete(Delivery, { companyId: company.id });
+    const existingRequests = await m.find(InventoryUpdateRequest, { where: { companyId: company.id }, select: ['id'] });
+    if (existingRequests.length > 0) {
+      const reqIds = existingRequests.map(r => r.id);
+      await m.delete(InventoryUpdateRequestLine, reqIds.map(id => ({ requestId: id })));
+      await m.delete(InventoryUpdateRequest, { companyId: company.id });
+    }
+    const existingDels = await m.find(Delivery, { where: { companyId: company.id }, select: ['id'] });
+    if (existingDels.length > 0) {
+      const delIds = existingDels.map(d => d.id);
+      await m.delete(DeliveryItem, delIds.map(id => ({ deliveryId: id })));
+      await m.delete(Delivery, { companyId: company.id });
+    }
 
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
