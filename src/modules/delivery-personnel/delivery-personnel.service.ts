@@ -16,18 +16,49 @@ export class DeliveryPersonnelService {
   ) {}
 
   async list(companyId: string, page: number, limit: number, status?: string) {
-    const qb = this.repo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
+    const qb = this.repo
+      .createQueryBuilder('p')
+      .leftJoin('users', 'u', 'u.id = p.user_id')
+      .addSelect('u.display_name', 'u_name')
+      .addSelect('u.email', 'u_email')
+      .addSelect('u.phone', 'u_phone')
+      .where('p.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('p.status = :s', { s: status });
     qb.orderBy('p.createdAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
-    const [data, total] = await qb.getManyAndCount();
+
+    const { entities, raw } = await qb.getRawAndEntities();
+    const total = await qb.getCount();
+
+    const data = entities.map((p, i) => ({
+      ...p,
+      name: raw[i]?.u_name ?? null,
+      email: raw[i]?.u_email ?? null,
+      phone: raw[i]?.u_phone ?? null,
+    }));
+
     return { data, total, page, limit };
   }
 
   async getById(companyId: string, userId: string) {
-    const p = await this.repo.findOne({ where: { userId, companyId } });
+    const result = await this.repo
+      .createQueryBuilder('p')
+      .leftJoin('users', 'u', 'u.id = p.user_id')
+      .addSelect('u.display_name', 'u_name')
+      .addSelect('u.email', 'u_email')
+      .addSelect('u.phone', 'u_phone')
+      .where('p.userId = :uid AND p.companyId = :cid', { uid: userId, cid: companyId })
+      .getRawAndEntities();
+
+    const p = result.entities[0];
     if (!p) throw new NotFoundException('Delivery personnel not found');
-    return p;
+
+    return {
+      ...p,
+      name: result.raw[0]?.u_name ?? null,
+      email: result.raw[0]?.u_email ?? null,
+      phone: result.raw[0]?.u_phone ?? null,
+    };
   }
 
   async create(companyId: string, dto: CreatePersonnelDto) {
