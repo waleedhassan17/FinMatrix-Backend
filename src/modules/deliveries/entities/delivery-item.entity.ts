@@ -20,6 +20,18 @@ export class DeliveryItem {
   @Column({ type: 'uuid', name: 'item_id' })
   itemId!: string;
 
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'item_name' })
+  itemName!: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'agency_id' })
+  agencyId!: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'agency_name' })
+  agencyName!: string | null;
+
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
+  quantity!: string;
+
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'ordered_qty' })
   orderedQty!: string;
 

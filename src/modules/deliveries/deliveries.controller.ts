@@ -24,14 +24,15 @@ export class DeliveriesController {
   constructor(private readonly svc: DeliveriesService) {}
 
   @Get()
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'delivery')
   list(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query() query: DeliveryQueryDto,
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
-    return this.svc.list(companyId, query, page, limit);
+    return this.svc.list(companyId, query, page, limit, user);
   }
 
   @Post()

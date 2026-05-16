@@ -41,14 +41,29 @@ export class DeliveriesService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('d').where('d.companyId = :cid', { cid: companyId });
+  async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
+    const qb = this.repo.createQueryBuilder('d')
+      .leftJoinAndSelect('d.items', 'items')
+      .where('d.companyId = :cid', { cid: companyId });
+
+    // Role-based filtering: delivery personnel only see their own
+    if (user && (user.role === 'delivery' || user.role === 'delivery_personnel')) {
+      qb.andWhere('d.personnelId = :uid', { uid: user.id });
+    }
+
     if (query.status) qb.andWhere('d.status = :s', { s: query.status });
     if (query.personnelId) qb.andWhere('d.personnelId = :pid', { pid: query.personnelId });
     if (query.customerId) qb.andWhere('d.customerId = :cust', { cust: query.customerId });
     qb.orderBy('d.createdAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
-    const [data, total] = await qb.getManyAndCount();
+    const [rawData, total] = await qb.getManyAndCount();
+
+    const data = rawData.map(d => ({
+      ...d,
+      assignedTo: d.personnelId,
+      scheduledDate: d.preferredDate,
+    }));
+
     return { data, total, page, limit };
   }
 
@@ -58,6 +73,12 @@ export class DeliveriesService {
     return d;
   }
 
+  private generateRefNo(): string {
+    const ts = Date.now().toString(36).toUpperCase();
+    const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `DEL-${ts}-${rand}`;
+  }
+
   async create(companyId: string, dto: CreateDeliveryDto, userId: string) {
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
@@ -65,10 +86,13 @@ export class DeliveriesService {
       const d = repo.create({
         companyId,
         customerId: dto.customerId,
+        customerName: dto.customerName ?? null,
+        zone: dto.zone ?? null,
+        referenceNo: this.generateRefNo(),
         personnelId: dto.personnelId ?? null,
         status: dto.personnelId ? 'pending' : 'unassigned',
         priority: dto.priority ?? 'normal',
-        preferredDate: dto.preferredDate ?? null,
+        preferredDate: dto.scheduledDate ?? dto.preferredDate ?? null,
         preferredTimeSlot: dto.preferredTimeSlot ?? null,
         notes: dto.notes ?? null,
         createdBy: userId,
@@ -80,28 +104,48 @@ export class DeliveriesService {
         itemRepo.create({
           deliveryId: d.id,
           itemId: it.itemId,
-          orderedQty: it.orderedQty,
-          unitPrice: it.unitPrice ?? '0',
+          itemName: it.itemName ?? null,
+          agencyId: it.agencyId ?? null,
+          agencyName: it.agencyName ?? null,
+          quantity: String(it.quantity ?? it.orderedQty ?? '0'),
+          orderedQty: String(it.orderedQty ?? '0'),
+          unitPrice: String(it.unitPrice ?? '0'),
           deliveredQty: '0',
           returnedQty: '0',
         }),
       );
       await itemRepo.save(items);
-      return { ...d, items };
+
+      return {
+        ...d,
+        assignedTo: d.personnelId,
+        scheduledDate: d.preferredDate,
+        items,
+      };
     });
   }
 
   async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string) {
-    const deliveries = await this.repo.find({ where: deliveryIds.map((id) => ({ id, companyId })) });
+    const deliveries = await this.repo.find({
+      where: deliveryIds.map((id) => ({ id, companyId })),
+      relations: ['items'],
+    });
     for (const d of deliveries) {
       d.personnelId = personnelId;
-      if (d.status === 'unassigned') {
+      if (d.status === 'unassigned' || d.status === 'pending') {
         d.status = 'pending';
         d.assignedAt = new Date();
       }
     }
     await this.repo.save(deliveries);
-    return { assigned: deliveries.length, deliveryIds, personnelId };
+
+    return {
+      deliveries: deliveries.map(d => ({
+        ...d,
+        assignedTo: d.personnelId,
+        scheduledDate: d.preferredDate,
+      })),
+    };
   }
 
   async update(companyId: string, id: string, dto: UpdateDeliveryDto) {

@@ -6,6 +6,7 @@ import {
   IsArray,
   ValidateNested,
   IsNumberString,
+  IsNumber,
   Length,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -13,13 +14,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
 
 export class DeliveryItemDto {
-  @ApiProperty() @IsUUID() itemId!: string;
-  @ApiProperty() @IsNumberString() orderedQty!: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumberString() unitPrice?: string;
+  @ApiProperty() @IsString() itemId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() itemName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() agencyId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() agencyName?: string;
+  @ApiPropertyOptional() @IsOptional() quantity?: number | string;
+  @ApiProperty() orderedQty!: number | string;
+  @ApiPropertyOptional() @IsOptional() unitPrice?: number | string;
 }
 
 export class CreateDeliveryDto {
-  @ApiProperty() @IsUUID() customerId!: string;
+  @ApiProperty() @IsString() customerId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() customerName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() zone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() scheduledDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
   @ApiPropertyOptional() @IsOptional() @IsEnum(['normal', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;

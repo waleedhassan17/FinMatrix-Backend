@@ -12,6 +12,15 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'customer_id' })
   customerId!: string;
 
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'customer_name' })
+  customerName!: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  zone!: string | null;
+
+  @Column({ type: 'varchar', length: 32, nullable: true, name: 'reference_no' })
+  referenceNo!: string | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'personnel_id' })
   personnelId!: string | null;
 
