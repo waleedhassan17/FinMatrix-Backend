@@ -81,6 +81,6 @@ export class AgenciesService {
     item.lastSyncAt = new Date();
     await this.repo.save(item);
 
-    return item;
+    return { ...item, itemCount: inventory.length };
   }
 }

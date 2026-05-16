@@ -89,10 +89,17 @@ export class AgencyInventoryItemDto {
 }
 
 export class SyncInventoryDto {
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AgencyInventoryItemDto)
-  inventory!: AgencyInventoryItemDto[];
+  inventory?: AgencyInventoryItemDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AgencyInventoryItemDto)
+  items?: AgencyInventoryItemDto[];
 }
 
 export class AgencyQueryDto {

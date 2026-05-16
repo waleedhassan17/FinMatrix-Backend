@@ -101,7 +101,8 @@ export class AgenciesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SyncInventoryDto,
   ) {
-    return this.svc.syncInventory(companyId, id, dto.inventory);
+    const inv = dto.inventory ?? dto.items ?? [];
+    return this.svc.syncInventory(companyId, id, inv);
   }
 
   @Patch(':id/toggle-active')
