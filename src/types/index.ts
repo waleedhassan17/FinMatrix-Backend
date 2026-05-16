@@ -95,7 +95,7 @@ export type DeliveryStatus =
   | 'returned'
   | 'cancelled';
 
-export type DeliveryPriority = 'normal' | 'high' | 'urgent';
+export type DeliveryPriority = 'low' | 'normal' | 'medium' | 'high' | 'urgent';
 
 export type DeliveryPersonnelStatus = 'active' | 'on_leave' | 'inactive';
 

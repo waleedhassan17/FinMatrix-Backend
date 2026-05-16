@@ -3,7 +3,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPersonnelStatus } from '../../../types';
 
 export class CreatePersonnelDto {
-  @ApiProperty() @IsUUID() userId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() userId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() username?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() password?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleNumber?: string;
   @ApiPropertyOptional() @IsOptional() @IsArray() zones?: string[];

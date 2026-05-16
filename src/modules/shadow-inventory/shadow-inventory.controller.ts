@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post,
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { ShadowInventoryService } from './shadow-inventory.service';
 import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
@@ -17,11 +18,13 @@ export class ShadowInventoryController {
   @Roles('admin', 'staff', 'delivery')
   list(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('personnelId') personnelId: string,
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
-    return this.svc.list(companyId, personnelId, page, limit);
+    const pid = (user.role === 'delivery') ? user.id : personnelId;
+    return this.svc.list(companyId, pid, page, limit);
   }
 
   @Post()

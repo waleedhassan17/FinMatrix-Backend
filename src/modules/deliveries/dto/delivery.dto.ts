@@ -29,7 +29,7 @@ export class CreateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() zone?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() scheduledDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['normal', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
+  @ApiPropertyOptional() @IsOptional() @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
@@ -38,7 +38,7 @@ export class CreateDeliveryDto {
 
 export class UpdateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['normal', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
+  @ApiPropertyOptional() @IsOptional() @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;

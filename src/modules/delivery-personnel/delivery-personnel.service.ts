@@ -62,10 +62,71 @@ export class DeliveryPersonnelService {
   }
 
   async create(companyId: string, dto: CreatePersonnelDto) {
-    const exists = await this.repo.findOne({ where: { userId: dto.userId, companyId } });
-    if (exists) throw new BadRequestException('Profile already exists');
-    const profile = this.repo.create({ ...dto, companyId });
-    return this.repo.save(profile);
+    return this.dataSource.transaction(async (em) => {
+      let userId = dto.userId;
+
+      // If email+password provided, create a new user first
+      if (!userId && dto.email && dto.password) {
+        const userRepo = em.getRepository('users');
+        const existing = await userRepo.findOne({ where: { email: dto.email } });
+        if (existing) throw new BadRequestException('A user with this email already exists');
+
+        const hash = await bcrypt.hash(dto.password, 12);
+        const user = await userRepo.save(userRepo.create({
+          email: dto.email,
+          passwordHash: hash,
+          displayName: dto.name ?? dto.username ?? dto.email,
+          phone: dto.phone ?? null,
+          role: 'delivery',
+          isActive: true,
+          defaultCompanyId: companyId,
+        }));
+        userId = user.id;
+
+        // Create user_company membership
+        await em.getRepository('user_companies').save(
+          em.getRepository('user_companies').create({
+            userId,
+            companyId,
+            role: 'delivery',
+          }),
+        );
+      }
+
+      if (!userId) throw new BadRequestException('Either userId or email+password must be provided');
+
+      const profileRepo = em.getRepository(DeliveryPersonnelProfile);
+      const exists = await profileRepo.findOne({ where: { userId, companyId } });
+      if (exists) throw new BadRequestException('Profile already exists for this user');
+
+      const profile = profileRepo.create({
+        userId,
+        companyId,
+        vehicleType: dto.vehicleType ?? null,
+        vehicleNumber: dto.vehicleNumber ?? null,
+        zones: dto.zones ?? [],
+        maxLoad: dto.maxLoad ?? '0',
+        currentLoad: '0',
+        isAvailable: true,
+        status: 'active',
+        rating: '5.00',
+        totalDeliveries: 0,
+        onTimeRate: '100.00',
+      });
+      await profileRepo.save(profile);
+
+      return {
+        userId,
+        email: dto.email,
+        name: dto.name ?? dto.username,
+        phone: dto.phone,
+        vehicleType: profile.vehicleType,
+        vehicleNumber: profile.vehicleNumber,
+        zones: profile.zones,
+        maxLoad: profile.maxLoad,
+        status: profile.status,
+      };
+    });
   }
 
   async update(companyId: string, userId: string, dto: UpdatePersonnelDto) {

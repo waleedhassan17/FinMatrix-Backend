@@ -30,6 +30,8 @@ import { DeliveryItem } from '../../modules/deliveries/entities/delivery-item.en
 import { DeliveryPersonnelProfile } from '../../modules/delivery-personnel/entities/delivery-personnel-profile.entity';
 import { ShadowInventorySnapshot } from '../../modules/shadow-inventory/entities/shadow-inventory-snapshot.entity';
 import { Agency } from '../../modules/agencies/entities/agency.entity';
+import { InventoryUpdateRequest } from '../../modules/inventory-approvals/entities/inventory-update-request.entity';
+import { InventoryUpdateRequestLine } from '../../modules/inventory-approvals/entities/inventory-update-request-line.entity';
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { InvoiceLineItem } from '../../modules/invoices/entities/invoice-line-item.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
@@ -375,62 +377,57 @@ async function run() {
     // =================================================================
     // 8. DELIVERY PERSONNEL PROFILES
     // =================================================================
-    for (const dp of [saim, haseeb]) {
-      const existing = await m.findOneBy(DeliveryPersonnelProfile, { userId: dp.id });
+    const personnelProfiles = [
+      { user: saim,   vehicleType: 'pickup',     vehicleNumber: 'LEC-8832', zones: ['Lahore-West', 'Lahore-South'],    maxLoad: '500', totalDeliveries: 203, onTimeRate: '91.20' },
+      { user: haseeb, vehicleType: 'motorcycle',  vehicleNumber: 'LEA-4521', zones: ['Lahore-Central', 'Lahore-East'], maxLoad: '200', totalDeliveries: 156, onTimeRate: '94.50' },
+    ];
+    for (const pp of personnelProfiles) {
+      let existing = await m.findOneBy(DeliveryPersonnelProfile, { userId: pp.user.id });
       if (!existing) {
-        await m.save(
-          m.create(DeliveryPersonnelProfile, {
-            userId: dp.id,
-            companyId: company.id,
-            vehicleType: dp.id === saim.id ? 'motorcycle' : 'pickup',
-            vehicleNumber: dp.id === saim.id ? 'LEA-4521' : 'LEC-8832',
-            zones: dp.id === saim.id
-              ? ['Lahore-Central', 'Lahore-East']
-              : ['Lahore-West', 'Lahore-South'],
-            maxLoad: dp.id === saim.id ? '200' : '500',
-            currentLoad: '0',
-            isAvailable: true,
-            status: 'active',
-            rating: '4.80',
-            totalDeliveries: dp.id === saim.id ? 156 : 203,
-            onTimeRate: dp.id === saim.id ? '94.50' : '91.20',
-          }),
-        );
+        existing = m.create(DeliveryPersonnelProfile, { userId: pp.user.id, companyId: company.id });
       }
+      existing.companyId = company.id;
+      existing.vehicleType = pp.vehicleType;
+      existing.vehicleNumber = pp.vehicleNumber;
+      existing.zones = pp.zones;
+      existing.maxLoad = pp.maxLoad;
+      existing.currentLoad = '0';
+      existing.isAvailable = true;
+      existing.status = 'active';
+      existing.rating = '4.80';
+      existing.totalDeliveries = pp.totalDeliveries;
+      existing.onTimeRate = pp.onTimeRate;
+      await m.save(existing);
     }
-    console.log('  ✓ Delivery personnel profiles created');
+    console.log('  ✓ Delivery personnel profiles upserted');
 
     // =================================================================
     // 9. SHADOW INVENTORY SNAPSHOTS (for DP mobile app)
     // =================================================================
-    const existingShadow = await m.countBy(ShadowInventorySnapshot, { companyId: company.id });
-    if (existingShadow === 0) {
-      // Give Saim the first 6 items, Haseeb the rest
-      const saimItems = items.slice(0, 6);
-      const haseebItems = items.slice(6);
-      const snapshots = [
-        ...saimItems.map((item) => m.create(ShadowInventorySnapshot, {
-          companyId: company!.id,
-          personnelId: saim.id,
-          itemId: item.id,
-          originalQty: item.quantityOnHand,
-          currentQty: item.quantityOnHand,
-          lastSyncAt: new Date(),
-          syncStatus: 'synced',
-        })),
-        ...haseebItems.map((item) => m.create(ShadowInventorySnapshot, {
-          companyId: company!.id,
-          personnelId: haseeb.id,
-          itemId: item.id,
-          originalQty: item.quantityOnHand,
-          currentQty: item.quantityOnHand,
-          lastSyncAt: new Date(),
-          syncStatus: 'synced',
-        })),
-      ];
-      await m.save(snapshots);
-      console.log('  ✓ Shadow inventory snapshots created for both DPs');
+    // Clear and re-create shadow inventory to match spec
+    await m.delete(ShadowInventorySnapshot, { companyId: company.id });
+    // Helper to find an item by partial name
+    const findItem = (partial: string) => items.find(i => i.name.toLowerCase().includes(partial.toLowerCase())) ?? items[0];
+    const shadowEntries = [
+      // Saim: AquaPure 500ml qty=20, Dalda Oil 1L qty=10
+      { personnelId: saim.id, item: findItem('Habib Cooking Oil 1L'), itemName: 'AquaPure 500ml', qty: '20' },
+      { personnelId: saim.id, item: findItem('Dalda'), itemName: 'Dalda Oil 1L', qty: '10' },
+      // Haseeb: Rice 5kg qty=0 (already delivered/synced)
+      { personnelId: haseeb.id, item: findItem('Sufi Cooking Oil 5L'), itemName: 'Rice 5kg', qty: '0' },
+    ];
+    for (const se of shadowEntries) {
+      await m.save(m.create(ShadowInventorySnapshot, {
+        companyId: company.id,
+        personnelId: se.personnelId,
+        itemId: se.item.id,
+        itemName: se.itemName,
+        originalQty: se.qty === '0' ? '8' : se.qty,
+        currentQty: se.qty,
+        lastSyncAt: new Date(),
+        syncStatus: 'synced',
+      }));
     }
+    console.log('  ✓ Shadow inventory snapshots seeded (Saim: 2 items, Haseeb: 1 item)');
 
     // =================================================================
     // 10. AGENCIES
@@ -463,67 +460,185 @@ async function run() {
     }
 
     // =================================================================
-    // 11. DELIVERIES (realistic — various statuses for dashboard)
+    // 11. DELIVERIES — 5 specific deliveries per spec + inventory approvals
     // =================================================================
     const allCustomers = await m.find(Customer, { where: { companyId: company.id } });
-    const existingDeliveries = await m.countBy(Delivery, { companyId: company.id });
-    if (existingDeliveries === 0 && allCustomers.length > 0) {
-      const today = new Date().toISOString().split('T')[0];
-      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    // Clear old deliveries + items + approval requests for idempotency
+    await m.delete(InventoryUpdateRequestLine, {});
+    await m.delete(InventoryUpdateRequest, { companyId: company.id });
+    await m.delete(DeliveryItem, {});
+    await m.delete(Delivery, { companyId: company.id });
 
-      const deliveryData = [
-        // Saim's deliveries
-        { customer: 0, dp: saim, status: 'delivered' as const, date: yesterday, notes: 'All items received. Customer signed.' },
-        { customer: 1, dp: saim, status: 'in_transit' as const, date: today, notes: 'On the way — ETA 30 min' },
-        { customer: 2, dp: saim, status: 'arrived' as const, date: today, notes: 'At customer location, waiting for unload' },
-        { customer: 3, dp: saim, status: 'pending' as const, date: today, notes: 'Scheduled for afternoon' },
-        // Haseeb's deliveries
-        { customer: 4, dp: haseeb, status: 'delivered' as const, date: yesterday, notes: '2 items returned (damaged)' },
-        { customer: 5, dp: haseeb, status: 'in_transit' as const, date: today, notes: 'Left warehouse 10:15 AM' },
-        { customer: 6, dp: haseeb, status: 'pending' as const, date: today, notes: null },
-        // Unassigned
-        { customer: 7, dp: null, status: 'unassigned' as const, date: today, notes: 'Needs DP assignment' },
-      ];
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
-      for (const d of deliveryData) {
-        const delivery = await m.save(
-          m.create(Delivery, {
-            companyId: company.id,
-            customerId: allCustomers[d.customer].id,
-            personnelId: d.dp?.id ?? null,
-            status: d.status,
-            priority: d.customer < 3 ? 'high' : 'normal',
-            preferredDate: d.date,
-            preferredTimeSlot: d.customer % 2 === 0 ? '09:00-12:00' : '14:00-17:00',
-            assignedAt: d.dp ? new Date() : null,
-            completedAt: d.status === 'delivered' ? new Date() : null,
-            notes: d.notes,
-            cancelReason: null,
-            createdBy: admin.id,
+    // We'll reference items by index: 0=Habib 5L, 1=Habib 1L, 2=Sufi 5L, 3=Sufi 1L, 4=Dalda, 5=Surf, ...
+    const deliverySeedData = [
+      {
+        refNo: 'DEL-1001', dp: saim, status: 'in_transit' as const, customerName: 'Ali General Store',
+        zone: 'Lahore-West', priority: 'high' as const, date: today, notes: 'Handle with care',
+        items: [
+          { itemName: 'AquaPure 500ml', qty: 20, price: '480' },
+          { itemName: 'Dalda Oil 1L', qty: 10, price: '1520' },
+        ],
+      },
+      {
+        refNo: 'DEL-1002', dp: saim, status: 'pending' as const, customerName: 'Khan Mart',
+        zone: 'Lahore-South', priority: 'medium' as const, date: today, notes: null,
+        items: [
+          { itemName: 'Nestlé Milk', qty: 15, price: '450' },
+        ],
+      },
+      {
+        refNo: 'DEL-1003', dp: haseeb, status: 'delivered' as const, customerName: 'City Supermarket',
+        zone: 'Lahore-Central', priority: 'high' as const, date: yesterday, notes: 'All items received',
+        items: [
+          { itemName: 'Rice 5kg', qty: 8, price: '1980' },
+        ],
+      },
+      {
+        refNo: 'DEL-1004', dp: haseeb, status: 'pending' as const, customerName: 'Faisal Traders',
+        zone: 'Lahore-East', priority: 'low' as const, date: today, notes: null,
+        items: [
+          { itemName: 'Sugar 1kg', qty: 25, price: '340' },
+        ],
+      },
+      {
+        refNo: 'DEL-1005', dp: null, status: 'unassigned' as const, customerName: 'New Store',
+        zone: 'Lahore-West', priority: 'medium' as const, date: today, notes: 'Needs assignment',
+        items: [
+          { itemName: 'Tea', qty: 50, price: '310' },
+        ],
+      },
+    ];
+
+    const seededDeliveries: Record<string, Delivery> = {};
+    for (const dd of deliverySeedData) {
+      const custId = allCustomers.length > 0 ? allCustomers[Math.floor(Math.random() * allCustomers.length)].id : admin.id;
+      const delivery = await m.save(
+        m.create(Delivery, {
+          companyId: company.id,
+          customerId: custId,
+          customerName: dd.customerName,
+          zone: dd.zone,
+          referenceNo: dd.refNo,
+          personnelId: dd.dp?.id ?? null,
+          status: dd.status,
+          priority: dd.priority,
+          preferredDate: dd.date,
+          assignedAt: dd.dp ? new Date() : null,
+          completedAt: dd.status === 'delivered' ? new Date() : null,
+          notes: dd.notes,
+          cancelReason: null,
+          createdBy: admin.id,
+        }),
+      );
+      seededDeliveries[dd.refNo] = delivery;
+
+      for (const it of dd.items) {
+        const inv = items.length > 0 ? items[Math.floor(Math.random() * items.length)] : null;
+        await m.save(
+          m.create(DeliveryItem, {
+            deliveryId: delivery.id,
+            itemId: inv?.id ?? '00000000-0000-0000-0000-000000000001',
+            itemName: it.itemName,
+            agencyId: null,
+            agencyName: null,
+            quantity: String(it.qty),
+            orderedQty: String(it.qty),
+            deliveredQty: dd.status === 'delivered' ? String(it.qty) : '0',
+            returnedQty: '0',
+            unitPrice: it.price,
           }),
         );
-
-        // Add 2-4 random items per delivery
-        const numItems = 2 + (d.customer % 3);
-        const deliveryItems: DeliveryItem[] = [];
-        for (let i = 0; i < numItems && i < items.length; i++) {
-          const item = items[(d.customer * 2 + i) % items.length];
-          const orderedQty = 20 + (d.customer * 5) + (i * 10);
-          deliveryItems.push(
-            m.create(DeliveryItem, {
-              deliveryId: delivery.id,
-              itemId: item.id,
-              orderedQty: String(orderedQty),
-              deliveredQty: d.status === 'delivered' ? String(orderedQty) : '0',
-              returnedQty: d.customer === 4 && i === 0 ? '5' : '0',
-              unitPrice: item.sellingPrice,
-            }),
-          );
-        }
-        await m.save(deliveryItems);
       }
-      console.log('  ✓ 8 deliveries created (2 delivered, 2 in-transit, 1 arrived, 2 assigned, 1 unassigned)');
     }
+    console.log('  ✓ 5 deliveries seeded (DEL-1001..DEL-1005)');
+
+    // =================================================================
+    // 11b. INVENTORY APPROVAL REQUESTS (2 per spec)
+    // =================================================================
+    // 1) DEL-1003 (delivered by Haseeb) — approved
+    const del1003 = seededDeliveries['DEL-1003'];
+    const approvalReq1 = await m.save(
+      m.create(InventoryUpdateRequest, {
+        companyId: company.id,
+        deliveryId: del1003.id,
+        personnelId: haseeb.id,
+        status: 'approved',
+        submittedAt: new Date(Date.now() - 86400000),
+        reviewedAt: new Date(Date.now() - 43200000),
+        reviewedBy: admin.id,
+        approvalNotes: 'All items verified',
+        rejectReason: null,
+        deliveryReference: 'DEL-1003',
+        personnelName: 'Haseeb Ahmed',
+        routeLabel: 'Lahore-Central',
+        shadowStatus: 'synced',
+        reviewerComment: 'Approved — all quantities match',
+        proofSignedBy: 'City Supermarket Manager',
+        proofVerificationMethod: 'bill_photo',
+        proofBillPhotoUrl: 'https://placehold.co/400x600/png',
+        proofBillPhotoCapturedAt: new Date(Date.now() - 86400000),
+      }),
+    );
+    await m.save(
+      m.create(InventoryUpdateRequestLine, {
+        requestId: approvalReq1.id,
+        itemId: items.length > 2 ? items[2].id : items[0].id,
+        itemName: 'Rice 5kg',
+        beforeQty: '100',
+        deliveredQty: '8',
+        returnedQty: '0',
+        afterQty: '92',
+      }),
+    );
+
+    // 2) DEL-1001 (in progress by Saim) — pending
+    const del1001 = seededDeliveries['DEL-1001'];
+    const approvalReq2 = await m.save(
+      m.create(InventoryUpdateRequest, {
+        companyId: company.id,
+        deliveryId: del1001.id,
+        personnelId: saim.id,
+        status: 'pending',
+        submittedAt: new Date(),
+        reviewedAt: null,
+        reviewedBy: null,
+        approvalNotes: null,
+        rejectReason: null,
+        deliveryReference: 'DEL-1001',
+        personnelName: 'Saim Raza',
+        routeLabel: 'Lahore-West',
+        shadowStatus: 'pending',
+        reviewerComment: null,
+        proofSignedBy: 'Ali General Store Owner',
+        proofVerificationMethod: 'bill_photo',
+        proofBillPhotoUrl: 'https://placehold.co/400x600/png',
+        proofBillPhotoCapturedAt: new Date(),
+      }),
+    );
+    await m.save([
+      m.create(InventoryUpdateRequestLine, {
+        requestId: approvalReq2.id,
+        itemId: items.length > 1 ? items[1].id : items[0].id,
+        itemName: 'AquaPure 500ml',
+        beforeQty: '200',
+        deliveredQty: '20',
+        returnedQty: '0',
+        afterQty: '180',
+      }),
+      m.create(InventoryUpdateRequestLine, {
+        requestId: approvalReq2.id,
+        itemId: items.length > 4 ? items[4].id : items[0].id,
+        itemName: 'Dalda Oil 1L',
+        beforeQty: '50',
+        deliveredQty: '10',
+        returnedQty: '0',
+        afterQty: '40',
+      }),
+    ]);
+    console.log('  ✓ 2 inventory approval requests seeded (1 approved, 1 pending)');
 
     // =================================================================
     // DONE
