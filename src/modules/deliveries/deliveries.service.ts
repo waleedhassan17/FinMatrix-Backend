@@ -224,6 +224,7 @@ export class DeliveriesService {
       issueType: dto.issueType,
       notes: dto.notes,
       photos: dto.photoUrl ? [dto.photoUrl] : [],
+      reportedAt: new Date(),
       reportedBy: userId,
     } as any);
     return this.issueRepo.save(issue);

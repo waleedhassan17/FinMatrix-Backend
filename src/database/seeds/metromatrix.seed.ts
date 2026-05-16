@@ -94,6 +94,21 @@ async function run() {
   await ds.initialize();
   console.log('> Connected. Seeding MetroMatrix production data…\n');
 
+  // Schema fixes + cleanup — run OUTSIDE the transaction
+  await ds.query(`ALTER TABLE shadow_inventory_snapshots ADD COLUMN IF NOT EXISTS item_name varchar(200)`).catch(() => {});
+
+  // Determine companyId for cleanup
+  const companyRow = await ds.query(`SELECT id FROM companies WHERE name = 'MetroMatrix' LIMIT 1`);
+  if (companyRow.length > 0) {
+    const cid = companyRow[0].id;
+    await ds.query(`DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM inventory_update_requests WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM deliveries WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM shadow_inventory_snapshots WHERE company_id = $1`, [cid]);
+    console.log('  ✓ Cleaned up old deliveries, approvals, shadow inventory');
+  }
+
   await ds.transaction(async (m) => {
     // =================================================================
     // 1. USERS
@@ -404,8 +419,6 @@ async function run() {
     // =================================================================
     // 9. SHADOW INVENTORY SNAPSHOTS (for DP mobile app)
     // =================================================================
-    // Clear and re-create shadow inventory to match spec
-    await m.delete(ShadowInventorySnapshot, { companyId: company.id });
     // Helper to find an item by partial name
     const findItem = (partial: string) => items.find(i => i.name.toLowerCase().includes(partial.toLowerCase())) ?? items[0];
     const shadowEntries = [
@@ -463,19 +476,6 @@ async function run() {
     // 11. DELIVERIES — 5 specific deliveries per spec + inventory approvals
     // =================================================================
     const allCustomers = await m.find(Customer, { where: { companyId: company.id } });
-    // Clear old deliveries + items + approval requests for idempotency
-    const existingRequests = await m.find(InventoryUpdateRequest, { where: { companyId: company.id }, select: ['id'] });
-    if (existingRequests.length > 0) {
-      const reqIds = existingRequests.map(r => r.id);
-      await m.delete(InventoryUpdateRequestLine, reqIds.map(id => ({ requestId: id })));
-      await m.delete(InventoryUpdateRequest, { companyId: company.id });
-    }
-    const existingDels = await m.find(Delivery, { where: { companyId: company.id }, select: ['id'] });
-    if (existingDels.length > 0) {
-      const delIds = existingDels.map(d => d.id);
-      await m.delete(DeliveryItem, delIds.map(id => ({ deliveryId: id })));
-      await m.delete(Delivery, { companyId: company.id });
-    }
 
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
