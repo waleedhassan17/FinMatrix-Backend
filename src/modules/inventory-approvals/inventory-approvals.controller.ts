@@ -16,13 +16,14 @@ export class InventoryApprovalsController {
 
   @Get()
   @Roles('admin', 'staff')
-  list(
+  async list(
     @CurrentCompany() companyId: string,
     @Query('status') status: string,
     @Query('page', ParseIntPipe) page = 1,
     @Query('limit', ParseIntPipe) limit = 20,
   ) {
-    return this.svc.list(companyId, status, page, limit);
+    const items = await this.svc.list(companyId, status, page, limit);
+    return { success: true, data: { requests: items } };
   }
 
   @Post()
@@ -45,12 +46,13 @@ export class InventoryApprovalsController {
 
   @Patch(':id/review')
   @Roles('admin', 'staff')
-  review(
+  async review(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewRequestDto,
   ) {
-    return this.svc.review(companyId, id, dto, user.id);
+    const result = await this.svc.review(companyId, id, dto, user.id);
+    return { success: true, data: { request: result } };
   }
 }

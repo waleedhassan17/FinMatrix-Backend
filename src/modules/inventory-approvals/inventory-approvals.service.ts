@@ -168,9 +168,9 @@ export class InventoryApprovalsService {
       if (delivery.personnelId !== callerUserId) {
         throw new ForbiddenException('Delivery is not assigned to you');
       }
-      if (!['arrived', 'in_transit'].includes(delivery.status as string)) {
+      if (['delivered', 'cancelled'].includes(delivery.status as string)) {
         throw new BadRequestException(
-          `Delivery must be in 'arrived' or 'in_transit' status (got '${delivery.status}')`,
+          `Cannot submit bill photo for a delivery in '${delivery.status}' status`,
         );
       }
 
@@ -758,8 +758,8 @@ export class InventoryApprovalsService {
       submittedAt: r.submittedAt,
       status: r.status,
       shadowStatus: r.shadowStatus,
-      reviewedAt: r.reviewedAt,
-      reviewedBy: r.reviewedBy,
+      reviewedAt: r.reviewedAt ?? null,
+      reviewedBy: r.reviewedBy ?? null,
       reviewerComment: r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
       changes: (r.lines ?? []).map((l) => ({
         itemId: l.itemId,
@@ -769,9 +769,11 @@ export class InventoryApprovalsService {
         returnedQty: Number(l.returnedQty),
       })),
       proof: {
-        signedBy: r.proofSignedBy,
-        billPhotoUri: r.proofBillPhotoUrl,
-        note: r.approvalNotes ?? null,
+        signedBy: r.proofSignedBy ?? null,
+        billPhotoUri: r.proofBillPhotoUrl ?? null,
+        billPhotoCapturedAt: r.proofBillPhotoCapturedAt ?? null,
+        verificationMethod: r.proofVerificationMethod ?? 'bill_photo',
+        verifiedBy: r.proofVerifiedBy ?? null,
       },
     };
   }
