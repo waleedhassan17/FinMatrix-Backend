@@ -550,6 +550,122 @@ export class InventoryApprovalsService {
     });
   }
 
+  /**
+   * POST /inventory-update-requests/:id/undo
+   * Reverses an already-approved request:
+   *  - Adds back the delivered qty (undo the deduction)
+   *  - Subtracts the returned qty (undo the addition)
+   *  - Sets status to 'rejected'
+   *  - Creates an audit entry
+   */
+  async undoApproval(companyId: string, id: string, reviewerId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const reqRepo = em.getRepository(InventoryUpdateRequest);
+      const itemRepo = em.getRepository(InventoryItem);
+      const moveRepo = em.getRepository(InventoryMovement);
+      const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
+      const shadowRepo = em.getRepository(ShadowInventorySnapshot);
+
+      const req = await reqRepo.findOne({
+        where: { id, companyId },
+        relations: ['lines'],
+      });
+      if (!req) throw new NotFoundException('Request not found');
+      if (req.status !== 'approved') {
+        throw new ConflictException(
+          `Only approved requests can be undone (current status: ${req.status})`,
+        );
+      }
+
+      // Reverse inventory changes with row-locking
+      for (const line of req.lines) {
+        const item = await itemRepo
+          .createQueryBuilder('i')
+          .setLock('pessimistic_write')
+          .where('i.id = :id AND i.companyId = :cid', {
+            id: line.itemId,
+            cid: companyId,
+          })
+          .getOne();
+        if (!item) {
+          // Item may have been deleted; skip gracefully
+          continue;
+        }
+
+        const before = Number(item.quantityOnHand);
+        const delivered = Number(line.deliveredQty);
+        const returned = Number(line.returnedQty);
+        // Undo: add back delivered, subtract returned
+        const restored = before + delivered - returned;
+
+        item.quantityOnHand = String(Math.max(0, restored));
+        await itemRepo.save(item);
+
+        await moveRepo.save(
+          moveRepo.create({
+            companyId,
+            itemId: line.itemId,
+            date: new Date().toISOString().split('T')[0],
+            type: 'adjustment',
+            quantityChange: String(delivered - returned),
+            balanceAfter: String(Math.max(0, restored)),
+            reference: `Undo Approval ${req.id}`,
+            sourceType: 'inventory_approval',
+            sourceId: req.id,
+            createdBy: reviewerId,
+            description: `approval_undone: ${req.deliveryReference ?? req.deliveryId}`,
+          }),
+        );
+      }
+
+      // Reset shadow inventory for the personnel: restore qty to reflect undo
+      for (const line of req.lines) {
+        const shadow = await shadowRepo.findOne({
+          where: { companyId, personnelId: req.personnelId, itemId: line.itemId },
+        });
+        if (shadow) {
+          shadow.currentQty = String(
+            Number(shadow.currentQty) + Number(line.deliveredQty) - Number(line.returnedQty),
+          );
+          shadow.syncStatus = 'rejected' as never;
+          shadow.lastSyncAt = new Date();
+          await shadowRepo.save(shadow);
+        }
+      }
+
+      const now = new Date();
+      req.status = 'rejected';
+      req.shadowStatus = 'rejected';
+      req.reviewedAt = now;
+      req.reviewedBy = reviewerId;
+      req.reviewerComment = 'Approval undone — inventory changes reversed';
+      req.rejectReason = 'Approval undone by admin';
+      await reqRepo.save(req);
+
+      await auditRepo.save(
+        auditRepo.create({
+          companyId,
+          requestId: req.id,
+          action: 'rejected',
+          reviewedBy: reviewerId,
+          details: `Approval undone — ${req.lines.length} item change(s) reversed for ${req.deliveryReference ?? req.deliveryId}`,
+        }),
+      );
+
+      // Notify the DP (best-effort)
+      void this.notifications.create({
+        companyId,
+        userId: req.personnelId,
+        type: 'approval_results',
+        title: 'Inventory approval reversed',
+        message: `The approval for ${req.deliveryReference ?? 'your delivery'} was undone. Inventory quantities have been restored.`,
+        data: { requestId: req.id, route: 'DPHistory' },
+      });
+
+      return this.formatRequest(req);
+    });
+  }
+
   async streamBillPhoto(companyId: string, requestId: string) {
     const req = await this.reqRepo.findOne({
       where: { id: requestId, companyId },

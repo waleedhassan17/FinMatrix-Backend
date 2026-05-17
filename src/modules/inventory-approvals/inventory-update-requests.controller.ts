@@ -121,6 +121,26 @@ export class InventoryUpdateRequestsController {
   }
 
   /**
+   * POST /api/v1/inventory-update-requests/:id/undo
+   * Admin undoes a previously approved request — reverses inventory changes
+   * and sets the request status back to 'rejected'.
+   */
+  @Post(':id/undo')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Undo an approved inventory update request (admin)' })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Approval undone and inventory changes reversed' })
+  @ApiResponse({ status: 409, description: 'Request is not approved' })
+  async undoApproval(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.svc.undoApproval(companyId, id, user.id);
+    return { success: true, data };
+  }
+
+  /**
    * GET /api/v1/inventory-update-requests/:id/bill-photo
    * Streams the stored bill photo image (auth-gated).
    */

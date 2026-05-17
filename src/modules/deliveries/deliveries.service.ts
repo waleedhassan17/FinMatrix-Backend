@@ -8,6 +8,7 @@ import { DeliveryIssue } from './entities/delivery-issue.entity';
 import { DeliverySignature } from './entities/delivery-signature.entity';
 import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreateDeliveryDto,
   UpdateDeliveryDto,
@@ -39,6 +40,7 @@ export class DeliveriesService {
     @InjectRepository(DeliveryLocationLog) private readonly locationLogRepo: Repository<DeliveryLocationLog>,
     @InjectRepository(DeliveryPersonnelProfile) private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
     private readonly dataSource: DataSource,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
@@ -138,6 +140,18 @@ export class DeliveriesService {
       }
     }
     await this.repo.save(deliveries);
+
+    // Notify the delivery personnel for each newly assigned delivery
+    for (const d of deliveries) {
+      await this.notificationsService.create({
+        companyId,
+        userId: personnelId,
+        type: 'delivery_assigned',
+        title: 'New delivery assigned',
+        message: `Delivery ${d.referenceNo} has been assigned to you.`,
+        data: { deliveryId: d.id, referenceNo: d.referenceNo },
+      });
+    }
 
     return {
       deliveries: deliveries.map(d => ({

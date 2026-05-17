@@ -16,7 +16,7 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto } from './dto/agency.dto';
+import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto, AddAgencyItemDto } from './dto/agency.dto';
 import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Agencies')
@@ -113,5 +113,32 @@ export class AgenciesController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.svc.toggleActive(companyId, id);
+  }
+
+  /**
+   * GET /agencies/:id/items
+   * Returns all InventoryItem records where sourceAgencyId = id.
+   */
+  @Get(':id/items')
+  @Roles('admin', 'staff')
+  getAgencyItems(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.getAgencyInventoryItems(companyId, id);
+  }
+
+  /**
+   * POST /agencies/:id/items
+   * Creates a new InventoryItem linked to this agency (sourceAgencyId = id).
+   */
+  @Post(':id/items')
+  @Roles('admin')
+  addItemToAgency(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddAgencyItemDto,
+  ) {
+    return this.svc.addItemToAgency(companyId, id, dto);
   }
 }

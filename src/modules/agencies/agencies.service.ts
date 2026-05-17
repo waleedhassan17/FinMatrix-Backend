@@ -2,13 +2,16 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Agency } from './entities/agency.entity';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto } from './dto/agency.dto';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto, AddAgencyItemDto } from './dto/agency.dto';
 
 @Injectable()
 export class AgenciesService {
   constructor(
     @InjectRepository(Agency)
     private readonly repo: Repository<Agency>,
+    @InjectRepository(InventoryItem)
+    private readonly itemRepo: Repository<InventoryItem>,
   ) {}
 
   async list(companyId: string, query: AgencyQueryDto, page: number, limit: number) {
@@ -59,19 +62,101 @@ export class AgenciesService {
   }
 
   async assignInventory(companyId: string, id: string, itemId: string, quantity: string) {
-    const item = await this.getById(companyId, id);
-    
-    // In a full implementation, we'd write to an AgencyInventory table.
-    // For now, we mock the success response to satisfy the frontend contract.
+    // Verify the agency exists
+    const agency = await this.getById(companyId, id);
+
+    // Look up the inventory item and link it to this agency
+    const invItem = await this.itemRepo.findOne({ where: { id: itemId, companyId } });
+    if (!invItem) throw new NotFoundException(`Inventory item ${itemId} not found`);
+
+    // Set/update the sourceAgencyId so this item is linked to the agency
+    invItem.sourceAgencyId = agency.id;
+    await this.itemRepo.save(invItem);
+
+    // Also reflect in the agency's JSONB inventory array
+    const existingInv: AgencyInventoryItemDto[] = Array.isArray((agency as any).inventory)
+      ? [...(agency as any).inventory]
+      : [];
+    const existingIdx = existingInv.findIndex(i => i.itemId === itemId);
+    const inventoryEntry: AgencyInventoryItemDto = {
+      itemId: invItem.id,
+      itemName: invItem.name,
+      name: invItem.name,
+      sku: invItem.sku,
+      category: invItem.category ?? undefined,
+      unitOfMeasure: invItem.unitOfMeasure,
+      unitCost: Number(invItem.unitCost),
+      sellingPrice: Number(invItem.sellingPrice),
+      quantity: Number(quantity) || Number(invItem.quantityOnHand),
+      quantityOnHand: Number(invItem.quantityOnHand),
+      reorderLevel: Number(invItem.reorderPoint),
+      reorderPoint: Number(invItem.reorderPoint),
+    };
+    if (existingIdx !== -1) {
+      existingInv[existingIdx] = inventoryEntry;
+    } else {
+      existingInv.push(inventoryEntry);
+    }
+    (agency as any).inventory = existingInv;
+    await this.repo.save(agency);
+
     return {
       success: true,
       data: {
-        agencyId: item.id,
-        itemId,
+        agencyId: agency.id,
+        itemId: invItem.id,
+        itemName: invItem.name,
         quantityAssigned: quantity,
-        assignedAt: new Date().toISOString()
-      }
+        assignedAt: new Date().toISOString(),
+      },
     };
+  }
+
+  /**
+   * Returns all InventoryItem records whose sourceAgencyId equals agencyId.
+   */
+  async getAgencyInventoryItems(companyId: string, agencyId: string) {
+    // Verify agency exists and belongs to this company
+    await this.getById(companyId, agencyId);
+    const items = await this.itemRepo.find({
+      where: { companyId, sourceAgencyId: agencyId },
+      order: { name: 'ASC' },
+    });
+    return { data: items, total: items.length };
+  }
+
+  /**
+   * Creates a new InventoryItem linked to the specified agency.
+   */
+  async addItemToAgency(companyId: string, agencyId: string, dto: AddAgencyItemDto) {
+    // Verify agency exists and belongs to this company
+    const agency = await this.getById(companyId, agencyId);
+
+    const item = this.itemRepo.create({
+      companyId,
+      sourceAgencyId: agency.id,
+      name: dto.name,
+      sku: dto.sku,
+      category: dto.category ?? null,
+      unitCost: dto.unitCost ?? '0',
+      sellingPrice: dto.sellingPrice ?? '0',
+      quantityOnHand: dto.quantityOnHand ?? '0',
+      quantityOnOrder: '0',
+      quantityCommitted: '0',
+      reorderPoint: '0',
+      reorderQuantity: '0',
+      minStock: '0',
+      maxStock: '0',
+      unitOfMeasure: dto.unitOfMeasure ?? 'unit',
+      costMethod: 'average',
+      serialTracking: false,
+      lotTracking: false,
+      barcodeData: null,
+      isActive: true,
+      description: null,
+      locationId: null,
+    });
+    return this.itemRepo.save(item);
   }
 
   async syncInventory(companyId: string, id: string, inventory: AgencyInventoryItemDto[]) {

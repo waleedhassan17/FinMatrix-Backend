@@ -10,9 +10,16 @@ import {
   IsNumber,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { AgencyType } from '../../../types';
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
+
+/**
+ * Normalise agency type to lowercase so both title-case ('Manufacturing')
+ * and lowercase ('manufacturing') inputs pass @IsEnum validation.
+ */
+const normaliseAgencyType = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.toLowerCase() : value;
 
 export class CreateAgencyDto {
   @ApiProperty({ example: 'ABC Manufacturing' })
@@ -21,6 +28,7 @@ export class CreateAgencyDto {
   name!: string;
 
   @ApiProperty({ enum: ['manufacturing', 'supply', 'distribution'] })
+  @Transform(normaliseAgencyType)
   @IsEnum(['manufacturing', 'supply', 'distribution'] as AgencyType[])
   type!: AgencyType;
 
@@ -49,6 +57,7 @@ export class UpdateAgencyDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(normaliseAgencyType)
   @IsEnum(['manufacturing', 'supply', 'distribution'] as AgencyType[])
   type?: AgencyType;
 
@@ -105,6 +114,7 @@ export class SyncInventoryDto {
 export class AgencyQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(normaliseAgencyType)
   @IsEnum(['manufacturing', 'supply', 'distribution'] as AgencyType[])
   type?: AgencyType;
 
@@ -117,4 +127,41 @@ export class AgencyQueryDto {
   @IsOptional()
   @IsString()
   q?: string;
+}
+
+export class AddAgencyItemDto {
+  @ApiProperty({ example: 'Habib Oil 5L' })
+  @IsString()
+  @Length(1, 200)
+  name!: string;
+
+  @ApiProperty({ example: 'CO-HABIB-5L' })
+  @IsString()
+  @Length(1, 64)
+  sku!: string;
+
+  @ApiPropertyOptional({ example: 'Cooking Oil' })
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @ApiPropertyOptional({ example: '1850' })
+  @IsOptional()
+  @IsString()
+  unitCost?: string;
+
+  @ApiPropertyOptional({ example: '2100' })
+  @IsOptional()
+  @IsString()
+  sellingPrice?: string;
+
+  @ApiPropertyOptional({ example: '450' })
+  @IsOptional()
+  @IsString()
+  quantityOnHand?: string;
+
+  @ApiPropertyOptional({ example: 'bottle' })
+  @IsOptional()
+  @IsString()
+  unitOfMeasure?: string;
 }

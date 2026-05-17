@@ -202,11 +202,19 @@ async function run() {
           inviteCode: generateInviteCode(6),
           logo: null,
           createdBy: admin.id,
+          status: 'active',
         }),
       );
       console.log(`  ✓ Company "MetroMatrix" created (invite: ${company.inviteCode})`);
     } else {
-      console.log(`  ✓ Company "MetroMatrix" exists (invite: ${company.inviteCode})`);
+      // Ensure status is set to 'active' for existing records
+      if (company.status !== 'active') {
+        company.status = 'active';
+        await m.save(company);
+        console.log(`  ✓ Company "MetroMatrix" status updated to 'active' (invite: ${company.inviteCode})`);
+      } else {
+        console.log(`  ✓ Company "MetroMatrix" exists (invite: ${company.inviteCode})`);
+      }
     }
 
     // =================================================================

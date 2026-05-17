@@ -9,6 +9,7 @@ import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
 import { DeliveriesService } from './deliveries.service';
 import { DeliveriesController } from './deliveries.controller';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { DeliveriesController } from './deliveries.controller';
       DeliveryLocationLog,
       DeliveryPersonnelProfile,
     ]),
+    NotificationsModule,
   ],
   providers: [DeliveriesService],
   controllers: [DeliveriesController],
