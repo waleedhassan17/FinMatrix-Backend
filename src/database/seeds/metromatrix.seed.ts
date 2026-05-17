@@ -453,32 +453,51 @@ async function run() {
     // =================================================================
     // 10. AGENCIES
     // =================================================================
-    const existingAgencies = await m.countBy(Agency, { companyId: company.id });
-    if (existingAgencies === 0) {
-      await m.save([
-        m.create(Agency, {
-          companyId: company.id,
-          name: 'TCS Express',
-          type: 'distribution',
-          description: 'National courier — used for inter-city shipments',
-          address: { city: 'Lahore', country: 'Pakistan' },
-          contact: { phone: '+92-42-111-827-827', email: 'support@tcs.pk' },
-          isConnected: true,
-          lastSyncAt: new Date(),
-        }),
-        m.create(Agency, {
-          companyId: company.id,
-          name: 'Leopards Courier',
-          type: 'distribution',
-          description: 'Fast delivery — Lahore metro area',
-          address: { city: 'Lahore', country: 'Pakistan' },
-          contact: { phone: '+92-42-111-300-786', email: 'ops@leopardscourier.pk' },
-          isConnected: false,
-          lastSyncAt: null,
-        }),
-      ]);
-      console.log('  ✓ 2 agencies created');
+    // Delete old courier-type agencies and recreate as supplier warehouses
+    await m.delete(Agency, { companyId: company.id });
+    const [daldaAgency, suffeeOilAgency, suffeeDetAgency] = await m.save([
+      m.create(Agency, {
+        companyId: company.id,
+        name: 'Dalda Cooking Oil',
+        type: 'distribution',
+        description: 'Dalda Foods — cooking oil supplier and distribution warehouse',
+        address: { street: 'Kot Lakhpat Industrial Area', city: 'Lahore', country: 'Pakistan' },
+        contact: { phone: '+92-42-35131000', email: 'supply@dalda.pk' },
+        isConnected: true,
+        lastSyncAt: new Date(),
+      }),
+      m.create(Agency, {
+        companyId: company.id,
+        name: 'Suffee Cooking Oil',
+        type: 'distribution',
+        description: 'Sufi Group — cooking oil products warehouse',
+        address: { street: 'Sundar Industrial Estate', city: 'Lahore', country: 'Pakistan' },
+        contact: { phone: '+92-42-37810000', email: 'supply@sufigroup.pk' },
+        isConnected: true,
+        lastSyncAt: new Date(),
+      }),
+      m.create(Agency, {
+        companyId: company.id,
+        name: 'Suffee Detergents',
+        type: 'distribution',
+        description: 'Sufi Group — detergents and cleaning products warehouse',
+        address: { street: 'Sundar Industrial Estate', city: 'Lahore', country: 'Pakistan' },
+        contact: { phone: '+92-42-37810001', email: 'detergents@sufigroup.pk' },
+        isConnected: true,
+        lastSyncAt: new Date(),
+      }),
+    ]);
+    console.log('  ✓ 3 agencies created (Dalda Cooking Oil, Suffee Cooking Oil, Suffee Detergents)');
+
+    // Link inventory items to their source agencies
+    for (const item of items) {
+      let agencyId: string | null = null;
+      if (item.sku.includes('DALDA')) agencyId = daldaAgency.id;
+      else if (item.sku.startsWith('CO-')) agencyId = suffeeOilAgency.id; // Sufi + Habib cooking oils
+      else if (item.sku.startsWith('DT-') || item.sku.startsWith('DW-') || item.sku.startsWith('CL-')) agencyId = suffeeDetAgency.id;
+      if (agencyId) await m.update(InventoryItem, { id: item.id }, { sourceAgencyId: agencyId });
     }
+    console.log('  ✓ Inventory items linked to supplier agencies');
 
     // =================================================================
     // 11. DELIVERIES — 5 specific deliveries per spec + inventory approvals
@@ -1004,7 +1023,7 @@ async function run() {
     console.log('    • 1 budget, 3 employees, 1 payroll run');
     console.log('    • 2 delivery personnel profiles');
     console.log('    • Shadow inventory snapshots for both DPs');
-    console.log('    • 2 agencies (TCS Express, Leopards)');
+    console.log('    • 3 agencies (Dalda Cooking Oil, Suffee Cooking Oil, Suffee Detergents)');
     console.log('    • 8 deliveries with items (various statuses)');
     console.log('    • 5 notifications');
     console.log('\n  Production API: https://finmatrix-api-a824f23fbd72.herokuapp.com/api/v1');
