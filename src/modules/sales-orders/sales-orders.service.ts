@@ -8,6 +8,7 @@ import { DataSource, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { SalesOrder } from './entities/sales-order.entity';
 import { SalesOrderLine } from './entities/sales-order-line.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import {
   CreateSalesOrderDto,
   FulfillOrderDto,
@@ -42,8 +43,15 @@ export class SalesOrdersService {
     qb.orderBy('o.orderDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
+
+    const customerIds = [...new Set(data.map((o) => o.customerId).filter(Boolean))];
+    const customerList = customerIds.length
+      ? await this.dataSource.getRepository(Customer).findByIds(customerIds)
+      : [];
+    const customerNameMap = Object.fromEntries(customerList.map((c) => [c.id, c.name]));
+
     return {
-      data,
+      data: data.map((o) => ({ ...o, customerName: customerNameMap[o.customerId] ?? '' })),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,

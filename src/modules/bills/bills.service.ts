@@ -77,8 +77,15 @@ export class BillsService {
     qb.orderBy('b.billDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
+
+    const vendorIds = [...new Set(data.map((b) => b.vendorId).filter(Boolean))];
+    const vendorList = vendorIds.length
+      ? await this.vendorRepo.findByIds(vendorIds)
+      : [];
+    const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
+
     return {
-      data,
+      data: data.map((b) => ({ ...b, vendorName: vendorNameMap[b.vendorId] ?? '' })),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,

@@ -8,6 +8,7 @@ import { DataSource, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { PurchaseOrder } from './entities/purchase-order.entity';
 import { PurchaseOrderLine } from './entities/purchase-order-line.entity';
+import { Vendor } from '../vendors/entities/vendor.entity';
 import {
   CreateBillFromPoDto,
   CreatePurchaseOrderDto,
@@ -43,8 +44,15 @@ export class PurchaseOrdersService {
     qb.orderBy('o.orderDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
+
+    const vendorIds = [...new Set(data.map((o) => o.vendorId).filter(Boolean))];
+    const vendorList = vendorIds.length
+      ? await this.dataSource.getRepository(Vendor).findByIds(vendorIds)
+      : [];
+    const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
+
     return {
-      data,
+      data: data.map((o) => ({ ...o, vendorName: vendorNameMap[o.vendorId] ?? '' })),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,

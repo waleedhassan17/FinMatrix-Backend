@@ -102,6 +102,13 @@ export class InvoicesService {
 
     const [data, total] = await qb.getManyAndCount();
 
+    // Batch-load customer names
+    const customerIds = [...new Set(data.map((i) => i.customerId).filter(Boolean))];
+    const customers = customerIds.length
+      ? await this.customerRepo.findByIds(customerIds)
+      : [];
+    const customerNameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
+
     const statusCounts = await this.repo
       .createQueryBuilder('i')
       .select('i.status', 'status')
@@ -112,7 +119,7 @@ export class InvoicesService {
       .getRawMany<{ status: string; count: string; total: string }>();
 
     return {
-      data,
+      data: data.map((i) => ({ ...i, customerName: customerNameMap[i.customerId] ?? '' })),
       summary: Object.fromEntries(
         statusCounts.map((r) => [
           r.status,

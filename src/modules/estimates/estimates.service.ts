@@ -8,6 +8,7 @@ import { DataSource, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Estimate } from './entities/estimate.entity';
 import { EstimateLineItem } from './entities/estimate-line-item.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import {
   CreateEstimateDto,
   EstimateLineDto,
@@ -42,8 +43,15 @@ export class EstimatesService {
     qb.orderBy('e.estimateDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
+
+    const customerIds = [...new Set(data.map((e) => e.customerId).filter(Boolean))];
+    const customerList = customerIds.length
+      ? await this.dataSource.getRepository(Customer).findByIds(customerIds)
+      : [];
+    const customerNameMap = Object.fromEntries(customerList.map((c) => [c.id, c.name]));
+
     return {
-      data,
+      data: data.map((e) => ({ ...e, customerName: customerNameMap[e.customerId] ?? '' })),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,

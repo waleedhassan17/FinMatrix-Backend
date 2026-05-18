@@ -53,8 +53,15 @@ export class CreditMemosService {
       take: pagination.limit,
       skip: pagination.skip,
     });
+
+    const customerIds = [...new Set(data.map((m) => m.customerId).filter(Boolean))];
+    const customerList = customerIds.length
+      ? await this.customerRepo.findByIds(customerIds)
+      : [];
+    const customerNameMap = Object.fromEntries(customerList.map((c) => [c.id, c.name]));
+
     return {
-      data,
+      data: data.map((m) => ({ ...m, customerName: customerNameMap[m.customerId] ?? '' })),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,
