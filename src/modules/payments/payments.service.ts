@@ -55,6 +55,11 @@ export class PaymentsService {
       .leftJoinAndSelect('p.applications', 'app')
       .where('p.companyId = :companyId', { companyId });
     if (query.customerId) qb.andWhere('p.customerId = :c', { c: query.customerId });
+    if (query.invoiceId)
+      qb.andWhere(
+        `p.id IN (SELECT pa."payment_id" FROM payment_applications pa WHERE pa."invoice_id" = :invId)`,
+        { invId: query.invoiceId },
+      );
     if (query.startDate && query.endDate)
       qb.andWhere('p.paymentDate BETWEEN :s AND :e', {
         s: query.startDate,

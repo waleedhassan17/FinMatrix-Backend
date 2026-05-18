@@ -49,6 +49,7 @@ export class ReceivePaymentDto {
 
 export class ListPaymentsQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() customerId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() invoiceId?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() startDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() endDate?: string;
   @ApiPropertyOptional({ enum: PAYMENT_METHODS })
