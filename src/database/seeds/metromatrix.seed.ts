@@ -41,7 +41,9 @@ import { EstimateLineItem } from '../../modules/estimates/entities/estimate-line
 import { CreditMemo } from '../../modules/credit-memos/entities/credit-memo.entity';
 import { CreditMemoLine } from '../../modules/credit-memos/entities/credit-memo-line.entity';
 import { SalesOrder } from '../../modules/sales-orders/entities/sales-order.entity';
+import { SalesOrderLine } from '../../modules/sales-orders/entities/sales-order-line.entity';
 import { PurchaseOrder } from '../../modules/purchase-orders/entities/purchase-order.entity';
+import { PurchaseOrderLine } from '../../modules/purchase-orders/entities/purchase-order-line.entity';
 import { Budget } from '../../modules/budgets/entities/budget.entity';
 import { PayrollRun } from '../../modules/payroll/entities/payroll-run.entity';
 import { Employee } from '../../modules/employees/entities/employee.entity';
@@ -114,7 +116,23 @@ async function run() {
     await ds.query(`DELETE FROM estimates WHERE company_id = $1`, [cid]);
     await ds.query(`DELETE FROM credit_memo_lines WHERE credit_memo_id IN (SELECT id FROM credit_memos WHERE company_id = $1)`, [cid]);
     await ds.query(`DELETE FROM credit_memos WHERE company_id = $1`, [cid]);
-    console.log('  ✓ Cleaned up old deliveries, approvals, shadow inventory, estimates, credit memos');
+    await ds.query(`DELETE FROM payment_applications WHERE payment_id IN (SELECT id FROM payments WHERE company_id = $1)`, [cid]).catch(() => {});
+    await ds.query(`DELETE FROM payments WHERE company_id = $1`, [cid]).catch(() => {});
+    await ds.query(`DELETE FROM invoice_line_items WHERE invoice_id IN (SELECT id FROM invoices WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM invoices WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM bill_line_items WHERE bill_id IN (SELECT id FROM bills WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM bills WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM sales_order_lines WHERE order_id IN (SELECT id FROM sales_orders WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM sales_orders WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM purchase_order_lines WHERE order_id IN (SELECT id FROM purchase_orders WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM purchase_orders WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM journal_entry_lines WHERE entry_id IN (SELECT id FROM journal_entries WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM journal_entries WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM bank_transactions WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM bank_accounts WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM notifications WHERE company_id = $1`, [cid]).catch(() => {});
+    await ds.query(`DELETE FROM tax_rates WHERE company_id = $1`, [cid]).catch(() => {});
+    console.log('  ✓ Cleaned up all transactional data for fresh seed');
   }
 
   await ds.transaction(async (m) => {
@@ -698,7 +716,7 @@ async function run() {
     console.log('  ─────────────────────────────────────────────');
 
     // =================================================================
-    // 12. INVOICES (5 invoices with line items)
+    // 12. TRANSACTIONS — 1 YEAR OF DATA
     // =================================================================
     const allCusts = await m.find(Customer, { where: { companyId: company.id } });
     const allVends = await m.find(Vendor, { where: { companyId: company.id } });
@@ -709,112 +727,159 @@ async function run() {
     const apAccount = allAccounts.find(a => a.name.includes('Payable') || a.subType === 'Accounts Payable') ?? allAccounts[0];
     const expenseAccount = allAccounts.find(a => a.type === 'expense') ?? allAccounts[0];
 
-    const invoiceCount = await m.countBy(Invoice, { companyId: company.id });
-    if (invoiceCount === 0 && allCusts.length > 0) {
-      const invoiceData = [
-        { num: 'INV-001', cust: 0, status: 'sent', subtotal: '42000', tax: '7140', total: '49140', paid: '49140', balance: '0', date: '2026-04-01', due: '2026-05-01' },
-        { num: 'INV-002', cust: 1, status: 'sent', subtotal: '18500', tax: '3145', total: '21645', paid: '10000', balance: '11645', date: '2026-04-05', due: '2026-05-05' },
-        { num: 'INV-003', cust: 2, status: 'sent', subtotal: '56000', tax: '9520', total: '65520', paid: '0', balance: '65520', date: '2026-04-10', due: '2026-05-10' },
-        { num: 'INV-004', cust: 3, status: 'draft', subtotal: '27500', tax: '4675', total: '32175', paid: '0', balance: '32175', date: '2026-04-15', due: '2026-05-15' },
-        { num: 'INV-005', cust: 4, status: 'void', subtotal: '8000', tax: '1360', total: '9360', paid: '0', balance: '0', date: '2026-03-20', due: '2026-04-20' },
+    // Helper: compute line totals (quantity * unitPrice, taxed at 17%)
+    const t17 = (sub: number) => +(sub * 0.17).toFixed(4);
+    const lt17 = (sub: number) => +(sub * 1.17).toFixed(4);
+
+    // ── 12a. INVOICES (20 items, 1 year May 2025–Apr 2026) ──────────────
+    if (allCusts.length > 0) {
+      type InvLine = { desc: string; qty: number; price: number };
+      type InvDef = { num: string; c: number; status: string; date: string; due: string; paidFrac: number; lines: InvLine[] };
+
+      const invDefs: InvDef[] = [
+        { num: 'INV-2025-001', c: 0, status: 'paid',    date: '2025-06-01', due: '2025-07-01', paidFrac: 1,    lines: [{ desc: 'Habib Cooking Oil 5L', qty: 20, price: 2100 }, { desc: 'Surf Excel 1kg', qty: 30, price: 450 }] },
+        { num: 'INV-2025-002', c: 1, status: 'paid',    date: '2025-06-10', due: '2025-07-10', paidFrac: 1,    lines: [{ desc: 'Sufi Cooking Oil 5L', qty: 15, price: 1980 }, { desc: 'Bonus Tristar 1kg', qty: 20, price: 340 }] },
+        { num: 'INV-2025-003', c: 2, status: 'paid',    date: '2025-07-05', due: '2025-08-05', paidFrac: 1,    lines: [{ desc: 'Bonus Tristar 1kg', qty: 50, price: 340 }, { desc: 'Brite Total 1kg', qty: 25, price: 365 }] },
+        { num: 'INV-2025-004', c: 3, status: 'partial', date: '2025-07-15', due: '2025-08-15', paidFrac: 0.5,  lines: [{ desc: 'Habib Cooking Oil 1L', qty: 40, price: 480 }] },
+        { num: 'INV-2025-005', c: 4, status: 'paid',    date: '2025-08-02', due: '2025-09-02', paidFrac: 1,    lines: [{ desc: 'Ariel Matic 500g', qty: 100, price: 310 }, { desc: 'Lemon Max Dishwash 750ml', qty: 30, price: 220 }] },
+        { num: 'INV-2025-006', c: 5, status: 'paid',    date: '2025-08-20', due: '2025-09-20', paidFrac: 1,    lines: [{ desc: 'Sufi Cooking Oil 1L', qty: 30, price: 450 }, { desc: 'Vim Dishwash Bar 500g', qty: 40, price: 150 }] },
+        { num: 'INV-2025-007', c: 6, status: 'paid',    date: '2025-09-05', due: '2025-10-05', paidFrac: 1,    lines: [{ desc: 'Lemon Max Dishwash 750ml', qty: 60, price: 220 }, { desc: 'Harpic Original 500ml', qty: 20, price: 280 }] },
+        { num: 'INV-2025-008', c: 7, status: 'partial', date: '2025-09-18', due: '2025-10-18', paidFrac: 0.5,  lines: [{ desc: 'Dalda Banaspati Ghee 2.5kg', qty: 20, price: 1520 }] },
+        { num: 'INV-2025-009', c: 0, status: 'paid',    date: '2025-10-01', due: '2025-11-01', paidFrac: 1,    lines: [{ desc: 'Habib Cooking Oil 5L', qty: 25, price: 2100 }, { desc: 'Surf Excel 1kg', qty: 20, price: 450 }] },
+        { num: 'INV-2025-010', c: 1, status: 'overdue', date: '2025-10-15', due: '2025-11-15', paidFrac: 0,    lines: [{ desc: 'Surf Excel 1kg', qty: 35, price: 450 }, { desc: 'Ariel Matic 500g', qty: 20, price: 310 }] },
+        { num: 'INV-2025-011', c: 2, status: 'sent',    date: '2025-11-03', due: '2025-12-03', paidFrac: 0,    lines: [{ desc: 'Bonus Tristar 1kg', qty: 40, price: 340 }, { desc: 'Brite Total 1kg', qty: 30, price: 365 }] },
+        { num: 'INV-2025-012', c: 3, status: 'paid',    date: '2025-11-20', due: '2025-12-20', paidFrac: 1,    lines: [{ desc: 'Sufi Cooking Oil 5L', qty: 15, price: 1980 }, { desc: 'Habib Cooking Oil 1L', qty: 20, price: 480 }] },
+        { num: 'INV-2025-013', c: 4, status: 'partial', date: '2025-12-05', due: '2026-01-05', paidFrac: 0.5,  lines: [{ desc: 'Ariel Matic 500g', qty: 80, price: 310 }, { desc: 'Lemon Max Dishwash 750ml', qty: 20, price: 220 }] },
+        { num: 'INV-2025-014', c: 5, status: 'void',    date: '2025-12-18', due: '2026-01-18', paidFrac: 0,    lines: [{ desc: 'Habib Cooking Oil 5L', qty: 20, price: 2100 }] },
+        { num: 'INV-2026-001', c: 6, status: 'paid',    date: '2026-01-08', due: '2026-02-08', paidFrac: 1,    lines: [{ desc: 'Surf Excel 1kg', qty: 50, price: 450 }, { desc: 'Brite Total 1kg', qty: 30, price: 365 }] },
+        { num: 'INV-2026-002', c: 7, status: 'overdue', date: '2026-01-22', due: '2026-02-22', paidFrac: 0,    lines: [{ desc: 'Habib Cooking Oil 5L', qty: 30, price: 2100 }] },
+        { num: 'INV-2026-003', c: 0, status: 'sent',    date: '2026-02-10', due: '2026-03-10', paidFrac: 0,    lines: [{ desc: 'Sufi Cooking Oil 1L', qty: 40, price: 450 }, { desc: 'Harpic Original 500ml', qty: 25, price: 280 }] },
+        { num: 'INV-2026-004', c: 1, status: 'draft',   date: '2026-02-25', due: '2026-03-25', paidFrac: 0,    lines: [{ desc: 'Dalda Banaspati Ghee 2.5kg', qty: 15, price: 1520 }] },
+        { num: 'INV-2026-005', c: 2, status: 'overdue', date: '2026-03-05', due: '2026-04-05', paidFrac: 0,    lines: [{ desc: 'Harpic Original 500ml', qty: 60, price: 280 }, { desc: 'Vim Dishwash Bar 500g', qty: 40, price: 150 }] },
+        { num: 'INV-2026-006', c: 3, status: 'partial', date: '2026-04-01', due: '2026-05-01', paidFrac: 0.5,  lines: [{ desc: 'Bonus Tristar 1kg', qty: 50, price: 340 }, { desc: 'Surf Excel 1kg', qty: 35, price: 450 }] },
       ];
-      for (const inv of invoiceData) {
+
+      for (const def of invDefs) {
+        const sub = def.lines.reduce((s, l) => s + l.qty * l.price, 0);
+        const tax = t17(sub);
+        const tot = sub + tax;
+        const paid = +(tot * def.paidFrac).toFixed(4);
+        const bal = +(tot - paid).toFixed(4);
         const invoice = await m.save(m.create(Invoice, {
           companyId: company.id,
-          customerId: allCusts[inv.cust].id,
-          invoiceNumber: inv.num,
-          invoiceDate: inv.date,
-          dueDate: inv.due,
-          subtotal: inv.subtotal,
+          customerId: allCusts[def.c % allCusts.length].id,
+          invoiceNumber: def.num,
+          invoiceDate: def.date,
+          dueDate: def.due,
+          subtotal: String(sub),
           discountType: 'none',
           discountValue: '0',
           discountAmount: '0',
-          taxAmount: inv.tax,
-          total: inv.total,
-          amountPaid: inv.paid,
-          balance: inv.balance,
-          status: inv.status as any,
-          notes: `Auto-generated invoice for ${allCusts[inv.cust].name}`,
+          taxAmount: String(tax),
+          total: String(tot),
+          amountPaid: String(paid),
+          balance: String(bal),
+          status: def.status as any,
+          notes: `Invoice for ${allCusts[def.c % allCusts.length].name}`,
           paymentTerms: 'net30',
           createdBy: admin.id,
         }));
-        // Add 2-3 line items
-        const numLines = 2 + (inv.cust % 2);
-        for (let i = 0; i < numLines && i < items.length; i++) {
-          const item = items[(inv.cust + i) % items.length];
-          const qty = 10 + inv.cust * 5;
-          const unitPrice = Number(item.sellingPrice);
-          const lineTotal = qty * unitPrice;
-          const taxAmt = lineTotal * 0.17;
+        for (let i = 0; i < def.lines.length; i++) {
+          const l = def.lines[i];
+          const lineSub = l.qty * l.price;
           await m.save(m.create(InvoiceLineItem, {
             invoiceId: invoice.id,
-            description: item.name,
-            quantity: String(qty),
-            unitPrice: item.sellingPrice,
+            description: l.desc,
+            quantity: String(l.qty),
+            unitPrice: String(l.price),
             taxRate: '17',
-            taxAmount: taxAmt.toFixed(4),
-            lineTotal: (lineTotal + taxAmt).toFixed(4),
+            taxAmount: String(t17(lineSub)),
+            lineTotal: String(lt17(lineSub)),
             accountId: salesAccount?.id ?? null,
             lineOrder: i,
           }));
         }
       }
-      console.log('  ✓ 5 invoices with line items created');
+      console.log('  ✓ 20 invoices with line items created (1 year, all statuses)');
     }
 
-    // =================================================================
-    // 13. BILLS (4 bills from vendors)
-    // =================================================================
-    const billCount = await m.countBy(Bill, { companyId: company.id });
-    if (billCount === 0 && allVends.length > 0) {
-      const billData = [
-        { num: 'BILL-001', vendor: 0, status: 'open', subtotal: '92500', tax: '15725', total: '108225', paid: '0', date: '2026-04-02', due: '2026-05-02' },
-        { num: 'BILL-002', vendor: 1, status: 'open', subtotal: '45000', tax: '7650', total: '52650', paid: '52650', date: '2026-03-28', due: '2026-04-28' },
-        { num: 'BILL-003', vendor: 2, status: 'draft', subtotal: '78000', tax: '13260', total: '91260', paid: '0', date: '2026-04-12', due: '2026-05-12' },
-        { num: 'BILL-004', vendor: 3, status: 'open', subtotal: '12000', tax: '2040', total: '14040', paid: '7000', date: '2026-04-08', due: '2026-05-08' },
+    // ── 12b. BILLS (15 items, 1 year May 2025–Apr 2026) ─────────────────
+    if (allVends.length > 0) {
+      type BillLine = { desc: string; amount: number };
+      type BillDef = { num: string; v: number; status: string; date: string; due: string; paidFrac: number; lines: BillLine[] };
+
+      const billDefs: BillDef[] = [
+        { num: 'BILL-2025-001', v: 0, status: 'paid',    date: '2025-06-03', due: '2025-07-03', paidFrac: 1,    lines: [{ desc: 'Habib Cooking Oil 5L bulk purchase', amount: 92500 }, { desc: 'Habib Cooking Oil 1L bulk purchase', amount: 50400 }] },
+        { num: 'BILL-2025-002', v: 1, status: 'paid',    date: '2025-06-15', due: '2025-07-15', paidFrac: 1,    lines: [{ desc: 'Surf Excel 1kg — 500 units', amount: 190000 }, { desc: 'Bonus Tristar 1kg — 600 units', amount: 174000 }] },
+        { num: 'BILL-2025-003', v: 2, status: 'paid',    date: '2025-07-08', due: '2025-08-08', paidFrac: 1,    lines: [{ desc: 'Sufi Cooking Oil 5L bulk', amount: 665000 }] },
+        { num: 'BILL-2025-004', v: 3, status: 'paid',    date: '2025-07-22', due: '2025-08-22', paidFrac: 1,    lines: [{ desc: 'Lemon Max Dishwash 750ml — 400 units', amount: 72000 }, { desc: 'Vim Dishwash Bar 500g — 300 units', amount: 36000 }] },
+        { num: 'BILL-2025-005', v: 4, status: 'paid',    date: '2025-08-05', due: '2025-09-05', paidFrac: 1,    lines: [{ desc: 'Packaging materials — August batch', amount: 45000 }] },
+        { num: 'BILL-2025-006', v: 0, status: 'paid',    date: '2025-09-10', due: '2025-10-10', paidFrac: 1,    lines: [{ desc: 'Habib Cooking Oil 5L bulk purchase', amount: 110500 }] },
+        { num: 'BILL-2025-007', v: 1, status: 'paid',    date: '2025-10-01', due: '2025-11-01', paidFrac: 1,    lines: [{ desc: 'Ariel Matic 500g — 800 units', amount: 208000 }, { desc: 'Brite Total 1kg — 400 units', amount: 124000 }] },
+        { num: 'BILL-2025-008', v: 2, status: 'partial', date: '2025-10-18', due: '2025-11-18', paidFrac: 0.5,  lines: [{ desc: 'Sufi Cooking Oil 1L bulk', amount: 380000 }] },
+        { num: 'BILL-2025-009', v: 3, status: 'open',    date: '2025-11-05', due: '2025-12-05', paidFrac: 0,    lines: [{ desc: 'Harpic Original 500ml — 300 units', amount: 69000 }] },
+        { num: 'BILL-2025-010', v: 4, status: 'open',    date: '2025-11-20', due: '2025-12-20', paidFrac: 0,    lines: [{ desc: 'Packaging materials — Nov batch', amount: 48000 }] },
+        { num: 'BILL-2025-011', v: 0, status: 'paid',    date: '2025-12-08', due: '2026-01-08', paidFrac: 1,    lines: [{ desc: 'Habib Oil year-end stock', amount: 185000 }, { desc: 'Dalda Banaspati Ghee 2.5kg', amount: 120000 }] },
+        { num: 'BILL-2026-001', v: 1, status: 'open',    date: '2026-01-10', due: '2026-02-10', paidFrac: 0,    lines: [{ desc: 'Detergent Q1 purchase order', amount: 210000 }] },
+        { num: 'BILL-2026-002', v: 2, status: 'partial', date: '2026-02-01', due: '2026-03-01', paidFrac: 0.4,  lines: [{ desc: 'Sufi Oil Feb replenishment', amount: 450000 }] },
+        { num: 'BILL-2026-003', v: 3, status: 'open',    date: '2026-03-05', due: '2026-04-05', paidFrac: 0,    lines: [{ desc: 'Cleaning products Q1', amount: 95000 }] },
+        { num: 'BILL-2026-004', v: 0, status: 'draft',   date: '2026-04-15', due: '2026-05-15', paidFrac: 0,    lines: [{ desc: 'Habib Oil Apr order (draft)', amount: 125000 }] },
       ];
-      for (const b of billData) {
+
+      for (const def of billDefs) {
+        const sub = def.lines.reduce((s, l) => s + l.amount, 0);
+        const tax = t17(sub);
+        const tot = sub + tax;
+        const paid = +(tot * def.paidFrac).toFixed(4);
+        const bal = +(tot - paid).toFixed(4);
         const bill = await m.save(m.create(Bill, {
           companyId: company.id,
-          vendorId: allVends[b.vendor].id,
-          billNumber: b.num,
-          billDate: b.date,
-          dueDate: b.due,
-          subtotal: b.subtotal,
-          taxAmount: b.tax,
-          total: b.total,
-          amountPaid: b.paid,
-          balance: String(Number(b.total) - Number(b.paid)),
-          status: b.status as any,
-          memo: `Purchase from ${allVends[b.vendor].companyName}`,
+          vendorId: allVends[def.v % allVends.length].id,
+          billNumber: def.num,
+          billDate: def.date,
+          dueDate: def.due,
+          subtotal: String(sub),
+          taxAmount: String(tax),
+          total: String(tot),
+          amountPaid: String(paid),
+          balance: String(bal),
+          status: def.status as any,
+          memo: `Purchase from ${allVends[def.v % allVends.length].companyName}`,
           createdBy: admin.id,
         } as any));
-        // Add line items
-        for (let i = 0; i < 2; i++) {
-          const item = items[(b.vendor * 2 + i) % items.length];
+        for (let i = 0; i < def.lines.length; i++) {
+          const l = def.lines[i];
           await m.save(m.create(BillLineItem, {
             billId: bill.id,
             accountId: expenseAccount?.id ?? null,
-            description: `${item.name} — bulk purchase`,
-            amount: String(Number(b.subtotal) / 2),
+            description: l.desc,
+            amount: String(l.amount),
             taxRate: '17',
             lineOrder: i,
           } as any));
         }
       }
-      console.log('  ✓ 4 bills with line items created');
+      console.log('  ✓ 15 bills with line items created (1 year, all statuses)');
     }
 
-    // =================================================================
-    // 14. JOURNAL ENTRIES (3 posted + 1 draft)
-    // =================================================================
-    const jeCount = await m.countBy(JournalEntry, { companyId: company.id });
-    if (jeCount === 0) {
+    // ── 12c. JOURNAL ENTRIES (15 items, 1 year) ──────────────────────────
+    {
       const jeData = [
-        { ref: 'JE-001', date: '2026-04-01', memo: 'Opening balances', status: 'posted', amount: '500000' },
-        { ref: 'JE-002', date: '2026-04-10', memo: 'Monthly rent payment', status: 'posted', amount: '45000' },
-        { ref: 'JE-003', date: '2026-04-15', memo: 'Utility bills payment', status: 'posted', amount: '12000' },
-        { ref: 'JE-004', date: '2026-04-20', memo: 'Inventory purchase adjustment', status: 'draft', amount: '25000' },
+        { ref: 'JE-2025-001', date: '2025-05-01', memo: 'Opening balances — FY 2025-26',          status: 'posted', amt: 2500000 },
+        { ref: 'JE-2025-002', date: '2025-06-30', memo: 'Monthly rent — June 2025',                status: 'posted', amt: 55000 },
+        { ref: 'JE-2025-003', date: '2025-06-30', memo: 'Utility bills — June 2025',               status: 'posted', amt: 14500 },
+        { ref: 'JE-2025-004', date: '2025-07-31', memo: 'Monthly rent — July 2025',                status: 'posted', amt: 55000 },
+        { ref: 'JE-2025-005', date: '2025-07-31', memo: 'Salary disbursement — July 2025',         status: 'posted', amt: 270000 },
+        { ref: 'JE-2025-006', date: '2025-08-31', memo: 'Monthly rent — August 2025',              status: 'posted', amt: 55000 },
+        { ref: 'JE-2025-007', date: '2025-09-30', memo: 'Depreciation — Q1 FY 2025-26',            status: 'posted', amt: 25000 },
+        { ref: 'JE-2025-008', date: '2025-10-31', memo: 'Salary disbursement — October 2025',      status: 'posted', amt: 270000 },
+        { ref: 'JE-2025-009', date: '2025-11-30', memo: 'Monthly rent — November 2025',            status: 'posted', amt: 55000 },
+        { ref: 'JE-2025-010', date: '2025-12-31', memo: 'Year-end inventory adjustment',           status: 'posted', amt: 48000 },
+        { ref: 'JE-2026-001', date: '2026-01-31', memo: 'Salary disbursement — January 2026',      status: 'posted', amt: 270000 },
+        { ref: 'JE-2026-002', date: '2026-02-28', memo: 'Monthly rent — February 2026',            status: 'posted', amt: 55000 },
+        { ref: 'JE-2026-003', date: '2026-03-31', memo: 'Depreciation — Q3 FY 2025-26',            status: 'posted', amt: 25000 },
+        { ref: 'JE-2026-004', date: '2026-04-15', memo: 'Salary disbursement — April 2026',        status: 'posted', amt: 270000 },
+        { ref: 'JE-2026-005', date: '2026-04-30', memo: 'Prepaid insurance adjustment (draft)',    status: 'draft',  amt: 36000 },
       ];
       for (const je of jeData) {
         const entry = await m.save(m.create(JournalEntry, {
@@ -823,91 +888,121 @@ async function run() {
           date: je.date,
           memo: je.memo,
           status: je.status as any,
-          totalDebits: je.amount,
-          totalCredits: je.amount,
+          totalDebits: String(je.amt),
+          totalCredits: String(je.amt),
           createdBy: admin.id,
           postedBy: je.status === 'posted' ? admin.id : null,
           postedAt: je.status === 'posted' ? new Date() : null,
         }));
-        // Debit + Credit lines
         await m.save(m.create(JournalEntryLine, {
           entryId: entry.id,
           accountId: expenseAccount?.id ?? allAccounts[0].id,
-          description: je.memo + ' (debit)',
-          debit: je.amount,
+          description: je.memo + ' — debit',
+          debit: String(je.amt),
           credit: '0',
           lineOrder: 0,
         }));
         await m.save(m.create(JournalEntryLine, {
           entryId: entry.id,
-          accountId: cashAccount?.id ?? allAccounts[1].id,
-          description: je.memo + ' (credit)',
+          accountId: cashAccount?.id ?? allAccounts[1]?.id ?? allAccounts[0].id,
+          description: je.memo + ' — credit',
           debit: '0',
-          credit: je.amount,
+          credit: String(je.amt),
           lineOrder: 1,
         }));
       }
-      console.log('  ✓ 4 journal entries created (3 posted, 1 draft)');
+      console.log('  ✓ 15 journal entries created (14 posted, 1 draft)');
     }
 
-    // =================================================================
-    // 15. BANK ACCOUNTS + TRANSACTIONS
-    // =================================================================
-    const bankCount = await m.countBy(BankAccount, { companyId: company.id });
-    if (bankCount === 0) {
+    // ── 12d. BANK ACCOUNTS + TRANSACTIONS (1 year) ──────────────────────
+    {
       const checking = await m.save(m.create(BankAccount, {
         companyId: company.id,
-        name: 'MCB Business Account',
+        name: 'MCB Business Current Account',
         bankName: 'MCB Bank',
         accountNumber: '0012-3456789-001',
         accountType: 'checking',
-        balance: '1250000',
+        balance: '4850000',
         linkedAccountId: cashAccount?.id ?? allAccounts[0].id,
         lastReconciled: null,
         isActive: true,
       }));
-      const savings = await m.save(m.create(BankAccount, {
+      await m.save(m.create(BankAccount, {
         companyId: company.id,
-        name: 'HBL Savings',
+        name: 'HBL Business Savings',
         bankName: 'Habib Bank Limited',
         accountNumber: '9876-5432100-002',
         accountType: 'savings',
-        balance: '3500000',
+        balance: '8500000',
         linkedAccountId: allAccounts.length > 1 ? allAccounts[1].id : allAccounts[0].id,
         lastReconciled: null,
         isActive: true,
       }));
 
-      // Add transactions to checking account
       const txns = [
-        { type: 'deposit', payee: 'Tariq General Store', ref: 'PMT-001', amount: '49140', memo: 'INV-001 payment received' },
-        { type: 'deposit', payee: 'Al-Madina Mart', ref: 'PMT-002', amount: '10000', memo: 'Partial payment INV-002' },
-        { type: 'expense', payee: 'Habib Oil Mills', ref: 'CHK-101', amount: '108225', memo: 'BILL-001 payment' },
-        { type: 'expense', payee: 'Office Rent', ref: 'CHK-102', amount: '45000', memo: 'April rent' },
-        { type: 'expense', payee: 'K-Electric', ref: 'CHK-103', amount: '12000', memo: 'Utility bill' },
-        { type: 'deposit', payee: 'Sales Collection', ref: 'DEP-001', amount: '85000', memo: 'Daily collection' },
-        { type: 'transfer', payee: 'HBL Savings', ref: 'TRF-001', amount: '100000', memo: 'Monthly savings transfer' },
+        // FY 2025 — June
+        { date: '2025-06-05', type: 'deposit', payee: 'Tariq General Store', ref: 'PMT-2025-001', amount: 64935, memo: 'INV-2025-001 payment' },
+        { date: '2025-06-15', type: 'deposit', payee: 'Al-Madina Mart', ref: 'PMT-2025-002', amount: 34749, memo: 'INV-2025-002 payment' },
+        { date: '2025-06-20', type: 'expense', payee: 'Habib Oil Mills', ref: 'CHK-2025-001', amount: 108225, memo: 'BILL-2025-001 payment' },
+        { date: '2025-06-30', type: 'expense', payee: 'Office Rent June', ref: 'CHK-2025-002', amount: 55000, memo: 'Monthly rent' },
+        // July
+        { date: '2025-07-10', type: 'deposit', payee: 'Iqbal Grocery', ref: 'PMT-2025-003', amount: 30566, memo: 'INV-2025-003 payment' },
+        { date: '2025-07-15', type: 'expense', payee: 'Pak Detergent Industries', ref: 'CHK-2025-003', amount: 426786, memo: 'BILL-2025-002 payment' },
+        { date: '2025-07-31', type: 'expense', payee: 'Payroll July', ref: 'SAL-2025-001', amount: 270000, memo: 'Staff salaries July' },
+        // August
+        { date: '2025-08-10', type: 'deposit', payee: 'City Wholesale', ref: 'PMT-2025-004', amount: 36270, memo: 'INV-2025-005 payment' },
+        { date: '2025-08-12', type: 'deposit', payee: 'Bismillah Trading', ref: 'PMT-2025-005', amount: 15795, memo: 'INV-2025-006 payment' },
+        { date: '2025-08-15', type: 'expense', payee: 'Sufi Cooking Oil', ref: 'CHK-2025-004', amount: 777555, memo: 'BILL-2025-003 payment' },
+        { date: '2025-08-31', type: 'expense', payee: 'Office Rent August', ref: 'CHK-2025-005', amount: 55000, memo: 'Monthly rent' },
+        // September
+        { date: '2025-09-05', type: 'deposit', payee: 'Noor Enterprises', ref: 'PMT-2025-006', amount: 22464, memo: 'INV-2025-007 payment' },
+        { date: '2025-09-12', type: 'expense', payee: 'Bright Chemical Works', ref: 'CHK-2025-006', amount: 124380, memo: 'BILL-2025-004 payment' },
+        { date: '2025-09-30', type: 'expense', payee: 'Payroll September', ref: 'SAL-2025-002', amount: 270000, memo: 'Staff salaries Sept' },
+        // October
+        { date: '2025-10-08', type: 'deposit', payee: 'Tariq General Store', ref: 'PMT-2025-007', amount: 61425, memo: 'INV-2025-009 payment' },
+        { date: '2025-10-15', type: 'expense', payee: 'K-Electric', ref: 'CHK-2025-007', amount: 18500, memo: 'Electricity bill Oct' },
+        // November
+        { date: '2025-11-01', type: 'deposit', payee: 'Punjab Mart', ref: 'PMT-2025-008', amount: 17784, memo: 'INV-2025-008 partial' },
+        { date: '2025-11-28', type: 'deposit', payee: 'Rehman Superstore', ref: 'PMT-2025-009', amount: 45981, memo: 'INV-2025-012 payment' },
+        { date: '2025-11-30', type: 'expense', payee: 'Payroll November', ref: 'SAL-2025-003', amount: 270000, memo: 'Staff salaries Nov' },
+        // December
+        { date: '2025-12-10', type: 'deposit', payee: 'City Wholesale', ref: 'PMT-2025-010', amount: 14508, memo: 'INV-2025-013 partial' },
+        { date: '2025-12-20', type: 'expense', payee: 'Office Rent December', ref: 'CHK-2025-008', amount: 55000, memo: 'Monthly rent' },
+        { date: '2025-12-31', type: 'transfer', payee: 'HBL Business Savings', ref: 'TRF-2025-001', amount: 500000, memo: 'Year-end savings transfer' },
+        // 2026 — January
+        { date: '2026-01-10', type: 'deposit', payee: 'Noor Enterprises', ref: 'PMT-2026-001', amount: 39137, memo: 'INV-2026-001 payment' },
+        { date: '2026-01-31', type: 'expense', payee: 'Payroll January', ref: 'SAL-2026-001', amount: 270000, memo: 'Staff salaries Jan' },
+        // February
+        { date: '2026-02-15', type: 'expense', payee: 'K-Electric', ref: 'CHK-2026-001', amount: 21000, memo: 'Electricity bill Feb' },
+        { date: '2026-02-28', type: 'expense', payee: 'Office Rent February', ref: 'CHK-2026-002', amount: 55000, memo: 'Monthly rent' },
+        // March
+        { date: '2026-03-15', type: 'expense', payee: 'Payroll March', ref: 'SAL-2026-002', amount: 270000, memo: 'Staff salaries Mar' },
+        // April
+        { date: '2026-04-10', type: 'deposit', payee: 'Rehman Superstore', ref: 'PMT-2026-002', amount: 19159, memo: 'INV-2026-006 partial' },
+        { date: '2026-04-28', type: 'expense', payee: 'Office Rent April', ref: 'CHK-2026-003', amount: 55000, memo: 'Monthly rent' },
+        { date: '2026-04-30', type: 'expense', payee: 'Payroll April', ref: 'SAL-2026-003', amount: 270000, memo: 'Staff salaries Apr' },
       ];
-      let runningBalance = 1250000;
+
+      let runBal = 4850000;
       for (const tx of txns) {
-        if (tx.type === 'deposit') runningBalance += Number(tx.amount);
-        else runningBalance -= Number(tx.amount);
+        if (tx.type === 'deposit') runBal += tx.amount;
+        else runBal -= tx.amount;
         await m.save(m.create(BankTransaction, {
           companyId: company.id,
           bankAccountId: checking.id,
-          date: '2026-04-15',
+          date: tx.date,
           type: tx.type as any,
           payee: tx.payee,
           reference: tx.ref,
-          amount: tx.amount,
-          balance: String(runningBalance),
-          accountId: tx.type === 'deposit' ? arAccount?.id : expenseAccount?.id ?? null,
+          amount: String(tx.amount),
+          balance: String(runBal),
+          accountId: tx.type === 'deposit' ? (arAccount?.id ?? null) : (expenseAccount?.id ?? null),
           memo: tx.memo,
-          isCleared: tx.type !== 'transfer',
-          clearedDate: tx.type !== 'transfer' ? new Date() : null,
+          isCleared: true,
+          clearedDate: new Date(),
         }));
       }
-      console.log('  ✓ 2 bank accounts + 7 transactions created');
+      console.log('  ✓ 2 bank accounts + 30 transactions created (1 year)');
     }
 
     // =================================================================
@@ -927,35 +1022,153 @@ async function run() {
     // =================================================================
     // 17. SALES ORDERS, PURCHASE ORDERS, BUDGETS, PAYROLL
     // =================================================================
-    const soCount = await m.countBy(SalesOrder, { companyId: company.id });
-    if (soCount < 3 && allCusts.length > 0) {
-      const soData = [
-        { customerId: allCusts[0].id, orderNumber: 'SO-001', status: 'open', subtotal: '84000.00', taxAmount: '14280.00', total: '98280.00' },
-        { customerId: allCusts[1].id, orderNumber: 'SO-002', status: 'draft', subtotal: '37000.00', taxAmount: '6290.00', total: '43290.00' },
-        { customerId: allCusts[2].id, orderNumber: 'SO-003', status: 'fulfilled', subtotal: '52000.00', taxAmount: '8840.00', total: '60840.00' },
+    // Sales Orders — 10, full year with SalesOrderLine items
+    if (allCusts.length > 0) {
+      type SOLine = { itemIdx: number | null; desc: string; ordQty: number; fulQty: number; price: number };
+      type SODef = { num: string; c: number; status: string; orderDate: string; expectedDate: string; notes: string; lines: SOLine[] };
+
+      const soDefs: SODef[] = [
+        { num: 'SO-2025-001', c: 0, status: 'fulfilled', orderDate: '2025-06-02', expectedDate: '2025-06-15', notes: 'Habib oils June bulk', lines: [
+          { itemIdx: 0, desc: 'Habib Cooking Oil 5L', ordQty: 20, fulQty: 20, price: 2100 },
+          { itemIdx: 5, desc: 'Surf Excel 1kg', ordQty: 30, fulQty: 30, price: 450 },
+        ]},
+        { num: 'SO-2025-002', c: 1, status: 'fulfilled', orderDate: '2025-06-10', expectedDate: '2025-06-25', notes: 'Al-Madina Mart June', lines: [
+          { itemIdx: 2, desc: 'Sufi Cooking Oil 5L', ordQty: 15, fulQty: 15, price: 1980 },
+          { itemIdx: 6, desc: 'Bonus Tristar 1kg', ordQty: 20, fulQty: 20, price: 340 },
+        ]},
+        { num: 'SO-2025-003', c: 2, status: 'confirmed', orderDate: '2025-07-05', expectedDate: '2025-07-20', notes: 'Detergent order July', lines: [
+          { itemIdx: 6, desc: 'Bonus Tristar 1kg', ordQty: 50, fulQty: 0, price: 340 },
+          { itemIdx: 7, desc: 'Brite Total 1kg', ordQty: 25, fulQty: 0, price: 365 },
+        ]},
+        { num: 'SO-2025-004', c: 3, status: 'fulfilled', orderDate: '2025-08-01', expectedDate: '2025-08-15', notes: 'August cooking oil restock', lines: [
+          { itemIdx: 1, desc: 'Habib Cooking Oil 1L', ordQty: 40, fulQty: 40, price: 480 },
+        ]},
+        { num: 'SO-2025-005', c: 4, status: 'open', orderDate: '2025-09-10', expectedDate: '2025-09-25', notes: 'City Wholesale weekly supply', lines: [
+          { itemIdx: 8, desc: 'Ariel Matic 500g', ordQty: 100, fulQty: 0, price: 310 },
+          { itemIdx: 9, desc: 'Lemon Max Dishwash 750ml', ordQty: 30, fulQty: 0, price: 220 },
+        ]},
+        { num: 'SO-2025-006', c: 5, status: 'fulfilled', orderDate: '2025-10-05', expectedDate: '2025-10-20', notes: 'Bismillah October order', lines: [
+          { itemIdx: 3, desc: 'Sufi Cooking Oil 1L', ordQty: 30, fulQty: 30, price: 450 },
+          { itemIdx: 10, desc: 'Vim Dishwash Bar 500g', ordQty: 40, fulQty: 40, price: 150 },
+        ]},
+        { num: 'SO-2025-007', c: 6, status: 'draft', orderDate: '2025-11-01', expectedDate: '2025-11-20', notes: 'Noor Enterprises Q3 draft', lines: [
+          { itemIdx: 9, desc: 'Lemon Max Dishwash 750ml', ordQty: 60, fulQty: 0, price: 220 },
+          { itemIdx: 11, desc: 'Harpic Original 500ml', ordQty: 20, fulQty: 0, price: 280 },
+        ]},
+        { num: 'SO-2026-001', c: 7, status: 'open', orderDate: '2026-01-08', expectedDate: '2026-01-25', notes: 'Punjab Mart January supply', lines: [
+          { itemIdx: 5, desc: 'Surf Excel 1kg', ordQty: 50, fulQty: 0, price: 450 },
+          { itemIdx: 7, desc: 'Brite Total 1kg', ordQty: 30, fulQty: 0, price: 365 },
+        ]},
+        { num: 'SO-2026-002', c: 0, status: 'confirmed', orderDate: '2026-02-10', expectedDate: '2026-02-28', notes: 'Tariq Q4 order', lines: [
+          { itemIdx: 0, desc: 'Habib Cooking Oil 5L', ordQty: 30, fulQty: 0, price: 2100 },
+        ]},
+        { num: 'SO-2026-003', c: 1, status: 'draft', orderDate: '2026-03-05', expectedDate: '2026-03-25', notes: 'Al-Madina March draft', lines: [
+          { itemIdx: 4, desc: 'Dalda Banaspati Ghee 2.5kg', ordQty: 15, fulQty: 0, price: 1520 },
+        ]},
       ];
-      for (const so of soData) {
-        const exists = await m.findOne(SalesOrder, { where: { companyId: company.id, orderNumber: so.orderNumber } as any });
-        if (!exists) {
-          await m.save(m.create(SalesOrder, { companyId: company.id, ...so, orderDate: new Date() } as any));
+
+      for (const def of soDefs) {
+        const sub = def.lines.reduce((s, l) => s + l.ordQty * l.price, 0);
+        const tax = t17(sub);
+        const tot = sub + tax;
+        const so = await m.save(m.create(SalesOrder, {
+          companyId: company.id,
+          customerId: allCusts[def.c % allCusts.length].id,
+          orderNumber: def.num,
+          orderDate: def.orderDate,
+          expectedDate: def.expectedDate,
+          subtotal: String(sub),
+          taxAmount: String(tax),
+          total: String(tot),
+          status: def.status as any,
+          notes: def.notes,
+        } as any));
+        for (let i = 0; i < def.lines.length; i++) {
+          const l = def.lines[i];
+          const lineSub = l.ordQty * l.price;
+          await m.save(m.create(SalesOrderLine, {
+            orderId: so.id,
+            itemId: l.itemIdx !== null && items.length > l.itemIdx ? items[l.itemIdx].id : null,
+            description: l.desc,
+            orderedQty: String(l.ordQty),
+            fulfilledQty: String(l.fulQty),
+            unitPrice: String(l.price),
+            taxRate: '17',
+            lineTotal: String(lt17(lineSub)),
+            lineOrder: i,
+          } as any));
         }
       }
-      console.log('  ✓ 3 sales orders ensured');
+      console.log('  ✓ 10 sales orders with line items created (full year)');
     }
 
-    const poCount = await m.countBy(PurchaseOrder, { companyId: company.id });
-    if (poCount < 2 && allVends.length > 0) {
-      const poData = [
-        { vendorId: allVends[0].id, poNumber: 'PO-001', status: 'draft', subtotal: '185000.00', taxAmount: '31450.00', total: '216450.00' },
-        { vendorId: allVends[1].id, poNumber: 'PO-002', status: 'received', subtotal: '90000.00', taxAmount: '15300.00', total: '105300.00' },
+    // Purchase Orders — 6, full year with PurchaseOrderLine items
+    if (allVends.length > 0) {
+      type POLine = { itemIdx: number | null; desc: string; ordQty: number; recQty: number; cost: number };
+      type PODef = { num: string; v: number; status: string; orderDate: string; expectedDate: string; notes: string; lines: POLine[] };
+
+      const poDefs: PODef[] = [
+        { num: 'PO-2025-001', v: 0, status: 'received', orderDate: '2025-06-01', expectedDate: '2025-06-10', notes: 'Habib Oil June restock', lines: [
+          { itemIdx: 0, desc: 'Habib Cooking Oil 5L — 50 units', ordQty: 50, recQty: 50, cost: 1850 },
+          { itemIdx: 1, desc: 'Habib Cooking Oil 1L — 120 units', ordQty: 120, recQty: 120, cost: 420 },
+        ]},
+        { num: 'PO-2025-002', v: 1, status: 'received', orderDate: '2025-07-05', expectedDate: '2025-07-15', notes: 'Detergent July bulk purchase', lines: [
+          { itemIdx: 5, desc: 'Surf Excel 1kg — 500 units', ordQty: 500, recQty: 500, cost: 380 },
+          { itemIdx: 6, desc: 'Bonus Tristar 1kg — 600 units', ordQty: 600, recQty: 600, cost: 290 },
+        ]},
+        { num: 'PO-2025-003', v: 2, status: 'partial', orderDate: '2025-09-01', expectedDate: '2025-09-15', notes: 'Sufi Oil Sep replenishment', lines: [
+          { itemIdx: 2, desc: 'Sufi Cooking Oil 5L — 200 units', ordQty: 200, recQty: 100, cost: 1750 },
+          { itemIdx: 3, desc: 'Sufi Cooking Oil 1L — 500 units', ordQty: 500, recQty: 250, cost: 400 },
+        ]},
+        { num: 'PO-2025-004', v: 3, status: 'received', orderDate: '2025-11-03', expectedDate: '2025-11-15', notes: 'Cleaners Q4 restock', lines: [
+          { itemIdx: 9, desc: 'Lemon Max Dishwash 750ml — 400 units', ordQty: 400, recQty: 400, cost: 180 },
+          { itemIdx: 10, desc: 'Vim Dishwash Bar 500g — 300 units', ordQty: 300, recQty: 300, cost: 120 },
+          { itemIdx: 11, desc: 'Harpic Original 500ml — 300 units', ordQty: 300, recQty: 300, cost: 230 },
+        ]},
+        { num: 'PO-2026-001', v: 0, status: 'sent', orderDate: '2026-02-01', expectedDate: '2026-02-15', notes: 'Habib Oil Feb order', lines: [
+          { itemIdx: 0, desc: 'Habib Cooking Oil 5L — 60 units', ordQty: 60, recQty: 0, cost: 1850 },
+          { itemIdx: 4, desc: 'Dalda Banaspati Ghee 2.5kg — 40 units', ordQty: 40, recQty: 0, cost: 1350 },
+        ]},
+        { num: 'PO-2026-002', v: 1, status: 'draft', orderDate: '2026-04-10', expectedDate: '2026-04-30', notes: 'Q2 detergent draft order', lines: [
+          { itemIdx: 7, desc: 'Brite Total 1kg — 400 units', ordQty: 400, recQty: 0, cost: 310 },
+          { itemIdx: 8, desc: 'Ariel Matic 500g — 300 units', ordQty: 300, recQty: 0, cost: 260 },
+        ]},
       ];
-      for (const po of poData) {
-        const exists = await m.findOne(PurchaseOrder, { where: { companyId: company.id, poNumber: po.poNumber } as any });
-        if (!exists) {
-          await m.save(m.create(PurchaseOrder, { companyId: company.id, ...po, orderDate: new Date() } as any));
+
+      for (const def of poDefs) {
+        const sub = def.lines.reduce((s, l) => s + l.ordQty * l.cost, 0);
+        const tax = t17(sub);
+        const tot = sub + tax;
+        const po = await m.save(m.create(PurchaseOrder, {
+          companyId: company.id,
+          vendorId: allVends[def.v % allVends.length].id,
+          poNumber: def.num,
+          orderDate: def.orderDate,
+          expectedDate: def.expectedDate,
+          subtotal: String(sub),
+          taxAmount: String(tax),
+          total: String(tot),
+          status: def.status as any,
+          notes: def.notes,
+        } as any));
+        for (let i = 0; i < def.lines.length; i++) {
+          const l = def.lines[i];
+          const lineSub = l.ordQty * l.cost;
+          await m.save(m.create(PurchaseOrderLine, {
+            orderId: po.id,
+            itemId: l.itemIdx !== null && items.length > l.itemIdx ? items[l.itemIdx].id : null,
+            description: l.desc,
+            orderedQty: String(l.ordQty),
+            receivedQty: String(l.recQty),
+            unitCost: String(l.cost),
+            taxRate: '17',
+            lineTotal: String(lt17(lineSub)),
+            accountId: expenseAccount?.id ?? null,
+            lineOrder: i,
+          } as any));
         }
       }
-      console.log('  ✓ 2 purchase orders ensured');
+      console.log('  ✓ 6 purchase orders with line items created (full year)');
     }
 
     const budgetCount = await m.countBy(Budget, { companyId: company.id });
@@ -1083,8 +1296,8 @@ async function run() {
     if (creditMemoCount === 0 && allCusts.length > 0) {
       // Fetch the invoices we seeded to link originalInvoiceId
       const allInvoices = await m.find(Invoice, { where: { companyId: company.id } });
-      const inv001 = allInvoices.find(i => i.invoiceNumber === 'INV-001') ?? null;
-      const inv003 = allInvoices.find(i => i.invoiceNumber === 'INV-003') ?? null;
+      const inv001 = allInvoices.find(i => i.invoiceNumber === 'INV-2025-001') ?? null;
+      const inv003 = allInvoices.find(i => i.invoiceNumber === 'INV-2025-003') ?? null;
 
       const creditMemoData = [
         {
@@ -1168,19 +1381,19 @@ async function run() {
     console.log('    • 8 customers (retail shops)');
     console.log('    • 5 vendors (oil mills, detergent factories)');
     console.log('    • 12 inventory items (cooking oil, detergents, cleaners)');
-    console.log('    • 5 invoices with line items');
-    console.log('    • 4 bills with line items');
-    console.log('    • 4 journal entries (3 posted, 1 draft)');
-    console.log('    • 2 bank accounts + 7 transactions');
+    console.log('    • 20 invoices with line items (1 year, all statuses)');
+    console.log('    • 15 bills with line items (1 year, all statuses)');
+    console.log('    • 15 journal entries (14 posted, 1 draft)');
+    console.log('    • 2 bank accounts + 30 transactions (1 year)');
     console.log('    • 4 tax rates (GST, WHT, Excise, Zero)');
-    console.log('    • 3 sales orders, 2 purchase orders');
+    console.log('    • 10 sales orders + 6 purchase orders (with line items, full year)');
     console.log('    • 4 estimates (sent, accepted, draft, expired)');
     console.log('    • 3 credit memos (1 applied, 2 open)');
     console.log('    • 1 budget, 3 employees, 1 payroll run');
     console.log('    • 2 delivery personnel profiles');
     console.log('    • Shadow inventory snapshots for both DPs');
     console.log('    • 3 agencies (Dalda Cooking Oil, Suffee Cooking Oil, Suffee Detergents)');
-    console.log('    • 8 deliveries with items (various statuses)');
+    console.log('    • 5 deliveries with items (various statuses)');
     console.log('    • 5 notifications');
     console.log('\n  Production API: https://finmatrix-api-a824f23fbd72.herokuapp.com/api/v1');
     console.log('  Local dev:      npm run start:dev');
