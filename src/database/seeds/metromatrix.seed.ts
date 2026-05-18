@@ -36,6 +36,10 @@ import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { InvoiceLineItem } from '../../modules/invoices/entities/invoice-line-item.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
 import { BillLineItem } from '../../modules/bills/entities/bill-line-item.entity';
+import { Estimate } from '../../modules/estimates/entities/estimate.entity';
+import { EstimateLineItem } from '../../modules/estimates/entities/estimate-line-item.entity';
+import { CreditMemo } from '../../modules/credit-memos/entities/credit-memo.entity';
+import { CreditMemoLine } from '../../modules/credit-memos/entities/credit-memo-line.entity';
 import { SalesOrder } from '../../modules/sales-orders/entities/sales-order.entity';
 import { PurchaseOrder } from '../../modules/purchase-orders/entities/purchase-order.entity';
 import { Budget } from '../../modules/budgets/entities/budget.entity';
@@ -106,7 +110,11 @@ async function run() {
     await ds.query(`DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id = $1)`, [cid]);
     await ds.query(`DELETE FROM deliveries WHERE company_id = $1`, [cid]);
     await ds.query(`DELETE FROM shadow_inventory_snapshots WHERE company_id = $1`, [cid]);
-    console.log('  ✓ Cleaned up old deliveries, approvals, shadow inventory');
+    await ds.query(`DELETE FROM estimate_line_items WHERE estimate_id IN (SELECT id FROM estimates WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM estimates WHERE company_id = $1`, [cid]);
+    await ds.query(`DELETE FROM credit_memo_lines WHERE credit_memo_id IN (SELECT id FROM credit_memos WHERE company_id = $1)`, [cid]);
+    await ds.query(`DELETE FROM credit_memos WHERE company_id = $1`, [cid]);
+    console.log('  ✓ Cleaned up old deliveries, approvals, shadow inventory, estimates, credit memos');
   }
 
   await ds.transaction(async (m) => {
@@ -993,7 +1001,153 @@ async function run() {
     }
 
     // =================================================================
-    // 18. NOTIFICATIONS (admin dashboard alerts)
+    // 18. ESTIMATES (4 estimates with line items — all statuses)
+    // =================================================================
+    const estimateCount = await m.countBy(Estimate, { companyId: company.id });
+    if (estimateCount === 0 && allCusts.length > 0) {
+      const estimateData = [
+        {
+          num: 'EST-2026-001', cust: 0, status: 'sent' as const,
+          estimateDate: '2026-03-15', expirationDate: '2026-04-15',
+          subtotal: '55500.0000', taxAmount: '9435.0000', total: '64935.0000',
+          discountAmount: '0.0000', notes: 'FMCG bulk order for Q2 replenishment',
+          lines: [
+            { description: 'Habib Cooking Oil 5L', quantity: '20', unitPrice: '2100', taxRate: '17', lineTotal: '49140.0000', lineOrder: 0 },
+            { description: 'Surf Excel 1kg', quantity: '30', unitPrice: '450', taxRate: '17', lineTotal: '15795.0000', lineOrder: 1 },
+          ],
+        },
+        {
+          num: 'EST-2026-002', cust: 1, status: 'accepted' as const,
+          estimateDate: '2026-03-20', expirationDate: '2026-04-20',
+          subtotal: '29700.0000', taxAmount: '5049.0000', total: '34749.0000',
+          discountAmount: '0.0000', notes: 'Cooking oil restocking — accepted by customer',
+          lines: [
+            { description: 'Sufi Cooking Oil 5L', quantity: '15', unitPrice: '1980', taxRate: '17', lineTotal: '34749.0000', lineOrder: 0 },
+          ],
+        },
+        {
+          num: 'EST-2026-003', cust: 3, status: 'draft' as const,
+          estimateDate: '2026-04-01', expirationDate: '2026-05-01',
+          subtotal: '27950.0000', taxAmount: '4751.5000', total: '32701.5000',
+          discountAmount: '0.0000', notes: 'Detergent assortment — pending review',
+          lines: [
+            { description: 'Bonus Tristar 1kg', quantity: '50', unitPrice: '340', taxRate: '17', lineTotal: '19890.0000', lineOrder: 0 },
+            { description: 'Brite Total 1kg', quantity: '30', unitPrice: '365', taxRate: '17', lineTotal: '12811.5000', lineOrder: 1 },
+          ],
+        },
+        {
+          num: 'EST-2026-004', cust: 4, status: 'expired' as const,
+          estimateDate: '2026-02-01', expirationDate: '2026-03-01',
+          subtotal: '5500.0000', taxAmount: '935.0000', total: '6435.0000',
+          discountAmount: '0.0000', notes: 'Small order — estimate expired',
+          lines: [
+            { description: 'Lemon Max Dishwash 750ml', quantity: '25', unitPrice: '220', taxRate: '17', lineTotal: '6435.0000', lineOrder: 0 },
+          ],
+        },
+      ];
+
+      for (const ed of estimateData) {
+        const estimate = await m.save(m.create(Estimate, {
+          companyId: company.id,
+          customerId: allCusts[ed.cust].id,
+          estimateNumber: ed.num,
+          estimateDate: ed.estimateDate,
+          expirationDate: ed.expirationDate,
+          subtotal: ed.subtotal,
+          discountAmount: ed.discountAmount,
+          taxAmount: ed.taxAmount,
+          total: ed.total,
+          status: ed.status,
+          convertedToInvoiceId: null,
+          notes: ed.notes,
+        }));
+        for (const l of ed.lines) {
+          await m.save(m.create(EstimateLineItem, {
+            estimateId: estimate.id,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            lineTotal: l.lineTotal,
+            lineOrder: l.lineOrder,
+          }));
+        }
+      }
+      console.log('  ✓ 4 estimates created (sent, accepted, draft, expired)');
+    }
+
+    // =================================================================
+    // 19. CREDIT MEMOS (3 credit memos for returns / adjustments)
+    // =================================================================
+    const creditMemoCount = await m.countBy(CreditMemo, { companyId: company.id });
+    if (creditMemoCount === 0 && allCusts.length > 0) {
+      // Fetch the invoices we seeded to link originalInvoiceId
+      const allInvoices = await m.find(Invoice, { where: { companyId: company.id } });
+      const inv001 = allInvoices.find(i => i.invoiceNumber === 'INV-001') ?? null;
+      const inv003 = allInvoices.find(i => i.invoiceNumber === 'INV-003') ?? null;
+
+      const creditMemoData = [
+        {
+          cust: 0, date: '2026-04-20', originalInvoice: inv001,
+          reason: 'Defective goods returned — 5 bottles Habib Cooking Oil 5L',
+          subtotal: '10500.0000', taxAmount: '1785.0000', total: '12285.0000',
+          amountApplied: '12285.0000', balance: '0.0000', status: 'applied',
+          lines: [
+            { description: 'Habib Cooking Oil 5L — return (defective)', quantity: '5', unitPrice: '2100', taxRate: '17', lineTotal: '12285.0000', lineOrder: 0 },
+          ],
+        },
+        {
+          cust: 2, date: '2026-04-25', originalInvoice: inv003,
+          reason: 'Price adjustment — overcharged on detergent order',
+          subtotal: '4500.0000', taxAmount: '765.0000', total: '5265.0000',
+          amountApplied: '0.0000', balance: '5265.0000', status: 'open',
+          lines: [
+            { description: 'Surf Excel 1kg — price correction', quantity: '10', unitPrice: '450', taxRate: '17', lineTotal: '5265.0000', lineOrder: 0 },
+          ],
+        },
+        {
+          cust: 5, date: '2026-05-01', originalInvoice: null,
+          reason: 'Returned expired stock — Brite Total 1kg',
+          subtotal: '3650.0000', taxAmount: '620.5000', total: '4270.5000',
+          amountApplied: '0.0000', balance: '4270.5000', status: 'open',
+          lines: [
+            { description: 'Brite Total 1kg — expired stock return', quantity: '10', unitPrice: '365', taxRate: '17', lineTotal: '4270.5000', lineOrder: 0 },
+          ],
+        },
+      ];
+
+      for (const cd of creditMemoData) {
+        const cm = await m.save(m.create(CreditMemo, {
+          companyId: company.id,
+          customerId: allCusts[cd.cust].id,
+          date: cd.date,
+          originalInvoiceId: cd.originalInvoice?.id ?? null,
+          reason: cd.reason,
+          subtotal: cd.subtotal,
+          taxAmount: cd.taxAmount,
+          total: cd.total,
+          amountApplied: cd.amountApplied,
+          balance: cd.balance,
+          status: cd.status,
+          journalEntryId: null,
+        }));
+        for (const l of cd.lines) {
+          await m.save(m.create(CreditMemoLine, {
+            creditMemoId: cm.id,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            lineTotal: l.lineTotal,
+            lineOrder: l.lineOrder,
+          }));
+        }
+      }
+      console.log('  ✓ 3 credit memos created (1 applied, 2 open)');
+    }
+
+    // =================================================================
+    // 20. NOTIFICATIONS (admin dashboard alerts)
     // =================================================================
     const notifCount = await m.countBy(Notification, { userId: admin.id } as any);
     if (notifCount === 0) {
@@ -1020,6 +1174,8 @@ async function run() {
     console.log('    • 2 bank accounts + 7 transactions');
     console.log('    • 4 tax rates (GST, WHT, Excise, Zero)');
     console.log('    • 3 sales orders, 2 purchase orders');
+    console.log('    • 4 estimates (sent, accepted, draft, expired)');
+    console.log('    • 3 credit memos (1 applied, 2 open)');
     console.log('    • 1 budget, 3 employees, 1 payroll run');
     console.log('    • 2 delivery personnel profiles');
     console.log('    • Shadow inventory snapshots for both DPs');
