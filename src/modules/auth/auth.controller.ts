@@ -37,7 +37,7 @@ export class AuthController {
 
   @Post('signup')
   @PublicRoute()
-  @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
   @ApiOperation({ summary: 'Register a new user (admin or delivery).' })
   signup(@Body() dto: SignupDto) {
     return this.auth.signup(dto);
