@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -92,8 +93,24 @@ export class CompaniesController {
   @ApiOperation({ summary: 'Select a subscription plan for your company (onboarding).' })
   subscribe(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: { planId: string },
+    @Body() dto: { planId: string; companyId?: string },
+    @Headers('x-company-id') headerCompanyId?: string,
   ) {
-    return this.companies.selfSubscribe(user.companyId ?? '', dto.planId, user.id);
+    // A freshly-signed-up admin's JWT has no companyId yet, so accept it from
+    // the body / x-company-id header, falling back to the token. selfSubscribe
+    // verifies the caller is a member of the company.
+    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? '';
+    return this.companies.selfSubscribe(companyId, dto.planId, user.id);
+  }
+
+  @Post(':companyId/submit')
+  @ApiOperation({
+    summary: 'Submit company onboarding for platform-admin approval (Step C).',
+  })
+  submit(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+  ) {
+    return this.companies.submitForApproval(user.id, companyId);
   }
 }

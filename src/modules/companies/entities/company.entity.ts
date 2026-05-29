@@ -30,6 +30,41 @@ export class Company extends BaseEntity {
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'tax_id' })
   taxId!: string | null;
 
+  // ── QuickBooks-style onboarding fields (Stage 1) ──────────────────────────
+  @Column({
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+    name: 'legal_structure',
+  })
+  legalStructure!: string | null; // sole_proprietor | llc | partnership | corporation
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  website!: string | null;
+
+  @Column({
+    type: 'smallint',
+    nullable: true,
+    name: 'fiscal_year_start_month',
+  })
+  fiscalYearStartMonth!: number | null; // 1-12 (1 = January)
+
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'accounting_method',
+  })
+  accountingMethod!: string | null; // cash | accrual
+
+  @Column({
+    type: 'varchar',
+    length: 8,
+    nullable: true,
+    name: 'home_currency',
+  })
+  homeCurrency!: string | null; // ISO 4217, e.g. PKR, USD
+
   @Index({ unique: true })
   @Column({ type: 'varchar', length: 16, name: 'invite_code' })
   inviteCode!: string;
@@ -42,6 +77,9 @@ export class Company extends BaseEntity {
 
   @Column({ type: 'varchar', length: 20, default: 'active', nullable: true })
   status!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'submitted_at' })
+  submittedAt!: Date | null;
 
   @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
   rejectionReason!: string | null;

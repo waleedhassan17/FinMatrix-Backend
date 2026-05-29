@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
@@ -16,9 +17,13 @@ import { CompanySubscription } from './entities/company-subscription.entity';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
+import { MailService } from '../mail/mail.service';
+import { COMPANY_STATUS, isCompanyApproved } from '../../types';
 
 @Injectable()
 export class SuperAdminService {
+  private readonly logger = new Logger(SuperAdminService.name);
+
   constructor(
     @InjectRepository(Company) private readonly companyRepo: Repository<Company>,
     @InjectRepository(UserCompany) private readonly userCompanyRepo: Repository<UserCompany>,
@@ -26,6 +31,7 @@ export class SuperAdminService {
     @InjectRepository(SubscriptionPlan) private readonly planRepo: Repository<SubscriptionPlan>,
     @InjectRepository(CompanySubscription) private readonly subRepo: Repository<CompanySubscription>,
     private readonly dataSource: DataSource,
+    private readonly mail: MailService,
   ) {}
 
   // ─── Seed Super Admin ───────────────────────────────────────────────────────
@@ -56,6 +62,12 @@ export class SuperAdminService {
   // ─── Platform Stats ─────────────────────────────────────────────────────────
 
   async getPlatformStats() {
+    const countByStatuses = (statuses: string[]) =>
+      this.companyRepo
+        .createQueryBuilder('c')
+        .where('c.status IN (:...s)', { s: statuses })
+        .getCount();
+
     const [
       totalCompanies,
       pendingCompanies,
@@ -67,8 +79,8 @@ export class SuperAdminService {
       activeSubscriptions,
     ] = await Promise.all([
       this.companyRepo.count(),
-      this.companyRepo.count({ where: { status: 'pending' } }),
-      this.companyRepo.count({ where: { status: 'active' } }),
+      countByStatuses(['pending', 'pending_approval']),
+      countByStatuses(['active', 'approved']),
       this.companyRepo.count({ where: { status: 'suspended' } }),
       this.companyRepo.count({ where: { status: 'rejected' } }),
       this.planRepo.count({ where: { isActive: true } }),
@@ -120,8 +132,13 @@ export class SuperAdminService {
     const qb = this.companyRepo.createQueryBuilder('c').orderBy('c.createdAt', 'DESC');
 
     if (status && status !== 'all') {
-      if (status === 'active') {
-        qb.where('(c.status = :s OR c.status IS NULL)', { s: status });
+      if (status === 'active' || status === 'approved') {
+        // Treat legacy `active` and new `approved` (and NULL) as approved.
+        qb.where('(c.status IN (:...s) OR c.status IS NULL)', {
+          s: ['active', 'approved'],
+        });
+      } else if (status === 'pending' || status === 'pending_approval') {
+        qb.where('c.status IN (:...s)', { s: ['pending', 'pending_approval'] });
       } else {
         qb.where('c.status = :s', { s: status });
       }
@@ -208,15 +225,41 @@ export class SuperAdminService {
     const company = await this.companyRepo.findOne({ where: { id: companyId } });
     if (!company) throw new NotFoundException('Company not found');
 
-    if (dto.status === 'rejected' && !dto.rejectionReason) {
+    // Normalise legacy alias: an admin "activating" a company == approving it.
+    const newStatus = dto.status === 'active' ? COMPANY_STATUS.APPROVED : dto.status;
+
+    if (newStatus === COMPANY_STATUS.REJECTED && !dto.rejectionReason) {
       throw new BadRequestException('Rejection reason is required');
     }
 
-    company.status = dto.status;
-    company.rejectionReason = dto.rejectionReason ?? null;
+    const wasApproved = isCompanyApproved(company.status);
+
+    company.status = newStatus;
+    company.rejectionReason =
+      newStatus === COMPANY_STATUS.REJECTED ? dto.rejectionReason ?? null : null;
     company.reviewedBy = reviewerId;
     company.reviewedAt = new Date();
     await this.companyRepo.save(company);
+
+    // Security/audit log.
+    this.logger.log(
+      `Company ${company.id} (${company.name}) -> ${newStatus} by reviewer ${reviewerId}`,
+    );
+
+    // Notify the company owner (best-effort).
+    const owner = await this.userRepo.findOneBy({ id: company.createdBy });
+    if (owner) {
+      if (isCompanyApproved(newStatus) && !wasApproved) {
+        await this.mail.sendApprovalEmail(owner.email, owner.displayName, company.name);
+      } else if (newStatus === COMPANY_STATUS.REJECTED) {
+        await this.mail.sendRejectionEmail(
+          owner.email,
+          owner.displayName,
+          company.name,
+          company.rejectionReason ?? 'No reason provided',
+        );
+      }
+    }
 
     return {
       id: company.id,

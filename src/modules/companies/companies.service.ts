@@ -20,6 +20,8 @@ import { Account } from '../accounts/entities/account.entity';
 import { DEFAULT_CHART_OF_ACCOUNTS } from '../accounts/accounts.constants';
 import { SubscriptionPlan } from '../super-admin/entities/subscription-plan.entity';
 import { CompanySubscription } from '../super-admin/entities/company-subscription.entity';
+import { MailService } from '../mail/mail.service';
+import { COMPANY_STATUS } from '../../types';
 
 @Injectable()
 export class CompaniesService {
@@ -35,6 +37,7 @@ export class CompaniesService {
     @InjectRepository(CompanySubscription)
     private readonly subRepo: Repository<CompanySubscription>,
     private readonly dataSource: DataSource,
+    private readonly mail: MailService,
   ) {}
 
   async create(userId: string, dto: CreateCompanyDto): Promise<Company> {
@@ -43,13 +46,20 @@ export class CompaniesService {
       const company = manager.create(Company, {
         name: dto.name,
         industry: dto.industry ?? null,
+        legalStructure: dto.legalStructure ?? null,
         address: dto.address ?? null,
         phone: dto.phone ?? null,
         email: dto.email ?? null,
+        website: dto.website ?? null,
         taxId: dto.taxId ?? null,
+        fiscalYearStartMonth: dto.fiscalYearStartMonth ?? null,
+        accountingMethod: dto.accountingMethod ?? null,
+        homeCurrency: dto.homeCurrency ?? null,
         logo: dto.logo ?? null,
         inviteCode,
         createdBy: userId,
+        // Onboarding draft — not yet submitted for approval.
+        status: COMPANY_STATUS.EMAIL_VERIFIED,
       });
       await manager.save(company);
 
@@ -124,10 +134,17 @@ export class CompaniesService {
     Object.assign(company, {
       ...(dto.name !== undefined ? { name: dto.name } : {}),
       ...(dto.industry !== undefined ? { industry: dto.industry } : {}),
+      ...(dto.legalStructure !== undefined ? { legalStructure: dto.legalStructure } : {}),
       ...(dto.address !== undefined ? { address: dto.address } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
       ...(dto.email !== undefined ? { email: dto.email } : {}),
+      ...(dto.website !== undefined ? { website: dto.website } : {}),
       ...(dto.taxId !== undefined ? { taxId: dto.taxId } : {}),
+      ...(dto.fiscalYearStartMonth !== undefined
+        ? { fiscalYearStartMonth: dto.fiscalYearStartMonth }
+        : {}),
+      ...(dto.accountingMethod !== undefined ? { accountingMethod: dto.accountingMethod } : {}),
+      ...(dto.homeCurrency !== undefined ? { homeCurrency: dto.homeCurrency } : {}),
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
     });
     return this.companyRepo.save(company);
@@ -175,6 +192,62 @@ export class CompaniesService {
     const company = await this.getById(userId, companyId);
     company.inviteCode = await this.generateUniqueInviteCode();
     return this.companyRepo.save(company);
+  }
+
+  // ── Submit onboarding for platform-admin approval (Step C) ─────────────────
+  async submitForApproval(userId: string, companyId: string) {
+    await this.assertAdmin(userId, companyId);
+    const company = await this.companyRepo.findOneBy({ id: companyId });
+    if (!company) {
+      throw new NotFoundException({
+        code: 'COMPANY_NOT_FOUND',
+        message: 'Company not found',
+      });
+    }
+
+    if (company.status === COMPANY_STATUS.PENDING_APPROVAL) {
+      return this.toStatusResult(company); // idempotent
+    }
+    if (company.status === COMPANY_STATUS.APPROVED || company.status === 'active') {
+      throw new BadRequestException({
+        code: 'ALREADY_APPROVED',
+        message: 'This company has already been approved',
+      });
+    }
+
+    // A subscription plan must be selected before submitting (Step B).
+    const sub = await this.subRepo.findOne({
+      where: [
+        { companyId, status: 'active' },
+        { companyId, status: 'trial' },
+      ],
+    });
+    if (!sub) {
+      throw new BadRequestException({
+        code: 'PLAN_REQUIRED',
+        message: 'Please select a subscription plan before submitting',
+      });
+    }
+
+    company.status = COMPANY_STATUS.PENDING_APPROVAL;
+    company.submittedAt = new Date();
+    company.rejectionReason = null;
+    await this.companyRepo.save(company);
+
+    // Notify the platform admin (best-effort).
+    const owner = await this.userRepo.findOneBy({ id: company.createdBy });
+    await this.mail.sendCompanySubmittedNotice(company.name, owner?.email ?? 'unknown');
+
+    return this.toStatusResult(company);
+  }
+
+  private toStatusResult(company: Company) {
+    return {
+      id: company.id,
+      name: company.name,
+      status: company.status,
+      submittedAt: company.submittedAt,
+    };
   }
 
   // ------- Helpers -------

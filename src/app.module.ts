@@ -8,6 +8,7 @@ import { LoggerModule } from 'nestjs-pino';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
+import mailConfig from './config/mail.config';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
@@ -55,12 +56,13 @@ import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
+import { MailModule } from './modules/mail/mail.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, databaseConfig, jwtConfig],
+      load: [appConfig, databaseConfig, jwtConfig, mailConfig],
       envFilePath: ['.env'],
       cache: true,
       validationSchema: envValidationSchema,
@@ -80,6 +82,7 @@ import { StorageModule } from './common/storage/storage.module';
         },
       ],
     }),
+    MailModule,
     UsersModule,
     AuthModule,
     CompaniesModule,

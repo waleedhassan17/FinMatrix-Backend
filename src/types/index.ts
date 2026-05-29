@@ -5,6 +5,42 @@
 
 export type UserRole = 'admin' | 'delivery' | 'staff' | 'super_admin';
 
+/**
+ * Company onboarding/approval state machine (Stage 1).
+ *
+ *   unverified        -> owner signed up, email not yet verified, no company
+ *   email_verified    -> owner verified email; company draft is being filled in
+ *   pending_approval  -> onboarding submitted, waiting on platform admin review
+ *   approved          -> platform admin approved; company admin has full access
+ *   rejected          -> platform admin rejected (see rejectionReason)
+ *
+ * NOTE: legacy companies created before Stage 1 use the value `active`, which is
+ * treated as equivalent to `approved` everywhere the login gate is evaluated.
+ */
+export type CompanyStatus =
+  | 'unverified'
+  | 'email_verified'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  // legacy values still present in older rows / seeds
+  | 'active'
+  | 'pending'
+  | 'suspended';
+
+export const COMPANY_STATUS = {
+  UNVERIFIED: 'unverified',
+  EMAIL_VERIFIED: 'email_verified',
+  PENDING_APPROVAL: 'pending_approval',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+} as const;
+
+/** A company is usable (full app access) only when approved (or legacy active). */
+export function isCompanyApproved(status: string | null | undefined): boolean {
+  return status === COMPANY_STATUS.APPROVED || status === 'active';
+}
+
 export type AccountType =
   | 'asset'
   | 'liability'

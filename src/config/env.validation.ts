@@ -44,9 +44,22 @@ export const envValidationSchema = Joi.object({
   EMAIL_ENABLED: Joi.boolean().default(false),
   SMTP_HOST: Joi.string().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),
   SMTP_PORT: Joi.number().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),
+  SMTP_SECURE: Joi.boolean().default(false),
   SMTP_USER: Joi.string().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),
-  SMTP_PASSWORD: Joi.string().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),
+  // SMTP_PASS is accepted as an alias for SMTP_PASSWORD (see mail.config.ts).
+  SMTP_PASSWORD: Joi.string().allow('').optional(),
+  SMTP_PASS: Joi.string().allow('').optional(),
   SMTP_FROM: Joi.string().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),
+
+  // ── Stage 1: deep links, platform admin seed, OTP/verification tuning ──
+  APP_DEEP_LINK_SCHEME: Joi.string().default('finmatrix'),
+  WEB_FALLBACK_URL: Joi.string().uri().optional(),
+  ADMIN_EMAIL: Joi.string().email().optional(),
+  ADMIN_PASSWORD: Joi.string().optional(),
+  ADMIN_NAME: Joi.string().optional(),
+  OTP_TTL_MINUTES: Joi.number().default(10),
+  OTP_MAX_ATTEMPTS: Joi.number().default(5),
+  VERIFICATION_TTL_HOURS: Joi.number().default(24),
 
   SWAGGER_ENABLED: Joi.boolean().default(true),
   SWAGGER_PATH: Joi.string().default('api/docs'),

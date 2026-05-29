@@ -7,6 +7,8 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PasswordReset } from './entities/password-reset.entity';
+import { PasswordResetOtp } from './entities/password-reset-otp.entity';
+import { EmailVerification } from './entities/email-verification.entity';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { UsersModule } from '../users/users.module';
@@ -16,7 +18,14 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   imports: [
     UsersModule,
     PassportModule,
-    TypeOrmModule.forFeature([RefreshToken, PasswordReset, Company, UserCompany]),
+    TypeOrmModule.forFeature([
+      RefreshToken,
+      PasswordReset,
+      PasswordResetOtp,
+      EmailVerification,
+      Company,
+      UserCompany,
+    ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

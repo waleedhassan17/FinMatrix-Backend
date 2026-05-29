@@ -24,6 +24,12 @@ export class User extends BaseEntity {
   @Column({ type: 'boolean', default: true, name: 'is_active' })
   isActive!: boolean;
 
+  @Column({ type: 'boolean', default: false, name: 'is_email_verified' })
+  isEmailVerified!: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'email_verified_at' })
+  emailVerifiedAt!: Date | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'default_company_id' })
   defaultCompanyId!: string | null;
 

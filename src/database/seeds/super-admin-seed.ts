@@ -70,6 +70,8 @@ async function run() {
           phone: '+92-300-1234567',
           role: 'super_admin',
           isActive: true,
+          isEmailVerified: true,
+          emailVerifiedAt: new Date(),
           defaultCompanyId: null,
         }),
       );
@@ -193,6 +195,8 @@ async function run() {
             phone: def.phone,
             role: 'admin',
             isActive: true,
+            isEmailVerified: true,
+            emailVerifiedAt: new Date(),
             defaultCompanyId: null,
           }),
         );

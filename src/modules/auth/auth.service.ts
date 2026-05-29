@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,22 +11,25 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'crypto';
-import { DataSource, IsNull, Repository } from 'typeorm';
+import { createHash, randomBytes, randomInt } from 'crypto';
+import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
-import { PasswordReset } from './entities/password-reset.entity';
+import { EmailVerification } from './entities/email-verification.entity';
+import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { SignupDto } from './dto/signup.dto';
 import {
   ForgotPasswordDto,
   ResetPasswordDto,
   SigninDto,
+  VerifyOtpDto,
 } from './dto/signin.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { UserRole } from '../../types';
+import { MailService } from '../mail/mail.service';
 
 export interface TokenPair {
   accessToken: string;
@@ -42,10 +46,12 @@ export interface AuthResult {
     phone: string | null;
     companyId: string | null;
     defaultCompanyId: string | null;
+    isEmailVerified: boolean;
   };
   tokens: TokenPair;
   companyId: string | null;
-  company: { id: string; name: string } | null;
+  company: { id: string; name: string; status: string | null } | null;
+  companyStatus: string | null;
 }
 
 @Injectable()
@@ -57,10 +63,13 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly mail: MailService,
     @InjectRepository(RefreshToken)
     private readonly refreshRepo: Repository<RefreshToken>,
-    @InjectRepository(PasswordReset)
-    private readonly resetRepo: Repository<PasswordReset>,
+    @InjectRepository(EmailVerification)
+    private readonly verificationRepo: Repository<EmailVerification>,
+    @InjectRepository(PasswordResetOtp)
+    private readonly otpRepo: Repository<PasswordResetOtp>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
     @InjectRepository(UserCompany)
@@ -82,6 +91,11 @@ export class AuthService {
     const cost = this.config.get<number>('app.bcryptCost', 12);
     const passwordHash = await bcrypt.hash(dto.password, cost);
 
+    // Company admins must verify their email; delivery users are added against
+    // an existing (already-approved) company via invite code, so they are
+    // considered verified on creation.
+    const isAdmin = dto.role === 'admin';
+
     const result = await this.dataSource.transaction(async (manager) => {
       const user = manager.create(User, {
         email,
@@ -90,11 +104,14 @@ export class AuthService {
         phone: dto.phone ?? null,
         role: dto.role,
         isActive: true,
+        isEmailVerified: !isAdmin,
+        emailVerifiedAt: isAdmin ? null : new Date(),
         defaultCompanyId: null,
       });
       await manager.save(user);
 
       let companyId: string | null = null;
+      let company: Company | null = null;
 
       if (dto.role === 'delivery') {
         if (!dto.companyCode) {
@@ -103,7 +120,7 @@ export class AuthService {
             message: 'companyCode is required for delivery users',
           });
         }
-        const company = await manager.findOne(Company, {
+        company = await manager.findOne(Company, {
           where: { inviteCode: dto.companyCode.toUpperCase() },
         });
         if (!company) {
@@ -124,21 +141,31 @@ export class AuthService {
         await manager.save(user);
       }
 
-      return { user, companyId };
+      return { user, companyId, company };
     });
+
+    // Fire the verification email for company admins (best-effort; never blocks).
+    if (isAdmin) {
+      const token = await this.issueEmailVerification(result.user.id);
+      await this.mail.sendVerificationEmail(email, dto.displayName, token);
+    }
 
     const tokens = await this.issueTokens(result.user, result.companyId, dto.role);
     return {
       user: this.toPublicUser(result.user, result.companyId),
       tokens,
       companyId: result.companyId,
-      company: result.companyId ? { id: result.companyId, name: dto.companyCode ?? '' } : null,
+      company: result.company
+        ? { id: result.company.id, name: result.company.name, status: result.company.status }
+        : null,
+      companyStatus: result.company?.status ?? null,
     };
   }
 
   async signin(dto: SigninDto): Promise<AuthResult> {
     const user = await this.users.findByEmail(dto.email);
     if (!user || !user.isActive) {
+      this.logger.warn(`Failed login (no user/inactive): ${dto.email}`);
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid email or password',
@@ -146,9 +173,20 @@ export class AuthService {
     }
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) {
+      this.logger.warn(`Failed login (bad password): ${dto.email}`);
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid email or password',
+      });
+    }
+
+    // Hard gate: company admins cannot sign in until their email is verified.
+    if (user.role === 'admin' && !user.isEmailVerified) {
+      this.logger.warn(`Login blocked (email not verified): ${dto.email}`);
+      throw new ForbiddenException({
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before signing in.',
+        email: user.email,
       });
     }
 
@@ -157,19 +195,26 @@ export class AuthService {
           where: { userId: user.id, companyId: user.defaultCompanyId },
           relations: { company: true },
         })
-      : await this.userCompanyRepo.findOne({ where: { userId: user.id }, relations: { company: true } });
+      : await this.userCompanyRepo.findOne({
+          where: { userId: user.id },
+          relations: { company: true },
+        });
 
     // super_admin is a platform-level role — never let a company membership override it
     const isSuperAdmin = user.role === 'super_admin';
-    const companyId = isSuperAdmin ? null : (membership?.companyId ?? null);
-    const role: UserRole = isSuperAdmin ? 'super_admin' : ((membership?.role ?? user.role) as UserRole);
+    const companyId = isSuperAdmin ? null : membership?.companyId ?? null;
+    const role: UserRole = isSuperAdmin
+      ? 'super_admin'
+      : ((membership?.role ?? user.role) as UserRole);
 
     const tokens = await this.issueTokens(user, companyId, role);
+    const company = membership?.company ?? null;
     return {
       user: this.toPublicUser(user, companyId),
       tokens,
       companyId,
-      company: membership?.company ? { id: membership.company.id, name: membership.company.name } : null,
+      company: company ? { id: company.id, name: company.name, status: company.status } : null,
+      companyStatus: company?.status ?? null,
     };
   }
 
@@ -209,56 +254,190 @@ export class AuthService {
     return { revoked: res.affected ?? 0 };
   }
 
+  // ── Email verification ────────────────────────────────────────────────────
+
+  /** Generate, persist (hashed) and return a single-use verification token. */
+  private async issueEmailVerification(userId: string): Promise<string> {
+    // Invalidate any outstanding tokens for this user first.
+    await this.verificationRepo.update(
+      { userId, usedAt: IsNull() },
+      { usedAt: new Date() },
+    );
+    const token = randomBytes(32).toString('hex');
+    const ttlHours = this.config.get<number>('mail.verificationTtlHours', 24);
+    await this.verificationRepo.save(
+      this.verificationRepo.create({
+        userId,
+        tokenHash: this.hashToken(token),
+        expiresAt: new Date(Date.now() + ttlHours * 3_600_000),
+        usedAt: null,
+      }),
+    );
+    return token;
+  }
+
+  async verifyEmail(token: string): Promise<{ verified: true; email: string }> {
+    if (!token) {
+      throw new BadRequestException({
+        code: 'INVALID_TOKEN',
+        message: 'Verification token is required',
+      });
+    }
+    const record = await this.verificationRepo.findOne({
+      where: { tokenHash: this.hashToken(token) },
+    });
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw new BadRequestException({
+        code: 'INVALID_TOKEN',
+        message: 'Verification link is invalid, used, or expired',
+      });
+    }
+    const user = await this.users.getByIdOrFail(record.userId);
+
+    if (!user.isEmailVerified) {
+      user.isEmailVerified = true;
+      user.emailVerifiedAt = new Date();
+      await this.users.save(user);
+    }
+    record.usedAt = new Date();
+    await this.verificationRepo.save(record);
+    this.logger.log(`Email verified: ${user.email}`);
+    return { verified: true, email: user.email };
+  }
+
+  async resendVerification(email: string): Promise<{ delivered: boolean }> {
+    const user = await this.users.findByEmail(email);
+    // Don't leak whether the email exists or is already verified.
+    if (!user || user.isEmailVerified || user.role !== 'admin') {
+      return { delivered: true };
+    }
+    const token = await this.issueEmailVerification(user.id);
+    await this.mail.sendVerificationEmail(user.email, user.displayName, token);
+    return { delivered: true };
+  }
+
+  // ── Forgot password (OTP flow) ────────────────────────────────────────────
+
   async forgotPassword(dto: ForgotPasswordDto): Promise<{ delivered: boolean }> {
     const user = await this.users.findByEmail(dto.email);
     // Always respond positively to avoid user enumeration.
     if (!user) return { delivered: true };
 
-    const token = randomBytes(32).toString('hex');
-    const reset = this.resetRepo.create({
-      userId: user.id,
-      tokenHash: this.hashToken(token),
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-      usedAt: null,
-    });
-    await this.resetRepo.save(reset);
-    this.logger.log(
-      `[DEV] Password reset for ${user.email}: token=${token} (expires in 1h)`,
+    // Invalidate previous outstanding OTPs.
+    await this.otpRepo.update(
+      { userId: user.id, usedAt: IsNull() },
+      { usedAt: new Date() },
     );
+
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const ttlMin = this.config.get<number>('mail.otpTtlMinutes', 10);
+    await this.otpRepo.save(
+      this.otpRepo.create({
+        userId: user.id,
+        otpHash: this.hashToken(otp),
+        resetTokenHash: null,
+        attempts: 0,
+        expiresAt: new Date(Date.now() + ttlMin * 60_000),
+        verifiedAt: null,
+        usedAt: null,
+      }),
+    );
+    await this.mail.sendOtpEmail(user.email, user.displayName, otp);
+    this.logger.log(`Password reset OTP issued for ${user.email}`);
     return { delivered: true };
   }
 
-  async resetPassword(dto: ResetPasswordDto): Promise<{ success: boolean }> {
-    const reset = await this.resetRepo.findOne({
-      where: { tokenHash: this.hashToken(dto.token) },
+  async verifyOtp(dto: VerifyOtpDto): Promise<{ resetToken: string }> {
+    const user = await this.users.findByEmail(dto.email);
+    const genericError = new BadRequestException({
+      code: 'INVALID_OTP',
+      message: 'The code is invalid or has expired',
     });
-    if (!reset || reset.usedAt || reset.expiresAt < new Date()) {
+    if (!user) throw genericError;
+
+    const record = await this.otpRepo.findOne({
+      where: { userId: user.id, usedAt: IsNull(), expiresAt: MoreThan(new Date()) },
+      order: { createdAt: 'DESC' },
+    });
+    if (!record) throw genericError;
+
+    const maxAttempts = this.config.get<number>('mail.otpMaxAttempts', 5);
+    if (record.attempts >= maxAttempts) {
+      record.usedAt = new Date();
+      await this.otpRepo.save(record);
+      this.logger.warn(`OTP locked (too many attempts): ${user.email}`);
       throw new BadRequestException({
-        code: 'INVALID_TOKEN',
-        message: 'Reset token is invalid, used, or expired',
+        code: 'OTP_LOCKED',
+        message: 'Too many incorrect attempts. Please request a new code.',
       });
     }
-    const user = await this.users.getByIdOrFail(reset.userId);
+
+    if (record.otpHash !== this.hashToken(dto.otp)) {
+      record.attempts += 1;
+      await this.otpRepo.save(record);
+      this.logger.warn(
+        `OTP mismatch (${record.attempts}/${maxAttempts}): ${user.email}`,
+      );
+      throw genericError;
+    }
+
+    // Correct — issue a single-use reset token for the final step.
+    const resetToken = randomBytes(32).toString('hex');
+    record.verifiedAt = new Date();
+    record.resetTokenHash = this.hashToken(resetToken);
+    await this.otpRepo.save(record);
+    return { resetToken };
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<{ success: boolean }> {
+    const user = await this.users.findByEmail(dto.email);
+    const invalid = new BadRequestException({
+      code: 'INVALID_TOKEN',
+      message: 'Reset session is invalid or expired. Please start again.',
+    });
+    if (!user) throw invalid;
+
+    const record = await this.otpRepo.findOne({
+      where: {
+        userId: user.id,
+        resetTokenHash: this.hashToken(dto.resetToken),
+        usedAt: IsNull(),
+      },
+    });
+    if (!record || !record.verifiedAt || record.expiresAt < new Date()) {
+      throw invalid;
+    }
 
     const cost = this.config.get<number>('app.bcryptCost', 12);
     user.passwordHash = await bcrypt.hash(dto.password, cost);
     await this.users.save(user);
 
-    reset.usedAt = new Date();
-    await this.resetRepo.save(reset);
+    record.usedAt = new Date();
+    await this.otpRepo.save(record);
+
     // Revoke all refresh tokens for safety.
     await this.refreshRepo.update(
       { userId: user.id, revokedAt: IsNull() },
       { revokedAt: new Date() },
     );
+    this.logger.log(`Password reset completed: ${user.email}`);
     return { success: true };
   }
 
+  // ── Profile ───────────────────────────────────────────────────────────────
+
   async getMe(userId: string): Promise<{
     user: ReturnType<AuthService['toPublicUser']>;
-    companies: { id: string; name: string; role: UserRole; inviteCode: string }[];
+    companies: {
+      id: string;
+      name: string;
+      role: UserRole;
+      inviteCode: string;
+      status: string | null;
+    }[];
     companyId: string | null;
-    company: { id: string; name: string } | null;
+    company: { id: string; name: string; status: string | null } | null;
+    companyStatus: string | null;
   }> {
     const user = await this.users.getByIdOrFail(userId);
     const memberships = await this.userCompanyRepo.find({
@@ -274,9 +453,13 @@ export class AuthService {
         name: m.company.name,
         role: m.role,
         inviteCode: m.company.inviteCode,
+        status: m.company.status,
       })),
       companyId,
-      company: primary?.company ? { id: primary.company.id, name: primary.company.name } : null,
+      company: primary?.company
+        ? { id: primary.company.id, name: primary.company.name, status: primary.company.status }
+        : null,
+      companyStatus: primary?.company?.status ?? null,
     };
   }
 
@@ -333,30 +516,7 @@ export class AuthService {
       phone: user.phone,
       companyId: companyId ?? user.defaultCompanyId ?? null,
       defaultCompanyId: user.defaultCompanyId,
+      isEmailVerified: user.isEmailVerified,
     };
-  }
-
-  async verifyEmail(token: string) {
-    // In a real implementation, we would decode the token, find the user, and set isEmailVerified = true.
-    // For this demo, we mock the success response.
-    this.logger.log(`Email verification successful for token: ${token}`);
-    return { success: true, message: 'Email verified successfully.' };
-  }
-
-  async resendVerification(email: string) {
-    const user = await this.users.findByEmail(email);
-    if (!user) {
-      // Don't leak user existence
-      return { success: true, message: 'If the email exists, a verification link has been sent.' };
-    }
-    const token = randomBytes(32).toString('hex'); // Mock token
-    this.logger.log(`[DEMO] Verification token generated for ${email}: ${token}`);
-    return { success: true, message: 'If the email exists, a verification link has been sent.' };
-  }
-
-  async checkVerification(userId: string) {
-    // Mocking that the user is verified for the demo.
-    // In reality, this would check `user.isEmailVerified`.
-    return { verified: true };
   }
 }
