@@ -57,15 +57,15 @@ async function run() {
   await ds.transaction(async (m) => {
     // ── 1. Super Admin User ───────────────────────────
     const SUPER_ADMIN_EMAIL = 'waleedhassansfd@gmail.com';
-    const SUPER_ADMIN_PASS = '123456';
+    const SUPER_ADMIN_PASS = 'Waleed@104';
+    const superAdminHash = await bcrypt.hash(SUPER_ADMIN_PASS, 12);
 
     let superAdmin = await m.findOneBy(User, { email: SUPER_ADMIN_EMAIL });
     if (!superAdmin) {
-      const hash = await bcrypt.hash(SUPER_ADMIN_PASS, 12);
       superAdmin = await m.save(
         m.create(User, {
           email: SUPER_ADMIN_EMAIL,
-          passwordHash: hash,
+          passwordHash: superAdminHash,
           displayName: 'Waleed Hassan',
           phone: '+92-300-1234567',
           role: 'super_admin',
@@ -77,11 +77,12 @@ async function run() {
       );
       console.log(`  ✔ Super admin created: ${SUPER_ADMIN_EMAIL}`);
     } else {
-      if (superAdmin.role !== 'super_admin') {
-        superAdmin.role = 'super_admin';
-        await m.save(superAdmin);
-      }
-      console.log(`  ↩ Super admin already exists: ${SUPER_ADMIN_EMAIL}`);
+      superAdmin.role = 'super_admin';
+      superAdmin.passwordHash = superAdminHash;
+      superAdmin.isActive = true;
+      (superAdmin as any).isEmailVerified = true;
+      await m.save(superAdmin);
+      console.log(`  ↩ Super admin updated (password reset): ${SUPER_ADMIN_EMAIL}`);
     }
 
     // ── 2. Subscription Plans ─────────────────────────
@@ -168,18 +169,8 @@ async function run() {
       adminEmail: string; adminName: string;
       daysAgo: number;
     }> = [
-      { name: 'TechNova Solutions', industry: 'Technology', email: 'admin@technova.com', phone: '+92-21-1234501', status: 'active', planName: 'Professional', adminEmail: 'ali@technova.com', adminName: 'Ali Raza', daysAgo: 60 },
-      { name: 'Global Trade Co.', industry: 'Trading', email: 'info@globaltrade.com', phone: '+92-42-1234502', status: 'active', planName: 'Enterprise', adminEmail: 'tariq@globaltrade.com', adminName: 'Tariq Mehmood', daysAgo: 80 },
-      { name: 'Metro Retail Group', industry: 'Retail', email: 'ops@metroretail.com', phone: '+92-51-1234503', status: 'active', planName: 'Starter', adminEmail: 'sara@metroretail.com', adminName: 'Sara Ahmed', daysAgo: 45 },
-      { name: 'Green Energy Ltd', industry: 'Energy', email: 'info@greenenergy.com', phone: '+92-21-1234504', status: 'pending', planName: null, adminEmail: 'zain@greenenergy.com', adminName: 'Zain Ul Abdin', daysAgo: 4 },
-      { name: 'Pacific Foods Corp', industry: 'Food & Beverage', email: 'hr@pacificfoods.com', phone: '+92-61-1234505', status: 'active', planName: 'Professional', adminEmail: 'nadia@pacificfoods.com', adminName: 'Nadia Khan', daysAgo: 110 },
-      { name: 'Summit Healthcare', industry: 'Healthcare', email: 'admin@summitcare.com', phone: '+92-42-1234506', status: 'suspended', planName: 'Enterprise', adminEmail: 'hassan@summitcare.com', adminName: 'Hassan Ali', daysAgo: 180 },
-      { name: 'Blue Wave Media', industry: 'Media & Marketing', email: 'contact@bluewavemedia.com', phone: '+92-21-1234507', status: 'active', planName: 'Professional', adminEmail: 'farah@bluewavemedia.com', adminName: 'Farah Siddiqui', daysAgo: 22 },
-      { name: 'Frontier Logistics', industry: 'Logistics', email: 'info@frontierlogistics.com', phone: '+92-91-1234508', status: 'pending', planName: null, adminEmail: 'khan@frontierlogistics.com', adminName: 'Imran Khan', daysAgo: 2 },
-      { name: 'Everest Consulting', industry: 'Consulting', email: 'hello@everestconsulting.com', phone: '+92-42-1234509', status: 'active', planName: 'Starter', adminEmail: 'aisha@everestconsulting.com', adminName: 'Aisha Malik', daysAgo: 90 },
-      { name: 'Star Manufacturing', industry: 'Manufacturing', email: 'info@starmfg.com', phone: '+92-41-1234510', status: 'rejected', planName: null, adminEmail: 'usman@starmfg.com', adminName: 'Usman Ghani', daysAgo: 43 },
-      { name: 'Digital Dynamics', industry: 'Technology', email: 'contact@digitaldynamics.com', phone: '+92-21-1234511', status: 'pending', planName: null, adminEmail: 'bilal@digitaldynamics.com', adminName: 'Bilal Chaudhry', daysAgo: 1 },
-      { name: 'Apex Financial', industry: 'Financial Services', email: 'admin@apexfinancial.com', phone: '+92-21-1234512', status: 'active', planName: 'Enterprise', adminEmail: 'omer@apexfinancial.com', adminName: 'Omer Farooq', daysAgo: 20 },
+      // Demo companies intentionally removed — MetroMatrix (seeded by
+      // `npm run seed:metromatrix`) is the only company for the demo.
     ];
 
     for (const def of companyDefs) {
@@ -290,7 +281,7 @@ async function run() {
 
   await ds.destroy();
   console.log('\n✔ Super admin seed complete!');
-  console.log('  Login: waleedhassansfd@gmail.com / 123456');
+  console.log('  Login: waleedhassansfd@gmail.com / Waleed@104');
 }
 
 run().catch((e) => {

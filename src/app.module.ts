@@ -26,13 +26,9 @@ import { JournalEntriesModule } from './modules/journal-entries/journal-entries.
 import { CustomersModule } from './modules/customers/customers.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { PaymentsModule } from './modules/payments/payments.module';
-import { EstimatesModule } from './modules/estimates/estimates.module';
-import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
-import { CreditMemosModule } from './modules/credit-memos/credit-memos.module';
 import { VendorsModule } from './modules/vendors/vendors.module';
 import { BillsModule } from './modules/bills/bills.module';
 import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module';
-import { VendorCreditsModule } from './modules/vendor-credits/vendor-credits.module';
 
 // Module 2
 import { AgenciesModule } from './modules/agencies/agencies.module';
@@ -41,13 +37,8 @@ import { DeliveryPersonnelModule } from './modules/delivery-personnel/delivery-p
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { InventoryApprovalsModule } from './modules/inventory-approvals/inventory-approvals.module';
 import { ShadowInventoryModule } from './modules/shadow-inventory/shadow-inventory.module';
-import { BankingModule } from './modules/banking/banking.module';
-import { EmployeesModule } from './modules/employees/employees.module';
-import { PayrollModule } from './modules/payroll/payroll.module';
-import { BudgetsModule } from './modules/budgets/budgets.module';
 import { TaxModule } from './modules/tax/tax.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
-import { AuditModule } from './modules/audit/audit.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SearchModule } from './modules/search/search.module';
@@ -92,26 +83,17 @@ import { MailModule } from './modules/mail/mail.module';
     CustomersModule,
     InvoicesModule,
     PaymentsModule,
-    EstimatesModule,
-    SalesOrdersModule,
-    CreditMemosModule,
     VendorsModule,
     BillsModule,
     PurchaseOrdersModule,
-    VendorCreditsModule,
     AgenciesModule,
     InventoryModule,
     DeliveryPersonnelModule,
     DeliveriesModule,
     InventoryApprovalsModule,
     ShadowInventoryModule,
-    BankingModule,
-    EmployeesModule,
-    PayrollModule,
-    BudgetsModule,
     TaxModule,
     NotificationsModule,
-    AuditModule,
     SettingsModule,
     ReportsModule,
     SearchModule,
