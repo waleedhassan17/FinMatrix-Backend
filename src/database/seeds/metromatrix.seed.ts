@@ -480,8 +480,9 @@ async function run() {
       billSeq++;
       const vend = allVends[billSeq % allVends.length];
       const it = items[(billSeq * 3) % items.length];
-      const qty = 200 + (billSeq % 6) * 50;
-      const lines = [{ desc: `${it.name} — bulk purchase (${qty} units)`, amount: qty * +it.unitCost }];
+      // Keep purchasing (COGS) below sales so the business shows a healthy margin
+      const qty = 20 + (billSeq % 5) * 5;
+      const lines = [{ desc: `${it.name} — stock purchase (${qty} units)`, amount: qty * +it.unitCost }];
       let status: string; let paidFrac: number;
       if (ageDays > 90) { status = 'paid'; paidFrac = 1; }
       else if (ageDays > 45) { if (billSeq % 3 === 0) { status = 'partial'; paidFrac = 0.5; } else { status = 'paid'; paidFrac = 1; } }
