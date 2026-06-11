@@ -68,6 +68,16 @@ export class SuperAdminService {
         .where('c.status IN (:...s)', { s: statuses })
         .getCount();
 
+    // Only count subscriptions that still belong to an existing company.
+    // Orphaned rows (company deleted) must never inflate platform stats.
+    const subCount = (activeOnly: boolean) => {
+      const qb = this.subRepo
+        .createQueryBuilder('s')
+        .innerJoin(Company, 'co', 'co.id = s.companyId');
+      if (activeOnly) qb.where('s.status = :st', { st: 'active' });
+      return qb.getCount();
+    };
+
     const [
       totalCompanies,
       pendingCompanies,
@@ -84,8 +94,8 @@ export class SuperAdminService {
       this.companyRepo.count({ where: { status: 'suspended' } }),
       this.companyRepo.count({ where: { status: 'rejected' } }),
       this.planRepo.count({ where: { isActive: true } }),
-      this.subRepo.count(),
-      this.subRepo.count({ where: { status: 'active' } }),
+      subCount(false),
+      subCount(true),
     ]);
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -326,22 +336,27 @@ export class SuperAdminService {
   // ─── Company Subscriptions ──────────────────────────────────────────────────
 
   async getAllSubscriptions(page = 1, limit = 20) {
-    const [data, total] = await this.subRepo.findAndCount({
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    // Inner-join companies so subscriptions belonging to deleted companies
+    // (orphans) are excluded entirely — they are stale data, not real revenue.
+    const baseQb = () =>
+      this.subRepo
+        .createQueryBuilder('s')
+        .innerJoin(Company, 'co', 'co.id = s.companyId');
 
-    const enriched = await Promise.all(
-      data.map(async s => {
-        const company = await this.companyRepo.findOne({ where: { id: s.companyId } });
-        return {
-          ...s,
-          companyName: company?.name ?? 'Unknown',
-          companyEmail: company?.email ?? null,
-        };
-      }),
-    );
+    const total = await baseQb().getCount();
+
+    const rows = await baseQb()
+      .addSelect(['co.name AS co_name', 'co.email AS co_email'])
+      .orderBy('s.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getRawAndEntities();
+
+    const enriched = rows.entities.map((s, i) => ({
+      ...s,
+      companyName: rows.raw[i]?.co_name ?? 'Unknown',
+      companyEmail: rows.raw[i]?.co_email ?? null,
+    }));
 
     return {
       data: {
