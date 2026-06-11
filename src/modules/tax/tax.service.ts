@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TaxRate } from './entities/tax-rate.entity';
@@ -63,7 +63,18 @@ export class TaxService {
 
   async deleteRate(companyId: string, id: string) {
     const r = await this.getRate(companyId, id);
-    await this.rateRepo.softRemove(r);
+    // Hard delete — the entity has no soft-delete column, so softRemove() 500s.
+    try {
+      await this.rateRepo.remove(r);
+    } catch (e: any) {
+      // 23503 = FK violation: rate is referenced by recorded payments.
+      if (e?.code === '23503') {
+        throw new BadRequestException(
+          'Cannot delete a tax rate that has recorded payments. Deactivate it instead.',
+        );
+      }
+      throw e;
+    }
     return { id, deleted: true };
   }
 
