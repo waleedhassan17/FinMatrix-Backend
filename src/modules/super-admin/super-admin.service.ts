@@ -345,7 +345,10 @@ export class SuperAdminService {
 
     const total = await baseQb().getCount();
 
+    // leftJoinAndSelect the plan: createQueryBuilder does not honour the
+    // entity's eager relation, so the plan must be joined explicitly.
     const rows = await baseQb()
+      .leftJoinAndSelect('s.plan', 'plan')
       .addSelect(['co.name AS co_name', 'co.email AS co_email'])
       .orderBy('s.createdAt', 'DESC')
       .skip((page - 1) * limit)
