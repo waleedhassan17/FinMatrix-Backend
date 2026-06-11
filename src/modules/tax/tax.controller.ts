@@ -18,8 +18,8 @@ export class TaxController {
   listRates(
     @CurrentCompany() companyId: string,
     @Query('isActive') isActive: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     const active = isActive === undefined ? undefined : isActive === 'true';
     return this.svc.listRates(companyId, page, limit, active);
@@ -67,8 +67,8 @@ export class TaxController {
   listPayments(
     @CurrentCompany() companyId: string,
     @Query('taxRateId') taxRateId: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.svc.listPayments(companyId, taxRateId, page, limit);
   }

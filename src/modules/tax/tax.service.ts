@@ -31,7 +31,17 @@ export class TaxService {
     if (dto.isDefault) {
       await this.rateRepo.update({ companyId, isDefault: true }, { isDefault: false });
     }
-    const rate = this.rateRepo.create({ ...dto, companyId, isActive: true } as any);
+    // Map app aliases (taxType -> type, description -> authority) and default the
+    // NOT-NULL `type` column so a create never violates the constraint.
+    const rate = this.rateRepo.create({
+      companyId,
+      name: dto.name,
+      rate: dto.rate,
+      type: (dto.type ?? dto.taxType ?? 'sales') as any,
+      authority: dto.authority ?? dto.description ?? null,
+      isActive: dto.isActive ?? true,
+      isDefault: dto.isDefault ?? false,
+    } as any);
     return this.rateRepo.save(rate);
   }
 
@@ -40,7 +50,14 @@ export class TaxService {
     if (dto.isDefault && !r.isDefault) {
       await this.rateRepo.update({ companyId, isDefault: true }, { isDefault: false });
     }
-    Object.assign(r, dto);
+    if (dto.name !== undefined) r.name = dto.name;
+    if (dto.rate !== undefined) r.rate = dto.rate;
+    const nextType = dto.type ?? dto.taxType;
+    if (nextType !== undefined) r.type = nextType as any;
+    const nextAuthority = dto.authority ?? dto.description;
+    if (nextAuthority !== undefined) r.authority = nextAuthority;
+    if (dto.isActive !== undefined) r.isActive = dto.isActive;
+    if (dto.isDefault !== undefined) r.isDefault = dto.isDefault;
     return this.rateRepo.save(r);
   }
 

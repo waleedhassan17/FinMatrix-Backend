@@ -31,8 +31,8 @@ export class AgenciesController {
   list(
     @CurrentCompany() companyId: string,
     @Query() query: AgencyQueryDto,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.svc.list(companyId, query, page, limit);
   }

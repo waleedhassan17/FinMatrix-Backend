@@ -39,8 +39,8 @@ export class InventoryController {
   listItems(
     @CurrentCompany() companyId: string,
     @Query() query: InventoryItemQueryDto,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.svc.listItems(companyId, query, page, limit);
   }
@@ -98,8 +98,8 @@ export class InventoryController {
   itemMovements(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.svc.itemMovements(companyId, id, page, limit);
   }
@@ -141,8 +141,8 @@ export class InventoryController {
   listMovements(
     @CurrentCompany() companyId: string,
     @Query() query: MovementQueryDto,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.svc.listMovements(companyId, query, page, limit);
   }

@@ -33,8 +33,8 @@ export class BillPaymentsController {
   list(
     @CurrentCompany() companyId: string,
     @Query('billId') billId: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.bills.listPayments(companyId, billId, page, limit);
   }

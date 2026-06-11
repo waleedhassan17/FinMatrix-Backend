@@ -20,8 +20,8 @@ export class ShadowInventoryController {
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('personnelId') personnelId: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     const pid = (user.role === 'delivery') ? user.id : personnelId;
     return this.svc.list(companyId, pid, page, limit);

@@ -19,8 +19,8 @@ export class InventoryApprovalsController {
   async list(
     @CurrentCompany() companyId: string,
     @Query('status') status: string,
-    @Query('page', ParseIntPipe) page = 1,
-    @Query('limit', ParseIntPipe) limit = 20,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     const items = await this.svc.list(companyId, status, page, limit);
     return { success: true, data: { requests: items } };
