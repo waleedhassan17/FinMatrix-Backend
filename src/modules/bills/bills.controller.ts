@@ -51,6 +51,16 @@ export class BillsController {
     return this.bills.list(companyId, query, pagination);
   }
 
+  // Payment history for a single bill. The app's bill-detail screen requests
+  // GET /bills/:billId/payments; declared before `:billId` so it matches first.
+  @Get(':billId/payments')
+  payments(
+    @CurrentCompany() companyId: string,
+    @Param('billId', ParseUUIDPipe) billId: string,
+  ) {
+    return this.bills.getBillPaymentHistory(companyId, billId);
+  }
+
   @Get(':billId')
   get(
     @CurrentCompany() companyId: string,

@@ -408,6 +408,31 @@ export class BillsService {
     return { data, total, page, limit };
   }
 
+  /**
+   * Payment history for a single bill, shaped as `{ payments: [...] }` to match
+   * the app's bill-detail serializer (reads `data.payments`). Each payment
+   * exposes its `applications` as `allocations`.
+   */
+  async getBillPaymentHistory(companyId: string, billId: string) {
+    const payments = await this.paymentRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.applications', 'app')
+      .where('p.companyId = :cid', { cid: companyId })
+      .andWhere(
+        'p.id IN (SELECT bill_payment_id FROM bill_payment_applications WHERE bill_id = :bid)',
+        { bid: billId },
+      )
+      .orderBy('p.paymentDate', 'DESC')
+      .getMany();
+
+    return {
+      payments: payments.map((p) => ({
+        ...p,
+        allocations: (p.applications ?? []).map((a) => ({ ...a })),
+      })),
+    };
+  }
+
   private computeTotals(
     lines: Array<BillLineDto & { accountId: string; amount: string }>,
   ): BillTotals {
