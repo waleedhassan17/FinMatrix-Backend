@@ -36,7 +36,9 @@ import {
 @ApiTags('bills')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
-@Controller('bills')
+// `bill` is a backwards-compat alias for older app builds that called the
+// singular `/api/v1/bill` route; both prefixes resolve to the same handlers.
+@Controller(['bills', 'bill'])
 export class BillsController {
   constructor(private readonly bills: BillsService) {}
 
