@@ -18,6 +18,19 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   zone!: string | null;
 
+  // -------- Destination address + geocoded coordinates --------
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  address!: string | null;
+
+  @Column({ type: 'double precision', nullable: true, name: 'dest_lat' })
+  destLat!: number | null;
+
+  @Column({ type: 'double precision', nullable: true, name: 'dest_lng' })
+  destLng!: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'geocoded_at' })
+  geocodedAt!: Date | null;
+
   @Column({ type: 'varchar', length: 32, nullable: true, name: 'reference_no' })
   referenceNo!: string | null;
 

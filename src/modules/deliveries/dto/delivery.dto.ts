@@ -80,6 +80,8 @@ export class ConfirmDeliveryItemDto {
 
 export class ConfirmDeliveryDto {
   @ApiPropertyOptional() @IsOptional() customerVerified?: boolean;
-  @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmDeliveryItemDto) deliveredItems!: ConfirmDeliveryItemDto[];
+  // Optional: when omitted, every line is treated as fully delivered.
+  @ApiPropertyOptional({ type: [ConfirmDeliveryItemDto] }) @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmDeliveryItemDto) deliveredItems?: ConfirmDeliveryItemDto[];
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() verifiedBy?: string;
 }

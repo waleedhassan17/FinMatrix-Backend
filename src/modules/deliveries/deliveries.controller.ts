@@ -82,6 +82,12 @@ export class DeliveriesController {
     return this.svc.getMapData(companyId);
   }
 
+  @Post('geocode-pending')
+  @Roles('admin', 'staff')
+  geocodePending(@CurrentCompany() companyId: string) {
+    return this.svc.geocodePending(companyId);
+  }
+
   @Get(':id/location-history')
   @Roles('admin', 'staff')
   locationHistory(

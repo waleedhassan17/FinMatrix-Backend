@@ -7,8 +7,10 @@ import { DeliverySignature } from './entities/delivery-signature.entity';
 import { DeliveryIssue } from './entities/delivery-issue.entity';
 import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import { DeliveriesService } from './deliveries.service';
 import { DeliveriesController } from './deliveries.controller';
+import { GeocodingService } from './geocoding.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
@@ -21,10 +23,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
       DeliveryIssue,
       DeliveryLocationLog,
       DeliveryPersonnelProfile,
+      Customer,
     ]),
     NotificationsModule,
   ],
-  providers: [DeliveriesService],
+  providers: [DeliveriesService, GeocodingService],
   controllers: [DeliveriesController],
   exports: [DeliveriesService],
 })

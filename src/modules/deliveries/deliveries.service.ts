@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
 import { DeliveryStatusHistory } from './entities/delivery-status-history.entity';
@@ -8,7 +8,9 @@ import { DeliveryIssue } from './entities/delivery-issue.entity';
 import { DeliverySignature } from './entities/delivery-signature.entity';
 import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { GeocodingService } from './geocoding.service';
 import {
   CreateDeliveryDto,
   UpdateDeliveryDto,
@@ -39,9 +41,33 @@ export class DeliveriesService {
     @InjectRepository(DeliverySignature) private readonly signatureRepo: Repository<DeliverySignature>,
     @InjectRepository(DeliveryLocationLog) private readonly locationLogRepo: Repository<DeliveryLocationLog>,
     @InjectRepository(DeliveryPersonnelProfile) private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
+    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
+    private readonly geocoding: GeocodingService,
   ) {}
+
+  /**
+   * Resolve a customer's delivery address and geocode it (best-effort).
+   * Runs outside any DB transaction since it performs a network call.
+   */
+  private async resolveDestination(
+    companyId: string,
+    customerId: string,
+  ): Promise<{ address: string | null; destLat: number | null; destLng: number | null; geocodedAt: Date | null }> {
+    const customer = await this.customerRepo.findOne({ where: { id: customerId, companyId } });
+    const address = GeocodingService.formatAddress(
+      customer?.shippingAddress ?? customer?.billingAddress ?? null,
+    );
+    if (!address) return { address: null, destLat: null, destLng: null, geocodedAt: null };
+    const geo = await this.geocoding.geocode(address);
+    return {
+      address,
+      destLat: geo?.lat ?? null,
+      destLng: geo?.lng ?? null,
+      geocodedAt: geo ? new Date() : null,
+    };
+  }
 
   async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
     const qb = this.repo.createQueryBuilder('d')
@@ -81,7 +107,37 @@ export class DeliveriesService {
     return `DEL-${ts}-${rand}`;
   }
 
+  /**
+   * Backfill destination coordinates for deliveries that don't have them
+   * yet (created before geocoding existed, or while the key was missing).
+   * Bounded per call to respect Geocoding API rate limits.
+   */
+  async geocodePending(companyId: string, limit = 25) {
+    const pending = await this.repo.find({
+      where: { companyId, destLat: IsNull() },
+      take: limit,
+      order: { createdAt: 'DESC' },
+    });
+    let updated = 0;
+    for (const d of pending) {
+      const dest = await this.resolveDestination(companyId, d.customerId);
+      if (dest.destLat != null && dest.destLng != null) {
+        d.address = dest.address;
+        d.destLat = dest.destLat;
+        d.destLng = dest.destLng;
+        d.geocodedAt = dest.geocodedAt;
+        await this.repo.save(d);
+        updated++;
+      }
+    }
+    return { scanned: pending.length, updated, geocodingConfigured: this.geocoding.isConfigured };
+  }
+
   async create(companyId: string, dto: CreateDeliveryDto, userId: string) {
+    // Resolve + geocode the destination before opening the DB transaction
+    // (network call must not hold a transaction open).
+    const dest = await this.resolveDestination(companyId, dto.customerId);
+
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
       const itemRepo = em.getRepository(DeliveryItem);
@@ -90,6 +146,10 @@ export class DeliveriesService {
         customerId: dto.customerId,
         customerName: dto.customerName ?? null,
         zone: dto.zone ?? null,
+        address: dest.address,
+        destLat: dest.destLat,
+        destLng: dest.destLng,
+        geocodedAt: dest.geocodedAt,
         referenceNo: this.generateRefNo(),
         personnelId: dto.personnelId ?? null,
         status: dto.personnelId ? 'pending' : 'unassigned',
@@ -300,16 +360,30 @@ export class DeliveriesService {
 
   async confirmDelivery(companyId: string, deliveryId: string, dto: ConfirmDeliveryDto, userId: string) {
     const d = await this.getById(companyId, deliveryId);
-    if (!['arrived', 'in_transit'].includes(d.status)) {
-      throw new BadRequestException('Delivery must be arrived or in_transit to confirm');
+    // Allow completion from any active (non-terminal) status. A courier may mark
+    // a delivery received without explicitly stepping through every milestone.
+    const TERMINAL = ['delivered', 'failed', 'returned', 'cancelled'];
+    if (TERMINAL.includes(d.status)) {
+      throw new BadRequestException(`Delivery is already ${d.status}`);
     }
 
-    // Update delivered/returned quantities on items
-    for (const item of dto.deliveredItems) {
-      await this.itemRepo.update(
-        { deliveryId: d.id, itemId: item.itemId },
-        { deliveredQty: item.deliveredQty, returnedQty: item.returnedQty ?? '0' },
-      );
+    // Update delivered/returned quantities. When the client didn't send a
+    // per-item breakdown (simple "customer confirmed receipt"), default every
+    // line to fully delivered.
+    if (dto.deliveredItems && dto.deliveredItems.length) {
+      for (const item of dto.deliveredItems) {
+        await this.itemRepo.update(
+          { deliveryId: d.id, itemId: item.itemId },
+          { deliveredQty: item.deliveredQty, returnedQty: item.returnedQty ?? '0' },
+        );
+      }
+    } else {
+      const items = await this.itemRepo.find({ where: { deliveryId: d.id } });
+      for (const item of items) {
+        item.deliveredQty = item.orderedQty;
+        item.returnedQty = '0';
+      }
+      if (items.length) await this.itemRepo.save(items);
     }
 
     // Update status to delivered
@@ -388,10 +462,16 @@ export class DeliveriesService {
         status: d.status,
         priority: d.priority,
         customerId: d.customerId,
+        customerName: d.customerName ?? null,
         personnelId: d.personnelId ?? null,
         itemCount: d.items?.length ?? 0,
         assignedAt: d.assignedAt,
         createdAt: d.createdAt,
+        address: d.address ?? null,
+        destination:
+          d.destLat != null && d.destLng != null
+            ? { lat: d.destLat, lng: d.destLng, address: d.address ?? null }
+            : null,
         personnel: personnel
           ? {
               vehicleType: personnel.vehicleType,
