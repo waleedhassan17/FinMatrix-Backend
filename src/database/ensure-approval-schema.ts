@@ -75,8 +75,14 @@ async function main(): Promise<void> {
       ON "inventory_approval_audit_entries" ("company_id", "created_at")
   `);
 
-  // Foreign key — add only if it doesn't already exist (ADD CONSTRAINT is not
-  // idempotent on its own).
+  // Remove orphaned audit rows (referencing deleted requests) so the FK can be
+  // added, then add it only if missing (ADD CONSTRAINT is not idempotent).
+  await client.query(`
+    DELETE FROM "inventory_approval_audit_entries" a
+     WHERE NOT EXISTS (
+       SELECT 1 FROM "inventory_update_requests" r WHERE r.id = a.request_id
+     )
+  `);
   await client.query(`
     DO $$
     BEGIN
