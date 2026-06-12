@@ -6,7 +6,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-export type InventoryApprovalAction = 'approved' | 'rejected';
+export type InventoryApprovalAction = 'approved' | 'rejected' | 'undone';
 
 /**
  * Lightweight audit row for inventory-update-request reviews.

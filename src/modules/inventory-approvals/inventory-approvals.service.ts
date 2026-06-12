@@ -627,28 +627,30 @@ export class InventoryApprovalsService {
           shadow.currentQty = String(
             Number(shadow.currentQty) + Number(line.deliveredQty) - Number(line.returnedQty),
           );
-          shadow.syncStatus = 'rejected' as never;
+          // Back to pending review (not rejected) — admin will re-decide.
+          shadow.syncStatus = 'pending' as never;
           shadow.lastSyncAt = new Date();
           await shadowRepo.save(shadow);
         }
       }
 
-      const now = new Date();
-      req.status = 'rejected';
-      req.shadowStatus = 'rejected';
-      req.reviewedAt = now;
-      req.reviewedBy = reviewerId;
-      req.reviewerComment = 'Approval undone — inventory changes reversed';
-      req.rejectReason = 'Approval undone by admin';
+      // Undo returns the request to the PENDING review queue so the admin can
+      // approve or reject it again — it is NOT a rejection.
+      req.status = 'pending';
+      req.shadowStatus = 'pending';
+      req.reviewedAt = null;
+      req.reviewedBy = null;
+      req.reviewerComment = null;
+      req.rejectReason = null;
       await reqRepo.save(req);
 
       await auditRepo.save(
         auditRepo.create({
           companyId,
           requestId: req.id,
-          action: 'rejected',
+          action: 'undone',
           reviewedBy: reviewerId,
-          details: `Approval undone — ${req.lines.length} item change(s) reversed for ${req.deliveryReference ?? req.deliveryId}`,
+          details: `Approval undone — ${req.lines.length} item change(s) reversed; request returned to pending for ${req.deliveryReference ?? req.deliveryId}`,
         }),
       );
 
@@ -658,7 +660,7 @@ export class InventoryApprovalsService {
         userId: req.personnelId,
         type: 'approval_results',
         title: 'Inventory approval reversed',
-        message: `The approval for ${req.deliveryReference ?? 'your delivery'} was undone. Inventory quantities have been restored.`,
+        message: `The approval for ${req.deliveryReference ?? 'your delivery'} was undone and sent back for re-review. Inventory quantities have been restored.`,
         data: { requestId: req.id, route: 'DPHistory' },
       });
 
