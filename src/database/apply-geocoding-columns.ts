@@ -9,6 +9,7 @@
  * This applies only the additive, IF-NOT-EXISTS column changes.
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
+export {};
 const { Client } = require('pg');
 
 async function main(): Promise<void> {
