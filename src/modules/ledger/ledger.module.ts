@@ -1,16 +1,19 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { GeneralLedgerEntry } from './entities/general-ledger.entity';
+import { LedgerService } from './ledger.service';
+import { LedgerController } from './ledger.controller';
 
 /**
- * First Update (v1.0) scope: the dedicated General Ledger browse/drill-down
- * endpoint is deferred to the Second Update, so the controller and service are
- * removed. The GeneralLedgerEntry entity stays registered because auto-posting
- * (PostingService) and "view account transactions" (Chart of Accounts) read
- * and write GL rows behind the scenes.
+ * General Ledger browse / drill-down. LedgerService derives chronological
+ * double-entry rows from posted documents (invoices, bills, payments) so the
+ * ledger reflects real activity; the GeneralLedgerEntry entity stays registered
+ * for auto-posting and "view account transactions" elsewhere.
  */
 @Module({
   imports: [TypeOrmModule.forFeature([GeneralLedgerEntry])],
-  exports: [TypeOrmModule],
+  controllers: [LedgerController],
+  providers: [LedgerService],
+  exports: [TypeOrmModule, LedgerService],
 })
 export class LedgerModule {}
