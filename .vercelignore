@@ -1,10 +1,13 @@
-node_modules
-dist
-storage
-test
-docs
-postman
-.github
+# Leading slash = repo root only. A bare name (e.g. "storage") would match
+# ANY folder of that name, which previously excluded src/common/storage and
+# crashed the function. Keep these anchored.
+/node_modules
+/dist
+/storage
+/test
+/docs
+/postman
+/.github
 *.log
 .env
 .env.*
