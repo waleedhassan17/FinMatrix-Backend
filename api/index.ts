@@ -17,12 +17,14 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
-import { AppModule } from '../src/app.module';
 
 const expressApp = express();
 let bootstrapPromise: Promise<void> | null = null;
 
 async function bootstrap(): Promise<void> {
+  // Lazy import so any module-load error (missing dep, decorator failure) is
+  // caught by the handler's try/catch instead of crashing the whole function.
+  const { AppModule } = await import('../src/app.module');
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
     // Pino's buffered logger does not fit the serverless lifecycle; the default
     // Nest logger writes straight to stdout, which Vercel captures fine.
@@ -80,6 +82,23 @@ export default async function handler(req: Request, res: Response) {
       throw err;
     });
   }
-  await bootstrapPromise;
+  try {
+    await bootstrapPromise;
+  } catch (err) {
+    // TEMPORARY boot-error surfacing: Vercel returns an opaque
+    // FUNCTION_INVOCATION_FAILED, so expose the real cause in the response to
+    // diagnose. Remove once the deployment is healthy.
+    const e = err as Error;
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        bootError: e?.message ?? String(err),
+        name: e?.name,
+        stack: (e?.stack ?? '').split('\n').slice(0, 12),
+      }),
+    );
+    return;
+  }
   expressApp(req, res);
 }
