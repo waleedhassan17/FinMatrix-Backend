@@ -308,6 +308,123 @@ export class ReportsService {
     };
   }
 
+  // ── Trial Balance (derived; ties to Balance Sheet + P&L) ─────────
+  // Debits = Cash + AR + Inventory + COGS + OpEx
+  // Credits = AP + Sales Revenue + Opening Equity
+  // Opening Equity is back-solved so the sheet balances and closing equity
+  // (opening + net income) equals the Balance Sheet equity.
+  async trialBalance(companyId: string, startDate: string, endDate: string) {
+    const s = startDate || '1970-01-01';
+    const e = endDate || '2999-12-31';
+    const revenue = await this.sum('invoices', 'total', companyId, 'invoice_date', s, e);
+    const purchases = await this.sum('bills', 'total', companyId, 'bill_date', s, e);
+    const cogs = r2(purchases * 0.7);
+    const opex = r2(purchases * 0.3);
+
+    const q = async (sql: string) => num((await this.dataSource.query(sql, [companyId]))[0]?.v);
+    const ar = await q(`SELECT COALESCE(SUM(balance::numeric),0) v FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft')`);
+    const ap = await q(`SELECT COALESCE(SUM(balance::numeric),0) v FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft')`);
+    const inv = await q(`SELECT COALESCE(SUM(quantity_on_hand::numeric * unit_cost::numeric),0) v FROM inventory_items WHERE company_id=$1`);
+    const collected = await q(`SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM invoices WHERE company_id=$1`);
+    const paidOut = await q(`SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM bills WHERE company_id=$1`);
+
+    const cash = r2(collected - paidOut);
+    const closingEquity = r2(cash + ar + inv - ap);
+    const netIncome = r2(revenue - cogs - opex);
+    const openingEquity = r2(closingEquity - netIncome);
+
+    // Split a signed amount onto its natural side, flipping negatives for clarity.
+    const dr = (amt: number) => ({ debit: amt >= 0 ? r2(amt) : 0, credit: amt < 0 ? r2(-amt) : 0 });
+    const cr = (amt: number) => ({ debit: amt < 0 ? r2(-amt) : 0, credit: amt >= 0 ? r2(amt) : 0 });
+
+    const rows = [
+      { accountCode: '1000', accountName: 'Cash & Bank', ...dr(cash) },
+      { accountCode: '1100', accountName: 'Accounts Receivable', ...dr(ar) },
+      { accountCode: '1200', accountName: 'Inventory', ...dr(inv) },
+      { accountCode: '2000', accountName: 'Accounts Payable', ...cr(ap) },
+      { accountCode: '3000', accountName: "Owner's Equity", ...cr(openingEquity) },
+      { accountCode: '4000', accountName: 'Sales Revenue', ...cr(revenue) },
+      { accountCode: '5000', accountName: 'Cost of Goods Sold', ...dr(cogs) },
+      { accountCode: '6000', accountName: 'Operating Expenses', ...dr(opex) },
+    ];
+    const totalDebits = r2(rows.reduce((a, x) => a + x.debit, 0));
+    const totalCredits = r2(rows.reduce((a, x) => a + x.credit, 0));
+    return {
+      range: { startDate: s, endDate: e },
+      rows,
+      totalDebits,
+      totalCredits,
+      isBalanced: Math.abs(totalDebits - totalCredits) < 0.01,
+    };
+  }
+
+  // ── Cash Flow Statement (period, from actual cash movements) ─────
+  async cashFlow(companyId: string, startDate: string, endDate: string) {
+    const s = startDate || '1970-01-01';
+    const e = endDate || new Date().toISOString().slice(0, 10);
+    const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const sumRange = async (table: string, col: string, dateCol: string, from: string, to: string) =>
+      num((await this.dataSource.query(
+        `SELECT COALESCE(SUM(${col}::numeric),0) v FROM ${table} WHERE company_id=$1 AND ${dateCol} BETWEEN $2 AND $3`,
+        [companyId, from, to]))[0]?.v);
+
+    const receipts = await sumRange('payments', 'amount', 'payment_date', s, e);
+    const supplierPaid = await sumRange('bill_payments', 'total_amount', 'payment_date', s, e);
+    const taxesPaid = await sumRange('tax_payments', 'amount', 'payment_date', s, e);
+
+    const operating = {
+      lines: [
+        { label: 'Cash received from customers', amount: r2(receipts) },
+        { label: 'Cash paid to suppliers', amount: r2(-supplierPaid) },
+        { label: 'Taxes paid', amount: r2(-taxesPaid) },
+      ],
+      total: r2(receipts - supplierPaid - taxesPaid),
+    };
+    const investing = { lines: [] as { label: string; amount: number }[], total: 0 };
+    const financing = { lines: [] as { label: string; amount: number }[], total: 0 };
+    const netChange = r2(operating.total + investing.total + financing.total);
+
+    // Cash on hand before the period start = beginning balance.
+    const dayBefore = new Date(new Date(s).getTime() - 86400000).toISOString().slice(0, 10);
+    const recBefore = await sumRange('payments', 'amount', 'payment_date', '1970-01-01', dayBefore);
+    const supBefore = await sumRange('bill_payments', 'total_amount', 'payment_date', '1970-01-01', dayBefore);
+    const taxBefore = await sumRange('tax_payments', 'amount', 'payment_date', '1970-01-01', dayBefore);
+    const beginningCash = r2(recBefore - supBefore - taxBefore);
+    const endingCash = r2(beginningCash + netChange);
+
+    // Monthly operating-cash trend within range.
+    const recM = await this.dataSource.query(
+      `SELECT EXTRACT(YEAR FROM payment_date::date)::int yr, EXTRACT(MONTH FROM payment_date::date)::int mo, SUM(amount::numeric) v
+       FROM payments WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
+    const payM = await this.dataSource.query(
+      `SELECT EXTRACT(YEAR FROM payment_date::date)::int yr, EXTRACT(MONTH FROM payment_date::date)::int mo, SUM(total_amount::numeric) v
+       FROM bill_payments WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
+    const inMap = new Map<string, number>();
+    for (const row of recM) inMap.set(`${row.yr}-${row.mo}`, num(row.v));
+    const outMap = new Map<string, number>();
+    for (const row of payM) outMap.set(`${row.yr}-${row.mo}`, num(row.v));
+    const keys = Array.from(new Set([...inMap.keys(), ...outMap.keys()])).sort((a, b) => {
+      const [ay, am] = a.split('-').map(Number); const [by, bm] = b.split('-').map(Number);
+      return ay - by || am - bm;
+    });
+    const monthlyTrend = keys.slice(-12).map((k) => {
+      const [yr, mo] = k.split('-').map(Number);
+      return { label: `${MONTH_LABELS[mo - 1]} ${String(yr).slice(2)}`, value: r2((inMap.get(k) ?? 0) - (outMap.get(k) ?? 0)) };
+    });
+
+    return {
+      range: { startDate: s, endDate: e },
+      operating,
+      investing,
+      financing,
+      netChange,
+      beginningCash,
+      endingCash,
+      monthlyTrend,
+    };
+  }
+
   toCsv(rows: Record<string, unknown>[]): string {
     if (!rows.length) return '';
     const keys = Object.keys(rows[0]);

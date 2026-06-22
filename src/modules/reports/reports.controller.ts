@@ -71,6 +71,32 @@ export class ReportsController {
     return this.send(data, format, res, 'inventory-valuation');
   }
 
+  @Get('trial-balance')
+  @Roles('admin', 'staff')
+  async trialBalance(
+    @CurrentCompany() companyId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('format') format = 'json',
+    @Res() res: Response,
+  ) {
+    const data = await this.svc.trialBalance(companyId, startDate, endDate);
+    return this.send(data, format, res, 'trial-balance');
+  }
+
+  @Get('cash-flow')
+  @Roles('admin', 'staff')
+  async cashFlow(
+    @CurrentCompany() companyId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('format') format = 'json',
+    @Res() res: Response,
+  ) {
+    const data = await this.svc.cashFlow(companyId, startDate, endDate);
+    return this.send(data, format, res, 'cash-flow');
+  }
+
   @Get('delivery-report')
   @Roles('admin', 'staff')
   async deliveryReport(
