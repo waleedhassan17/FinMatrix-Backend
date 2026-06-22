@@ -1,13 +1,7 @@
-# Leading slash = repo root only. A bare name (e.g. "storage") would match
-# ANY folder of that name, which previously excluded src/common/storage and
-# crashed the function. Keep these anchored.
-/node_modules
-/dist
-/storage
-/test
-/docs
-/postman
-/.github
-*.log
+# Keep this minimal. Bare folder names here match ANY folder of that name in
+# the tree (gitignore semantics), which previously excluded src/common/storage
+# and crash-looped the function. Only list things that never appear under src/.
+node_modules
 .env
 .env.*
+*.log
