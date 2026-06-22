@@ -10,7 +10,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import * as bcrypt from 'bcrypt';
+// bcryptjs (pure JS) instead of native bcrypt: the native .node binary cannot
+// be bundled by Vercel's serverless builder. Hashes are byte-compatible.
+import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomInt } from 'crypto';
 import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
