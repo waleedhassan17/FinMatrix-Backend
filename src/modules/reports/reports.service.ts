@@ -358,28 +358,30 @@ export class ReportsService {
     };
   }
 
-  // ── Cash Flow Statement (period, from actual cash movements) ─────
+  // ── Cash Flow Statement (period) ─────────────────────────────────
+  // Derived from invoice/bill cash collected & paid (same source as the
+  // Balance Sheet cash), so ending cash ties to the Balance Sheet.
   async cashFlow(companyId: string, startDate: string, endDate: string) {
     const s = startDate || '1970-01-01';
     const e = endDate || new Date().toISOString().slice(0, 10);
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-    const sumRange = async (table: string, col: string, dateCol: string, from: string, to: string) =>
+    // Cash collected on invoices / paid on bills, by the document date.
+    const sumPaid = async (table: 'invoices' | 'bills', dateCol: string, from: string, to: string) =>
       num((await this.dataSource.query(
-        `SELECT COALESCE(SUM(${col}::numeric),0) v FROM ${table} WHERE company_id=$1 AND ${dateCol} BETWEEN $2 AND $3`,
+        `SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM ${table}
+         WHERE company_id=$1 AND status NOT IN ('void','draft') AND ${dateCol} BETWEEN $2 AND $3`,
         [companyId, from, to]))[0]?.v);
 
-    const receipts = await sumRange('payments', 'amount', 'payment_date', s, e);
-    const supplierPaid = await sumRange('bill_payments', 'total_amount', 'payment_date', s, e);
-    const taxesPaid = await sumRange('tax_payments', 'amount', 'payment_date', s, e);
+    const receipts = await sumPaid('invoices', 'invoice_date', s, e);
+    const supplierPaid = await sumPaid('bills', 'bill_date', s, e);
 
     const operating = {
       lines: [
         { label: 'Cash received from customers', amount: r2(receipts) },
         { label: 'Cash paid to suppliers', amount: r2(-supplierPaid) },
-        { label: 'Taxes paid', amount: r2(-taxesPaid) },
       ],
-      total: r2(receipts - supplierPaid - taxesPaid),
+      total: r2(receipts - supplierPaid),
     };
     const investing = { lines: [] as { label: string; amount: number }[], total: 0 };
     const financing = { lines: [] as { label: string; amount: number }[], total: 0 };
@@ -387,19 +389,18 @@ export class ReportsService {
 
     // Cash on hand before the period start = beginning balance.
     const dayBefore = new Date(new Date(s).getTime() - 86400000).toISOString().slice(0, 10);
-    const recBefore = await sumRange('payments', 'amount', 'payment_date', '1970-01-01', dayBefore);
-    const supBefore = await sumRange('bill_payments', 'total_amount', 'payment_date', '1970-01-01', dayBefore);
-    const taxBefore = await sumRange('tax_payments', 'amount', 'payment_date', '1970-01-01', dayBefore);
-    const beginningCash = r2(recBefore - supBefore - taxBefore);
+    const recBefore = await sumPaid('invoices', 'invoice_date', '1970-01-01', dayBefore);
+    const supBefore = await sumPaid('bills', 'bill_date', '1970-01-01', dayBefore);
+    const beginningCash = r2(recBefore - supBefore);
     const endingCash = r2(beginningCash + netChange);
 
     // Monthly operating-cash trend within range.
     const recM = await this.dataSource.query(
-      `SELECT EXTRACT(YEAR FROM payment_date::date)::int yr, EXTRACT(MONTH FROM payment_date::date)::int mo, SUM(amount::numeric) v
-       FROM payments WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
+      `SELECT EXTRACT(YEAR FROM invoice_date::date)::int yr, EXTRACT(MONTH FROM invoice_date::date)::int mo, SUM(amount_paid::numeric) v
+       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') AND invoice_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
     const payM = await this.dataSource.query(
-      `SELECT EXTRACT(YEAR FROM payment_date::date)::int yr, EXTRACT(MONTH FROM payment_date::date)::int mo, SUM(total_amount::numeric) v
-       FROM bill_payments WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
+      `SELECT EXTRACT(YEAR FROM bill_date::date)::int yr, EXTRACT(MONTH FROM bill_date::date)::int mo, SUM(amount_paid::numeric) v
+       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') AND bill_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
     const inMap = new Map<string, number>();
     for (const row of recM) inMap.set(`${row.yr}-${row.mo}`, num(row.v));
     const outMap = new Map<string, number>();
