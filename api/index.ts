@@ -21,6 +21,17 @@ import helmet from 'helmet';
 const expressApp = express();
 let bootstrapPromise: Promise<void> | null = null;
 
+// TEMPORARY diagnostics: capture async failures that would otherwise hard-exit
+// the lambda (opaque FUNCTION_INVOCATION_FAILED). Registering these handlers
+// also PREVENTS the default crash, so the request handler can report the cause.
+let lastFatal: unknown = null;
+process.on('unhandledRejection', (e) => {
+  lastFatal = e;
+});
+process.on('uncaughtException', (e) => {
+  lastFatal = e;
+});
+
 async function bootstrap(): Promise<void> {
   // Lazy import so any module-load error (missing dep, decorator failure) is
   // caught by the handler's try/catch instead of crashing the whole function.
@@ -82,23 +93,35 @@ export default async function handler(req: Request, res: Response) {
       throw err;
     });
   }
-  try {
-    await bootstrapPromise;
-  } catch (err) {
-    // TEMPORARY boot-error surfacing: Vercel returns an opaque
-    // FUNCTION_INVOCATION_FAILED, so expose the real cause in the response to
-    // diagnose. Remove once the deployment is healthy.
+  const fail = (label: string, err: unknown) => {
     const e = err as Error;
+    if (res.headersSent) return;
     res.statusCode = 500;
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
+        diag: label,
         bootError: e?.message ?? String(err),
         name: e?.name,
-        stack: (e?.stack ?? '').split('\n').slice(0, 12),
+        stack: (e?.stack ?? '').split('\n').slice(0, 14),
       }),
     );
-    return;
+  };
+
+  try {
+    // Guard against a hung bootstrap (e.g. DB connect retry storm) so we return
+    // a readable error rather than an opaque FUNCTION_INVOCATION_FAILED.
+    await Promise.race([
+      bootstrapPromise,
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('bootstrap timed out after 20s')), 20_000),
+      ),
+    ]);
+  } catch (err) {
+    return fail('bootstrap-rejected', err);
+  }
+  if (lastFatal) {
+    return fail('async-fatal', lastFatal);
   }
   expressApp(req, res);
 }
