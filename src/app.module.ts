@@ -27,6 +27,8 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { EstimatesModule } from './modules/estimates/estimates.module';
 import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
+import { CreditMemosModule } from './modules/credit-memos/credit-memos.module';
+import { VendorCreditsModule } from './modules/vendor-credits/vendor-credits.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { VendorsModule } from './modules/vendors/vendors.module';
 import { BillsModule } from './modules/bills/bills.module';
@@ -86,6 +88,8 @@ import { MailModule } from './modules/mail/mail.module';
     InvoicesModule,
     SalesOrdersModule,
     EstimatesModule,
+    CreditMemosModule,
+    VendorCreditsModule,
     PaymentsModule,
     VendorsModule,
     BillsModule,
