@@ -5,13 +5,14 @@ import { JournalEntryLine } from './entities/journal-entry-line.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { PostingService } from './posting.service';
+import { JournalEntriesService } from './journal-entries.service';
+import { JournalEntriesController } from './journal-entries.controller';
 
 /**
- * First Update (v1.0) scope: the manual Journal Entry screens/endpoints are
- * deferred to the Second Update. Auto-posting still runs in v1 — invoices,
- * bills and payments post their journal entries through PostingService, which
- * is the only thing this module exposes now. The JournalEntry/Line entities
- * remain registered so PostingService and the General Ledger keep working.
+ * Manual General Journal module. PostingService is the shared posting engine
+ * used by invoices, bills, payments and credit memos for auto-posting; the
+ * controller + JournalEntriesService expose the manual journal-entry workflow
+ * (create draft/posted, post, void-via-reversal) on top of it.
  */
 @Module({
   imports: [
@@ -22,7 +23,8 @@ import { PostingService } from './posting.service';
       GeneralLedgerEntry,
     ]),
   ],
-  providers: [PostingService],
+  controllers: [JournalEntriesController],
+  providers: [PostingService, JournalEntriesService],
   exports: [PostingService, TypeOrmModule],
 })
 export class JournalEntriesModule {}
