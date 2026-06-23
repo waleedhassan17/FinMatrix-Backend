@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsIn,
   IsInt,
@@ -95,7 +96,12 @@ export class CreateCompanyDto {
   logo?: string;
 }
 
-export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {}
+export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
+  @ApiPropertyOptional({ description: 'Mark/dismiss the first-run setup checklist' })
+  @IsOptional()
+  @IsBoolean()
+  setupCompleted?: boolean;
+}
 
 export class JoinCompanyDto {
   @ApiProperty({ example: 'AB12CD' })

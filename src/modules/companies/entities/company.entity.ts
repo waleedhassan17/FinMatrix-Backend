@@ -90,6 +90,9 @@ export class Company extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'reviewed_at' })
   reviewedAt!: Date | null;
 
+  @Column({ type: 'boolean', default: false, name: 'setup_completed' })
+  setupCompleted!: boolean;
+
   @OneToMany(() => UserCompany, (uc) => uc.company)
   memberships!: UserCompany[];
 }

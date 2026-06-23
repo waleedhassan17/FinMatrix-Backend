@@ -358,6 +358,8 @@ export class ReportsService {
     if (num(pendingAP) > 0) alerts.push({ id: 'pending_bills', message: `You have pending bills totalling Rs ${num(pendingAP).toLocaleString()}.`, severity: 'amber' });
     if (deliveryBreakdown.pending > 0) alerts.push({ id: 'pending_delivery', message: `${deliveryBreakdown.pending} delivery order(s) awaiting assignment.`, severity: 'blue' });
 
+    const setup = await this.setupStatus(companyId, itemCount);
+
     return {
       totalRevenue: invoiceTotal,
       totalExpenses: billTotal,
@@ -368,7 +370,49 @@ export class ReportsService {
       deliveryTotal,
       recentTransactions,
       alerts,
+      setup,
       period: { startDate: monthStart, endDate: monthEnd },
+    };
+  }
+
+  /**
+   * Guided first-run setup signals (FinMatrixGuide §5.7). Each step's `done`
+   * reflects whether the underlying data exists; `completed` is the company's
+   * dismiss/finish flag. Surfaced on the dashboard so the checklist can show or
+   * hide itself. Purely informational — no accounting logic here.
+   */
+  private async setupStatus(companyId: string, itemCount: number) {
+    const count1 = async (sql: string) =>
+      parseInt((await this.dataSource.query(sql, [companyId]))[0]?.v ?? '0', 10);
+
+    const openingBalance = await count1(
+      `SELECT CASE WHEN
+         EXISTS (SELECT 1 FROM general_ledger WHERE company_id=$1 AND source_type='opening_balance')
+         OR EXISTS (SELECT 1 FROM accounts WHERE company_id=$1 AND opening_balance::numeric <> 0)
+       THEN 1 ELSE 0 END AS v`,
+    );
+    const customAccounts = await count1(
+      `SELECT COUNT(*) v FROM accounts WHERE company_id=$1`,
+    );
+    const customers = await count1(`SELECT COUNT(*) v FROM customers WHERE company_id=$1`);
+    const vendors = await count1(`SELECT COUNT(*) v FROM vendors WHERE company_id=$1`);
+    const taxRates = await count1(`SELECT COUNT(*) v FROM tax_rates WHERE company_id=$1`);
+    const company = await this.dataSource.query(
+      `SELECT setup_completed AS "v" FROM companies WHERE id=$1`,
+      [companyId],
+    );
+
+    const steps = {
+      openingBalance: openingBalance > 0,
+      chartOfAccounts: customAccounts > 0,
+      inventory: itemCount > 0,
+      customers: customers > 0,
+      vendors: vendors > 0,
+      taxRates: taxRates > 0,
+    };
+    return {
+      completed: company[0]?.v === true,
+      steps,
     };
   }
 

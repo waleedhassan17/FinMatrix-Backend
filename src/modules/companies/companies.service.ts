@@ -146,6 +146,7 @@ export class CompaniesService {
       ...(dto.accountingMethod !== undefined ? { accountingMethod: dto.accountingMethod } : {}),
       ...(dto.homeCurrency !== undefined ? { homeCurrency: dto.homeCurrency } : {}),
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
+      ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
     });
     return this.companyRepo.save(company);
   }
