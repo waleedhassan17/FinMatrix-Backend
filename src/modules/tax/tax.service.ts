@@ -1,15 +1,22 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { TaxRate } from './entities/tax-rate.entity';
 import { TaxPayment } from './entities/tax-payment.entity';
 import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
+import { PostingService } from '../journal-entries/posting.service';
+import { AccountsService } from '../accounts/accounts.service';
+import { ACCT_CASH, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
+import { toDecimal } from '../../common/utils/money.util';
 
 @Injectable()
 export class TaxService {
   constructor(
     @InjectRepository(TaxRate) private readonly rateRepo: Repository<TaxRate>,
     @InjectRepository(TaxPayment) private readonly paymentRepo: Repository<TaxPayment>,
+    private readonly dataSource: DataSource,
+    private readonly posting: PostingService,
+    private readonly accounts: AccountsService,
   ) {}
 
   async listRates(companyId: string, page: number, limit: number, isActive?: boolean) {
@@ -87,9 +94,50 @@ export class TaxService {
     return { data, total, page, limit };
   }
 
-  async createPayment(companyId: string, dto: CreateTaxPaymentDto) {
-    const payment = this.paymentRepo.create({ ...dto, companyId } as any);
-    return this.paymentRepo.save(payment);
+  async createPayment(
+    companyId: string,
+    dto: CreateTaxPaymentDto,
+    userId: string,
+  ) {
+    // Per FinMatrixGuide §3.9: remitting tax relieves the liability and pays
+    // cash — DR Sales Tax Payable (2300) / CR Cash (1000) — atomically with
+    // the payment record.
+    return this.dataSource.transaction(async (em) => {
+      const payRepo = em.getRepository(TaxPayment);
+      const payment = payRepo.create({ ...dto, companyId } as any);
+      const saved = (await payRepo.save(payment)) as unknown as TaxPayment;
+
+      const amount = toDecimal(dto.amount);
+      if (amount.greaterThan(0)) {
+        const taxPayable = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_TAX_PAYABLE,
+          em,
+        );
+        const cash = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_CASH,
+          em,
+        );
+        const amt = amount.toFixed(4);
+        const entry = await this.posting.createEntry(em, {
+          companyId,
+          createdBy: userId,
+          date: dto.paymentDate,
+          memo: `Tax payment ${dto.period}`,
+          status: 'posted',
+          lines: [
+            { accountId: taxPayable.id, debit: amt, credit: '0', lineOrder: 0 },
+            { accountId: cash.id, debit: '0', credit: amt, lineOrder: 1 },
+          ],
+          sourceType: 'tax_payment',
+          sourceId: saved.id,
+        });
+        saved.journalEntryId = entry.id;
+        await payRepo.save(saved);
+      }
+      return saved;
+    });
   }
 
   async getLiability(companyId: string, asOfDate?: string) {

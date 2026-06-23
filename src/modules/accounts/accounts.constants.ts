@@ -113,6 +113,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'expense',
     subType: 'Operating',
   },
+  {
+    accountNumber: '6400',
+    name: 'Inventory Adjustment / Shrinkage',
+    type: 'expense',
+    subType: 'Operating',
+  },
 ];
 
 /**
@@ -128,6 +134,7 @@ export const ACCT_TAX_PAYABLE = '2300';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
+export const ACCT_INVENTORY_ADJUSTMENT = '6400';
 
 /**
  * System accounts that auto-posting depends on. Resolved by number and
@@ -147,5 +154,10 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
     name: 'Inventory Received Not Billed (GRNI)',
     type: 'liability',
     subType: 'Other Liability',
+  },
+  [ACCT_INVENTORY_ADJUSTMENT]: {
+    name: 'Inventory Adjustment / Shrinkage',
+    type: 'expense',
+    subType: 'Operating',
   },
 };

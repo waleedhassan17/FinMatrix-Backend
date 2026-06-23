@@ -23,6 +23,12 @@ import {
   MovementQueryDto,
 } from './dto/inventory.dto';
 import { toDecimal } from '../../common/utils/money.util';
+import { PostingService } from '../journal-entries/posting.service';
+import { AccountsService } from '../accounts/accounts.service';
+import {
+  ACCT_INVENTORY,
+  ACCT_INVENTORY_ADJUSTMENT,
+} from '../accounts/accounts.constants';
 
 @Injectable()
 export class InventoryService {
@@ -35,6 +41,8 @@ export class InventoryService {
     @InjectRepository(PhysicalCount) private readonly countRepo: Repository<PhysicalCount>,
     @InjectRepository(PhysicalCountLine) private readonly countLineRepo: Repository<PhysicalCountLine>,
     private readonly dataSource: DataSource,
+    private readonly posting: PostingService,
+    private readonly accounts: AccountsService,
   ) {}
 
   // Items
@@ -123,6 +131,49 @@ export class InventoryService {
         createdBy: userId,
       });
       await moveRepo.save(move);
+
+      // Per FinMatrixGuide §3.8: an adjustment moves stock AND the Inventory GL
+      // together, recording the difference as a shrinkage/adjustment expense.
+      //   decrease (variance < 0): DR Inventory Adjustment (6400) / CR Inventory (1200)
+      //   increase (variance > 0): DR Inventory (1200) / CR Inventory Adjustment (6400)
+      // Value uses the item's unit cost. Zero-value moves post nothing.
+      const value = variance.abs().times(toDecimal(item.unitCost));
+      if (value.greaterThan(0)) {
+        const inventoryAcct = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_INVENTORY,
+          em,
+        );
+        const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
+          em,
+          companyId,
+          ACCT_INVENTORY_ADJUSTMENT,
+        );
+        const amount = value.toFixed(4);
+        const increase = variance.greaterThan(0);
+        const lines = increase
+          ? [
+              { accountId: inventoryAcct.id, debit: amount, credit: '0' },
+              { accountId: adjustmentAcct.id, debit: '0', credit: amount },
+            ]
+          : [
+              { accountId: adjustmentAcct.id, debit: amount, credit: '0' },
+              { accountId: inventoryAcct.id, debit: '0', credit: amount },
+            ];
+        const entry = await this.posting.createEntry(em, {
+          companyId,
+          createdBy: userId,
+          date: adj.date,
+          memo: `Inventory adjustment ${item.sku} (${dto.reason})`,
+          status: 'posted',
+          lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
+          sourceType: 'inventory_adjustment',
+          sourceId: adj.id,
+        });
+        adj.journalEntryId = entry.id;
+        await adjRepo.save(adj);
+      }
+
       return { item, adjustment: adj, movement: move };
     });
   }

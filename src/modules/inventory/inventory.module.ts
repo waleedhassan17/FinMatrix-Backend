@@ -10,6 +10,8 @@ import { PhysicalCount } from './entities/physical-count.entity';
 import { PhysicalCountLine } from './entities/physical-count-line.entity';
 import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
+import { AccountsModule } from '../accounts/accounts.module';
+import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { InventoryController } from './inventory.controller';
       PhysicalCount,
       PhysicalCountLine,
     ]),
+    AccountsModule,
+    JournalEntriesModule,
   ],
   providers: [InventoryService],
   controllers: [InventoryController],

@@ -2,6 +2,10 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, ParseUUIDPipe, Patc
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { TaxService } from './tax.service';
 import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
@@ -77,9 +81,10 @@ export class TaxController {
   @Roles('admin')
   createPayment(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateTaxPaymentDto,
   ) {
-    return this.svc.createPayment(companyId, dto);
+    return this.svc.createPayment(companyId, dto, user.id);
   }
 
   @Get('liability')
