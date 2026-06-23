@@ -7,12 +7,13 @@ import {
   AuthenticatedUser,
 } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { TaxService } from './tax.service';
 import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
 
 @ApiTags('Tax')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('taxes')
 export class TaxController {
   constructor(private readonly svc: TaxService) {}

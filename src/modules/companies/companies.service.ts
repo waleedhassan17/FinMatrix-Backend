@@ -147,6 +147,7 @@ export class CompaniesService {
       ...(dto.homeCurrency !== undefined ? { homeCurrency: dto.homeCurrency } : {}),
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
       ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
+      ...(dto.booksLockedUntil !== undefined ? { booksLockedUntil: dto.booksLockedUntil } : {}),
     });
     return this.companyRepo.save(company);
   }

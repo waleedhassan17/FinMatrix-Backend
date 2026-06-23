@@ -93,6 +93,10 @@ export class Company extends BaseEntity {
   @Column({ type: 'boolean', default: false, name: 'setup_completed' })
   setupCompleted!: boolean;
 
+  // Period lock: postings dated on/before this are rejected (FinMatrixGuide §6.4).
+  @Column({ type: 'date', nullable: true, name: 'books_locked_until' })
+  booksLockedUntil!: string | null;
+
   @OneToMany(() => UserCompany, (uc) => uc.company)
   memberships!: UserCompany[];
 }

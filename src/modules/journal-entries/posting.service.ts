@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { EntityManager } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Account } from '../accounts/entities/account.entity';
+import { Company } from '../companies/entities/company.entity';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { JournalEntry } from './entities/journal-entry.entity';
 import { JournalEntryLine } from './entities/journal-entry-line.entity';
@@ -52,6 +53,30 @@ export class PostingService {
    * Uses a locking SELECT to avoid race conditions when multiple entries
    * are posted concurrently.
    */
+  /**
+   * Period lock (FinMatrixGuide §6.4): reject any posting dated on/before the
+   * company's closed-books date. Enforced centrally here so EVERY document type
+   * (invoice, bill, payment, PO receipt, inventory, tax, manual journal, voids)
+   * is covered automatically.
+   */
+  private async assertPeriodOpen(
+    manager: EntityManager,
+    companyId: string,
+    date: string,
+  ): Promise<void> {
+    const company = await manager.findOne(Company, {
+      where: { id: companyId },
+      select: { id: true, booksLockedUntil: true },
+    });
+    const lock = company?.booksLockedUntil;
+    if (lock && date <= lock) {
+      throw new BadRequestException({
+        code: 'PERIOD_LOCKED',
+        message: `The accounting period is closed through ${lock}. Postings dated on or before that date are not allowed.`,
+      });
+    }
+  }
+
   async nextJournalReference(
     manager: EntityManager,
     companyId: string,
@@ -76,6 +101,12 @@ export class PostingService {
         code: 'INSUFFICIENT_LINES',
         message: 'Journal entry must have at least 2 lines',
       });
+    }
+
+    // A posted entry hits the ledger — enforce the period lock. Drafts don't
+    // post, so they may be created in a locked period and posted once reopened.
+    if (input.status === 'posted') {
+      await this.assertPeriodOpen(manager, input.companyId, input.date);
     }
 
     // Validate line shape + fetch accounts
@@ -195,6 +226,7 @@ export class PostingService {
         message: 'Only draft entries can be posted',
       });
     }
+    await this.assertPeriodOpen(manager, companyId, entry.date);
     let totalDebits = new Decimal(0);
     let totalCredits = new Decimal(0);
     for (const l of entry.lines) {

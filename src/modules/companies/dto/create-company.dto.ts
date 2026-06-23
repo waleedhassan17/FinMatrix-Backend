@@ -101,6 +101,12 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional()
   @IsBoolean()
   setupCompleted?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Close the books up to this date (YYYY-MM-DD); blocks postings on/before it. Send null to reopen.',
+  })
+  @IsOptional()
+  booksLockedUntil?: string | null;
 }
 
 export class JoinCompanyDto {

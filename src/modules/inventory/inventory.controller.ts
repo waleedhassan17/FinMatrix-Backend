@@ -15,6 +15,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { InventoryService } from './inventory.service';
 import {
   CreateInventoryItemDto,
@@ -28,7 +29,7 @@ import {
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('inventory')
 export class InventoryController {
   constructor(private readonly svc: InventoryService) {}
