@@ -20,6 +20,11 @@ import { toDecimal } from '../../common/utils/money.util';
 import { formatPurchaseOrderRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { BillsService } from '../bills/bills.service';
+import { PostingService } from '../journal-entries/posting.service';
+import { AccountsService } from '../accounts/accounts.service';
+import { ACCT_GRNI, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { PurchaseOrderStatus } from '../../types';
 
 @Injectable()
@@ -27,6 +32,8 @@ export class PurchaseOrdersService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly bills: BillsService,
+    private readonly posting: PostingService,
+    private readonly accounts: AccountsService,
     @InjectRepository(PurchaseOrder)
     private readonly repo: Repository<PurchaseOrder>,
   ) {}
@@ -137,6 +144,7 @@ export class PurchaseOrdersService {
 
   async receive(
     companyId: string,
+    userId: string,
     id: string,
     dto: ReceivePurchaseOrderDto,
   ): Promise<PurchaseOrder> {
@@ -148,7 +156,14 @@ export class PurchaseOrdersService {
       if (!po) {
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'PO not found' });
       }
+      const itemRepo = manager.getRepository(InventoryItem);
+      const moveRepo = manager.getRepository(InventoryMovement);
       const lineMap = new Map(po.lines.map((l) => [l.id, l]));
+
+      // Total inventory value received in this call → DR Inventory / CR GRNI.
+      let inventoryValue = new Decimal(0);
+      const today = new Date().toISOString().slice(0, 10);
+
       for (const rl of dto.lines) {
         const line = lineMap.get(rl.lineId);
         if (!line) {
@@ -164,9 +179,68 @@ export class PurchaseOrdersService {
             message: `Cannot receive more than ordered (${line.orderedQty})`,
           });
         }
+        // receivedQty is absolute; raise stock only by the newly-received delta
+        // so repeated receive calls never double-count.
+        const delta = q.minus(toDecimal(line.receivedQty));
         line.receivedQty = q.toFixed(4);
         await manager.save(line);
+
+        // Inventory accrual (FinMatrixGuide §3.3): only item-linked lines raise
+        // stock; non-inventory purchases (services) hit expense when billed.
+        if (line.itemId && !delta.isZero()) {
+          const item = await itemRepo.findOne({
+            where: { id: line.itemId, companyId },
+          });
+          if (item) {
+            const newQty = toDecimal(item.quantityOnHand).plus(delta);
+            item.quantityOnHand = newQty.toFixed(4);
+            await itemRepo.save(item);
+            inventoryValue = inventoryValue.plus(delta.times(toDecimal(line.unitCost)));
+            await moveRepo.save(
+              moveRepo.create({
+                companyId,
+                itemId: item.id,
+                date: today,
+                type: 'receipt',
+                quantityChange: delta.toFixed(4),
+                balanceAfter: newQty.toFixed(4),
+                reference: po.poNumber,
+                sourceType: 'purchase_order',
+                sourceId: po.id,
+                createdBy: userId,
+              }),
+            );
+          }
+        }
       }
+
+      if (inventoryValue.greaterThan(0)) {
+        const inventoryAcct = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_INVENTORY,
+          manager,
+        );
+        const grni = await this.accounts.getOrCreateSystemAccount(
+          manager,
+          companyId,
+          ACCT_GRNI,
+        );
+        const amount = inventoryValue.toFixed(4);
+        await this.posting.createEntry(manager, {
+          companyId,
+          createdBy: userId,
+          date: today,
+          memo: `Goods received — PO ${po.poNumber}`,
+          status: 'posted',
+          lines: [
+            { accountId: inventoryAcct.id, debit: amount, credit: '0', lineOrder: 0 },
+            { accountId: grni.id, debit: '0', credit: amount, lineOrder: 1 },
+          ],
+          sourceType: 'po_receipt',
+          sourceId: po.id,
+        });
+      }
+
       po.status = this.deriveStatus(po.lines);
       await manager.save(po);
       return po;
@@ -195,6 +269,16 @@ export class PurchaseOrdersService {
         });
       }
 
+      // Billing a received PO (FinMatrixGuide §3.4): inventory lines were already
+      // accrued to Inventory via GRNI on receipt, so the bill debits GRNI to
+      // clear it (no second inventory hit). Non-inventory lines are direct
+      // expenses and debit their chosen expense account.
+      const grni = await this.accounts.getOrCreateSystemAccount(
+        manager,
+        companyId,
+        ACCT_GRNI,
+      );
+
       const bill = await this.bills.create(companyId, userId, {
         vendorId: po.vendorId,
         billNumber: dto.billNumber,
@@ -203,7 +287,7 @@ export class PurchaseOrdersService {
         memo: `Created from PO ${po.poNumber}`,
         status: 'open',
         lines: received.map((l) => ({
-          accountId: l.accountId ?? dto.defaultAccountId,
+          accountId: l.itemId ? grni.id : l.accountId ?? dto.defaultAccountId,
           description: l.description,
           amount: toDecimal(l.receivedQty).times(toDecimal(l.unitCost)).toFixed(4),
           taxRate: l.taxRate,

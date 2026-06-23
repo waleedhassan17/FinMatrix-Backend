@@ -71,10 +71,11 @@ export class PurchaseOrdersController {
   @HttpCode(200)
   receive(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('poId', ParseUUIDPipe) poId: string,
     @Body() dto: ReceivePurchaseOrderDto,
   ) {
-    return this.service.receive(companyId, poId, dto);
+    return this.service.receive(companyId, user.id, poId, dto);
   }
 
   @Post(':poId/create-bill')
