@@ -58,7 +58,7 @@ export class ReportsService {
               COALESCE(SUM(g.debit::numeric), 0) AS dr,
               COALESCE(SUM(g.credit::numeric), 0) AS cr
        FROM accounts a
-       LEFT JOIN general_ledger_entries g
+       LEFT JOIN general_ledger g
          ON g.account_id = a.id AND g.company_id = $1
          AND g.date >= $2 AND g.date <= $3
        WHERE a.company_id = $1
