@@ -32,60 +32,124 @@ export class ReportsService {
   }
 
   // ── Profit & Loss ────────────────────────────────────────────────
+  /**
+   * GL movements grouped by account within a date range, joined to the chart of
+   * accounts. This is the single ledger-derived source the financial statements
+   * (P&L, Balance Sheet, Trial Balance) compute from — never document tables —
+   * so every number traces back to a posted journal entry (FinMatrixGuide §5.2).
+   */
+  private async glByAccount(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<
+    {
+      accountNumber: string;
+      accountName: string;
+      type: string;
+      subType: string;
+      dr: string;
+      cr: string;
+    }[]
+  > {
+    return this.dataSource.query(
+      `SELECT a.account_number AS "accountNumber", a.name AS "accountName",
+              a.type AS "type", a.sub_type AS "subType",
+              COALESCE(SUM(g.debit::numeric), 0) AS dr,
+              COALESCE(SUM(g.credit::numeric), 0) AS cr
+       FROM accounts a
+       LEFT JOIN general_ledger_entries g
+         ON g.account_id = a.id AND g.company_id = $1
+         AND g.date >= $2 AND g.date <= $3
+       WHERE a.company_id = $1
+       GROUP BY a.id, a.account_number, a.name, a.type, a.sub_type
+       ORDER BY a.account_number`,
+      [companyId, startDate, endDate],
+    );
+  }
+
+  private isCogs(row: { accountNumber: string; subType: string }): boolean {
+    return row.subType === 'Cost of Goods' || row.accountNumber.startsWith('5');
+  }
+
+  // ── Profit & Loss (ledger-derived) ───────────────────────────────
   async profitLoss(companyId: string, startDate: string, endDate: string) {
     const s = startDate || '1970-01-01';
     const e = endDate || '2999-12-31';
-    const revenue = await this.sum('invoices', 'total', companyId, 'invoice_date', s, e);
-    const purchases = await this.sum('bills', 'total', companyId, 'bill_date', s, e);
-    // Distributor model: ~70% of purchases = COGS, ~30% = operating expenses
-    const cogs = r2(purchases * 0.7);
-    const expenses = r2(purchases * 0.3);
+    const rows = await this.glByAccount(companyId, s, e);
+
+    let revenue = 0;
+    let cogs = 0;
+    let expenses = 0;
+    for (const row of rows) {
+      const dr = num(row.dr);
+      const cr = num(row.cr);
+      if (row.type === 'revenue') revenue += cr - dr;
+      else if (row.type === 'expense') {
+        const amt = dr - cr;
+        if (this.isCogs(row)) cogs += amt;
+        else expenses += amt;
+      }
+    }
     const grossProfit = r2(revenue - cogs);
     const netIncome = r2(grossProfit - expenses);
     return {
       range: { startDate: s, endDate: e },
       comparisonRange: null,
       revenue: r2(revenue),
-      cogs,
+      cogs: r2(cogs),
       grossProfit,
-      expenses,
+      expenses: r2(expenses),
       netIncome,
     };
   }
 
-  // ── Balance Sheet (derived from documents, no GL needed) ─────────
+  // ── Balance Sheet (ledger-derived, as of date) ───────────────────
   async balanceSheet(companyId: string, asOfDate: string) {
     const asOf = asOfDate || new Date().toISOString().slice(0, 10);
-    const ar = await this.dataSource.query(
-      `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft')`, [companyId]);
-    const ap = await this.dataSource.query(
-      `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft')`, [companyId]);
-    const inv = await this.dataSource.query(
-      `SELECT COALESCE(SUM(quantity_on_hand::numeric * unit_cost::numeric),0) AS v FROM inventory_items WHERE company_id=$1`, [companyId]);
-    const collected = await this.dataSource.query(
-      `SELECT COALESCE(SUM(amount_paid::numeric),0) AS v FROM invoices WHERE company_id=$1`, [companyId]);
-    const paidOut = await this.dataSource.query(
-      `SELECT COALESCE(SUM(amount_paid::numeric),0) AS v FROM bills WHERE company_id=$1`, [companyId]);
+    const rows = await this.glByAccount(companyId, '1970-01-01', asOf);
 
-    const arVal = num(ar[0]?.v);
-    const apVal = num(ap[0]?.v);
-    const invVal = num(inv[0]?.v);
-    const cash = r2(num(collected[0]?.v) - num(paidOut[0]?.v));
+    const assets: { accountCode: string; accountName: string; amount: number }[] = [];
+    const liabilities: { accountCode: string; accountName: string; amount: number }[] = [];
+    const equity: { accountCode: string; accountName: string; amount: number }[] = [];
+    let revenue = 0;
+    let expense = 0;
 
-    const assets = [
-      { accountId: 'cash', accountCode: '1000', accountName: 'Cash & Bank', amount: r2(cash) },
-      { accountId: 'ar', accountCode: '1100', accountName: 'Accounts Receivable', amount: r2(arVal) },
-      { accountId: 'inv', accountCode: '1200', accountName: 'Inventory', amount: r2(invVal) },
-    ];
+    for (const row of rows) {
+      const dr = num(row.dr);
+      const cr = num(row.cr);
+      const line = (amount: number) => ({
+        accountCode: row.accountNumber,
+        accountName: row.accountName,
+        amount: r2(amount),
+      });
+      if (row.type === 'asset') {
+        const amt = dr - cr;
+        if (Math.abs(amt) > 0.0001) assets.push(line(amt));
+      } else if (row.type === 'liability') {
+        const amt = cr - dr;
+        if (Math.abs(amt) > 0.0001) liabilities.push(line(amt));
+      } else if (row.type === 'equity') {
+        const amt = cr - dr;
+        if (Math.abs(amt) > 0.0001) equity.push(line(amt));
+      } else if (row.type === 'revenue') revenue += cr - dr;
+      else if (row.type === 'expense') expense += dr - cr;
+    }
+
+    // Current-period earnings (revenue − expense) roll into equity so the sheet
+    // balances (FinMatrixGuide §5.3); shown as a Retained Earnings line.
+    const netIncome = r2(revenue - expense);
+    if (Math.abs(netIncome) > 0.0001) {
+      equity.push({
+        accountCode: '3100',
+        accountName: 'Net Income (current period)',
+        amount: netIncome,
+      });
+    }
+
     const totalAssets = r2(assets.reduce((a, x) => a + x.amount, 0));
-    const liabilities = [
-      { accountId: 'ap', accountCode: '2000', accountName: 'Accounts Payable', amount: r2(apVal) },
-    ];
-    const totalLiabilities = r2(apVal);
-    const equityAmt = r2(totalAssets - totalLiabilities);
-    const equity = [
-      { accountId: 'equity', accountCode: '3000', accountName: "Owner's Equity & Retained Earnings", amount: equityAmt },
-    ];
+    const totalLiabilities = r2(liabilities.reduce((a, x) => a + x.amount, 0));
+    const totalEquity = r2(equity.reduce((a, x) => a + x.amount, 0));
     return {
       asOfDate: asOf,
       assets,
@@ -93,8 +157,8 @@ export class ReportsService {
       equity,
       totalAssets,
       totalLiabilities,
-      totalEquity: equityAmt,
-      isBalanced: true,
+      totalEquity,
+      isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
     };
   }
 
@@ -313,40 +377,27 @@ export class ReportsService {
   // Credits = AP + Sales Revenue + Opening Equity
   // Opening Equity is back-solved so the sheet balances and closing equity
   // (opening + net income) equals the Balance Sheet equity.
+  // ── Trial Balance (ledger-derived) ───────────────────────────────
   async trialBalance(companyId: string, startDate: string, endDate: string) {
     const s = startDate || '1970-01-01';
     const e = endDate || '2999-12-31';
-    const revenue = await this.sum('invoices', 'total', companyId, 'invoice_date', s, e);
-    const purchases = await this.sum('bills', 'total', companyId, 'bill_date', s, e);
-    const cogs = r2(purchases * 0.7);
-    const opex = r2(purchases * 0.3);
+    const glRows = await this.glByAccount(companyId, s, e);
 
-    const q = async (sql: string) => num((await this.dataSource.query(sql, [companyId]))[0]?.v);
-    const ar = await q(`SELECT COALESCE(SUM(balance::numeric),0) v FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft')`);
-    const ap = await q(`SELECT COALESCE(SUM(balance::numeric),0) v FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft')`);
-    const inv = await q(`SELECT COALESCE(SUM(quantity_on_hand::numeric * unit_cost::numeric),0) v FROM inventory_items WHERE company_id=$1`);
-    const collected = await q(`SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM invoices WHERE company_id=$1`);
-    const paidOut = await q(`SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM bills WHERE company_id=$1`);
+    // Each account's net (debits − credits) lands in its natural column. Since
+    // every posted entry is balanced, Σ net across accounts is 0, so the column
+    // totals are equal — the trial balance always balances to the paisa.
+    const rows = glRows
+      .map((row) => {
+        const net = num(row.dr) - num(row.cr);
+        return {
+          accountCode: row.accountNumber,
+          accountName: row.accountName,
+          debit: net >= 0 ? r2(net) : 0,
+          credit: net < 0 ? r2(-net) : 0,
+        };
+      })
+      .filter((row) => row.debit > 0 || row.credit > 0);
 
-    const cash = r2(collected - paidOut);
-    const closingEquity = r2(cash + ar + inv - ap);
-    const netIncome = r2(revenue - cogs - opex);
-    const openingEquity = r2(closingEquity - netIncome);
-
-    // Split a signed amount onto its natural side, flipping negatives for clarity.
-    const dr = (amt: number) => ({ debit: amt >= 0 ? r2(amt) : 0, credit: amt < 0 ? r2(-amt) : 0 });
-    const cr = (amt: number) => ({ debit: amt < 0 ? r2(-amt) : 0, credit: amt >= 0 ? r2(amt) : 0 });
-
-    const rows = [
-      { accountCode: '1000', accountName: 'Cash & Bank', ...dr(cash) },
-      { accountCode: '1100', accountName: 'Accounts Receivable', ...dr(ar) },
-      { accountCode: '1200', accountName: 'Inventory', ...dr(inv) },
-      { accountCode: '2000', accountName: 'Accounts Payable', ...cr(ap) },
-      { accountCode: '3000', accountName: "Owner's Equity", ...cr(openingEquity) },
-      { accountCode: '4000', accountName: 'Sales Revenue', ...cr(revenue) },
-      { accountCode: '5000', accountName: 'Cost of Goods Sold', ...dr(cogs) },
-      { accountCode: '6000', accountName: 'Operating Expenses', ...dr(opex) },
-    ];
     const totalDebits = r2(rows.reduce((a, x) => a + x.debit, 0));
     const totalCredits = r2(rows.reduce((a, x) => a + x.credit, 0));
     return {
