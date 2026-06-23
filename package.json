@@ -27,6 +27,8 @@
     "seed:demo": "ts-node -r tsconfig-paths/register src/database/seeds/demo-data.seed.ts",
     "seed:metromatrix": "ts-node -r tsconfig-paths/register src/database/seeds/metromatrix.seed.ts",
     "seed:metromatrix:prod": "node dist/database/seeds/metromatrix.seed.js",
+    "seed:metromatrix:ledger": "ts-node -r tsconfig-paths/register src/database/seeds/metromatrix-ledger.seed.ts",
+    "seed:metromatrix:ledger:prod": "node dist/database/seeds/metromatrix-ledger.seed.js",
     "seed:superadmin": "ts-node -r tsconfig-paths/register src/database/seeds/super-admin-seed.ts",
     "seed:superadmin:prod": "node dist/database/seeds/super-admin-seed.js"
   },
