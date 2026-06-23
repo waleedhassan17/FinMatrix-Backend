@@ -53,7 +53,9 @@ export class CreateBillFromPoDto {
   @ApiProperty() @IsString() billNumber!: string;
   @ApiProperty() @IsDateString() billDate!: string;
   @ApiProperty() @IsDateString() dueDate!: string;
-  @ApiProperty() @IsUUID() defaultAccountId!: string;
+  // Optional: only needed as a fallback expense account for non-inventory
+  // lines. Pure-inventory PO bills debit GRNI and don't require it.
+  @ApiPropertyOptional() @IsOptional() @IsUUID() defaultAccountId?: string;
 }
 
 export class ListPurchaseOrdersQueryDto {
