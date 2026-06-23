@@ -134,43 +134,19 @@ export class InventoryService {
 
       // Per FinMatrixGuide §3.8: an adjustment moves stock AND the Inventory GL
       // together, recording the difference as a shrinkage/adjustment expense.
-      //   decrease (variance < 0): DR Inventory Adjustment (6400) / CR Inventory (1200)
-      //   increase (variance > 0): DR Inventory (1200) / CR Inventory Adjustment (6400)
-      // Value uses the item's unit cost. Zero-value moves post nothing.
-      const value = variance.abs().times(toDecimal(item.unitCost));
-      if (value.greaterThan(0)) {
-        const inventoryAcct = await this.accounts.getByNumberOrFail(
-          companyId,
-          ACCT_INVENTORY,
-          em,
-        );
-        const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
-          em,
-          companyId,
-          ACCT_INVENTORY_ADJUSTMENT,
-        );
-        const amount = value.toFixed(4);
-        const increase = variance.greaterThan(0);
-        const lines = increase
-          ? [
-              { accountId: inventoryAcct.id, debit: amount, credit: '0' },
-              { accountId: adjustmentAcct.id, debit: '0', credit: amount },
-            ]
-          : [
-              { accountId: adjustmentAcct.id, debit: amount, credit: '0' },
-              { accountId: inventoryAcct.id, debit: '0', credit: amount },
-            ];
-        const entry = await this.posting.createEntry(em, {
-          companyId,
-          createdBy: userId,
-          date: adj.date,
-          memo: `Inventory adjustment ${item.sku} (${dto.reason})`,
-          status: 'posted',
-          lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
-          sourceType: 'inventory_adjustment',
-          sourceId: adj.id,
-        });
-        adj.journalEntryId = entry.id;
+      const je = await this.postInventoryAdjustmentJe(
+        em,
+        companyId,
+        userId,
+        item,
+        variance,
+        adj.date,
+        `Inventory adjustment ${item.sku} (${dto.reason})`,
+        'inventory_adjustment',
+        adj.id,
+      );
+      if (je) {
+        adj.journalEntryId = je;
         await adjRepo.save(adj);
       }
 
@@ -200,21 +176,25 @@ export class InventoryService {
       const lines = dto.lines.map((l) => lineRepo.create({ transferId: xfer.id, itemId: l.itemId, quantity: l.quantity }));
       await lineRepo.save(lines);
 
-      // movements
+      // A stock transfer relocates an item between locations. quantityOnHand is
+      // tracked per item (not per location), and all inventory rolls up to the
+      // same Inventory GL account, so a transfer is asset-to-asset with NO P&L
+      // impact and NO change to total quantity on hand (FinMatrixGuide §3.8).
+      // We update the item's location and record audit movements only.
       for (const l of dto.lines) {
         const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
         if (!item) continue;
-        const q = toDecimal(item.quantityOnHand);
-        const newQty = q.minus(toDecimal(l.quantity));
-        item.quantityOnHand = newQty.toFixed(4);
-        await itemRepo.save(item);
+        if (dto.toLocationId) {
+          item.locationId = dto.toLocationId;
+          await itemRepo.save(item);
+        }
         await moveRepo.save(moveRepo.create({
           companyId,
           itemId: l.itemId,
           date: dto.transferDate,
           type: 'transfer',
-          quantityChange: '-' + l.quantity,
-          balanceAfter: newQty.toFixed(4),
+          quantityChange: '0',
+          balanceAfter: item.quantityOnHand,
           reference: dto.reference ?? null,
           sourceType: 'stock_transfer',
           sourceId: xfer.id,
@@ -233,12 +213,16 @@ export class InventoryService {
     return this.xferRepo.save(xfer);
   }
 
-  // Physical Count
+  // Physical Count — records the count AND reconciles stock to the counted
+  // quantity, posting the variance as an inventory adjustment (FinMatrixGuide
+  // §3.8: stock and the Inventory GL move together; shrinkage is expensed).
   async createCount(companyId: string, dto: CreatePhysicalCountDto, userId: string) {
     return this.dataSource.transaction(async (em) => {
       const countRepo = em.getRepository(PhysicalCount);
       const lineRepo = em.getRepository(PhysicalCountLine);
       const itemRepo = em.getRepository(InventoryItem);
+      const moveRepo = em.getRepository(InventoryMovement);
+      const adjRepo = em.getRepository(InventoryAdjustment);
 
       const count = countRepo.create({ companyId, countDate: dto.countDate, notes: dto.notes ?? null, createdBy: userId });
       await countRepo.save(count);
@@ -247,7 +231,8 @@ export class InventoryService {
       for (const l of dto.lines) {
         const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
         const sysQty = item ? item.quantityOnHand : '0';
-        const variance = toDecimal(l.countedQty).minus(toDecimal(sysQty));
+        const counted = toDecimal(l.countedQty);
+        const variance = counted.minus(toDecimal(sysQty));
         const line = lineRepo.create({
           countId: count.id,
           itemId: l.itemId,
@@ -255,10 +240,110 @@ export class InventoryService {
           countedQty: l.countedQty,
           variance: variance.toFixed(4),
         });
+
+        // Reconcile stock + post the GL adjustment for any non-zero variance.
+        if (item && !variance.isZero()) {
+          item.quantityOnHand = counted.toFixed(4);
+          await itemRepo.save(item);
+
+          const adj = await adjRepo.save(
+            adjRepo.create({
+              companyId,
+              itemId: item.id,
+              date: dto.countDate,
+              previousQty: sysQty,
+              newQty: counted.toFixed(4),
+              variance: variance.toFixed(4),
+              reason: 'physical_count',
+              notes: `Physical count ${dto.countDate}`,
+              createdBy: userId,
+            }),
+          );
+          await moveRepo.save(
+            moveRepo.create({
+              companyId,
+              itemId: item.id,
+              date: dto.countDate,
+              type: 'adjustment',
+              quantityChange: variance.toFixed(4),
+              balanceAfter: counted.toFixed(4),
+              description: 'Physical count adjustment',
+              sourceType: 'physical_count',
+              sourceId: count.id,
+              createdBy: userId,
+            }),
+          );
+          const je = await this.postInventoryAdjustmentJe(
+            em,
+            companyId,
+            userId,
+            item,
+            variance,
+            dto.countDate,
+            `Physical count ${item.sku}`,
+            'physical_count',
+            count.id,
+          );
+          if (je) {
+            adj.journalEntryId = je;
+            await adjRepo.save(adj);
+          }
+          (line as any).adjustmentId = adj.id;
+        }
         lines.push(await lineRepo.save(line));
       }
       return { count, lines };
     });
+  }
+
+  /**
+   * Post the balanced inventory-adjustment journal entry for a quantity
+   * variance valued at the item's unit cost. Returns the entry id (or null
+   * when the value is zero). Shared by adjust() and physical count.
+   *   decrease (variance < 0): DR Inventory Adjustment 6400 / CR Inventory 1200
+   *   increase (variance > 0): DR Inventory 1200 / CR Inventory Adjustment 6400
+   */
+  private async postInventoryAdjustmentJe(
+    em: import('typeorm').EntityManager,
+    companyId: string,
+    userId: string,
+    item: InventoryItem,
+    variance: Decimal,
+    date: string,
+    memo: string,
+    sourceType: string,
+    sourceId: string,
+  ): Promise<string | null> {
+    const value = variance.abs().times(toDecimal(item.unitCost));
+    if (value.lessThanOrEqualTo(0)) return null;
+    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
+      em,
+      companyId,
+      ACCT_INVENTORY_ADJUSTMENT,
+    );
+    const amount = value.toFixed(4);
+    const increase = variance.greaterThan(0);
+    const lines = increase
+      ? [
+          { accountId: inventoryAcct.id, debit: amount, credit: '0' },
+          { accountId: adjustmentAcct.id, debit: '0', credit: amount },
+        ]
+      : [
+          { accountId: adjustmentAcct.id, debit: amount, credit: '0' },
+          { accountId: inventoryAcct.id, debit: '0', credit: amount },
+        ];
+    const entry = await this.posting.createEntry(em, {
+      companyId,
+      createdBy: userId,
+      date,
+      memo,
+      status: 'posted',
+      lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
+      sourceType,
+      sourceId,
+    });
+    return entry.id;
   }
 
   // Movements
