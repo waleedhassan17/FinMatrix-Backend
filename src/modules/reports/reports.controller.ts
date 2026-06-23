@@ -4,11 +4,12 @@ import { Response } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { ReportsService } from './reports.service';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly svc: ReportsService) {}
