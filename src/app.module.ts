@@ -12,6 +12,8 @@ import mailConfig from './config/mail.config';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
+import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
+import { IdempotencyRecord } from './common/interceptors/idempotency-record.entity';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
 import { AppController } from './app.controller';
@@ -81,6 +83,7 @@ import { MailModule } from './modules/mail/mail.module';
     }),
     MailModule,
     UsersModule,
+    TypeOrmModule.forFeature([IdempotencyRecord]),
     AuthModule,
     CompaniesModule,
     AccountsModule,
@@ -138,6 +141,9 @@ import { MailModule } from './modules/mail/mail.module';
   providers: [
     AppService,
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
+    // Idempotency is registered first → it is the OUTER interceptor, so it
+    // captures and replays the fully-enveloped response (FinMatrixGuide §6.3).
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },

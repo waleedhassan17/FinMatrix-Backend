@@ -1,4 +1,4 @@
-import { Column, Entity, Index, OneToMany } from 'typeorm';
+import { Column, Entity, Index, OneToMany, VersionColumn } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { BillStatus } from '../../../types';
 import { BillLineItem } from './bill-line-item.entity';
@@ -44,6 +44,11 @@ export class Bill extends BaseCompanyEntity {
 
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
+
+  // Optimistic lock (FinMatrixGuide §6.7): prevents concurrent bill payments
+  // from both reading the same balance and overpaying.
+  @VersionColumn()
+  version!: number;
 
   @OneToMany(() => BillLineItem, (l) => l.bill, { cascade: true })
   lines!: BillLineItem[];

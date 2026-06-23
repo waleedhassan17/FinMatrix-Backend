@@ -1,4 +1,4 @@
-import { Column, Entity, Index, OneToMany } from 'typeorm';
+import { Column, Entity, Index, OneToMany, VersionColumn } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
 import { InvoiceLineItem } from './invoice-line-item.entity';
@@ -61,6 +61,11 @@ export class Invoice extends BaseCompanyEntity {
 
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
+
+  // Optimistic lock (FinMatrixGuide §6.7): blocks two concurrent payments from
+  // both reading the same balance and overpaying — the second save fails.
+  @VersionColumn()
+  version!: number;
 
   @OneToMany(() => InvoiceLineItem, (li) => li.invoice, { cascade: true })
   lines!: InvoiceLineItem[];
