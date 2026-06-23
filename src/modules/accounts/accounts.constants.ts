@@ -18,7 +18,13 @@ export const ACCOUNT_SUB_TYPES: Record<AccountType, readonly string[]> = {
     'Notes Payable',
     'Other Liability',
   ],
-  equity: ['Owner Equity', 'Retained Earnings', 'Owner Draws', 'Other Equity'],
+  equity: [
+    'Owner Equity',
+    'Retained Earnings',
+    'Owner Draws',
+    'Opening Balance Equity',
+    'Other Equity',
+  ],
   revenue: ['Sales', 'Service', 'Interest', 'Other Revenue'],
   expense: [
     'Cost of Goods',
@@ -62,6 +68,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     subType: 'Accounts Payable',
   },
   {
+    accountNumber: '2050',
+    name: 'Inventory Received Not Billed (GRNI)',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+  {
     accountNumber: '2300',
     name: 'Sales Tax Payable',
     type: 'liability',
@@ -73,6 +85,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     name: 'Retained Earnings',
     type: 'equity',
     subType: 'Retained Earnings',
+  },
+  {
+    accountNumber: '3900',
+    name: 'Opening Balance Equity',
+    type: 'equity',
+    subType: 'Opening Balance Equity',
   },
   { accountNumber: '4000', name: 'Sales Revenue', type: 'revenue', subType: 'Sales' },
   {
@@ -103,7 +121,31 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
 export const ACCT_CASH = '1000';
 export const ACCT_BANK = '1010';
 export const ACCT_AR = '1100';
+export const ACCT_INVENTORY = '1200';
+export const ACCT_GRNI = '2050';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
+export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
+
+/**
+ * System accounts that auto-posting depends on. Resolved by number and
+ * lazily created for companies whose chart predates these additions
+ * (see AccountsService.getOrCreateSystemAccount).
+ */
+export const SYSTEM_ACCOUNT_DEFS: Record<
+  string,
+  { name: string; type: AccountType; subType: string }
+> = {
+  [ACCT_OPENING_BALANCE_EQUITY]: {
+    name: 'Opening Balance Equity',
+    type: 'equity',
+    subType: 'Opening Balance Equity',
+  },
+  [ACCT_GRNI]: {
+    name: 'Inventory Received Not Billed (GRNI)',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+};

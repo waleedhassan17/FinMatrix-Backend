@@ -15,6 +15,10 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { AccountsService } from './accounts.service';
 import {
   CreateAccountDto,
@@ -57,9 +61,10 @@ export class AccountsController {
   @ApiOperation({ summary: 'Create a new account.' })
   create(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateAccountDto,
   ) {
-    return this.accounts.create(companyId, dto);
+    return this.accounts.create(companyId, dto, user.id);
   }
 
   @Patch(':accountId')

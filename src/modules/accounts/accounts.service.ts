@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, EntityManager, ILike, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, ILike, Repository } from 'typeorm';
 import { Account } from './entities/account.entity';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import {
@@ -13,10 +13,15 @@ import {
   ListAccountsQueryDto,
   UpdateAccountDto,
 } from './dto/account.dto';
-import { isValidSubType } from './accounts.constants';
+import {
+  ACCT_OPENING_BALANCE_EQUITY,
+  isValidSubType,
+  SYSTEM_ACCOUNT_DEFS,
+} from './accounts.constants';
 import { AccountType } from '../../types';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
+import { PostingService } from '../journal-entries/posting.service';
 
 @Injectable()
 export class AccountsService {
@@ -25,6 +30,8 @@ export class AccountsService {
     private readonly repo: Repository<Account>,
     @InjectRepository(GeneralLedgerEntry)
     private readonly glRepo: Repository<GeneralLedgerEntry>,
+    private readonly dataSource: DataSource,
+    private readonly posting: PostingService,
   ) {}
 
   async list(companyId: string, query: ListAccountsQueryDto) {
@@ -76,7 +83,11 @@ export class AccountsService {
     return { account, recentEntries };
   }
 
-  async create(companyId: string, dto: CreateAccountDto): Promise<Account> {
+  async create(
+    companyId: string,
+    dto: CreateAccountDto,
+    userId: string,
+  ): Promise<Account> {
     if (!isValidSubType(dto.type, dto.subType)) {
       throw new BadRequestException({
         code: 'INVALID_SUB_TYPE',
@@ -95,20 +106,117 @@ export class AccountsService {
     if (dto.parentId) {
       await this.getById(companyId, dto.parentId);
     }
-    const opening = dto.openingBalance ?? '0';
-    const account = this.repo.create({
+
+    const opening = toDecimal(dto.openingBalance ?? '0');
+
+    // Account creation AND its opening-balance journal entry must be atomic:
+    // either both land or neither does, so the Trial Balance never drifts.
+    return this.dataSource.transaction(async (manager) => {
+      const account = manager.create(Account, {
+        companyId,
+        accountNumber: dto.accountNumber,
+        name: dto.name,
+        type: dto.type,
+        subType: dto.subType,
+        parentId: dto.parentId ?? null,
+        description: dto.description ?? null,
+        openingBalance: opening.toFixed(4),
+        // balance starts at 0; the opening journal posting (below) moves it
+        // to the opening amount via the normal balance-update path so the
+        // GL, account balance, and offsetting equity all stay consistent.
+        balance: '0',
+        isActive: true,
+      });
+      await manager.save(account);
+
+      // Per §3.12: a non-zero opening balance MUST post an offsetting entry
+      // to Opening Balance Equity (3900) in the same transaction. Without
+      // this the books are unbalanced. The OBE account itself is exempt
+      // (it would offset to itself) and is seeded with no opening balance.
+      if (
+        !opening.isZero() &&
+        dto.accountNumber !== ACCT_OPENING_BALANCE_EQUITY
+      ) {
+        const obe = await this.getOrCreateSystemAccount(
+          manager,
+          companyId,
+          ACCT_OPENING_BALANCE_EQUITY,
+        );
+
+        // Debit-normal accounts (asset/expense) increase with a debit; a
+        // positive opening balance debits the account and credits OBE.
+        // Credit-normal accounts (liability/equity/revenue) do the reverse.
+        const debitNormal =
+          account.type === 'asset' || account.type === 'expense';
+        const magnitude = opening.abs().toFixed(4);
+        const accountDebits = debitNormal === opening.greaterThan(0);
+
+        const accountLine = accountDebits
+          ? { accountId: account.id, debit: magnitude, credit: '0' }
+          : { accountId: account.id, debit: '0', credit: magnitude };
+        const obeLine = accountDebits
+          ? { accountId: obe.id, debit: '0', credit: magnitude }
+          : { accountId: obe.id, debit: magnitude, credit: '0' };
+
+        await this.posting.createEntry(manager, {
+          companyId,
+          createdBy: userId,
+          date: new Date().toISOString().slice(0, 10),
+          memo: `Opening balance for ${account.accountNumber} ${account.name}`,
+          status: 'posted',
+          lines: [accountLine, obeLine].map((l, i) => ({ ...l, lineOrder: i })),
+          sourceType: 'opening_balance',
+          sourceId: account.id,
+        });
+      }
+
+      return manager.findOneOrFail(Account, {
+        where: { id: account.id, companyId },
+      });
+    });
+  }
+
+  /**
+   * Resolve a system account by number, creating it (active) if a company's
+   * chart predates it. Used for Opening Balance Equity / GRNI which auto-
+   * posting depends on but older companies may not have.
+   */
+  async getOrCreateSystemAccount(
+    manager: EntityManager,
+    companyId: string,
+    accountNumber: string,
+  ): Promise<Account> {
+    const repo = manager.getRepository(Account);
+    const existing = await repo.findOne({
+      where: { companyId, accountNumber },
+    });
+    if (existing) {
+      if (!existing.isActive) {
+        existing.isActive = true;
+        await repo.save(existing);
+      }
+      return existing;
+    }
+    const def = SYSTEM_ACCOUNT_DEFS[accountNumber];
+    if (!def) {
+      throw new NotFoundException({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `System account ${accountNumber} is not defined`,
+      });
+    }
+    const created = repo.create({
       companyId,
-      accountNumber: dto.accountNumber,
-      name: dto.name,
-      type: dto.type,
-      subType: dto.subType,
-      parentId: dto.parentId ?? null,
-      description: dto.description ?? null,
-      openingBalance: opening,
-      balance: opening,
+      accountNumber,
+      name: def.name,
+      type: def.type,
+      subType: def.subType,
+      parentId: null,
+      description: null,
+      openingBalance: '0',
+      balance: '0',
       isActive: true,
     });
-    return this.repo.save(account);
+    return repo.save(created);
   }
 
   async update(
