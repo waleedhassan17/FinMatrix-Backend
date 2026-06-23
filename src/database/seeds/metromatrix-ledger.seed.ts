@@ -165,7 +165,10 @@ async function run() {
   const cashAcct = await acctRepo.findOneByOrFail({ companyId: cid, accountNumber: ACCT_CASH });
   const bankAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: ACCT_BANK });
   const cashId = cashAcct.id;
-  const bankId = bankAcct?.id ?? cashId;
+  // Route both collections and payments through one cash account so the demo
+  // balance sheet shows a single, positive cash figure (no overdrawn account).
+  void bankAcct;
+  const bankId = cashId;
   const rentAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6000' });
   const utilAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6100' });
 
