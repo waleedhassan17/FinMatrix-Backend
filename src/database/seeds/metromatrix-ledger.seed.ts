@@ -134,12 +134,12 @@ async function run() {
   const itemRepo = ds.getRepository(InventoryItem);
   const items = await itemRepo.save(
     [
-      { sku: 'CO-HABIB-5L', name: 'Habib Cooking Oil 5L', cat: 'Cooking Oil', cost: '1850', sell: '2100' },
-      { sku: 'DET-SURF-1KG', name: 'Surf Excel 1KG', cat: 'Detergent', cost: '420', sell: '520' },
-      { sku: 'CO-SUFI-5L', name: 'Sufi Cooking Oil 5L', cat: 'Cooking Oil', cost: '1780', sell: '2050' },
-      { sku: 'DW-LIQ-500', name: 'Dishwash Liquid 500ml', cat: 'Cleaners', cost: '180', sell: '260' },
-      { sku: 'GHEE-DALDA-1', name: 'Dalda Ghee 1KG', cat: 'Ghee', cost: '950', sell: '1180' },
-      { sku: 'RICE-BAS-5', name: 'Basmati Rice 5KG', cat: 'Grocery', cost: '1400', sell: '1700' },
+      { sku: 'CO-HABIB-5L', name: 'Habib Cooking Oil 5L', cat: 'Cooking Oil', cost: '1850', sell: '2400' },
+      { sku: 'DET-SURF-1KG', name: 'Surf Excel 1KG', cat: 'Detergent', cost: '420', sell: '560' },
+      { sku: 'CO-SUFI-5L', name: 'Sufi Cooking Oil 5L', cat: 'Cooking Oil', cost: '1780', sell: '2300' },
+      { sku: 'DW-LIQ-500', name: 'Dishwash Liquid 500ml', cat: 'Cleaners', cost: '180', sell: '250' },
+      { sku: 'GHEE-DALDA-1', name: 'Dalda Ghee 1KG', cat: 'Ghee', cost: '950', sell: '1250' },
+      { sku: 'RICE-BAS-5', name: 'Basmati Rice 5KG', cat: 'Grocery', cost: '1400', sell: '1850' },
     ].map((p) =>
       itemRepo.create({
         companyId: cid, sku: p.sku, name: p.name, description: null, category: p.cat,
@@ -176,28 +176,31 @@ async function run() {
   for (let m = 11; m >= 0; m--) {
     const base = new Date(now.getFullYear(), now.getMonth() - m, 1);
     const day = (n: number) => ymd(new Date(base.getFullYear(), base.getMonth(), n));
+    const mlabel = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`;
+
+    // Each month trades in two products. We BUY ~ what we SELL (plus a small
+    // buffer) so inventory and cash stay healthy and the year is profitable.
+    const A = items[m % items.length];
+    const B = items[(m + 1) % items.length];
 
     // 3a. Purchase order → receive → bill → pay (stocks inventory via GRNI).
     try {
-      const poItems = [items[m % items.length], items[(m + 1) % items.length], items[(m + 2) % items.length]];
       const po = await pos.create(cid, {
         vendorId: vendors[m % vendors.length].id,
         orderDate: day(2),
-        lines: poItems.map((it) => ({
-          itemId: it.id, description: it.name, orderedQty: '60', unitCost: it.unitCost, taxRate: '0',
+        lines: [A, B].map((it) => ({
+          itemId: it.id, description: it.name, orderedQty: '30', unitCost: it.unitCost, taxRate: '0',
         })),
       } as any);
       const poFull = await pos.getById(cid, po.id).catch(() => null);
       const lines = (poFull as any)?.lines ?? (po as any).lines ?? [];
       await pos.receive(cid, uid, po.id, {
-        lines: lines.map((l: any) => ({ lineId: l.id, receivedQty: '60' })),
+        lines: lines.map((l: any) => ({ lineId: l.id, receivedQty: '30' })),
       } as any);
       const { billId } = await pos.createBill(cid, uid, po.id, {
-        billNumber: `PB-${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`,
-        billDate: day(5), dueDate: day(25),
+        billNumber: `PB-${mlabel}`, billDate: day(5), dueDate: day(25),
       } as any);
       poCount++; billCount++;
-      // Pay the PO bill in full.
       const bill = await ds.getRepository(Bill).findOneBy({ id: billId });
       if (bill) {
         await bills.pay(cid, uid, {
@@ -208,23 +211,21 @@ async function run() {
       }
     } catch (e: any) { errors++; console.warn(`   PO ${m} failed:`, e.message); }
 
-    // 3b. Two sales invoices, payment received on most.
-    for (let k = 0; k < 2; k++) {
+    // 3b. Three sales invoices selling those two products (27 of each ≤ 30 in
+    // stock), payment collected on ~90%.
+    for (let k = 0; k < 3; k++) {
       try {
         const cust = customers[(m + k) % customers.length];
-        const it1 = items[(m + k) % items.length];
-        const it2 = items[(m + k + 3) % items.length];
         const inv = await invoices.create(cid, uid, {
-          customerId: cust.id, invoiceDate: day(8 + k * 6), dueDate: day(28),
+          customerId: cust.id, invoiceDate: day(8 + k * 5), dueDate: day(28),
           status: 'sent', discountType: 'none', discountValue: '0',
           lines: [
-            { description: it1.name, quantity: String(8 + k * 2), unitPrice: it1.sellingPrice, taxRate: '17', itemId: it1.id },
-            { description: it2.name, quantity: '5', unitPrice: it2.sellingPrice, taxRate: '17', itemId: it2.id },
+            { description: A.name, quantity: '9', unitPrice: A.sellingPrice, taxRate: '17', itemId: A.id },
+            { description: B.name, quantity: '9', unitPrice: B.sellingPrice, taxRate: '17', itemId: B.id },
           ],
         } as any);
         invCount++;
-        // Collect payment on ~75% of invoices.
-        if ((m + k) % 4 !== 0) {
+        if ((m * 3 + k) % 10 !== 0) {
           const full = await ds.getRepository(Invoice).findOneBy({ id: inv.id });
           if (full) {
             await payments.receive(cid, uid, {
@@ -238,15 +239,14 @@ async function run() {
       } catch (e: any) { errors++; console.warn(`   INV ${m}-${k} failed:`, e.message); }
     }
 
-    // 3c. One direct expense bill (rent or utilities), paid.
+    // 3c. One modest direct expense bill (rent or utilities), paid.
     try {
       const exp = m % 2 === 0 ? rentAcct : utilAcct;
       if (exp) {
         const eb = await bills.create(cid, uid, {
           vendorId: vendors[(m + 1) % vendors.length].id,
-          billNumber: `EXP-${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`,
-          billDate: day(3), dueDate: day(18), status: 'open',
-          lines: [{ accountId: exp.id, description: m % 2 === 0 ? 'Monthly rent' : 'Utilities', amount: '45000', taxRate: '0' }],
+          billNumber: `EXP-${mlabel}`, billDate: day(3), dueDate: day(18), status: 'open',
+          lines: [{ accountId: exp.id, description: m % 2 === 0 ? 'Monthly rent' : 'Utilities', amount: '12000', taxRate: '0' }],
         } as any);
         billCount++;
         const ebFull = await ds.getRepository(Bill).findOneBy({ id: eb.id });
