@@ -9,6 +9,8 @@ import Decimal from 'decimal.js';
 import { Invoice, DiscountType } from './entities/invoice.entity';
 import { InvoiceLineItem } from './entities/invoice-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import {
   CreateInvoiceDto,
   InvoiceLineDto,
@@ -30,6 +32,8 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import {
   ACCT_AR,
+  ACCT_COGS,
+  ACCT_INVENTORY,
   ACCT_SALES_REVENUE,
   ACCT_TAX_PAYABLE,
 } from '../accounts/accounts.constants';
@@ -44,6 +48,7 @@ interface LineCalc {
   lineTotal: string;
   baseAmount: string;
   accountId: string | null;
+  itemId: string | null;
   lineOrder: number;
 }
 
@@ -230,6 +235,7 @@ export class InvoicesService {
           taxAmount: l.taxAmount,
           lineTotal: l.lineTotal,
           accountId: l.accountId,
+          itemId: l.itemId,
           lineOrder: l.lineOrder,
         }),
       );
@@ -279,6 +285,7 @@ export class InvoicesService {
           unitPrice: l.unitPrice,
           taxRate: l.taxRate,
           accountId: l.accountId ?? undefined,
+          itemId: l.itemId ?? undefined,
         }));
         const dType = dto.discountType ?? invoice.discountType;
         const dValue = dto.discountValue ?? invoice.discountValue;
@@ -303,6 +310,7 @@ export class InvoicesService {
               taxAmount: l.taxAmount,
               lineTotal: l.lineTotal,
               accountId: l.accountId,
+              itemId: l.itemId,
               lineOrder: l.lineOrder,
             }),
           );
@@ -392,7 +400,11 @@ export class InvoicesService {
           ACCT_TAX_PAYABLE,
           manager,
         );
-        const lines = [
+        const lines: {
+          accountId: string;
+          debit: string;
+          credit: string;
+        }[] = [
           { accountId: ar.id, debit: '0', credit: invoice.total },
           {
             accountId: rev.id,
@@ -401,8 +413,27 @@ export class InvoicesService {
               .toFixed(4),
             credit: '0',
           },
-          { accountId: tax.id, debit: invoice.taxAmount, credit: '0' },
         ];
+        // Only include the tax line when there is tax — a zero/zero line is
+        // rejected by the posting engine (was a latent bug for tax-free invoices).
+        if (toDecimal(invoice.taxAmount).greaterThan(0)) {
+          lines.push({ accountId: tax.id, debit: invoice.taxAmount, credit: '0' });
+        }
+
+        // Reverse the cost side and restock (FinMatrixGuide §3.13): COGS↓,
+        // Inventory↑, quantity on hand restored.
+        const cogsTotal = await this.postInvoiceCogs(manager, invoice, userId, true);
+        if (cogsTotal.greaterThan(0)) {
+          const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
+          const inventory = await this.accounts.getByNumberOrFail(
+            companyId,
+            ACCT_INVENTORY,
+            manager,
+          );
+          lines.push({ accountId: cogs.id, debit: '0', credit: cogsTotal.toFixed(4) });
+          lines.push({ accountId: inventory.id, debit: cogsTotal.toFixed(4), credit: '0' });
+        }
+
         await this.posting.createEntry(manager, {
           companyId,
           createdBy: userId,
@@ -410,6 +441,8 @@ export class InvoicesService {
           memo: `Void invoice ${invoice.invoiceNumber}: ${dto.reason}`,
           status: 'posted',
           lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
+          sourceType: 'invoice_void',
+          sourceId: invoice.id,
           reversalOfId: invoice.journalEntryId,
         });
 
@@ -515,6 +548,7 @@ export class InvoicesService {
         lineTotal: lineTotal.toFixed(4),
         baseAmount: base.toFixed(4),
         accountId: l.accountId ?? null,
+        itemId: l.itemId ?? null,
         lineOrder: i,
       });
     });
@@ -581,6 +615,38 @@ export class InvoicesService {
       });
     }
 
+    // Cost entry (FinMatrixGuide §3.1): for each line linked to an inventory
+    // item, recognise COGS at the item's unit cost, relieve Inventory, reduce
+    // quantity on hand and record an inventory movement — all in this same
+    // transaction. Lines with no itemId (free-text/service lines) post no cost.
+    const cogsTotal = await this.postInvoiceCogs(manager, invoice, userId, false);
+    if (cogsTotal.greaterThan(0)) {
+      const cogs = await this.accounts.getByNumberOrFail(
+        invoice.companyId,
+        ACCT_COGS,
+        manager,
+      );
+      const inventory = await this.accounts.getByNumberOrFail(
+        invoice.companyId,
+        ACCT_INVENTORY,
+        manager,
+      );
+      lines.push({
+        accountId: cogs.id,
+        description: 'Cost of goods sold',
+        debit: cogsTotal.toFixed(4),
+        credit: '0',
+        lineOrder: lines.length,
+      });
+      lines.push({
+        accountId: inventory.id,
+        description: 'Inventory relieved',
+        debit: '0',
+        credit: cogsTotal.toFixed(4),
+        lineOrder: lines.length,
+      });
+    }
+
     const entry = await this.posting.createEntry(manager, {
       companyId: invoice.companyId,
       createdBy: userId,
@@ -593,6 +659,57 @@ export class InvoicesService {
     });
     invoice.journalEntryId = entry.id;
     await manager.save(invoice);
+  }
+
+  /**
+   * Apply (or reverse) the inventory side of an invoice: relieve/restore stock
+   * for each item-linked line and record movements. Returns the total cost
+   * value moved, used to build the COGS/Inventory journal lines.
+   *
+   * @param reverse false on issue (qty↓, COGS recognised); true on void
+   *                (qty↑, COGS reversed).
+   */
+  private async postInvoiceCogs(
+    manager: EntityManager,
+    invoice: Invoice,
+    userId: string,
+    reverse: boolean,
+  ): Promise<Decimal> {
+    const itemRepo = manager.getRepository(InventoryItem);
+    const moveRepo = manager.getRepository(InventoryMovement);
+    let total = new Decimal(0);
+    for (const line of invoice.lines ?? []) {
+      if (!line.itemId) continue;
+      const item = await itemRepo.findOne({
+        where: { id: line.itemId, companyId: invoice.companyId },
+      });
+      if (!item) continue;
+      const qty = toDecimal(line.quantity);
+      const cost = qty.times(toDecimal(item.unitCost));
+      if (cost.lessThanOrEqualTo(0)) continue;
+      total = total.plus(cost);
+
+      const onHand = toDecimal(item.quantityOnHand);
+      const newQty = reverse ? onHand.plus(qty) : onHand.minus(qty);
+      item.quantityOnHand = newQty.toFixed(4);
+      await itemRepo.save(item);
+
+      await moveRepo.save(
+        moveRepo.create({
+          companyId: invoice.companyId,
+          itemId: item.id,
+          date: invoice.invoiceDate,
+          type: reverse ? 'return' : 'sale',
+          quantityChange: (reverse ? qty : qty.negated()).toFixed(4),
+          balanceAfter: newQty.toFixed(4),
+          reference: invoice.invoiceNumber,
+          sourceType: reverse ? 'invoice_void' : 'invoice',
+          sourceId: invoice.id,
+          createdBy: userId,
+        }),
+      );
+    }
+    return total;
   }
 
   private async incrementCustomerBalance(

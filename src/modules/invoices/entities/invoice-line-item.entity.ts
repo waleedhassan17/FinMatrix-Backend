@@ -38,6 +38,11 @@ export class InvoiceLineItem {
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })
   accountId!: string | null;
 
+  // Optional link to an inventory item. When set, posting the invoice records a
+  // COGS/Inventory cost entry and reduces quantity on hand (FinMatrixGuide §3.1).
+  @Column({ type: 'uuid', nullable: true, name: 'item_id' })
+  itemId!: string | null;
+
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;
 

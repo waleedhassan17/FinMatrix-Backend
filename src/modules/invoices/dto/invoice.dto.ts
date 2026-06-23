@@ -24,6 +24,10 @@ export class InvoiceLineDto {
   @IsOptional()
   @IsUUID()
   accountId?: string;
+  @ApiPropertyOptional({ description: 'Inventory item id — drives COGS posting' })
+  @IsOptional()
+  @IsUUID()
+  itemId?: string;
 }
 
 export class CreateInvoiceDto {
