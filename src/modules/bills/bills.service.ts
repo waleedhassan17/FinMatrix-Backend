@@ -282,8 +282,11 @@ export class BillsService {
 
       const apps: BillPaymentApplication[] = [];
       for (const app of dto.applications) {
+        // Lock the bill row (SELECT ... FOR UPDATE) so concurrent payments
+        // cannot both read the same balance and over-apply (M1).
         const bill = await manager.findOne(Bill, {
           where: { id: app.billId, companyId },
+          lock: { mode: 'pessimistic_write' },
         });
         if (!bill) {
           throw new NotFoundException({
@@ -372,7 +375,12 @@ export class BillsService {
     billId: string,
     amount: string,
   ): Promise<Bill> {
-    const bill = await manager.findOne(Bill, { where: { id: billId, companyId } });
+    // Lock the bill row so a credit application and a concurrent payment
+    // cannot both consume the same balance (M1).
+    const bill = await manager.findOne(Bill, {
+      where: { id: billId, companyId },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!bill) {
       throw new NotFoundException({
         code: 'BILL_NOT_FOUND',

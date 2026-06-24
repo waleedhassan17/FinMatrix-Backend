@@ -81,8 +81,15 @@ export class PostingService {
     manager: EntityManager,
     companyId: string,
   ): Promise<string> {
-    // pessimistic_write (FOR UPDATE) is not allowed on aggregate queries in
-    // PostgreSQL — use a plain COUNT inside the existing transaction instead.
+    // FOR UPDATE is not allowed on an aggregate (COUNT), so we instead take a
+    // row-level lock on the owning company row first. This serialises journal
+    // reference generation per company: two concurrent postings can no longer
+    // both compute the same COUNT and produce a duplicate JE-XXX reference (M2).
+    await manager.findOne(Company, {
+      where: { id: companyId },
+      lock: { mode: 'pessimistic_write' },
+      select: { id: true },
+    });
     const res = await manager
       .createQueryBuilder(JournalEntry, 'e')
       .select('COUNT(*)', 'count')
@@ -277,12 +284,21 @@ export class PostingService {
       deltas.set(l.accountId, (deltas.get(l.accountId) ?? new Decimal(0)).plus(delta));
     }
 
-    // Apply to account balances
+    // Apply to account balances with an atomic SQL increment instead of a
+    // read-modify-write save(). Concurrent postings touching the same account
+    // can no longer lose an update and drift the cached balance (M3). We read
+    // back the authoritative balance via RETURNING so the GL running-balance
+    // computation below stays consistent.
     for (const [accountId, delta] of deltas) {
       const acc = accountMap.get(accountId)!;
-      const newBalance = toDecimal(acc.balance).plus(delta);
-      acc.balance = newBalance.toFixed(4);
-      await manager.save(acc);
+      const rows = await manager.query(
+        `UPDATE accounts
+           SET balance = (balance::numeric + $1)::numeric(18,4)
+         WHERE id = $2
+         RETURNING balance`,
+        [delta.toFixed(4), accountId],
+      );
+      acc.balance = toDecimal(rows[0].balance).toFixed(4);
     }
 
     // Write GL rows with running balance per account

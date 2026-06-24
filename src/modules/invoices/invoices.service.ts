@@ -482,8 +482,11 @@ export class InvoicesService {
     invoiceId: string,
     amount: string,
   ): Promise<Invoice> {
+    // Lock the invoice row (SELECT ... FOR UPDATE) so concurrent payment
+    // applications cannot both read the same balance and over-apply (M1).
     const invoice = await manager.findOne(Invoice, {
       where: { id: invoiceId, companyId },
+      lock: { mode: 'pessimistic_write' },
     });
     if (!invoice) {
       throw new NotFoundException({
