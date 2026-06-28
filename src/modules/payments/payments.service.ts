@@ -17,14 +17,14 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import {
   addMoney,
   isPositive,
-  moneyEquals,
+  MONEY_TOLERANCE,
   subtractMoney,
   toDecimal,
 } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
-import { ACCT_AR } from '../accounts/accounts.constants';
+import { ACCT_AR, ACCT_BANK, ACCT_CASH } from '../accounts/accounts.constants';
 import { Account } from '../accounts/entities/account.entity';
 
 @Injectable()
@@ -120,17 +120,20 @@ export class PaymentsService {
         });
       }
 
-      // Determine applications
+      // Determine applications. The sum applied to invoices may be LESS than
+      // the payment amount — the unapplied remainder is retained as a customer
+      // credit (the customer's AR balance simply goes negative). It may never
+      // EXCEED the payment amount.
       let applications: PaymentApplicationDto[];
       if (dto.applications && dto.applications.length > 0) {
         const sum = dto.applications.reduce(
           (acc, a) => addMoney(acc, a.amount),
           toDecimal(0),
         );
-        if (!moneyEquals(sum, amount)) {
+        if (sum.greaterThan(amount.plus(MONEY_TOLERANCE))) {
           throw new BadRequestException({
             code: 'INVALID_PAYMENT_APPLICATION',
-            message: `Applications total (${sum.toFixed(4)}) must equal payment amount (${amount.toFixed(4)})`,
+            message: `Applications total (${sum.toFixed(4)}) cannot exceed payment amount (${amount.toFixed(4)})`,
           });
         }
         applications = dto.applications;
@@ -138,15 +141,30 @@ export class PaymentsService {
         applications = await this.autoApply(companyId, customer.id, amount.toFixed(4));
       }
 
-      // Validate bank/cash account
-      const bank = await manager.findOne(Account, {
-        where: { id: dto.bankAccountId, companyId },
-      });
-      if (!bank) {
-        throw new NotFoundException({
-          code: 'ACCOUNT_NOT_FOUND',
-          message: 'Bank/Cash account not found',
+      // Resolve the GL account to debit. If the caller supplied an explicit
+      // account, validate it; otherwise fall back to the company's Cash account
+      // (cash payments) or Business Checking account (everything else) so the
+      // mobile client doesn't have to know GL account ids.
+      let bank: Account;
+      if (dto.bankAccountId) {
+        const found = await manager.findOne(Account, {
+          where: { id: dto.bankAccountId, companyId },
         });
+        if (!found) {
+          throw new NotFoundException({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: 'Bank/Cash account not found',
+          });
+        }
+        bank = found;
+      } else {
+        const defaultNumber =
+          dto.paymentMethod === 'cash' ? ACCT_CASH : ACCT_BANK;
+        bank = await this.accounts.getByNumberOrFail(
+          companyId,
+          defaultNumber,
+          manager,
+        );
       }
 
       const payment = manager.create(Payment, {
@@ -236,12 +254,8 @@ export class PaymentsService {
       apps.push({ invoiceId: inv.id, amount: apply.toFixed(4) });
       remaining = remaining.minus(apply);
     }
-    if (isPositive(remaining)) {
-      throw new BadRequestException({
-        code: 'PAYMENT_EXCEEDS_BALANCE',
-        message: `No unpaid invoices available to absorb ${remaining.toFixed(4)}`,
-      });
-    }
+    // Any amount left after the oldest-first sweep is intentionally retained as
+    // a customer credit (negative AR balance) rather than rejected.
     return apps;
   }
 }

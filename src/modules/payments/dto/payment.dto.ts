@@ -30,9 +30,14 @@ export class ReceivePaymentDto {
   @ApiProperty() @IsDateString() paymentDate!: string;
   @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
   @ApiProperty({ example: '100' }) @IsNumberString() amount!: string;
-  @ApiProperty({ description: 'Bank/Cash account id to debit' })
+  @ApiPropertyOptional({
+    description:
+      'Bank/Cash GL account id to debit. If omitted, defaults to the ' +
+      "company's Cash account (for the 'cash' method) or Business Checking account.",
+  })
+  @IsOptional()
   @IsUUID()
-  bankAccountId!: string;
+  bankAccountId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() memo?: string;
 
