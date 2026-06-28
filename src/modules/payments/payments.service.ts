@@ -174,7 +174,7 @@ export class PaymentsService {
         paymentMethod: dto.paymentMethod,
         reference: dto.reference ?? null,
         amount: amount.toFixed(4),
-        bankAccountId: dto.bankAccountId,
+        bankAccountId: bank.id,
         memo: dto.memo ?? null,
         journalEntryId: null,
       });
