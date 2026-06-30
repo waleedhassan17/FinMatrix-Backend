@@ -453,61 +453,99 @@ export class ReportsService {
     };
   }
 
-  // ── Cash Flow Statement (period) ─────────────────────────────────
-  // Derived from invoice/bill cash collected & paid (same source as the
-  // Balance Sheet cash), so ending cash ties to the Balance Sheet.
+  // ── Cash Flow Statement (period, ledger-derived direct method) ───
+  // Derived from the actual posted ledger movements on the Cash/Bank accounts,
+  // by the date the cash truly moved. A customer payment therefore lands on its
+  // payment date (not the invoice date), a bill payment on its payment date,
+  // and tax/payroll/manual cash entries are all captured automatically. This is
+  // the QuickBooks "direct method" and ties exactly to the Balance Sheet cash
+  // (FinMatrixGuide §5.4): ending cash == Σ(debit − credit) on cash accounts
+  // through endDate.
   async cashFlow(companyId: string, startDate: string, endDate: string) {
     const s = startDate || '1970-01-01';
     const e = endDate || new Date().toISOString().slice(0, 10);
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-    // Cash collected on invoices / paid on bills, by the document date.
-    const sumPaid = async (table: 'invoices' | 'bills', dateCol: string, from: string, to: string) =>
-      num((await this.dataSource.query(
-        `SELECT COALESCE(SUM(amount_paid::numeric),0) v FROM ${table}
-         WHERE company_id=$1 AND status NOT IN ('void','draft') AND ${dateCol} BETWEEN $2 AND $3`,
-        [companyId, from, to]))[0]?.v);
+    // Cash/Bank accounts (sub_type), so custom user-added bank accounts count too.
+    const cashFilter = `a.sub_type IN ('Cash','Bank')`;
 
-    const receipts = await sumPaid('invoices', 'invoice_date', s, e);
-    const supplierPaid = await sumPaid('bills', 'bill_date', s, e);
+    // Beginning cash = net cash movement on cash/bank accounts before the period.
+    const beginRows = await this.dataSource.query(
+      `SELECT COALESCE(SUM(g.debit::numeric - g.credit::numeric),0) AS v
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND ${cashFilter} AND g.date < $2`,
+      [companyId, s],
+    );
+    const beginningCash = r2(num(beginRows[0]?.v));
 
-    const operating = {
-      lines: [
-        { label: 'Cash received from customers', amount: r2(receipts) },
-        { label: 'Cash paid to suppliers', amount: r2(-supplierPaid) },
-      ],
-      total: r2(receipts - supplierPaid),
+    // In-period cash movement grouped by the source document type, so the
+    // statement shows meaningful lines (receipts, supplier payments, tax, …).
+    const srcRows = await this.dataSource.query(
+      `SELECT g.source_type AS src,
+              COALESCE(SUM(g.debit::numeric),0)  AS inflow,
+              COALESCE(SUM(g.credit::numeric),0) AS outflow
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND ${cashFilter} AND g.date >= $2 AND g.date <= $3
+        GROUP BY g.source_type`,
+      [companyId, s, e],
+    );
+
+    // source_type → statement line + section. Unmapped types fall into
+    // operating "Other cash movements" so the statement always ties out.
+    type Section = 'operating' | 'investing' | 'financing';
+    const META: Record<string, { label: string; section: Section }> = {
+      payment: { label: 'Cash received from customers', section: 'operating' },
+      invoice: { label: 'Cash received from customers', section: 'operating' },
+      credit_memo: { label: 'Customer refunds', section: 'operating' },
+      credit_memo_refund: { label: 'Customer refunds', section: 'operating' },
+      bill_payment: { label: 'Cash paid to suppliers', section: 'operating' },
+      bill: { label: 'Cash paid to suppliers', section: 'operating' },
+      vendor_credit: { label: 'Vendor refunds received', section: 'operating' },
+      payroll: { label: 'Payroll paid', section: 'operating' },
+      tax_payment: { label: 'Tax payments', section: 'operating' },
+      opening_balance: { label: 'Opening balance / owner funding', section: 'financing' },
+      journal_entry: { label: 'Other cash movements', section: 'operating' },
     };
-    const investing = { lines: [] as { label: string; amount: number }[], total: 0 };
-    const financing = { lines: [] as { label: string; amount: number }[], total: 0 };
-    const netChange = r2(operating.total + investing.total + financing.total);
 
-    // Cash on hand before the period start = beginning balance.
-    const dayBefore = new Date(new Date(s).getTime() - 86400000).toISOString().slice(0, 10);
-    const recBefore = await sumPaid('invoices', 'invoice_date', '1970-01-01', dayBefore);
-    const supBefore = await sumPaid('bills', 'bill_date', '1970-01-01', dayBefore);
-    const beginningCash = r2(recBefore - supBefore);
+    const buckets: Record<Section, Map<string, number>> = {
+      operating: new Map(),
+      investing: new Map(),
+      financing: new Map(),
+    };
+    for (const row of srcRows) {
+      const net = num(row.inflow) - num(row.outflow);
+      if (Math.abs(net) < 0.005) continue;
+      const meta = META[row.src as string] ?? { label: 'Other cash movements', section: 'operating' as Section };
+      const bucket = buckets[meta.section];
+      bucket.set(meta.label, (bucket.get(meta.label) ?? 0) + net);
+    }
+
+    const toSection = (m: Map<string, number>) => {
+      const lines = Array.from(m.entries())
+        .map(([label, amount]) => ({ label, amount: r2(amount) }))
+        .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+      return { lines, total: r2(lines.reduce((t, l) => t + l.amount, 0)) };
+    };
+    const operating = toSection(buckets.operating);
+    const investing = toSection(buckets.investing);
+    const financing = toSection(buckets.financing);
+
+    const netChange = r2(operating.total + investing.total + financing.total);
     const endingCash = r2(beginningCash + netChange);
 
-    // Monthly operating-cash trend within range.
-    const recM = await this.dataSource.query(
-      `SELECT EXTRACT(YEAR FROM invoice_date::date)::int yr, EXTRACT(MONTH FROM invoice_date::date)::int mo, SUM(amount_paid::numeric) v
-       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') AND invoice_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
-    const payM = await this.dataSource.query(
-      `SELECT EXTRACT(YEAR FROM bill_date::date)::int yr, EXTRACT(MONTH FROM bill_date::date)::int mo, SUM(amount_paid::numeric) v
-       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') AND bill_date BETWEEN $2 AND $3 GROUP BY yr,mo`, [companyId, s, e]);
-    const inMap = new Map<string, number>();
-    for (const row of recM) inMap.set(`${row.yr}-${row.mo}`, num(row.v));
-    const outMap = new Map<string, number>();
-    for (const row of payM) outMap.set(`${row.yr}-${row.mo}`, num(row.v));
-    const keys = Array.from(new Set([...inMap.keys(), ...outMap.keys()])).sort((a, b) => {
-      const [ay, am] = a.split('-').map(Number); const [by, bm] = b.split('-').map(Number);
-      return ay - by || am - bm;
-    });
-    const monthlyTrend = keys.slice(-12).map((k) => {
-      const [yr, mo] = k.split('-').map(Number);
-      return { label: `${MONTH_LABELS[mo - 1]} ${String(yr).slice(2)}`, value: r2((inMap.get(k) ?? 0) - (outMap.get(k) ?? 0)) };
-    });
+    // Monthly net-cash trend within range.
+    const trendRows = await this.dataSource.query(
+      `SELECT EXTRACT(YEAR FROM g.date)::int AS yr, EXTRACT(MONTH FROM g.date)::int AS mo,
+              COALESCE(SUM(g.debit::numeric - g.credit::numeric),0) AS v
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND ${cashFilter} AND g.date >= $2 AND g.date <= $3
+        GROUP BY yr, mo ORDER BY yr, mo`,
+      [companyId, s, e],
+    );
+    const monthlyTrend = trendRows.slice(-12).map((r: any) => ({
+      label: `${MONTH_LABELS[r.mo - 1]} ${String(r.yr).slice(2)}`,
+      value: r2(num(r.v)),
+    }));
 
     return {
       range: { startDate: s, endDate: e },

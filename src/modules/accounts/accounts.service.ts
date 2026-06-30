@@ -14,11 +14,37 @@ import {
   UpdateAccountDto,
 } from './dto/account.dto';
 import {
+  ACCT_AP,
+  ACCT_AR,
+  ACCT_BANK,
+  ACCT_CASH,
+  ACCT_COGS,
+  ACCT_GRNI,
+  ACCT_INVENTORY,
+  ACCT_INVENTORY_ADJUSTMENT,
   ACCT_OPENING_BALANCE_EQUITY,
+  ACCT_SALES_REVENUE,
+  ACCT_TAX_PAYABLE,
   isValidSubType,
   SYSTEM_ACCOUNT_DEFS,
 } from './accounts.constants';
 import { AccountType } from '../../types';
+
+// Canonical accounts that auto-posting (invoices, payments, bills, tax,
+// payroll, inventory) depends on — these may never be deleted.
+const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
+  ACCT_CASH,
+  ACCT_BANK,
+  ACCT_AR,
+  ACCT_INVENTORY,
+  ACCT_GRNI,
+  ACCT_AP,
+  ACCT_TAX_PAYABLE,
+  ACCT_OPENING_BALANCE_EQUITY,
+  ACCT_SALES_REVENUE,
+  ACCT_COGS,
+  ACCT_INVENTORY_ADJUSTMENT,
+]);
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -301,7 +327,38 @@ export class AccountsService {
 
   async delete(companyId: string, id: string) {
     const account = await this.getById(companyId, id);
-    await this.repo.softRemove(account);
+
+    // 1. System accounts underpin every auto-posting path — never deletable.
+    if (SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber)) {
+      throw new BadRequestException({
+        code: 'SYSTEM_ACCOUNT_PROTECTED',
+        message: `Account ${account.accountNumber} (${account.name}) is a system account required by automatic posting and cannot be deleted. Deactivate it instead if it is unused.`,
+      });
+    }
+
+    // 2. An account with posted ledger history must never be hard-deleted —
+    //    that would orphan journal/GL references and break the financial
+    //    statements. QuickBooks-style: deactivate (make inactive) instead.
+    const glCount = await this.glRepo.count({ where: { companyId, accountId: id } });
+    if (glCount > 0) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_HAS_TRANSACTIONS',
+        message:
+          'This account has posted transactions and cannot be deleted. Deactivate it instead to hide it from new entries while preserving history.',
+      });
+    }
+
+    // 3. Block deletion while sub-accounts still point at it.
+    const childCount = await this.repo.count({ where: { companyId, parentId: id } });
+    if (childCount > 0) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_HAS_CHILDREN',
+        message: 'This account has sub-accounts. Reassign or remove them first.',
+      });
+    }
+
+    // Safe to hard-delete: no postings, no children, not a system account.
+    await this.repo.remove(account);
     return { id, deleted: true };
   }
 
