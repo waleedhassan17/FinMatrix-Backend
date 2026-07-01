@@ -89,9 +89,9 @@ export class SuperAdminService {
       activeSubscriptions,
     ] = await Promise.all([
       this.companyRepo.count(),
-      countByStatuses(['pending', 'pending_approval']),
+      countByStatuses(['pending', 'pending_approval', 'email_verified', 'unverified']),
       countByStatuses(['active', 'approved']),
-      this.companyRepo.count({ where: { status: 'suspended' } }),
+      countByStatuses(['inactive', 'suspended']),
       this.companyRepo.count({ where: { status: 'rejected' } }),
       this.planRepo.count({ where: { isActive: true } }),
       subCount(false),
@@ -117,6 +117,7 @@ export class SuperAdminService {
         pending: pendingCompanies,
         active: activeCompanies,
         suspended: suspendedCompanies,
+        inactive: suspendedCompanies,
         rejected: rejectedCompanies,
         recentWeek: recentCompanies,
       },
@@ -148,7 +149,11 @@ export class SuperAdminService {
           s: ['active', 'approved'],
         });
       } else if (status === 'pending' || status === 'pending_approval') {
-        qb.where('c.status IN (:...s)', { s: ['pending', 'pending_approval'] });
+        qb.where('c.status IN (:...s)', {
+          s: ['pending', 'pending_approval', 'email_verified', 'unverified'],
+        });
+      } else if (status === 'inactive' || status === 'suspended') {
+        qb.where('c.status IN (:...s)', { s: ['inactive', 'suspended'] });
       } else {
         qb.where('c.status = :s', { s: status });
       }
