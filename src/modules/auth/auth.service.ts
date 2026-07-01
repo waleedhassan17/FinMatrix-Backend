@@ -19,6 +19,7 @@ import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
+import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
@@ -209,14 +210,45 @@ export class AuthService {
       ? 'super_admin'
       : ((membership?.role ?? user.role) as UserRole);
 
-    const tokens = await this.issueTokens(user, companyId, role);
     const company = membership?.company ?? null;
+
+    // Hard gate (Phase1.md): a company account may sign in ONLY when active.
+    // pending/inactive/rejected are blocked here with a specific code so the
+    // client routes to the correct screen (PendingApproval / CompanyRejected /
+    // deactivated). Super-admins and delivery riders are exempt.
+    if (!isSuperAdmin && role !== 'delivery' && company) {
+      const acctStatus = normalizeCompanyStatus(company.status);
+      if (acctStatus !== 'active') {
+        const code =
+          acctStatus === 'rejected'
+            ? 'COMPANY_REJECTED'
+            : acctStatus === 'inactive'
+              ? 'COMPANY_INACTIVE'
+              : 'COMPANY_PENDING';
+        const message =
+          acctStatus === 'rejected'
+            ? 'Your company registration was rejected.'
+            : acctStatus === 'inactive'
+              ? 'Your company account has been deactivated. Contact the administrator.'
+              : 'Your company is awaiting approval. You will be able to sign in once approved.';
+        this.logger.warn(`Login blocked (${acctStatus}): ${dto.email}`);
+        throw new ForbiddenException({
+          code,
+          message,
+          companyStatus: acctStatus,
+          rejectionReason: company.rejectionReason ?? null,
+          email: user.email,
+        });
+      }
+    }
+
+    const tokens = await this.issueTokens(user, companyId, role);
     return {
       user: this.toPublicUser(user, companyId),
       tokens,
       companyId,
       company: company ? { id: company.id, name: company.name, status: company.status } : null,
-      companyStatus: company?.status ?? null,
+      companyStatus: company ? normalizeCompanyStatus(company.status) : null,
     };
   }
 
@@ -461,7 +493,11 @@ export class AuthService {
       company: primary?.company
         ? { id: primary.company.id, name: primary.company.name, status: primary.company.status }
         : null,
-      companyStatus: primary?.company?.status ?? null,
+      // Normalized so the client routes on a stable model; mid-session
+      // deactivation (status → inactive) surfaces here and routes the user out.
+      companyStatus: primary?.company
+        ? normalizeCompanyStatus(primary.company.status)
+        : null,
     };
   }
 

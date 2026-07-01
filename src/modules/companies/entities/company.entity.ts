@@ -93,6 +93,11 @@ export class Company extends BaseEntity {
   @Column({ type: 'boolean', default: false, name: 'setup_completed' })
   setupCompleted!: boolean;
 
+  // Chosen plan (Phase1.md): free | standard | pro. Only 'free' is selectable
+  // for now; the paid tiers are display-only ("coming soon").
+  @Column({ type: 'varchar', length: 16, default: 'free', name: 'subscription_plan' })
+  subscriptionPlan!: string;
+
   // GST/Sales-tax registered: when true, input tax on bills is posted to a
   // recoverable asset (Sales Tax Recoverable 1300) instead of being rolled into
   // the expense/inventory line, so remittance = output tax − input tax

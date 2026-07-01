@@ -235,8 +235,14 @@ export class SuperAdminService {
     const company = await this.companyRepo.findOne({ where: { id: companyId } });
     if (!company) throw new NotFoundException('Company not found');
 
-    // Normalise legacy alias: an admin "activating" a company == approving it.
-    const newStatus = dto.status === 'active' ? COMPANY_STATUS.APPROVED : dto.status;
+    // Normalise onto stored values: "active" == approved (reads as active);
+    // "suspended" (legacy) == "inactive" (deactivated).
+    const newStatus =
+      dto.status === 'active'
+        ? COMPANY_STATUS.APPROVED
+        : dto.status === 'suspended'
+          ? 'inactive'
+          : dto.status;
 
     if (newStatus === COMPANY_STATUS.REJECTED && !dto.rejectionReason) {
       throw new BadRequestException('Rejection reason is required');
