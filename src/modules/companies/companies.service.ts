@@ -148,6 +148,7 @@ export class CompaniesService {
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
       ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
       ...(dto.booksLockedUntil !== undefined ? { booksLockedUntil: dto.booksLockedUntil } : {}),
+      ...(dto.salesTaxRegistered !== undefined ? { salesTaxRegistered: dto.salesTaxRegistered } : {}),
     });
     return this.companyRepo.save(company);
   }

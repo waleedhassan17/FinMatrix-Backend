@@ -46,6 +46,7 @@ import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { InventoryApprovalsModule } from './modules/inventory-approvals/inventory-approvals.module';
 import { ShadowInventoryModule } from './modules/shadow-inventory/shadow-inventory.module';
 import { TaxModule } from './modules/tax/tax.module';
+import { ReconciliationsModule } from './modules/reconciliations/reconciliations.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
@@ -108,6 +109,7 @@ import { MailModule } from './modules/mail/mail.module';
     InventoryApprovalsModule,
     ShadowInventoryModule,
     TaxModule,
+    ReconciliationsModule,
     NotificationsModule,
     SettingsModule,
     ReportsModule,

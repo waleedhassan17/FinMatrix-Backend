@@ -31,4 +31,14 @@ export class GeneralLedgerEntry extends BaseCompanyEntity {
 
   @Column({ type: 'text', nullable: true })
   memo!: string | null;
+
+  // Bank reconciliation (FinMatrix.md §27). `cleared` = ticked as appearing on
+  // a bank statement; `reconciliationId` links the row to a finalised
+  // reconciliation (its "reconciled" marker). Neither posts to the ledger.
+  @Column({ type: 'boolean', default: false })
+  cleared!: boolean;
+
+  @Index()
+  @Column({ type: 'uuid', name: 'reconciliation_id', nullable: true })
+  reconciliationId!: string | null;
 }

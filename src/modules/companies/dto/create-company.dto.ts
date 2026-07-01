@@ -107,6 +107,13 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   })
   @IsOptional()
   booksLockedUntil?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'GST/Sales-tax registered: reclaim input tax on bills to a recoverable asset (1300).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  salesTaxRegistered?: boolean;
 }
 
 export class JoinCompanyDto {

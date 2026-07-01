@@ -12,6 +12,7 @@ import { BillPayment } from './entities/bill-payment.entity';
 import { BillPaymentApplication } from './entities/bill-payment-application.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Company } from '../companies/entities/company.entity';
 import {
   BillLineDto,
   CreateBillDto,
@@ -29,7 +30,7 @@ import {
 } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_AP, ACCT_COGS } from '../accounts/accounts.constants';
+import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { BillStatus } from '../../types';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { formatBillRef } from '../../common/utils/reference-generator.util';
@@ -475,6 +476,21 @@ export class BillsService {
     userId: string,
   ): Promise<void> {
     const ap = await this.accounts.getByNumberOrFail(bill.companyId, ACCT_AP, manager);
+
+    // Input-tax treatment (FinMatrix.md §21). For a GST/sales-tax-registered
+    // business, input tax on purchases is RECOVERABLE — it must sit in a
+    // separate asset (Sales Tax Recoverable 1300), not be rolled into the
+    // expense/inventory line, so remittance = output tax − input tax. For a
+    // non-registered business it is a cost and stays in the line (legacy).
+    const company = await manager
+      .getRepository(Company)
+      .findOne({ where: { id: bill.companyId } });
+    const reclaimInputTax = !!company?.salesTaxRegistered;
+    const totalTax = bill.lines.reduce(
+      (sum, l) => sum.plus(toDecimal(l.taxAmount)),
+      toDecimal('0'),
+    );
+
     const jLines: Array<{
       accountId: string;
       description?: string;
@@ -484,10 +500,30 @@ export class BillsService {
     }> = bill.lines.map((l, i) => ({
       accountId: l.accountId,
       description: l.description,
-      debit: toDecimal(l.amount).plus(toDecimal(l.taxAmount)).toFixed(4),
+      // Registered → net amount only (tax broken out below). Otherwise the
+      // tax-inclusive amount is expensed as before.
+      debit: reclaimInputTax
+        ? toDecimal(l.amount).toFixed(4)
+        : toDecimal(l.amount).plus(toDecimal(l.taxAmount)).toFixed(4),
       credit: '0',
       lineOrder: i,
     }));
+
+    if (reclaimInputTax && totalTax.greaterThan(0)) {
+      const inputTaxAcct = await this.accounts.getOrCreateSystemAccount(
+        manager,
+        bill.companyId,
+        ACCT_INPUT_TAX,
+      );
+      jLines.push({
+        accountId: inputTaxAcct.id,
+        description: `Input tax (recoverable) — Bill ${bill.billNumber}`,
+        debit: totalTax.toFixed(4),
+        credit: '0',
+        lineOrder: jLines.length,
+      });
+    }
+
     jLines.push({
       accountId: ap.id,
       description: `Bill ${bill.billNumber}`,

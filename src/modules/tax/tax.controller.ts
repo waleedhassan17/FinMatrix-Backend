@@ -92,8 +92,11 @@ export class TaxController {
   @Roles('admin', 'staff')
   getLiability(
     @CurrentCompany() companyId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
     @Query('asOfDate') asOfDate: string,
   ) {
-    return this.svc.getLiability(companyId, asOfDate);
+    // FE sends startDate/endDate; asOfDate kept for backwards compatibility.
+    return this.svc.getLiability(companyId, startDate, endDate || asOfDate);
   }
 }

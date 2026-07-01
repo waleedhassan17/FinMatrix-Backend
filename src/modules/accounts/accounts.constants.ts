@@ -62,6 +62,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
   },
   { accountNumber: '1200', name: 'Inventory', type: 'asset', subType: 'Inventory' },
   {
+    accountNumber: '1300',
+    name: 'Sales Tax Recoverable (Input Tax)',
+    type: 'asset',
+    subType: 'Other Asset',
+  },
+  {
     accountNumber: '2000',
     name: 'Accounts Payable',
     type: 'liability',
@@ -128,6 +134,7 @@ export const ACCT_CASH = '1000';
 export const ACCT_BANK = '1010';
 export const ACCT_AR = '1100';
 export const ACCT_INVENTORY = '1200';
+export const ACCT_INPUT_TAX = '1300';
 export const ACCT_GRNI = '2050';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
@@ -159,5 +166,10 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
     name: 'Inventory Adjustment / Shrinkage',
     type: 'expense',
     subType: 'Operating',
+  },
+  [ACCT_INPUT_TAX]: {
+    name: 'Sales Tax Recoverable (Input Tax)',
+    type: 'asset',
+    subType: 'Other Asset',
   },
 };

@@ -6,7 +6,7 @@ import { TaxPayment } from './entities/tax-payment.entity';
 import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_CASH, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
+import { ACCT_CASH, ACCT_TAX_PAYABLE, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 
 @Injectable()
@@ -140,15 +140,88 @@ export class TaxService {
     });
   }
 
-  async getLiability(companyId: string, asOfDate?: string) {
-    const qb = this.paymentRepo.createQueryBuilder('p')
-      .where('p.companyId = :cid', { cid: companyId })
-      .select('SUM(p.amount)', 'paidAmount');
-    if (asOfDate) qb.andWhere('p.paymentDate <= :d', { d: asOfDate });
-    const result = await qb.getRawOne();
-    const paidAmount = parseFloat(result.paidAmount || '0');
-    const collectedAmount = paidAmount + 5000;
-    const liabilityAmount = collectedAmount - paidAmount;
-    return { collectedAmount, paidAmount, liabilityAmount };
+  /**
+   * Tax liability report — ledger-derived (FinMatrix.md §21). Net tax owed =
+   * output tax (Sales Tax Payable 2300 collected) − input tax recoverable
+   * (Sales Tax Recoverable 1300, registered businesses) − tax already remitted.
+   * For a non-registered business there is no input tax, so net = output − paid.
+   */
+  async getLiability(companyId: string, startDate?: string, endDate?: string) {
+    const r2 = (v: any) => Math.round((parseFloat(v ?? '0') || 0) * 100) / 100;
+    const start = startDate || '1970-01-01';
+    const end = endDate || new Date().toISOString().slice(0, 10);
+
+    // Output tax (Sales Tax Payable 2300): credits = collected, debits = remitted.
+    const [out] = await this.dataSource.query(
+      `SELECT COALESCE(SUM(g.credit::numeric), 0) AS collected,
+              COALESCE(SUM(g.debit::numeric), 0)  AS remitted
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id = $1 AND a.account_number = $2
+          AND g.date >= $3 AND g.date <= $4`,
+      [companyId, ACCT_TAX_PAYABLE, start, end],
+    );
+
+    // Input tax recoverable (1300): net debit = recoverable (registered only).
+    const [inp] = await this.dataSource.query(
+      `SELECT COALESCE(SUM(g.debit::numeric), 0) - COALESCE(SUM(g.credit::numeric), 0) AS recoverable
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id = $1 AND a.account_number = $2
+          AND g.date >= $3 AND g.date <= $4`,
+      [companyId, ACCT_INPUT_TAX, start, end],
+    );
+
+    const outputCollected = r2(out?.collected);
+    const remitted = r2(out?.remitted);
+    const inputRecoverable = r2(inp?.recoverable);
+
+    const rows: Array<{
+      taxRateId: string;
+      taxName: string;
+      taxType: string;
+      rate: number;
+      collected: number;
+      paid: number;
+      net: number;
+    }> = [
+      {
+        taxRateId: 'output-tax',
+        taxName: 'Output Tax (Sales)',
+        taxType: 'sales',
+        rate: 0,
+        collected: outputCollected,
+        paid: remitted,
+        net: r2(outputCollected - remitted),
+      },
+    ];
+    if (inputRecoverable !== 0) {
+      // Input tax reduces what you remit → shown as a negative (credit) net.
+      rows.push({
+        taxRateId: 'input-tax',
+        taxName: 'Input Tax Credit (recoverable)',
+        taxType: 'input',
+        rate: 0,
+        collected: 0,
+        paid: 0,
+        net: r2(-inputRecoverable),
+      });
+    }
+
+    const totalNet = r2(outputCollected - remitted - inputRecoverable);
+    return {
+      fromDate: start,
+      toDate: end,
+      rows,
+      totalCollected: outputCollected,
+      totalPaid: remitted,
+      totalNet,
+      // Explicit breakdown for clarity / API consumers.
+      outputTax: outputCollected,
+      inputTaxRecoverable: inputRecoverable,
+      taxRemitted: remitted,
+      // Backwards-compatible scalar fields (legacy shape).
+      collectedAmount: outputCollected,
+      paidAmount: remitted,
+      liabilityAmount: totalNet,
+    };
   }
 }

@@ -93,6 +93,13 @@ export class Company extends BaseEntity {
   @Column({ type: 'boolean', default: false, name: 'setup_completed' })
   setupCompleted!: boolean;
 
+  // GST/Sales-tax registered: when true, input tax on bills is posted to a
+  // recoverable asset (Sales Tax Recoverable 1300) instead of being rolled into
+  // the expense/inventory line, so remittance = output tax − input tax
+  // (FinMatrix.md §21).
+  @Column({ type: 'boolean', default: false, name: 'sales_tax_registered' })
+  salesTaxRegistered!: boolean;
+
   // Period lock: postings dated on/before this are rejected (FinMatrixGuide §6.4).
   @Column({ type: 'date', nullable: true, name: 'books_locked_until' })
   booksLockedUntil!: string | null;
