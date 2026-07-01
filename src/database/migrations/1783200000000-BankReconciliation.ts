@@ -10,8 +10,13 @@ export class BankReconciliation1783200000000 implements MigrationInterface {
   name = 'BankReconciliation1783200000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // InitialSchema shipped an empty stub `reconciliations` table (banking was
+    // never built) with a different, incompatible shape (bank_account_id,
+    // statement_beginning_balance, completed_at/by). Drop it and recreate with
+    // the shape this feature uses. Safe: the stub is always empty/unreferenced.
+    await queryRunner.query(`DROP TABLE IF EXISTS "reconciliations" CASCADE`);
     await queryRunner.query(`
-      CREATE TABLE IF NOT EXISTS "reconciliations" (
+      CREATE TABLE "reconciliations" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
