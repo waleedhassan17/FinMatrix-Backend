@@ -29,6 +29,7 @@ import {
 import { formatInvoiceRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
+import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { AccountsService } from '../accounts/accounts.service';
 import {
   ACCT_AR,
@@ -468,10 +469,81 @@ export class InvoicesService {
     });
   }
 
-  async delete(companyId: string, id: string) {
-    const inv = await this.getById(companyId, id);
-    await this.repo.softRemove(inv);
-    return { id, deleted: true };
+  /**
+   * Delete an invoice. Reverses its ledger impact with a mirror journal entry
+   * (swap Dr/Cr of the original — covers AR/Revenue/Tax and COGS/Inventory),
+   * restocks item-linked lines, restores the customer balance, then hard-
+   * removes the record. (The entity has no @DeleteDateColumn, so softRemove was
+   * a no-op that 500'd.) Already-void invoices were reversed at void time, so
+   * they are just removed. Invoices with payments must be handled first.
+   */
+  async delete(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const invoice = await manager.findOne(Invoice, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!invoice) {
+        throw new NotFoundException({
+          code: 'INVOICE_NOT_FOUND',
+          message: 'Invoice not found',
+        });
+      }
+      if (isPositive(invoice.amountPaid)) {
+        throw new BadRequestException({
+          code: 'INVOICE_HAS_PAYMENTS',
+          message: 'Cannot delete an invoice that has payments. Remove the payments first.',
+        });
+      }
+
+      // A voided invoice was already reversed (GL, inventory, customer balance)
+      // — don't reverse it again; just drop the record.
+      if (invoice.status !== 'void' && invoice.journalEntryId) {
+        const origLines = await manager.find(JournalEntryLine, {
+          where: { entryId: invoice.journalEntryId },
+          order: { lineOrder: 'ASC' },
+        });
+        if (origLines.length > 0) {
+          await this.posting.createEntry(manager, {
+            companyId,
+            createdBy: userId,
+            date: new Date().toISOString().slice(0, 10),
+            memo: `Delete invoice ${invoice.invoiceNumber}`,
+            status: 'posted',
+            sourceType: 'invoice_void',
+            sourceId: invoice.id,
+            reversalOfId: invoice.journalEntryId,
+            lines: origLines.map((l, i) => ({
+              accountId: l.accountId,
+              description: l.description ?? undefined,
+              debit: l.credit,
+              credit: l.debit,
+              lineOrder: i,
+            })),
+          });
+        }
+
+        // Restock inventory physically (the GL cost side is already reversed by
+        // the mirror entry above, so we ignore the returned cost total).
+        await this.postInvoiceCogs(manager, invoice, userId, true);
+
+        // Invoice creation increased the customer balance by its total; undo it.
+        const customer = await manager.findOneBy(Customer, {
+          id: invoice.customerId,
+          companyId,
+        });
+        if (customer) {
+          await this.incrementCustomerBalance(
+            manager,
+            customer,
+            toDecimal(invoice.total).negated().toFixed(4),
+          );
+        }
+      }
+
+      await manager.remove(invoice); // hard remove (cascades lines)
+      return { id, deleted: true };
+    });
   }
 
   // ------- Payment hook (called by payments module) -------

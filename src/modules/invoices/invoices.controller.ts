@@ -142,8 +142,9 @@ export class InvoicesController {
   @Roles('admin')
   remove(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
   ) {
-    return this.invoices.delete(companyId, invoiceId);
+    return this.invoices.delete(companyId, invoiceId, user.id);
   }
 }
