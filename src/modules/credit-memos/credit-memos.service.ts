@@ -5,6 +5,8 @@ import Decimal from 'decimal.js';
 import { CreditMemo, CreditMemoStatus } from './entities/credit-memo.entity';
 import { CreditMemoLine } from './entities/credit-memo-line.entity';
 import { Customer } from '../customers/entities/customer.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import {
   ApplyCreditMemoDto, CreateCreditMemoDto, CreditMemoLineDto, ListCreditMemosQueryDto,
 } from './dto/credit-memo.dto';
@@ -15,7 +17,7 @@ import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
-import { ACCT_AR, ACCT_CASH, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
+import { ACCT_AR, ACCT_CASH, ACCT_COGS, ACCT_INVENTORY, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
 
 @Injectable()
 export class CreditMemosService {
@@ -84,6 +86,17 @@ export class CreditMemosService {
         lines.push({ accountId: tax.id, description: 'Tax adjustment', debit: totals.taxAmount, credit: '0', lineOrder: 1 });
       }
       lines.push({ accountId: ar.id, description: `Credit memo ${number}`, debit: '0', credit: totals.total, lineOrder: lines.length });
+
+      // Inventory return side (FinMatrix.md §11): restock item lines and reverse
+      // the cost out of COGS — Dr Inventory / Cr COGS at qty × item cost.
+      const returnCost = await this.postCreditMemoInventory(manager, cm, userId, false);
+      if (returnCost.greaterThan(0)) {
+        const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
+        const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
+        lines.push({ accountId: inventory.id, description: 'Inventory returned to stock', debit: returnCost.toFixed(4), credit: '0', lineOrder: lines.length });
+        lines.push({ accountId: cogs.id, description: 'COGS reversed on return', debit: '0', credit: returnCost.toFixed(4), lineOrder: lines.length });
+      }
+
       const entry = await this.posting.createEntry(manager, {
         companyId, createdBy: userId, date: dto.date, memo: `Credit memo ${number}`,
         status: 'posted', lines, sourceType: 'credit_memo', sourceId: cm.id,
@@ -148,7 +161,7 @@ export class CreditMemosService {
 
   async void(companyId: string, id: string, userId: string): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) => {
-      const cm = await manager.findOne(CreditMemo, { where: { id, companyId } });
+      const cm = await manager.findOne(CreditMemo, { where: { id, companyId }, relations: { lines: true } });
       if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
       if (toDecimal(cm.amountApplied).greaterThan(0)) {
         throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a credit memo that has been applied' });
@@ -163,6 +176,15 @@ export class CreditMemosService {
         if (toDecimal(cm.taxAmount).greaterThan(0)) {
           const tax = await this.accounts.getByNumberOrFail(companyId, ACCT_TAX_PAYABLE, manager);
           lines.push({ accountId: tax.id, debit: '0', credit: cm.taxAmount, lineOrder: 2 });
+        }
+        // Reverse the inventory return: pull the restocked goods back out —
+        // qty↓, Dr COGS / Cr Inventory (undo the Dr Inventory / Cr COGS on issue).
+        const returnCost = await this.postCreditMemoInventory(manager, cm, userId, true);
+        if (returnCost.greaterThan(0)) {
+          const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
+          const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
+          lines.push({ accountId: cogs.id, debit: returnCost.toFixed(4), credit: '0', lineOrder: lines.length });
+          lines.push({ accountId: inventory.id, debit: '0', credit: returnCost.toFixed(4), lineOrder: lines.length });
         }
         await this.posting.createEntry(manager, {
           companyId, createdBy: userId, date: new Date().toISOString().slice(0, 10),
@@ -191,6 +213,56 @@ export class CreditMemosService {
     return { id, deleted: true };
   }
 
+  /**
+   * Apply (or reverse) the inventory side of a credit memo: a customer return
+   * brings item-linked goods back in — quantity↑ and the cost is credited out
+   * of COGS. Records movements and returns the total cost value moved (used to
+   * build the Inventory/COGS journal lines). Mirrors invoice COGS, inverted.
+   *
+   * @param reverse false on issue (return: qty↑, COGS reversed); true on void
+   *                (undo the return: qty↓, COGS re-recognised).
+   */
+  private async postCreditMemoInventory(
+    manager: EntityManager,
+    cm: CreditMemo,
+    userId: string,
+    reverse: boolean,
+  ): Promise<Decimal> {
+    const itemRepo = manager.getRepository(InventoryItem);
+    const moveRepo = manager.getRepository(InventoryMovement);
+    let total = new Decimal(0);
+    for (const line of cm.lines ?? []) {
+      if (!line.itemId) continue;
+      const item = await itemRepo.findOne({ where: { id: line.itemId, companyId: cm.companyId } });
+      if (!item) continue;
+      const qty = toDecimal(line.quantity);
+      const cost = qty.times(toDecimal(item.unitCost));
+      if (cost.lessThanOrEqualTo(0)) continue;
+      total = total.plus(cost);
+
+      const onHand = toDecimal(item.quantityOnHand);
+      const newQty = reverse ? onHand.minus(qty) : onHand.plus(qty);
+      item.quantityOnHand = newQty.toFixed(4);
+      await itemRepo.save(item);
+
+      await moveRepo.save(
+        moveRepo.create({
+          companyId: cm.companyId,
+          itemId: item.id,
+          date: cm.date,
+          type: reverse ? 'sale' : 'return',
+          quantityChange: (reverse ? qty.negated() : qty).toFixed(4),
+          balanceAfter: newQty.toFixed(4),
+          reference: cm.creditMemoNumber,
+          sourceType: reverse ? 'credit_memo_void' : 'credit_memo',
+          sourceId: cm.id,
+          createdBy: userId,
+        }),
+      );
+    }
+    return total;
+  }
+
   private computeTotals(lines: CreditMemoLineDto[]) {
     const calc: any[] = [];
     let subtotal = new Decimal(0);
@@ -201,6 +273,7 @@ export class CreditMemosService {
       subtotal = subtotal.plus(base);
       tax = tax.plus(lineTax);
       calc.push({
+        itemId: l.itemId ?? null,
         description: l.description, quantity: toDecimal(l.quantity).toFixed(4), unitPrice: toDecimal(l.unitPrice).toFixed(4),
         taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineTotal: base.plus(lineTax).toFixed(4), lineOrder: i,
       });

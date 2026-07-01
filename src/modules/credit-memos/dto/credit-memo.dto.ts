@@ -5,6 +5,8 @@ import {
 } from 'class-validator';
 
 export class CreditMemoLineDto {
+  @ApiPropertyOptional({ description: 'Inventory item to restock on return.' })
+  @IsOptional() @IsUUID() itemId?: string;
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;

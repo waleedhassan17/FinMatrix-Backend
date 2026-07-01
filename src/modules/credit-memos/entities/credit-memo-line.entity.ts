@@ -10,6 +10,11 @@ export class CreditMemoLine {
   @Column({ type: 'uuid', name: 'credit_memo_id' })
   creditMemoId!: string;
 
+  // Optional link to an inventory item — when set, the returned quantity is
+  // restocked and the cost is reversed out of COGS (FinMatrix.md §11).
+  @Column({ type: 'uuid', name: 'item_id', nullable: true })
+  itemId!: string | null;
+
   @Column({ type: 'text' })
   description!: string;
 
