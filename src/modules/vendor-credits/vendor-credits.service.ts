@@ -143,12 +143,14 @@ export class VendorCreditsService {
     });
   }
 
-  async delete(companyId: string, id: string) {
+  async delete(companyId: string, id: string, userId: string) {
     const vc = await this.getById(companyId, id);
     if (vc.status !== 'open') {
       throw new BadRequestException({ code: 'CANNOT_DELETE', message: 'Only open, unapplied vendor credits can be deleted' });
     }
-    if (vc.journalEntryId) { await this.void(companyId, id, vc.createdBy ?? ''); }
+    // Reverse the ledger (via void) attributed to the acting user — never an
+    // empty createdBy, which would fail the reversal JE's uuid column.
+    if (vc.journalEntryId) { await this.void(companyId, id, userId); }
     await this.repo.remove(vc);
     return { id, deleted: true };
   }

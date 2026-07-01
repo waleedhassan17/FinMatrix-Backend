@@ -179,12 +179,14 @@ export class CreditMemosService {
     });
   }
 
-  async delete(companyId: string, id: string) {
+  async delete(companyId: string, id: string, userId: string) {
     const cm = await this.getById(companyId, id);
     if (cm.status !== 'open') {
       throw new BadRequestException({ code: 'CANNOT_DELETE', message: 'Only open, unapplied credit memos can be deleted' });
     }
-    if (cm.journalEntryId) { await this.void(companyId, id, cm.createdBy ?? ''); }
+    // Reverse the ledger (via void) attributed to the acting user — never an
+    // empty createdBy, which would fail the reversal JE's uuid column.
+    if (cm.journalEntryId) { await this.void(companyId, id, userId); }
     await this.repo.remove(cm);
     return { id, deleted: true };
   }

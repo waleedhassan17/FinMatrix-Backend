@@ -68,7 +68,11 @@ export class VendorCreditsController {
 
   @Delete(':id')
   @Roles('admin')
-  remove(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
-    return this.svc.delete(companyId, id);
+  remove(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.delete(companyId, id, user.id);
   }
 }
