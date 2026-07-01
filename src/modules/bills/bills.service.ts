@@ -13,6 +13,7 @@ import { BillPaymentApplication } from './entities/bill-payment-application.enti
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
+import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import {
   BillLineDto,
   CreateBillDto,
@@ -402,10 +403,65 @@ export class BillsService {
     return bill;
   }
 
-  async delete(companyId: string, id: string) {
-    const b = await this.getById(companyId, id);
-    await this.billRepo.softRemove(b);
-    return { id, deleted: true };
+  /**
+   * Delete a bill. Reverses its ledger impact with a mirror journal entry
+   * (swap Dr/Cr of the original) and restores the vendor balance, then hard-
+   * removes the record. (The entity has no @DeleteDateColumn, so softRemove was
+   * a no-op that 500'd.) Bills that already have payments must be unapplied
+   * first. Reading the original JE and swapping guarantees the reversal is
+   * correct regardless of how it posted (e.g. input-tax split to 1300).
+   */
+  async delete(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const bill = await manager.findOne(Bill, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!bill) {
+        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+      }
+      if (isPositive(bill.amountPaid)) {
+        throw new BadRequestException({
+          code: 'BILL_HAS_PAYMENTS',
+          message: 'Cannot delete a bill that has payments. Remove the payments first.',
+        });
+      }
+
+      if (bill.journalEntryId) {
+        const origLines = await manager.find(JournalEntryLine, {
+          where: { entryId: bill.journalEntryId },
+          order: { lineOrder: 'ASC' },
+        });
+        if (origLines.length > 0) {
+          await this.posting.createEntry(manager, {
+            companyId,
+            createdBy: userId,
+            date: new Date().toISOString().slice(0, 10),
+            memo: `Delete bill ${bill.billNumber}`,
+            status: 'posted',
+            sourceType: 'bill_void',
+            sourceId: bill.id,
+            reversalOfId: bill.journalEntryId,
+            lines: origLines.map((l, i) => ({
+              accountId: l.accountId,
+              description: l.description ?? undefined,
+              debit: l.credit,
+              credit: l.debit,
+              lineOrder: i,
+            })),
+          });
+        }
+        // Bill creation increased the vendor balance by its total; undo that.
+        const vendor = await manager.findOneBy(Vendor, { id: bill.vendorId, companyId });
+        if (vendor) {
+          vendor.balance = subtractMoney(vendor.balance, bill.total).toFixed(4);
+          await manager.save(vendor);
+        }
+      }
+
+      await manager.remove(bill); // hard remove (cascades lines)
+      return { id, deleted: true };
+    });
   }
 
   async listPayments(companyId: string, billId: string | undefined, page: number, limit: number) {

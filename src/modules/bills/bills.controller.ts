@@ -104,8 +104,9 @@ export class BillsController {
   @Roles('admin')
   remove(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('billId', ParseUUIDPipe) billId: string,
   ) {
-    return this.bills.delete(companyId, billId);
+    return this.bills.delete(companyId, billId, user.id);
   }
 }
