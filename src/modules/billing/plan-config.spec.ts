@@ -42,6 +42,6 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
     const bank = getPlatformBank({} as NodeJS.ProcessEnv);
     expect(bank.accountTitle).toContain('Waleed');
     expect(bank.bankName).toBe('Allied Bank');
-    expect(bank.iban).toBeTruthy();
+    expect(bank.accountNumber).toBeTruthy();
   });
 });

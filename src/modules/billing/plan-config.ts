@@ -79,19 +79,19 @@ export function formatMinorUnits(minor: number, currency = 'PKR'): string {
 export interface PlatformBankAccount {
   accountTitle: string;
   bankName: string;
-  iban: string;
+  accountNumber: string;
   instructions: string;
 }
 
-// IBAN alone is enough to receive the transfer — the account number is not
-// exposed. Set the real IBAN via the PLATFORM_BANK_IBAN env var.
+// The account number alone is enough to receive the transfer. Override any
+// field via env (PLATFORM_BANK_ACCOUNT / PLATFORM_BANK_TITLE / PLATFORM_BANK_NAME).
 export function getPlatformBank(env: NodeJS.ProcessEnv = process.env): PlatformBankAccount {
   return {
     accountTitle: env.PLATFORM_BANK_TITLE || 'Muhammad Waleed Hassan',
     bankName: env.PLATFORM_BANK_NAME || 'Allied Bank',
-    iban: env.PLATFORM_BANK_IBAN || 'PK00ABPA0000000000000000',
+    accountNumber: env.PLATFORM_BANK_ACCOUNT || '12860010124896560019',
     instructions:
-      'Transfer the exact amount shown to the IBAN above, then upload a clear ' +
+      'Transfer the exact amount shown to the account above, then upload a clear ' +
       'screenshot of the transfer receipt. Your plan activates once an ' +
       'administrator verifies the payment.',
   };

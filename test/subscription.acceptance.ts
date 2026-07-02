@@ -128,7 +128,7 @@ async function main() {
 
   // ── Bank details (server-set amount) ──
   const bank = data(await req('GET', '/billing/bank-details?plan=standard', { token: adminToken, companyId }));
-  check('bank-details: Standard = Rs 1,000 (100000 minor), 6 months, bank present', bank?.amountDueMinorUnits === 100000 && bank?.durationMonths === 6 && !!bank?.bankAccount?.iban, bank);
+  check('bank-details: Standard = Rs 1,000 (100000 minor), 6 months, bank present', bank?.amountDueMinorUnits === 100000 && bank?.durationMonths === 6 && !!bank?.bankAccount?.accountNumber, bank);
 
   // ── FLOW 3: upgrade from Free (active company) → UPGRADE submission ──
   const sub1 = await submitPayment(adminToken, companyId, 'standard');
