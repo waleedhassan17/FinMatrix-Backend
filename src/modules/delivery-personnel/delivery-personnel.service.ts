@@ -6,6 +6,7 @@ import { DeliveryPersonnelProfile } from './entities/delivery-personnel-profile.
 import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
+import { getPlanConfig } from '../billing/plan-config';
 
 @Injectable()
 export class DeliveryPersonnelService {
@@ -63,6 +64,32 @@ export class DeliveryPersonnelService {
 
   async create(companyId: string, dto: CreatePersonnelDto) {
     return this.dataSource.transaction(async (em) => {
+      // phase2.md — plan-based limit (authoritative, server-side). Free = 1,
+      // paid = 3 active personnel. A downgrade never deletes extras; it only
+      // blocks creating new ones until the company is within the limit again.
+      const companyRow: Array<{ subscription_plan: string | null }> = await em.query(
+        `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1`,
+        [companyId],
+      );
+      const planConfig = getPlanConfig(companyRow[0]?.subscription_plan);
+      const activeCountRow: Array<{ count: string }> = await em.query(
+        `SELECT COUNT(*)::int AS count FROM delivery_personnel_profiles
+          WHERE company_id = $1 AND status = 'active'`,
+        [companyId],
+      );
+      const activeCount = Number(activeCountRow[0]?.count ?? 0);
+      if (activeCount >= planConfig.deliveryPersonnelLimit) {
+        throw new BadRequestException({
+          code: 'DELIVERY_PERSONNEL_LIMIT_REACHED',
+          message:
+            `Your ${planConfig.label} plan allows ${planConfig.deliveryPersonnelLimit} ` +
+            `delivery ${planConfig.deliveryPersonnelLimit === 1 ? 'person' : 'people'}. ` +
+            `Upgrade your plan to add more delivery personnel.`,
+          limit: planConfig.deliveryPersonnelLimit,
+          currentCount: activeCount,
+        });
+      }
+
       let userId = dto.userId;
 
       // If email+password provided, create a new user first

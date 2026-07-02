@@ -212,25 +212,23 @@ export class AuthService {
 
     const company = membership?.company ?? null;
 
-    // Hard gate (Phase1.md): a company account may sign in ONLY when active.
-    // pending/inactive/rejected are blocked here with a specific code so the
-    // client routes to the correct screen (PendingApproval / CompanyRejected /
-    // deactivated). Super-admins and delivery riders are exempt.
+    // Access gate. pending/rejected are hard-blocked (no token) so the client
+    // routes to PendingApproval / CompanyRejected.
+    //
+    // INACTIVE is different (phase2.md): a deactivated/expired account MUST be
+    // able to sign in so it can reach the renew-only flow — renewing is the one
+    // action an inactive account can take. So we issue a token and let the
+    // client route to the Renew screen; CompanyGuard still blocks every
+    // business endpoint, and only /billing/* stays reachable. Super-admins and
+    // delivery riders are exempt from this gate entirely.
     if (!isSuperAdmin && role !== 'delivery' && company) {
       const acctStatus = normalizeCompanyStatus(company.status);
-      if (acctStatus !== 'active') {
-        const code =
-          acctStatus === 'rejected'
-            ? 'COMPANY_REJECTED'
-            : acctStatus === 'inactive'
-              ? 'COMPANY_INACTIVE'
-              : 'COMPANY_PENDING';
+      if (acctStatus === 'pending' || acctStatus === 'rejected') {
+        const code = acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
         const message =
           acctStatus === 'rejected'
             ? 'Your company registration was rejected.'
-            : acctStatus === 'inactive'
-              ? 'Your company account has been deactivated. Contact the administrator.'
-              : 'Your company is awaiting approval. You will be able to sign in once approved.';
+            : 'Your company is awaiting approval. You will be able to sign in once approved.';
         this.logger.warn(`Login blocked (${acctStatus}): ${dto.email}`);
         throw new ForbiddenException({
           code,
@@ -239,6 +237,9 @@ export class AuthService {
           rejectionReason: company.rejectionReason ?? null,
           email: user.email,
         });
+      }
+      if (acctStatus === 'inactive') {
+        this.logger.warn(`Login → renew-only (inactive): ${dto.email}`);
       }
     }
 

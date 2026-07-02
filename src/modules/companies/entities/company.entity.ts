@@ -98,6 +98,32 @@ export class Company extends BaseEntity {
   @Column({ type: 'varchar', length: 16, default: 'free', name: 'subscription_plan' })
   subscriptionPlan!: string;
 
+  // ── Subscription lifecycle (phase2.md) ────────────────────────────────────
+  // subscriptionStatus is SEPARATE from `status` (the account status). It tracks
+  // whether the plan is current: active | expiring | expired. Free stays active
+  // with a null expiry. Expiry NEVER deletes data — it only flips the account to
+  // inactive (login → renew-only) until renewed.
+  @Column({ type: 'varchar', length: 16, default: 'active', name: 'subscription_status' })
+  subscriptionStatus!: string;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'subscription_start_date' })
+  subscriptionStartDate!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'subscription_expiry_date' })
+  subscriptionExpiryDate!: Date | null;
+
+  // none | submitted | paid | rejected
+  @Column({ type: 'varchar', length: 16, default: 'none', name: 'payment_status' })
+  paymentStatus!: string;
+
+  @Column({ type: 'uuid', nullable: true, name: 'last_submission_id' })
+  lastSubmissionId!: string | null;
+
+  // The date of the most recent expiry-reminder notification, used to guarantee
+  // at most ONE reminder per day (cron idempotency).
+  @Column({ type: 'date', nullable: true, name: 'subscription_reminder_on' })
+  subscriptionReminderOn!: string | null;
+
   // GST/Sales-tax registered: when true, input tax on bills is posted to a
   // recoverable asset (Sales Tax Recoverable 1300) instead of being rolled into
   // the expense/inventory line, so remittance = output tax − input tax

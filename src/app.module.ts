@@ -3,6 +3,7 @@ import { APP_FILTER, APP_INTERCEPTOR, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
 
 import appConfig from './config/app.config';
@@ -53,6 +54,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { SearchModule } from './modules/search/search.module';
 import { HealthModule } from './modules/health/health.module';
 import { SuperAdminModule } from './modules/super-admin/super-admin.module';
+import { BillingModule } from './modules/billing/billing.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
@@ -117,6 +119,8 @@ import { MailModule } from './modules/mail/mail.module';
     HealthModule,
     StorageModule,
     SuperAdminModule,
+    BillingModule,
+    ScheduleModule.forRoot(),
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
