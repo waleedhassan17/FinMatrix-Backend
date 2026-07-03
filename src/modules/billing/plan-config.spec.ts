@@ -13,15 +13,23 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
     expect(PLAN_CONFIG.free.deliveryPersonnelLimit).toBe(1);
   });
 
-  it('Standard: Rs 1,000, 6 months, 3 delivery personnel', () => {
-    expect(PLAN_CONFIG.standard.priceMinorUnits).toBe(100000);
+  it('Standard: Rs 1,000/month x 6 months = Rs 6,000, 3 delivery personnel', () => {
+    expect(PLAN_CONFIG.standard.monthlyMinorUnits).toBe(100000);
     expect(PLAN_CONFIG.standard.durationMonths).toBe(6);
+    expect(PLAN_CONFIG.standard.priceMinorUnits).toBe(600000);
+    expect(PLAN_CONFIG.standard.priceMinorUnits).toBe(
+      PLAN_CONFIG.standard.monthlyMinorUnits * PLAN_CONFIG.standard.durationMonths!,
+    );
     expect(PLAN_CONFIG.standard.deliveryPersonnelLimit).toBe(3);
   });
 
-  it('Pro: Rs 2,000, 3 months, 3 delivery personnel', () => {
-    expect(PLAN_CONFIG.pro.priceMinorUnits).toBe(200000);
-    expect(PLAN_CONFIG.pro.durationMonths).toBe(3);
+  it('Pro: Rs 2,000/month x 2 months = Rs 4,000, 3 delivery personnel', () => {
+    expect(PLAN_CONFIG.pro.monthlyMinorUnits).toBe(200000);
+    expect(PLAN_CONFIG.pro.durationMonths).toBe(2);
+    expect(PLAN_CONFIG.pro.priceMinorUnits).toBe(400000);
+    expect(PLAN_CONFIG.pro.priceMinorUnits).toBe(
+      PLAN_CONFIG.pro.monthlyMinorUnits * PLAN_CONFIG.pro.durationMonths!,
+    );
     expect(PLAN_CONFIG.pro.deliveryPersonnelLimit).toBe(3);
   });
 

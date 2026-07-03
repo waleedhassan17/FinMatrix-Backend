@@ -42,6 +42,13 @@ export class BillingAdminController {
     return this.billing.listSubmissions(query.status);
   }
 
+  /** Platform revenue collected from approved payment submissions. */
+  @Get('revenue/summary')
+  revenue(@CurrentUser() user: AuthenticatedUser) {
+    guardSuperAdmin(user);
+    return this.billing.getRevenueSummary();
+  }
+
   @Get(':id/screenshot')
   async screenshot(
     @CurrentUser() user: AuthenticatedUser,

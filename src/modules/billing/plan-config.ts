@@ -3,9 +3,13 @@
  * subscription plans. Amounts are in MINOR UNITS (paisa: 100 paisa = Rs 1).
  * The client NEVER sets the price — it is always read from here on submit.
  *
- *   Free     — Rs 0,     no expiry,   1 delivery-personnel
- *   Standard — Rs 1,000, 6 months,    3 delivery-personnel
- *   Pro      — Rs 2,000, 3 months,    3 delivery-personnel
+ *   Free     — Rs 0,           no expiry,                    1 delivery-personnel
+ *   Standard — Rs 1,000/month, 6 months (Rs 6,000 total),    3 delivery-personnel
+ *   Pro      — Rs 2,000/month, 2 months (Rs 4,000 total),    3 delivery-personnel
+ *
+ * `priceMinorUnits` is the TOTAL charged up-front for the whole duration
+ * (monthlyMinorUnits × durationMonths) — the manual bank transfer is one
+ * payment for the full period.
  *
  * All accounting features are available on EVERY plan; the only plan difference
  * enforced anywhere is `deliveryPersonnelLimit`.
@@ -15,8 +19,10 @@ export type PlanKey = 'free' | 'standard' | 'pro';
 export interface PlanConfig {
   key: PlanKey;
   label: string;
-  /** Price in minor units (paisa). Divide by 100 for rupees. */
+  /** TOTAL price for the whole duration, in minor units (paisa). */
   priceMinorUnits: number;
+  /** Per-month price in minor units (priceMinorUnits = monthly × duration). */
+  monthlyMinorUnits: number;
   /** Subscription length in months; null = never expires (Free). */
   durationMonths: number | null;
   /** Max simultaneously-active delivery personnel allowed on this plan. */
@@ -29,6 +35,7 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
     key: 'free',
     label: 'Free',
     priceMinorUnits: 0,
+    monthlyMinorUnits: 0,
     durationMonths: null,
     deliveryPersonnelLimit: 1,
     currency: 'PKR',
@@ -36,7 +43,8 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   standard: {
     key: 'standard',
     label: 'Standard',
-    priceMinorUnits: 100000, // Rs 1,000
+    priceMinorUnits: 600000, // Rs 6,000 total = Rs 1,000/month × 6 months
+    monthlyMinorUnits: 100000, // Rs 1,000/month
     durationMonths: 6,
     deliveryPersonnelLimit: 3,
     currency: 'PKR',
@@ -44,8 +52,9 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   pro: {
     key: 'pro',
     label: 'Pro',
-    priceMinorUnits: 200000, // Rs 2,000
-    durationMonths: 3,
+    priceMinorUnits: 400000, // Rs 4,000 total = Rs 2,000/month × 2 months
+    monthlyMinorUnits: 200000, // Rs 2,000/month
+    durationMonths: 2,
     deliveryPersonnelLimit: 3,
     currency: 'PKR',
   },

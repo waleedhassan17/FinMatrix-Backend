@@ -93,6 +93,8 @@ export class BillingService {
       neverExpires: config.durationMonths === null,
       priceMinorUnits: config.priceMinorUnits,
       priceLabel: formatMinorUnits(config.priceMinorUnits, config.currency),
+      monthlyMinorUnits: config.monthlyMinorUnits,
+      monthlyLabel: formatMinorUnits(config.monthlyMinorUnits, config.currency),
       deliveryPersonnelLimit: config.deliveryPersonnelLimit,
       lastSubmission: lastSubmission
         ? {
@@ -148,6 +150,8 @@ export class BillingService {
       plan: config.key,
       planLabel: config.label,
       durationMonths: config.durationMonths,
+      monthlyMinorUnits: config.monthlyMinorUnits,
+      monthlyLabel: formatMinorUnits(config.monthlyMinorUnits, config.currency),
       amountDueMinorUnits: config.priceMinorUnits,
       amountDueLabel: formatMinorUnits(config.priceMinorUnits, config.currency),
       currency: config.currency,
@@ -383,6 +387,88 @@ export class BillingService {
     });
 
     return this.toSubmissionView(submission, company?.name ?? null);
+  }
+
+  /**
+   * Super-admin revenue dashboard: every approved payment (platform_revenue
+   * rows — written exactly once per approved submission) with all-time /
+   * this-month totals, per-plan breakdown, a 6-month trend, and per-company
+   * totals. This is PLATFORM money, unrelated to any company's books.
+   */
+  async getRevenueSummary() {
+    const { entities, raw } = await this.revenueRepo
+      .createQueryBuilder('r')
+      .leftJoin(Company, 'c', 'c.id = r.companyId')
+      .addSelect('c.name', 'c_name')
+      .orderBy('r.recordedAt', 'DESC')
+      .getRawAndEntities();
+
+    const entries = entities.map((r, i) => ({
+      id: r.id,
+      submissionId: r.submissionId,
+      companyId: r.companyId,
+      companyName: (raw[i]?.c_name as string | null) ?? 'Unknown',
+      plan: r.plan,
+      planLabel: getPlanConfig(r.plan).label,
+      amountMinorUnits: r.amountMinorUnits,
+      amountLabel: formatMinorUnits(r.amountMinorUnits, r.currency),
+      currency: r.currency,
+      recordedAt: r.recordedAt,
+    }));
+
+    const now = new Date();
+    const monthKey = (d: Date) => `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+    const thisMonthKey = monthKey(now);
+
+    let totalMinorUnits = 0;
+    let thisMonthMinorUnits = 0;
+    const byPlanMap = new Map<string, { plan: string; planLabel: string; payments: number; totalMinorUnits: number }>();
+    const byCompanyMap = new Map<string, { companyId: string; companyName: string; payments: number; totalMinorUnits: number; lastPlan: string }>();
+
+    for (const e of entries) {
+      totalMinorUnits += e.amountMinorUnits;
+      const recorded = new Date(e.recordedAt);
+      if (monthKey(recorded) === thisMonthKey) thisMonthMinorUnits += e.amountMinorUnits;
+
+      const p = byPlanMap.get(e.plan) ?? { plan: e.plan, planLabel: e.planLabel, payments: 0, totalMinorUnits: 0 };
+      p.payments += 1;
+      p.totalMinorUnits += e.amountMinorUnits;
+      byPlanMap.set(e.plan, p);
+
+      const co = byCompanyMap.get(e.companyId) ?? {
+        companyId: e.companyId, companyName: e.companyName, payments: 0, totalMinorUnits: 0, lastPlan: e.planLabel,
+      };
+      co.payments += 1;
+      co.totalMinorUnits += e.amountMinorUnits;
+      byCompanyMap.set(e.companyId, co);
+    }
+
+    // Last 6 calendar months (oldest → newest), collected revenue per month.
+    const monthly: { year: number; month: number; totalMinorUnits: number }[] = [];
+    for (let back = 5; back >= 0; back--) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+      monthly.push({ year: d.getUTCFullYear(), month: d.getUTCMonth(), totalMinorUnits: 0 });
+    }
+    for (const e of entries) {
+      const d = new Date(e.recordedAt);
+      const slot = monthly.find((m) => m.year === d.getUTCFullYear() && m.month === d.getUTCMonth());
+      if (slot) slot.totalMinorUnits += e.amountMinorUnits;
+    }
+
+    const pendingCount = await this.submissionRepo.count({ where: { status: 'submitted' } });
+
+    return {
+      totalMinorUnits,
+      totalLabel: formatMinorUnits(totalMinorUnits),
+      thisMonthMinorUnits,
+      thisMonthLabel: formatMinorUnits(thisMonthMinorUnits),
+      paymentsCount: entries.length,
+      pendingSubmissions: pendingCount,
+      byPlan: [...byPlanMap.values()].sort((a, b) => b.totalMinorUnits - a.totalMinorUnits),
+      byCompany: [...byCompanyMap.values()].sort((a, b) => b.totalMinorUnits - a.totalMinorUnits),
+      monthly,
+      entries: entries.slice(0, 50),
+    };
   }
 
   // ── Scheduled expiry + reminder scan (idempotent; run daily by cron) ──────
