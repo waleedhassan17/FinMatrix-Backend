@@ -37,6 +37,15 @@ export class PaymentSubmission extends BaseEntity {
   @Column({ type: 'text', name: 'screenshot_key', nullable: true })
   screenshotKey!: string | null;
 
+  /**
+   * Screenshot bytes stored in Postgres — the durable copy. Heroku's dyno
+   * filesystem is ephemeral (wiped on every restart/deploy), so disk-only
+   * storage loses the file before the super-admin reviews it. `select: false`
+   * keeps list queries light; loaded explicitly only when streaming.
+   */
+  @Column({ type: 'bytea', name: 'screenshot_data', nullable: true, select: false })
+  screenshotData!: Buffer | null;
+
   @Column({ type: 'varchar', length: 64, name: 'screenshot_mime', nullable: true })
   screenshotMime!: string | null;
 

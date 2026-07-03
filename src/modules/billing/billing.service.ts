@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Readable } from 'stream';
 import { DataSource, Repository } from 'typeorm';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
@@ -171,7 +172,9 @@ export class BillingService {
       throw new BadRequestException('A payment screenshot is required.');
     }
 
-    // Persist the screenshot (auth-gated; streamed back on the review screen).
+    // Persist the screenshot. The DURABLE copy is the bytea column — Heroku's
+    // dyno filesystem is ephemeral, so a disk-only file is gone by the time the
+    // super-admin reviews it. Disk is kept as a same-dyno fast path only.
     const stored = await this.storage.putBuffer({
       bucket: 'payment-screenshots',
       buffer: file.buffer,
@@ -191,6 +194,7 @@ export class BillingService {
       currency: config.currency,
       screenshotKey: stored.key,
       screenshotMime: file.mimetype,
+      screenshotData: file.buffer,
       submittedBy: userId,
     });
     await this.submissionRepo.save(submission);
@@ -217,16 +221,34 @@ export class BillingService {
 
   // ── Screenshot streaming (company owns it, or super-admin) ────────────────
 
-  async getScreenshot(submissionId: string) {
-    const submission = await this.submissionRepo.findOne({
-      where: { id: submissionId },
-    });
-    if (!submission || !submission.screenshotKey) {
+  async getScreenshot(
+    submissionId: string,
+  ): Promise<{ stream: Readable; mime: string; length?: number }> {
+    // screenshotData is select:false — pull it explicitly for streaming.
+    const submission = await this.submissionRepo
+      .createQueryBuilder('s')
+      .addSelect('s.screenshotData')
+      .where('s.id = :id', { id: submissionId })
+      .getOne();
+    if (!submission || (!submission.screenshotData && !submission.screenshotKey)) {
       throw new NotFoundException('Screenshot not found');
     }
-    const file = await this.storage.read(submission.screenshotKey);
+    const mime = submission.screenshotMime ?? 'image/jpeg';
+
+    // Durable copy in Postgres first (survives dyno restarts) …
+    if (submission.screenshotData && submission.screenshotData.length > 0) {
+      return {
+        stream: Readable.from(submission.screenshotData),
+        mime,
+        length: submission.screenshotData.length,
+      };
+    }
+    // … disk fallback only for legacy rows created before the bytea column.
+    const file = submission.screenshotKey
+      ? await this.storage.read(submission.screenshotKey)
+      : null;
     if (!file) throw new NotFoundException('Screenshot file is no longer available');
-    return { file, mime: submission.screenshotMime ?? 'image/jpeg' };
+    return { stream: file.stream, mime };
   }
 
   async assertOwnsSubmission(submissionId: string, companyId: string) {

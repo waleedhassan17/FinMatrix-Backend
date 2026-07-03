@@ -60,6 +60,20 @@ async function main(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS "idx_pps_status" ON "platform_payment_submissions" ("status")`,
   );
 
+  // Screenshot bytes live in Postgres (Heroku's disk is ephemeral — files
+  // written by StorageService vanish on dyno restart, breaking admin review).
+  await client.query(`
+    ALTER TABLE "platform_payment_submissions"
+      ADD COLUMN IF NOT EXISTS "screenshot_data" bytea
+  `);
+  await client.query(`
+    INSERT INTO migrations("timestamp", name)
+    SELECT 1783600000000, 'PaymentScreenshotData1783600000000'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM migrations WHERE name = 'PaymentScreenshotData1783600000000'
+    )
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS "platform_revenue" (
       "id" uuid NOT NULL DEFAULT gen_random_uuid(),

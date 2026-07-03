@@ -118,8 +118,9 @@ export class BillingController {
   ) {
     const companyId = this.companyIdOf(user);
     await this.billing.assertOwnsSubmission(id, companyId);
-    const { file, mime } = await this.billing.getScreenshot(id);
+    const { stream, mime, length } = await this.billing.getScreenshot(id);
     res.setHeader('Content-Type', mime);
-    file.stream.pipe(res);
+    if (length) res.setHeader('Content-Length', String(length));
+    stream.pipe(res);
   }
 }
