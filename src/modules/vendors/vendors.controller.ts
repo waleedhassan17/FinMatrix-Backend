@@ -20,6 +20,7 @@ import {
   CreateVendorDto,
   ListVendorsQueryDto,
   UpdateVendorDto,
+  VendorStatementQueryDto,
 } from './dto/vendor.dto';
 import { Delete, HttpCode } from '@nestjs/common';
 import {
@@ -71,16 +72,27 @@ export class VendorsController {
   bills(
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.vendors.bills(companyId, vendorId);
+    return this.vendors.bills(companyId, vendorId, pagination);
   }
 
   @Get(':vendorId/payments')
   payments(
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.vendors.payments(companyId, vendorId);
+    return this.vendors.payments(companyId, vendorId, pagination);
+  }
+
+  @Get(':vendorId/statement')
+  statement(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @Query() query: VendorStatementQueryDto,
+  ) {
+    return this.vendors.statement(companyId, vendorId, query);
   }
 
   @Delete(':vendorId')

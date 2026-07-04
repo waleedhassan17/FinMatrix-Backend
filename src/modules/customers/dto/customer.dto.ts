@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
@@ -21,13 +21,21 @@ export const PAYMENT_TERMS: PaymentTerms[] = [
   'net45',
   'net60',
   '2_10_net30',
+  'custom',
 ];
 
 class AddressDto {
   @ApiPropertyOptional() @IsOptional() @IsString() street?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() city?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() state?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() postalCode?: string;
+  // `zipCode` is accepted as an alias so app builds that send it don't
+  // silently lose the field to DTO whitelisting.
+  @ApiPropertyOptional()
+  @Transform(({ value, obj }) => value ?? obj?.zipCode)
+  @IsOptional()
+  @IsString()
+  postalCode?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() zipCode?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() country?: string;
 }
 
@@ -66,6 +74,10 @@ export class CreateCustomerDto {
   paymentTerms?: PaymentTerms;
 
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() contactPerson?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() taxId?: string;
 }
 
 export class UpdateCustomerDto extends PartialType(CreateCustomerDto) {

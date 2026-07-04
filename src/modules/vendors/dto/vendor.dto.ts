@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsDateString,
   IsEmail,
   IsIn,
   IsObject,
@@ -52,4 +53,9 @@ export class UpdateVendorDto extends PartialType(CreateVendorDto) {
 export class ListVendorsQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class VendorStatementQueryDto {
+  @ApiProperty() @IsDateString() startDate!: string;
+  @ApiProperty() @IsDateString() endDate!: string;
 }

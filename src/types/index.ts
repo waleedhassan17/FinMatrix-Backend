@@ -73,7 +73,8 @@ export type PaymentTerms =
   | 'net30'
   | 'net45'
   | 'net60'
-  | '2_10_net30';
+  | '2_10_net30'
+  | 'custom';
 
 export type EstimateStatus =
   | 'draft'

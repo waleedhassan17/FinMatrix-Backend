@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, EntityManager, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity';
@@ -12,6 +12,7 @@ import {
 } from './dto/customer.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, subtractMoney, toDecimal } from '../../common/utils/money.util';
+import { GeocodingService } from '../deliveries/geocoding.service';
 
 @Injectable()
 export class CustomersService {
@@ -22,6 +23,7 @@ export class CustomersService {
     private readonly invoiceRepo: Repository<Invoice>,
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
+    private readonly geocoding: GeocodingService,
   ) {}
 
   async list(
@@ -58,17 +60,21 @@ export class CustomersService {
       .where('c.companyId = :companyId', { companyId })
       .getRawOne<{ count: string; outstanding: string }>();
 
+    // Nested under `data` so ResponseEnvelopeInterceptor (which lifts the
+    // `data` key and drops siblings) preserves summary + pagination.
     return {
-      data,
-      summary: {
-        total: parseInt(totalsRaw?.count ?? '0', 10),
-        outstandingBalance: toDecimal(totalsRaw?.outstanding ?? 0).toFixed(4),
-      },
-      pagination: {
-        page: pagination.page,
-        limit: pagination.limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+      data: {
+        data,
+        summary: {
+          total: parseInt(totalsRaw?.count ?? '0', 10),
+          outstandingBalance: toDecimal(totalsRaw?.outstanding ?? 0).toFixed(4),
+        },
+        pagination: {
+          page: pagination.page,
+          limit: pagination.limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+        },
       },
     };
   }
@@ -102,7 +108,7 @@ export class CustomersService {
 
   async detail(companyId: string, id: string) {
     const customer = await this.getById(companyId, id);
-    const [invoices, payments] = await Promise.all([
+    const [invoices, payments, purchasesRaw] = await Promise.all([
       this.invoiceRepo.find({
         where: { companyId, customerId: id },
         order: { invoiceDate: 'DESC' },
@@ -113,9 +119,16 @@ export class CustomersService {
         order: { paymentDate: 'DESC' },
         take: 5,
       }),
+      this.invoiceRepo
+        .createQueryBuilder('i')
+        .select('COALESCE(SUM(i.total), 0)', 'total')
+        .where('i.companyId = :companyId AND i.customerId = :id', { companyId, id })
+        .andWhere("i.status NOT IN ('draft', 'void')")
+        .getRawOne<{ total: string }>(),
     ]);
     return {
       customer,
+      totalPurchases: toDecimal(purchasesRaw?.total ?? 0).toFixed(4),
       recentInvoices: invoices,
       recentPayments: payments,
       credit: {
@@ -126,7 +139,7 @@ export class CustomersService {
     };
   }
 
-  create(companyId: string, dto: CreateCustomerDto): Promise<Customer> {
+  async create(companyId: string, dto: CreateCustomerDto): Promise<Customer> {
     const shipping =
       dto.shippingAddress?.sameAsBilling && dto.billingAddress
         ? dto.billingAddress
@@ -145,8 +158,31 @@ export class CustomersService {
       balance: '0',
       isActive: true,
       notes: dto.notes ?? null,
+      contactPerson: dto.contactPerson ?? null,
+      taxId: dto.taxId ?? null,
     });
+    await this.applyShippingGeocode(entity);
     return this.repo.save(entity);
+  }
+
+  /**
+   * Geocode the shipping address (graceful — never blocks the save).
+   * Deliveries fall back to these coordinates when their own geocode fails.
+   */
+  private async applyShippingGeocode(c: Customer): Promise<void> {
+    const query = GeocodingService.formatAddress(c.shippingAddress ?? c.billingAddress);
+    if (!query) {
+      c.shippingLat = null;
+      c.shippingLng = null;
+      c.shippingGeocodedAt = null;
+      return;
+    }
+    const point = await this.geocoding.geocode(query);
+    if (point) {
+      c.shippingLat = point.lat;
+      c.shippingLng = point.lng;
+      c.shippingGeocodedAt = new Date();
+    }
   }
 
   async update(
@@ -155,6 +191,8 @@ export class CustomersService {
     dto: UpdateCustomerDto,
   ): Promise<Customer> {
     const c = await this.getById(companyId, id);
+    const addressChanged =
+      dto.shippingAddress !== undefined || dto.billingAddress !== undefined;
     if (dto.name !== undefined) c.name = dto.name;
     if (dto.company !== undefined) c.company = dto.company;
     if (dto.email !== undefined) c.email = dto.email;
@@ -169,28 +207,71 @@ export class CustomersService {
     if (dto.paymentTerms !== undefined) c.paymentTerms = dto.paymentTerms;
     if (dto.notes !== undefined) c.notes = dto.notes;
     if (dto.isActive !== undefined) c.isActive = dto.isActive;
+    if (dto.contactPerson !== undefined) c.contactPerson = dto.contactPerson;
+    if (dto.taxId !== undefined) c.taxId = dto.taxId;
+    if (addressChanged) await this.applyShippingGeocode(c);
     return this.repo.save(c);
   }
 
-  async invoices(companyId: string, id: string) {
+  async invoices(companyId: string, id: string, pagination: PaginationParams) {
     await this.getById(companyId, id);
-    return this.invoiceRepo.find({
+    const [data, total] = await this.invoiceRepo.findAndCount({
       where: { companyId, customerId: id },
       order: { invoiceDate: 'DESC' },
+      take: pagination.limit,
+      skip: pagination.skip,
     });
+    return {
+      data: {
+        data,
+        pagination: {
+          page: pagination.page,
+          limit: pagination.limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+        },
+      },
+    };
   }
 
-  async payments(companyId: string, id: string) {
+  async payments(companyId: string, id: string, pagination: PaginationParams) {
     await this.getById(companyId, id);
-    return this.paymentRepo.find({
+    const [data, total] = await this.paymentRepo.findAndCount({
       where: { companyId, customerId: id },
       order: { paymentDate: 'DESC' },
+      take: pagination.limit,
+      skip: pagination.skip,
     });
+    return {
+      data: {
+        data,
+        pagination: {
+          page: pagination.page,
+          limit: pagination.limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+        },
+      },
+    };
   }
 
   async delete(companyId: string, id: string) {
     const c = await this.getById(companyId, id);
-    await this.repo.softRemove(c);
+    // softRemove was a silent no-op (no @DeleteDateColumn on the entity).
+    // Deleting a customer with financial history would orphan invoices and
+    // break AR — block it and point the admin at deactivation instead.
+    const [invoiceCount, paymentCount] = await Promise.all([
+      this.invoiceRepo.count({ where: { companyId, customerId: id } }),
+      this.paymentRepo.count({ where: { companyId, customerId: id } }),
+    ]);
+    if (invoiceCount > 0 || paymentCount > 0 || !toDecimal(c.balance).isZero()) {
+      throw new BadRequestException({
+        code: 'CUSTOMER_HAS_ACTIVITY',
+        message:
+          'This customer has invoices, payments, or an outstanding balance and cannot be deleted. Deactivate the customer instead.',
+      });
+    }
+    await this.repo.remove(c);
     return { id, deleted: true };
   }
 

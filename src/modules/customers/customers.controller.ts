@@ -77,16 +77,18 @@ export class CustomersController {
   invoices(
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.customers.invoices(companyId, customerId);
+    return this.customers.invoices(companyId, customerId, pagination);
   }
 
   @Get(':customerId/payments')
   payments(
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.customers.payments(companyId, customerId);
+    return this.customers.payments(companyId, customerId, pagination);
   }
 
   @Get(':customerId/statement')

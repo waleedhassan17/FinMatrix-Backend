@@ -46,4 +46,20 @@ export class Customer extends BaseCompanyEntity {
 
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'contact_person' })
+  contactPerson!: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true, name: 'tax_id' })
+  taxId!: string | null;
+
+  // Geocoded shipping address (used as delivery destination fallback).
+  @Column({ type: 'double precision', nullable: true, name: 'shipping_lat' })
+  shippingLat!: number | null;
+
+  @Column({ type: 'double precision', nullable: true, name: 'shipping_lng' })
+  shippingLng!: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'shipping_geocoded_at' })
+  shippingGeocodedAt!: Date | null;
 }
