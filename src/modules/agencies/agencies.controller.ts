@@ -14,6 +14,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto, AddAgencyItemDto } from './dto/agency.dto';
@@ -21,7 +22,7 @@ import { HttpCode } from '@nestjs/common';
 
 @ApiTags('Agencies')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('agencies')
 export class AgenciesController {
   constructor(private readonly svc: AgenciesService) {}

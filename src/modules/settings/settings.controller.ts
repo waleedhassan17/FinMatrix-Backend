@@ -15,6 +15,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { SettingsService } from './settings.service';
 import { UpdateSettingsDto } from './dto/settings.dto';
 import { CompaniesService } from '../companies/companies.service';
@@ -22,7 +23,7 @@ import { UsersService } from '../users/users.service';
 
 @ApiTags('Settings')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('settings')
 export class SettingsController {
   constructor(

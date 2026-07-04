@@ -22,6 +22,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import {
   ApproveInventoryUpdateRequestDto,
@@ -31,7 +32,7 @@ import {
 
 @ApiTags('Inventory Update Requests')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('inventory-update-requests')
 export class InventoryUpdateRequestsController {
   constructor(private readonly svc: InventoryApprovalsService) {}

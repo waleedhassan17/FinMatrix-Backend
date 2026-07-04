@@ -7,6 +7,7 @@ import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
 import { getPlanConfig } from '../billing/plan-config';
+import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 
 @Injectable()
 export class DeliveryPersonnelService {
@@ -14,6 +15,7 @@ export class DeliveryPersonnelService {
     @InjectRepository(DeliveryPersonnelProfile)
     private readonly repo: Repository<DeliveryPersonnelProfile>,
     private readonly dataSource: DataSource,
+    private readonly audit: OperationalAuditService,
   ) {}
 
   async list(companyId: string, page: number, limit: number, status?: string) {
@@ -156,10 +158,32 @@ export class DeliveryPersonnelService {
     });
   }
 
-  async update(companyId: string, userId: string, dto: UpdatePersonnelDto) {
+  async update(
+    companyId: string,
+    userId: string,
+    dto: UpdatePersonnelDto,
+    actorUserId?: string,
+  ) {
     const p = await this.getById(companyId, userId);
+    const previousStatus = p.status;
     Object.assign(p, dto);
-    return this.repo.save(p);
+    const saved = await this.repo.save(p);
+    if (dto.status && dto.status !== previousStatus) {
+      await this.audit.record({
+        companyId,
+        actorUserId: actorUserId ?? null,
+        action:
+          dto.status === 'inactive'
+            ? 'personnel_deactivated'
+            : dto.status === 'active'
+              ? 'personnel_reactivated'
+              : 'personnel_status_changed',
+        targetType: 'delivery_personnel',
+        targetId: userId,
+        details: { from: previousStatus, to: dto.status },
+      });
+    }
+    return saved;
   }
 
   async toggleAvailability(companyId: string, userId: string) {
@@ -220,7 +244,7 @@ export class DeliveryPersonnelService {
     };
   }
 
-  async resetPassword(companyId: string, userId: string) {
+  async resetPassword(companyId: string, userId: string, actorUserId?: string) {
     const p = await this.getById(companyId, userId);
     const tempPassword = `Del@${Math.floor(1000 + Math.random() * 9000)}`;
     const hash = await bcrypt.hash(tempPassword, 10);
@@ -230,9 +254,19 @@ export class DeliveryPersonnelService {
       .set({ passwordHash: hash })
       .where('id = :id', { id: p.userId })
       .execute();
+    await this.audit.record({
+      companyId,
+      actorUserId: actorUserId ?? null,
+      action: 'personnel_password_reset',
+      targetType: 'delivery_personnel',
+      targetId: p.userId,
+      details: { email: p.email ?? null },
+    });
     return {
       userId: p.userId,
-      credentials: { email: p.userId, temporaryPassword: tempPassword },
+      // p.email is the joined users.email (getById adds it) — the previous
+      // code leaked the userId here instead of the login email.
+      credentials: { email: p.email ?? '', temporaryPassword: tempPassword },
       message: 'Password reset. Share credentials securely.',
     };
   }

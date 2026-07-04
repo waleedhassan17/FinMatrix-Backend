@@ -8,6 +8,8 @@ import {
   IsNumberString,
   IsNumber,
   Length,
+  Max,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -33,6 +35,11 @@ export class CreateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+  // Manual destination override — used when automatic geocoding fails and
+  // the dispatcher supplies the address/pin themselves.
+  @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
   @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => DeliveryItemDto) items!: DeliveryItemDto[];
 }
 
@@ -42,6 +49,9 @@ export class UpdateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
 }
 
 export class DeliveryStatusUpdateDto {

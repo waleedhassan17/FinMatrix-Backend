@@ -59,6 +59,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
 import { MailModule } from './modules/mail/mail.module';
+import { OperationalAuditModule } from './common/audit/operational-audit.module';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { MailModule } from './modules/mail/mail.module';
       ],
     }),
     MailModule,
+    OperationalAuditModule,
     UsersModule,
     TypeOrmModule.forFeature([IdempotencyRecord]),
     AuthModule,

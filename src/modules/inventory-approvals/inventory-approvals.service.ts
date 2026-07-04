@@ -423,6 +423,11 @@ export class InventoryApprovalsService {
         );
       }
 
+      // CHUNK2: commit stock on approval — post the inventory/COGS journal
+      // entry for the approved delivered quantities here (ledger commit).
+      // Chunk 1 intentionally stops at the quantity + movement updates above
+      // and posts NO journal entries.
+
       // Zero-out / delete shadow inventory entries for approved items
       if (req.lines.length > 0) {
         await shadowRepo

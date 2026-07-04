@@ -4,12 +4,13 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { ShadowInventoryService } from './shadow-inventory.service';
 import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
 
 @ApiTags('Shadow Inventory')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('shadow-inventory')
 export class ShadowInventoryController {
   constructor(private readonly svc: ShadowInventoryService) {}

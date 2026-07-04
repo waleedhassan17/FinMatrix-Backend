@@ -25,6 +25,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import { SubmitBillPhotoDto } from './dto/inventory-approval.dto';
 
@@ -33,7 +34,7 @@ const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB
 
 @ApiTags('Deliveries — Bill Photo')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('deliveries')
 export class BillPhotoController {
   constructor(private readonly svc: InventoryApprovalsService) {}

@@ -6,6 +6,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { DeliveriesService } from './deliveries.service';
 import {
   CreateDeliveryDto,
@@ -18,7 +19,7 @@ import {
 
 @ApiTags('Deliveries')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('deliveries')
 export class DeliveriesController {
   constructor(private readonly svc: DeliveriesService) {}
@@ -133,7 +134,7 @@ export class DeliveriesController {
     @Body() dto: DeliveryStatusUpdateDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.updateStatus(companyId, id, dto, user.id);
+    return this.svc.updateStatus(companyId, id, dto, user.id, user.role);
   }
 
   @Get(':id/history')
@@ -186,6 +187,6 @@ export class DeliveriesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: ConfirmDeliveryDto,
   ) {
-    return this.svc.confirmDelivery(companyId, id, dto, user.id);
+    return this.svc.confirmDelivery(companyId, id, dto, user.id, user.role);
   }
 }

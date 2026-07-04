@@ -6,12 +6,13 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { DeliveryPersonnelService } from './delivery-personnel.service';
 import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
 
 @ApiTags('Delivery Personnel')
 @ApiBearerAuth()
-@UseGuards(CompanyGuard)
+@UseGuards(CompanyGuard, RolesGuard)
 @Controller('delivery-personnel')
 export class DeliveryPersonnelController {
   constructor(private readonly svc: DeliveryPersonnelService) {}
@@ -70,8 +71,9 @@ export class DeliveryPersonnelController {
     @CurrentCompany() companyId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() dto: UpdatePersonnelDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.update(companyId, userId, dto);
+    return this.svc.update(companyId, userId, dto, user.id);
   }
 
   @Patch(':userId/availability')
@@ -88,7 +90,8 @@ export class DeliveryPersonnelController {
   resetPassword(
     @CurrentCompany() companyId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.resetPassword(companyId, userId);
+    return this.svc.resetPassword(companyId, userId, user.id);
   }
 }

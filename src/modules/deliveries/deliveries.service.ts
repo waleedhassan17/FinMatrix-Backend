@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
 import { Delivery } from './entities/delivery.entity';
@@ -31,6 +36,23 @@ const STATUS_ORDER: Record<string, number> = {
   delivered: 5,
 };
 
+// Server-enforced status machine (phase3 Chunk 1): only these transitions
+// are legal. Skipping ahead (e.g. pending → delivered) is rejected, and a
+// replayed/double-tapped update of the current status is a no-op instead of
+// writing duplicate history.
+const LEGAL_TRANSITIONS: Record<string, DeliveryStatus[]> = {
+  unassigned: ['pending', 'cancelled'],
+  pending: ['picked_up', 'cancelled', 'failed'],
+  picked_up: ['in_transit', 'cancelled', 'failed', 'returned'],
+  in_transit: ['arrived', 'cancelled', 'failed', 'returned'],
+  arrived: ['delivered', 'cancelled', 'failed', 'returned'],
+  // Terminal states — nothing may leave them via the status endpoint.
+  delivered: [],
+  failed: [],
+  returned: [],
+  cancelled: [],
+};
+
 @Injectable()
 export class DeliveriesService {
   constructor(
@@ -61,12 +83,20 @@ export class DeliveriesService {
     );
     if (!address) return { address: null, destLat: null, destLng: null, geocodedAt: null };
     const geo = await this.geocoding.geocode(address);
-    return {
-      address,
-      destLat: geo?.lat ?? null,
-      destLng: geo?.lng ?? null,
-      geocodedAt: geo ? new Date() : null,
-    };
+    if (geo) {
+      return { address, destLat: geo.lat, destLng: geo.lng, geocodedAt: new Date() };
+    }
+    // Geocode failed (missing key / network / unresolvable address) — fall
+    // back to the coordinates stored on the customer record, if any.
+    if (customer?.shippingLat != null && customer?.shippingLng != null) {
+      return {
+        address,
+        destLat: Number(customer.shippingLat),
+        destLng: Number(customer.shippingLng),
+        geocodedAt: customer.shippingGeocodedAt ?? new Date(),
+      };
+    }
+    return { address, destLat: null, destLng: null, geocodedAt: null };
   }
 
   async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
@@ -135,8 +165,18 @@ export class DeliveriesService {
 
   async create(companyId: string, dto: CreateDeliveryDto, userId: string) {
     // Resolve + geocode the destination before opening the DB transaction
-    // (network call must not hold a transaction open).
-    const dest = await this.resolveDestination(companyId, dto.customerId);
+    // (network call must not hold a transaction open). A manual override
+    // from the dispatcher wins over automatic geocoding.
+    const dest =
+      dto.destLat != null && dto.destLng != null
+        ? {
+            address: dto.destAddress ?? null,
+            destLat: dto.destLat,
+            destLng: dto.destLng,
+            geocodedAt: new Date(),
+          }
+        : await this.resolveDestination(companyId, dto.customerId);
+    if (dto.destAddress && !dest.address) dest.address = dto.destAddress;
 
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
@@ -231,7 +271,10 @@ export class DeliveriesService {
         d.assignedAt = new Date();
       }
     }
-    Object.assign(d, dto);
+    const { destAddress, ...rest } = dto;
+    Object.assign(d, rest);
+    if (destAddress !== undefined) d.address = destAddress;
+    if (dto.destLat != null && dto.destLng != null) d.geocodedAt = new Date();
     return this.repo.save(d);
   }
 
@@ -250,35 +293,76 @@ export class DeliveriesService {
     return this.repo.save(d);
   }
 
-  async updateStatus(companyId: string, id: string, dto: DeliveryStatusUpdateDto, userId: string) {
-    const d = await this.getById(companyId, id);
-    const oldStatus = d.status;
-    if (dto.status === 'cancelled') {
-      if (['delivered', 'cancelled'].includes(oldStatus)) throw new BadRequestException('Cannot cancel delivered/cancelled delivery');
-      d.status = dto.status;
-      d.cancelReason = dto.notes ?? 'Cancelled by user';
-    } else if (oldStatus === 'cancelled') {
-      throw new BadRequestException('Cannot update cancelled delivery');
-    } else {
-      if (STATUS_ORDER[dto.status] !== undefined && STATUS_ORDER[oldStatus] !== undefined) {
-        if (STATUS_ORDER[dto.status] < STATUS_ORDER[oldStatus]) {
-          throw new BadRequestException('Cannot revert delivery status');
-        }
-      }
-      d.status = dto.status;
-    }
-    if (dto.status === 'delivered') d.completedAt = new Date();
-    await this.repo.save(d);
+  async updateStatus(
+    companyId: string,
+    id: string,
+    dto: DeliveryStatusUpdateDto,
+    userId: string,
+    userRole?: string,
+  ) {
+    // Row lock so two concurrent updates (double-tap, retry after timeout)
+    // serialize instead of both reading the same old status.
+    return this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(Delivery);
+      const d = await repo
+        .createQueryBuilder('d')
+        .setLock('pessimistic_write')
+        .where('d.id = :id AND d.companyId = :cid', { id, cid: companyId })
+        .getOne();
+      if (!d) throw new NotFoundException('Delivery not found');
 
-    const history = this.historyRepo.create({
-      deliveryId: id,
-      status: dto.status,
-      notes: dto.notes ?? null,
-      location: dto.location ?? null,
-      changedBy: userId,
+      // Riders may only update deliveries assigned to them.
+      const isRider = userRole === 'delivery' || userRole === 'delivery_personnel';
+      if (isRider && d.personnelId !== userId) {
+        throw new ForbiddenException({
+          code: 'NOT_YOUR_DELIVERY',
+          message: 'This delivery is not assigned to you.',
+        });
+      }
+      if (isRider && dto.status === 'cancelled') {
+        throw new ForbiddenException({
+          code: 'RIDER_CANNOT_CANCEL',
+          message: 'Delivery personnel cannot cancel a delivery. Report an issue instead.',
+        });
+      }
+
+      const oldStatus = d.status;
+
+      // Idempotent replay: re-sending the current status is a no-op — the
+      // retried request succeeds but nothing advances and no duplicate
+      // history row is written.
+      if (dto.status === oldStatus) {
+        return { ...d, idempotentReplay: true };
+      }
+
+      const allowed = LEGAL_TRANSITIONS[oldStatus] ?? [];
+      if (!allowed.includes(dto.status)) {
+        throw new BadRequestException({
+          code: 'ILLEGAL_STATUS_TRANSITION',
+          message: `Cannot move a delivery from '${oldStatus}' to '${dto.status}'.`,
+          from: oldStatus,
+          to: dto.status,
+          allowed,
+        });
+      }
+
+      d.status = dto.status;
+      if (dto.status === 'cancelled') d.cancelReason = dto.notes ?? 'Cancelled by user';
+      if (dto.status === 'delivered') d.completedAt = new Date();
+      await repo.save(d);
+
+      const historyRepo = em.getRepository(DeliveryStatusHistory);
+      await historyRepo.save(
+        historyRepo.create({
+          deliveryId: id,
+          status: dto.status,
+          notes: dto.notes ?? null,
+          location: dto.location ?? null,
+          changedBy: userId,
+        }),
+      );
+      return d;
     });
-    await this.historyRepo.save(history);
-    return d;
   }
 
   async getHistory(companyId: string, deliveryId: string, page: number, limit: number) {
@@ -358,11 +442,30 @@ export class DeliveriesService {
     return { deliveryId: d.id, signature: sig };
   }
 
-  async confirmDelivery(companyId: string, deliveryId: string, dto: ConfirmDeliveryDto, userId: string) {
+  async confirmDelivery(
+    companyId: string,
+    deliveryId: string,
+    dto: ConfirmDeliveryDto,
+    userId: string,
+    userRole?: string,
+  ) {
     const d = await this.getById(companyId, deliveryId);
+    const isRider = userRole === 'delivery' || userRole === 'delivery_personnel';
+    if (isRider && d.personnelId !== userId) {
+      throw new ForbiddenException({
+        code: 'NOT_YOUR_DELIVERY',
+        message: 'This delivery is not assigned to you.',
+      });
+    }
+    // Idempotent replay: confirming an already-delivered delivery succeeds
+    // without changing anything (a retried/double-tapped confirm must not
+    // error or double-advance).
+    if (d.status === 'delivered') {
+      return { deliveryId: d.id, status: 'delivered', completedAt: d.completedAt };
+    }
     // Allow completion from any active (non-terminal) status. A courier may mark
     // a delivery received without explicitly stepping through every milestone.
-    const TERMINAL = ['delivered', 'failed', 'returned', 'cancelled'];
+    const TERMINAL = ['failed', 'returned', 'cancelled'];
     if (TERMINAL.includes(d.status)) {
       throw new BadRequestException(`Delivery is already ${d.status}`);
     }
