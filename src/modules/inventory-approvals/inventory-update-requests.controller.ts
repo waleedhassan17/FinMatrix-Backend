@@ -157,7 +157,8 @@ export class InventoryUpdateRequestsController {
     @Res() res: Response,
   ) {
     const file = await this.svc.streamBillPhoto(companyId, id);
-    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Type', file.mimeType ?? 'image/jpeg');
+    if (file.size != null) res.setHeader('Content-Length', String(file.size));
     res.setHeader('Cache-Control', 'private, max-age=3600');
     file.stream.pipe(res);
   }
