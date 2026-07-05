@@ -30,13 +30,17 @@ import { Company } from '../../modules/companies/entities/company.entity';
 import { User } from '../../modules/users/entities/user.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
+import { Delivery } from '../../modules/deliveries/entities/delivery.entity';
+import { DeliveryItem } from '../../modules/deliveries/entities/delivery-item.entity';
 import { InvoicesService } from '../../modules/invoices/invoices.service';
+import { PostingService } from '../../modules/journal-entries/posting.service';
 import { BillsService } from '../../modules/bills/bills.service';
 import { PaymentsService } from '../../modules/payments/payments.service';
 import { PurchaseOrdersService } from '../../modules/purchase-orders/purchase-orders.service';
 import {
   ACCT_CASH,
   ACCT_BANK,
+  ACCT_OPENING_BALANCE_EQUITY,
 } from '../../modules/accounts/accounts.constants';
 
 loadEnv();
@@ -52,6 +56,7 @@ async function run() {
   const bills = app.get(BillsService);
   const payments = app.get(PaymentsService);
   const pos = app.get(PurchaseOrdersService);
+  const posting = app.get(PostingService);
 
   console.log('> Connected. Re-seeding MetroMatrix through the ledger…\n');
 
@@ -89,6 +94,19 @@ async function run() {
   await del(`DELETE FROM inventory_movements WHERE company_id=$1`);
   await del(`DELETE FROM inventory_adjustments WHERE company_id=$1`);
   await del(`DELETE FROM tax_payments WHERE company_id=$1`);
+  // Delivery module: old rows reference customers/items that are recreated
+  // below — leaving them produces a broken-looking demo.
+  await del(`DELETE FROM inventory_approval_audit_entries WHERE company_id=$1`);
+  await del(`DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id=$1)`);
+  await del(`DELETE FROM inventory_update_requests WHERE company_id=$1`);
+  await del(`DELETE FROM shadow_inventory_snapshots WHERE company_id=$1`);
+  await del(`DELETE FROM delivery_location_logs WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(`DELETE FROM delivery_status_history WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(`DELETE FROM delivery_issues WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(`DELETE FROM delivery_signatures WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(`DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(`DELETE FROM deliveries WHERE company_id=$1`);
+  await del(`UPDATE agencies SET inventory = '[]'::jsonb WHERE company_id=$1`);
   await del(`DELETE FROM customers WHERE company_id=$1`);
   await del(`DELETE FROM vendors WHERE company_id=$1`);
   await del(`DELETE FROM inventory_items WHERE company_id=$1`);
@@ -172,13 +190,43 @@ async function run() {
   const rentAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6000' });
   const utilAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6100' });
 
+  // Opening cash — posted through the engine (Dr Cash / Cr Opening Balance
+  // Equity), dated before the first month of activity, exactly as an
+  // accountant would enter it. Keeps the demo balance sheet cash healthy
+  // while every report still derives from the ledger.
+  const obeAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: ACCT_OPENING_BALANCE_EQUITY });
+  if (obeAcct) {
+    const openDate = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 12, 1));
+    await ds.transaction(async (manager) => {
+      await posting.createEntry(manager, {
+        companyId: cid,
+        date: openDate,
+        memo: 'Opening cash balance',
+        createdBy: uid,
+        status: 'posted',
+        sourceType: 'opening_balance',
+        sourceId: cashAcct.id,
+        lines: [
+          { accountId: cashAcct.id, description: 'Opening cash', debit: '250000.0000', credit: '0', lineOrder: 0 },
+          { accountId: obeAcct.id, description: 'Opening balance offset', debit: '0', credit: '250000.0000', lineOrder: 1 },
+        ],
+      });
+    });
+    console.log('  ✓ opening cash 250,000 posted (Dr 1000 / Cr 3900)');
+  }
+
   // ── 3. Twelve months of activity, posted through the services ──
   const now = new Date();
   let invCount = 0, billCount = 0, payCount = 0, poCount = 0, errors = 0;
 
   for (let m = 11; m >= 0; m--) {
     const base = new Date(now.getFullYear(), now.getMonth() - m, 1);
-    const day = (n: number) => ymd(new Date(base.getFullYear(), base.getMonth(), n));
+    // Clamp to today: a demo document dated in the future would be excluded
+    // from as-of-today reports and break the cross-report ties.
+    const day = (n: number) => {
+      const d = new Date(base.getFullYear(), base.getMonth(), n);
+      return ymd(d > now ? now : d);
+    };
     const mlabel = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`;
 
     // Each month trades in two products. We BUY ~ what we SELL (plus a small
@@ -234,7 +282,7 @@ async function run() {
             await payments.receive(cid, uid, {
               customerId: cust.id, paymentDate: day(24), paymentMethod: 'cash',
               amount: full.total, bankAccountId: cashId,
-              allocations: [{ invoiceId: inv.id, amount: full.total }],
+              applications: [{ invoiceId: inv.id, amount: full.total }],
             } as any);
             payCount++;
           }
@@ -262,6 +310,87 @@ async function run() {
         }
       }
     } catch (e: any) { errors++; console.warn(`   EXP ${m} failed:`, e.message); }
+  }
+
+  // ── 4. Delivery-module demo data (fresh customers/items, riders kept) ──
+  // Statuses only go up to 'arrived' or stay 'delivered' WITHOUT an approval
+  // request: stock/ledger effects happen exclusively through the real
+  // approval flow, so nothing here can un-tie the books. Presenting live:
+  // advance a delivery as a rider, submit the bill photo, approve it — the
+  // COGS/Inventory posting happens for real.
+  try {
+    const riders: Array<{ id: string }> = await ds.query(
+      `SELECT p.user_id AS id FROM delivery_personnel_profiles p WHERE p.company_id=$1 AND p.status='active' ORDER BY p.created_at`,
+      [cid],
+    );
+    if (riders.length > 0) {
+      const dRepo = ds.getRepository(Delivery);
+      const diRepo = ds.getRepository(DeliveryItem);
+      const zones = ['Gulberg', 'DHA', 'Johar Town', 'Model Town', 'Cantt'];
+      const plan: Array<{ status: string; daysAgo: number }> = [
+        { status: 'delivered', daysAgo: 6 },
+        { status: 'delivered', daysAgo: 4 },
+        { status: 'delivered', daysAgo: 2 },
+        { status: 'arrived', daysAgo: 0 },
+        { status: 'in_transit', daysAgo: 0 },
+        { status: 'pending', daysAgo: 0 },
+        { status: 'unassigned', daysAgo: 0 },
+      ];
+      let dCount = 0;
+      for (let i = 0; i < plan.length; i++) {
+        const p = plan[i];
+        const cust = customers[i % customers.length];
+        const rider = p.status === 'unassigned' ? null : riders[i % riders.length].id;
+        const when = new Date(Date.now() - p.daysAgo * 86400000);
+        const itA = items[i % items.length];
+        const itB = items[(i + 2) % items.length];
+        const d: Delivery = await dRepo.save(
+          dRepo.create({
+            companyId: cid,
+            customerId: cust.id,
+            customerName: cust.name,
+            zone: zones[i % zones.length],
+            address: `${cust.name}, ${(cust.billingAddress as any)?.city ?? 'Lahore'}, Pakistan`,
+            referenceNo: `DEL-${ymd(when).replace(/-/g, '')}-${String(i + 1).padStart(3, '0')}`,
+            personnelId: rider,
+            status: p.status as never,
+            priority: (i % 3 === 0 ? 'high' : 'normal') as never,
+            preferredDate: ymd(when),
+            notes: null,
+            createdBy: uid,
+            assignedAt: rider ? when : null,
+            completedAt: p.status === 'delivered' ? when : null,
+          } as unknown as Delivery),
+        );
+        await diRepo.save([
+          diRepo.create({
+            deliveryId: d.id, itemId: itA.id, itemName: itA.name,
+            quantity: '4', orderedQty: '4', unitPrice: itA.sellingPrice,
+            deliveredQty: p.status === 'delivered' ? '4' : '0', returnedQty: '0',
+          } as unknown as DeliveryItem),
+          diRepo.create({
+            deliveryId: d.id, itemId: itB.id, itemName: itB.name,
+            quantity: '2', orderedQty: '2', unitPrice: itB.sellingPrice,
+            deliveredQty: p.status === 'delivered' ? '2' : '0', returnedQty: '0',
+          } as unknown as DeliveryItem),
+        ]);
+        dCount++;
+      }
+      // Rider dashboards should reflect the seeded history.
+      await ds.query(
+        `UPDATE delivery_personnel_profiles p SET
+           total_deliveries = (SELECT COUNT(*) FROM deliveries d WHERE d.personnel_id = p.user_id AND d.company_id=$1 AND d.status='delivered'),
+           current_load = (SELECT COUNT(*) FROM deliveries d WHERE d.personnel_id = p.user_id AND d.company_id=$1 AND d.status IN ('pending','picked_up','in_transit','arrived')),
+           is_available = true
+         WHERE p.company_id=$1`,
+        [cid],
+      );
+      console.log(`  ✓ ${dCount} deliveries across ${riders.length} riders (approval loop left LIVE for the demo)`);
+    } else {
+      console.warn('  (no active riders found — delivery demo data skipped)');
+    }
+  } catch (e: any) {
+    console.warn('  delivery demo data failed:', e.message);
   }
 
   // Mark setup complete so the checklist hides for the demo company.
