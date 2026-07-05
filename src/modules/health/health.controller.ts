@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { PublicRoute } from '../../common/decorators/public.decorator';
 import {
   HealthCheckService,
   HealthCheck,
@@ -20,6 +21,14 @@ export class HealthController {
   @HealthCheck()
   liveness() {
     return this.health.check([]);
+  }
+
+  // TEMPORARY (phase6 verification): throws so the deployed app sends a test
+  // error to Sentry. REMOVE after the event is confirmed in the dashboard.
+  @Get('debug-sentry')
+  @PublicRoute()
+  debugSentry(): never {
+    throw new Error('Sentry verification test error (phase6) — safe to ignore');
   }
 
   @Get('db')

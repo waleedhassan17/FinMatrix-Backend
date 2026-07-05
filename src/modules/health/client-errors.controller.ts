@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, Logger, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
-import * as Sentry from '@sentry/node';
+import * as Sentry from '@sentry/nestjs';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
 class ClientErrorDto {

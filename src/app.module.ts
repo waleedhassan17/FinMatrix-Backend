@@ -60,9 +60,12 @@ import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
 import { MailModule } from './modules/mail/mail.module';
 import { OperationalAuditModule } from './common/audit/operational-audit.module';
+import { SentryModule } from '@sentry/nestjs/setup';
 
 @Module({
   imports: [
+    // Sentry first so its error hooks wrap everything that follows.
+    SentryModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       load: [appConfig, databaseConfig, jwtConfig, mailConfig],
