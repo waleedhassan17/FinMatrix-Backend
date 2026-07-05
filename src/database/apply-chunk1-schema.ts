@@ -84,7 +84,8 @@ async function main(): Promise<void> {
   for (const [ts, name] of rows) {
     await client.query(
       `INSERT INTO "migrations" ("timestamp", "name")
-       SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM "migrations" WHERE "name" = $2)`,
+       SELECT $1::bigint, $2::varchar
+       WHERE NOT EXISTS (SELECT 1 FROM "migrations" WHERE "name" = $2::varchar)`,
       [ts, name],
     );
   }
