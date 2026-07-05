@@ -176,9 +176,10 @@ export class BillingService {
       throw new BadRequestException('A payment screenshot is required.');
     }
 
-    // Persist the screenshot. The DURABLE copy is the bytea column — Heroku's
-    // dyno filesystem is ephemeral, so a disk-only file is gone by the time the
-    // super-admin reviews it. Disk is kept as a same-dyno fast path only.
+    // Persist the screenshot durably via StorageService: Cloudinary
+    // (type=authenticated) when configured, Postgres bytea otherwise — never
+    // the dyno filesystem. Only the storage key is kept on the submission;
+    // the legacy screenshotData bytea remains readable for old rows.
     const stored = await this.storage.putBuffer({
       bucket: 'payment-screenshots',
       buffer: file.buffer,
@@ -198,7 +199,6 @@ export class BillingService {
       currency: config.currency,
       screenshotKey: stored.key,
       screenshotMime: file.mimetype,
-      screenshotData: file.buffer,
       submittedBy: userId,
     });
     await this.submissionRepo.save(submission);

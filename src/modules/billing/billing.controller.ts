@@ -21,7 +21,7 @@ import { BillingService } from './billing.service';
 import { BankDetailsQueryDto, SubmitPaymentDto } from './dto/billing.dto';
 import { isPlanKey, PlanKey } from './plan-config';
 
-const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB
 
 /**

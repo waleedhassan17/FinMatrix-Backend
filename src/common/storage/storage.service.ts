@@ -61,16 +61,33 @@ export class StorageService {
     const apiPrefix = this.config.get<string>('API_PREFIX', 'api/v1');
     this.publicBase = `${appUrl.replace(/\/$/, '')}/${apiPrefix.replace(/^\/|\/$/g, '')}`;
 
-    // The SDK auto-configures from CLOUDINARY_URL; calling config() with no
-    // overrides just reads the resolved values.
+    // Credentials come ONLY from environment variables (phase5 Task 1):
+    // either the discrete trio CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY /
+    // CLOUDINARY_API_SECRET, or a single CLOUDINARY_URL. Never hardcoded.
+    const cloudName = this.config.get<string>('CLOUDINARY_CLOUD_NAME', '');
+    const apiKey = this.config.get<string>('CLOUDINARY_API_KEY', '');
+    const apiSecret = this.config.get<string>('CLOUDINARY_API_SECRET', '');
     const cloudinaryUrl = this.config.get<string>('CLOUDINARY_URL', '');
-    this.cloudinaryEnabled = !!cloudinaryUrl;
-    if (this.cloudinaryEnabled) {
+    if (cloudName && apiKey && apiSecret) {
+      cloudinary.config({
+        cloud_name: cloudName,
+        api_key: apiKey,
+        api_secret: apiSecret,
+        secure: true,
+      });
+      this.cloudinaryEnabled = true;
+    } else if (cloudinaryUrl) {
+      // SDK auto-configures from CLOUDINARY_URL; config() just adds secure.
       cloudinary.config({ secure: true });
-      this.logger.log('Storage backend: Cloudinary (authenticated delivery)');
+      this.cloudinaryEnabled = true;
     } else {
-      this.logger.log('Storage backend: Postgres bytea (CLOUDINARY_URL not set)');
+      this.cloudinaryEnabled = false;
     }
+    this.logger.log(
+      this.cloudinaryEnabled
+        ? 'Storage backend: Cloudinary (authenticated delivery)'
+        : 'Storage backend: Postgres bytea (Cloudinary env vars not set)',
+    );
   }
 
   /**
@@ -129,8 +146,10 @@ export class StorageService {
   async remove(key: string): Promise<void> {
     try {
       if (key.startsWith('cld:')) {
-        const publicId = key.slice(4).replace(/\.[a-z0-9]+$/i, '');
-        await cloudinary.uploader.destroy(publicId, { type: 'authenticated' });
+        await cloudinary.uploader.destroy(key.slice(4), {
+          resource_type: 'raw',
+          type: 'authenticated',
+        });
       } else if (key.startsWith('db:')) {
         await this.fileRepo.delete({ id: key.slice(3) });
       } else {
@@ -152,15 +171,19 @@ export class StorageService {
     const folder = `${opts.bucket}/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
     const publicId = `${folder}/${randomUUID()}`;
     const dataUri = `data:${opts.mimeType};base64,${opts.buffer.toString('base64')}`;
+    // resource_type 'raw' = exact-byte storage (no image transcoding) and
+    // uniform support for jpg/png/pdf. We serve through our own auth-gated
+    // endpoints, so CDN-side image transformations are not needed.
+    const ext = this.extFromMime(opts.mimeType);
     const result = await cloudinary.uploader.upload(dataUri, {
-      public_id: publicId,
-      resource_type: 'image',
+      public_id: `${publicId}${ext}`,
+      resource_type: 'raw',
       // Authenticated assets are not publicly accessible — delivery requires
       // a signed URL, which only this API generates.
       type: 'authenticated',
       overwrite: false,
     });
-    return `cld:${result.public_id}.${result.format}`;
+    return `cld:${result.public_id}`;
   }
 
   private async readFromCloudinary(key: string): Promise<ReadableStoredFile | null> {
@@ -168,13 +191,12 @@ export class StorageService {
       this.logger.error(`Cannot read ${key}: CLOUDINARY_URL is not configured`);
       return null;
     }
-    const rest = key.slice(4);
-    const extMatch = rest.match(/\.([a-z0-9]+)$/i);
+    const publicId = key.slice(4);
+    const extMatch = publicId.match(/\.([a-z0-9]+)$/i);
     const format = extMatch?.[1] ?? 'jpg';
-    const publicId = rest.replace(/\.[a-z0-9]+$/i, '');
-    // Short-lived signed delivery URL; the asset itself stays private.
-    const signedUrl = cloudinary.url(`${publicId}.${format}`, {
-      resource_type: 'image',
+    // Signed delivery URL; the asset itself stays private (authenticated).
+    const signedUrl = cloudinary.url(publicId, {
+      resource_type: 'raw',
       type: 'authenticated',
       sign_url: true,
       secure: true,
@@ -233,8 +255,25 @@ export class StorageService {
         return 'image/png';
       case 'webp':
         return 'image/webp';
+      case 'pdf':
+        return 'application/pdf';
       default:
         return 'application/octet-stream';
+    }
+  }
+
+  private extFromMime(mime: string): string {
+    switch (mime) {
+      case 'image/jpeg':
+        return '.jpg';
+      case 'image/png':
+        return '.png';
+      case 'image/webp':
+        return '.webp';
+      case 'application/pdf':
+        return '.pdf';
+      default:
+        return '.bin';
     }
   }
 }
