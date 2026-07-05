@@ -72,6 +72,12 @@ async function main(): Promise<void> {
       ON "stored_files" ("bucket", "created_at")
   `);
 
+  // 1783730000000-ApprovalJournalLink (chunk 2)
+  await client.query(`
+    ALTER TABLE "inventory_update_requests"
+      ADD COLUMN IF NOT EXISTS "journal_entry_id" uuid
+  `);
+
   // Record the migrations as applied so future migration:run attempts skip them.
   await client.query(`CREATE TABLE IF NOT EXISTS "migrations" (
     "id" SERIAL PRIMARY KEY, "timestamp" bigint NOT NULL, "name" varchar NOT NULL
@@ -80,6 +86,7 @@ async function main(): Promise<void> {
     [1783700000000, 'CustomerRecordFields1783700000000'],
     [1783710000000, 'OperationalAuditEvents1783710000000'],
     [1783720000000, 'StoredFiles1783720000000'],
+    [1783730000000, 'ApprovalJournalLink1783730000000'],
   ];
   for (const [ts, name] of rows) {
     await client.query(

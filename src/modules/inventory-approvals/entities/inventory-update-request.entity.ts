@@ -74,6 +74,11 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'proof_bill_photo_captured_at' })
   proofBillPhotoCapturedAt!: Date | null;
 
+  // Journal entry posted on approval (Dr COGS / Cr Inventory). Reversed and
+  // cleared when the approval is undone.
+  @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
+  journalEntryId!: string | null;
+
   @OneToMany(() => InventoryUpdateRequestLine, (l) => l.request, { cascade: true })
   lines!: InventoryUpdateRequestLine[];
 }

@@ -192,7 +192,19 @@ export class PurchaseOrdersService {
             where: { id: line.itemId, companyId },
           });
           if (item) {
-            const newQty = toDecimal(item.quantityOnHand).plus(delta);
+            const onHand = toDecimal(item.quantityOnHand);
+            const newQty = onHand.plus(delta);
+            // WEIGHTED-AVERAGE COST (the system's single cost method): fold
+            // the purchase cost into the item's average so every outflow
+            // (invoice COGS, credit-memo restock, adjustments, delivery
+            // approvals) is valued consistently and GL Inventory keeps tying
+            // to qty × unitCost. Receipts at a new price re-average; negative
+            // deltas (receipt corrections) relieve at the current average.
+            if (delta.greaterThan(0) && newQty.greaterThan(0)) {
+              const oldValue = onHand.lessThan(0) ? new Decimal(0) : onHand.times(toDecimal(item.unitCost));
+              const newValue = oldValue.plus(delta.times(toDecimal(line.unitCost)));
+              item.unitCost = newValue.dividedBy(newQty).toFixed(4);
+            }
             item.quantityOnHand = newQty.toFixed(4);
             await itemRepo.save(item);
             inventoryValue = inventoryValue.plus(delta.times(toDecimal(line.unitCost)));

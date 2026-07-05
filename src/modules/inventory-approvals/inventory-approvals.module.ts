@@ -10,6 +10,8 @@ import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inventory-snapshot.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
+import { AccountsModule } from '../accounts/accounts.module';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import { InventoryApprovalsController } from './inventory-approvals.controller';
 import { BillPhotoController } from './bill-photo.controller';
@@ -29,6 +31,8 @@ import { InventoryUpdateRequestsController } from './inventory-update-requests.c
       ShadowInventorySnapshot,
     ]),
     NotificationsModule,
+    JournalEntriesModule,
+    AccountsModule,
   ],
   providers: [InventoryApprovalsService],
   controllers: [

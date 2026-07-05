@@ -81,7 +81,8 @@ export class ReconciliationsController {
   remove(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.remove(companyId, id);
+    return this.svc.remove(companyId, id, user.id);
   }
 }

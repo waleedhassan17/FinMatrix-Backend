@@ -8,6 +8,7 @@ import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { Reconciliation } from './entities/reconciliation.entity';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 import {
   CreateReconciliationDto,
   ListReconciliationsQueryDto,
@@ -33,6 +34,7 @@ export class ReconciliationsService {
     private readonly glRepo: Repository<GeneralLedgerEntry>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    private readonly audit: OperationalAuditService,
   ) {}
 
   private async getReconcilableAccount(
@@ -247,8 +249,14 @@ export class ReconciliationsService {
     });
   }
 
-  /** Undo a reconciliation — unstamp its rows so they can be reconciled again. */
-  async remove(companyId: string, id: string) {
+  /**
+   * Undo a reconciliation — unstamp its rows so they can be reconciled again.
+   * Locked-down (a reconciled period must not be silently altered): only the
+   * MOST RECENT reconciliation for the account may be undone (undoing an
+   * older one would corrupt every later beginning balance), and the undo is
+   * recorded in the operational audit trail.
+   */
+  async remove(companyId: string, id: string, actorUserId?: string) {
     return this.dataSource.transaction(async (manager) => {
       const reconRepo = manager.getRepository(Reconciliation);
       const glRepo = manager.getRepository(GeneralLedgerEntry);
@@ -259,11 +267,43 @@ export class ReconciliationsService {
           message: 'Reconciliation not found',
         });
       }
+      const newer = await reconRepo
+        .createQueryBuilder('r')
+        .where('r.companyId = :cid AND r.accountId = :aid AND r.id != :id', {
+          cid: companyId,
+          aid: recon.accountId,
+          id,
+        })
+        .andWhere(
+          '(r.statementDate > :sd OR (r.statementDate = :sd AND r.createdAt > :ca))',
+          { sd: recon.statementDate, ca: recon.createdAt },
+        )
+        .getCount();
+      if (newer > 0) {
+        throw new BadRequestException({
+          code: 'RECONCILIATION_NOT_LATEST',
+          message:
+            'Only the most recent reconciliation for this account can be undone. Undo the newer reconciliations first.',
+        });
+      }
       await glRepo.update(
         { companyId, reconciliationId: id },
         { cleared: false, reconciliationId: null },
       );
       await reconRepo.remove(recon);
+      await this.audit.record({
+        companyId,
+        actorUserId: actorUserId ?? null,
+        action: 'reconciliation_undone',
+        targetType: 'reconciliation',
+        targetId: id,
+        details: {
+          accountId: recon.accountId,
+          statementDate: recon.statementDate,
+          statementEndingBalance: recon.statementEndingBalance,
+          clearedCount: recon.clearedCount,
+        },
+      });
       return { id, undone: true };
     });
   }

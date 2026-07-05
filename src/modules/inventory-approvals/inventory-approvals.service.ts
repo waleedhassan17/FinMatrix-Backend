@@ -18,6 +18,11 @@ import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inv
 import { User } from '../users/entities/user.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PostingService } from '../journal-entries/posting.service';
+import { AccountsService } from '../accounts/accounts.service';
+import { ACCT_COGS, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import { JournalEntry } from '../journal-entries/entities/journal-entry.entity';
+import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { StorageService, StoredFile } from '../../common/storage/storage.service';
 import {
   ApproveInventoryUpdateRequestDto,
@@ -27,7 +32,7 @@ import {
   ReviewRequestDto,
   SubmitBillPhotoDto,
 } from './dto/inventory-approval.dto';
-import { toDecimal } from '../../common/utils/money.util';
+import { toDecimal, MONEY_TOLERANCE } from '../../common/utils/money.util';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 
@@ -51,6 +56,8 @@ export class InventoryApprovalsService {
     private readonly dataSource: DataSource,
     private readonly notifications: NotificationsService,
     private readonly storage: StorageService,
+    private readonly posting: PostingService,
+    private readonly accounts: AccountsService,
   ) {}
 
   // ==========================================================================
@@ -376,7 +383,10 @@ export class InventoryApprovalsService {
         );
       }
 
-      // Apply each line with row-locking + negative-stock guard
+      // Apply each line with row-locking + negative-stock guard. Accumulate
+      // the signed cost of goods leaving stock so the ledger commit below
+      // matches the quantity change exactly (weighted-average unit cost).
+      let netCost = toDecimal(0);
       for (const line of req.lines) {
         const item = await itemRepo
           .createQueryBuilder('i')
@@ -405,6 +415,9 @@ export class InventoryApprovalsService {
         item.quantityOnHand = String(next);
         await itemRepo.save(item);
         line.afterQty = String(next);
+        netCost = netCost.plus(
+          toDecimal(delivered - returned).times(toDecimal(item.unitCost)),
+        );
 
         await moveRepo.save(
           moveRepo.create({
@@ -423,10 +436,38 @@ export class InventoryApprovalsService {
         );
       }
 
-      // CHUNK2: commit stock on approval — post the inventory/COGS journal
-      // entry for the approved delivered quantities here (ledger commit).
-      // Chunk 1 intentionally stops at the quantity + movement updates above
-      // and posts NO journal entries.
+      // Ledger commit (chunk 2): goods dispatched to the customer leave stock,
+      // so the GL must move with the quantity — Dr COGS / Cr Inventory at the
+      // item's (weighted-average) unit cost. A net return (returned >
+      // delivered) posts the mirror entry. Without this, Inventory Valuation
+      // and the Balance Sheet Inventory line diverge. Same transaction as the
+      // quantity change, so both commit or neither does.
+      let journalEntryId: string | null = null;
+      if (netCost.abs().greaterThan(MONEY_TOLERANCE)) {
+        const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+        const cogsAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, em);
+        const value = netCost.abs().toFixed(4);
+        const outbound = netCost.greaterThan(0);
+        const entry = await this.posting.createEntry(em, {
+          companyId,
+          date: new Date().toISOString().split('T')[0],
+          memo: `Delivery ${req.deliveryReference ?? req.deliveryId} approved — stock committed`,
+          createdBy: reviewerId,
+          status: 'posted',
+          sourceType: 'delivery_approval',
+          sourceId: req.id,
+          lines: outbound
+            ? [
+                { accountId: cogsAcct.id, description: 'Cost of goods delivered', debit: value, credit: '0', lineOrder: 0 },
+                { accountId: inventoryAcct.id, description: 'Inventory relieved on delivery', debit: '0', credit: value, lineOrder: 1 },
+              ]
+            : [
+                { accountId: inventoryAcct.id, description: 'Inventory returned on delivery', debit: value, credit: '0', lineOrder: 0 },
+                { accountId: cogsAcct.id, description: 'COGS reversed on returned goods', debit: '0', credit: value, lineOrder: 1 },
+              ],
+        });
+        journalEntryId = entry.id;
+      }
 
       // Zero-out / delete shadow inventory entries for approved items
       if (req.lines.length > 0) {
@@ -454,6 +495,7 @@ export class InventoryApprovalsService {
       const now = new Date();
       req.status = 'approved';
       req.shadowStatus = 'synced';
+      req.journalEntryId = journalEntryId;
       req.reviewedAt = now;
       req.reviewedBy = reviewerId;
       req.reviewerComment = dto.reviewerComment ?? null;
@@ -621,6 +663,42 @@ export class InventoryApprovalsService {
             description: `approval_undone: ${req.deliveryReference ?? req.deliveryId}`,
           }),
         );
+      }
+
+      // Reverse the approval's ledger commit EXACTLY (swap Dr/Cr of the
+      // original lines) so the undo restores the GL to the paisa even if the
+      // item's average cost has drifted since approval. Voids reverse — the
+      // original entry is never deleted.
+      if (req.journalEntryId) {
+        const jeRepo = em.getRepository(JournalEntry);
+        const jeLineRepo = em.getRepository(JournalEntryLine);
+        const originalEntry = await jeRepo.findOne({
+          where: { id: req.journalEntryId, companyId },
+        });
+        const originalLines = await jeLineRepo.find({
+          where: { entryId: req.journalEntryId },
+          order: { lineOrder: 'ASC' },
+        });
+        if (originalEntry && originalLines.length >= 2) {
+          await this.posting.createEntry(em, {
+            companyId,
+            date: new Date().toISOString().split('T')[0],
+            memo: `Undo approval ${req.deliveryReference ?? req.deliveryId} — reverses ${originalEntry.reference}`,
+            createdBy: reviewerId,
+            status: 'posted',
+            sourceType: 'delivery_approval_undo',
+            sourceId: req.id,
+            reversalOfId: originalEntry.id,
+            lines: originalLines.map((l, i) => ({
+              accountId: l.accountId,
+              description: `Reversal: ${l.description ?? originalEntry.reference}`,
+              debit: l.credit,
+              credit: l.debit,
+              lineOrder: i,
+            })),
+          });
+        }
+        req.journalEntryId = null;
       }
 
       // Reset shadow inventory for the personnel: restore qty to reflect undo

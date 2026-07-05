@@ -34,7 +34,8 @@
     "seed:metromatrix:ledger:prod": "node dist/database/seeds/metromatrix-ledger.seed.js",
     "seed:superadmin": "ts-node -r tsconfig-paths/register src/database/seeds/super-admin-seed.ts",
     "seed:superadmin:prod": "node dist/database/seeds/super-admin-seed.js",
-    "test:chunk1": "ts-node -r tsconfig-paths/register test/chunk1.acceptance.ts"
+    "test:chunk1": "ts-node -r tsconfig-paths/register test/chunk1.acceptance.ts",
+    "test:chunk2": "ts-node -r tsconfig-paths/register test/chunk2.acceptance.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
