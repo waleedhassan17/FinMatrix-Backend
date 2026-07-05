@@ -13,6 +13,20 @@ import {
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, subtractMoney, toDecimal } from '../../common/utils/money.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
+import { Address } from './entities/customer.entity';
+
+/**
+ * App builds send `zipCode`; the canonical stored field is `postalCode`.
+ * Normalized here (not via class-transformer) so the alias can never be
+ * lost to decorator ordering.
+ */
+function normalizeAddress(
+  addr?: { street?: string; city?: string; state?: string; postalCode?: string; zipCode?: string; country?: string } | null,
+): Address | null {
+  if (!addr) return null;
+  const { zipCode, ...rest } = addr;
+  return { ...rest, postalCode: rest.postalCode ?? zipCode };
+}
 
 @Injectable()
 export class CustomersService {
@@ -140,10 +154,11 @@ export class CustomersService {
   }
 
   async create(companyId: string, dto: CreateCustomerDto): Promise<Customer> {
+    const billing = normalizeAddress(dto.billingAddress);
     const shipping =
-      dto.shippingAddress?.sameAsBilling && dto.billingAddress
-        ? dto.billingAddress
-        : (dto.shippingAddress ?? null);
+      dto.shippingAddress?.sameAsBilling && billing
+        ? billing
+        : normalizeAddress(dto.shippingAddress);
 
     const entity = this.repo.create({
       companyId,
@@ -151,7 +166,7 @@ export class CustomersService {
       company: dto.company ?? null,
       email: dto.email ?? null,
       phone: dto.phone ?? null,
-      billingAddress: dto.billingAddress ?? null,
+      billingAddress: billing,
       shippingAddress: shipping,
       creditLimit: dto.creditLimit ?? '0',
       paymentTerms: dto.paymentTerms ?? 'net30',
@@ -197,11 +212,11 @@ export class CustomersService {
     if (dto.company !== undefined) c.company = dto.company;
     if (dto.email !== undefined) c.email = dto.email;
     if (dto.phone !== undefined) c.phone = dto.phone;
-    if (dto.billingAddress !== undefined) c.billingAddress = dto.billingAddress;
+    if (dto.billingAddress !== undefined) c.billingAddress = normalizeAddress(dto.billingAddress);
     if (dto.shippingAddress !== undefined) {
       c.shippingAddress = dto.shippingAddress?.sameAsBilling
-        ? (dto.billingAddress ?? c.billingAddress)
-        : dto.shippingAddress;
+        ? (normalizeAddress(dto.billingAddress) ?? c.billingAddress)
+        : normalizeAddress(dto.shippingAddress);
     }
     if (dto.creditLimit !== undefined) c.creditLimit = dto.creditLimit;
     if (dto.paymentTerms !== undefined) c.paymentTerms = dto.paymentTerms;

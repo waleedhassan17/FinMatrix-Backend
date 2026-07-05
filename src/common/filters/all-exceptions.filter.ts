@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import * as Sentry from '@sentry/node';
 
 interface ErrorEnvelope {
   success: false;
@@ -56,8 +57,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         code = this.defaultCodeForStatus(status);
       }
     } else if (exception instanceof Error) {
-      message = exception.message;
+      // Never leak internal error text (DB errors, stack fragments) to
+      // clients — log it, report it, and return a generic message.
       this.logger.error(exception.stack ?? exception.message);
+      message = 'An unexpected error occurred';
     } else {
       this.logger.error(`Non-Error thrown: ${JSON.stringify(exception)}`);
     }
@@ -75,6 +78,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.error(
         `[${req.method}] ${req.url} -> ${status} ${code}: ${message}`,
       );
+      // Error monitoring — no-op unless SENTRY_DSN is configured in main.ts.
+      Sentry.withScope((scope) => {
+        scope.setTag('route', `${req.method} ${req.path}`);
+        scope.setContext('request', {
+          method: req.method,
+          url: req.url,
+          companyId: (req.headers['x-company-id'] as string) ?? null,
+          requestId: (req.headers['x-request-id'] as string) ?? null,
+        });
+        Sentry.captureException(
+          exception instanceof Error ? exception : new Error(String(exception)),
+        );
+      });
     }
 
     res.status(status).json(envelope);

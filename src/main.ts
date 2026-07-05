@@ -6,9 +6,20 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
+import * as Sentry from '@sentry/node';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  // Error monitoring — init BEFORE Nest boots so startup crashes report too.
+  // No-op when SENTRY_DSN is not set (dev/local).
+  if (process.env.SENTRY_DSN) {
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'development',
+      tracesSampleRate: 0,
+    });
+  }
+
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     cors: false,

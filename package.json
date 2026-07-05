@@ -33,7 +33,8 @@
     "seed:metromatrix:ledger": "ts-node -r tsconfig-paths/register src/database/seeds/metromatrix-ledger.seed.ts",
     "seed:metromatrix:ledger:prod": "node dist/database/seeds/metromatrix-ledger.seed.js",
     "seed:superadmin": "ts-node -r tsconfig-paths/register src/database/seeds/super-admin-seed.ts",
-    "seed:superadmin:prod": "node dist/database/seeds/super-admin-seed.js"
+    "seed:superadmin:prod": "node dist/database/seeds/super-admin-seed.js",
+    "test:chunk1": "ts-node -r tsconfig-paths/register test/chunk1.acceptance.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -47,6 +48,7 @@
     "@nestjs/terminus": "^10.2.3",
     "@nestjs/throttler": "^5.1.2",
     "@nestjs/typeorm": "^10.0.2",
+    "@sentry/node": "^10.63.0",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",

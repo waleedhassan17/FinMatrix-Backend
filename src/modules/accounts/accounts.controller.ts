@@ -39,6 +39,7 @@ export class AccountsController {
   constructor(private readonly accounts: AccountsService) {}
 
   @Get()
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'List accounts with filters. Includes summary totals.' })
   list(
     @CurrentCompany() companyId: string,
@@ -48,6 +49,7 @@ export class AccountsController {
   }
 
   @Get(':accountId')
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Account detail with last 10 GL entries.' })
   detail(
     @CurrentCompany() companyId: string,
@@ -91,6 +93,7 @@ export class AccountsController {
   }
 
   @Get(':accountId/transactions')
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Paginated GL entries for this account.' })
   transactions(
     @CurrentCompany() companyId: string,
