@@ -16,6 +16,7 @@ import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/deliver
 import { Customer } from '../customers/entities/customer.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { GeocodingService } from './geocoding.service';
+import { DeliveryLedgerService } from './delivery-ledger.service';
 import {
   CreateDeliveryDto,
   UpdateDeliveryDto,
@@ -67,6 +68,7 @@ export class DeliveriesService {
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
     private readonly geocoding: GeocodingService,
+    private readonly ledger: DeliveryLedgerService,
   ) {}
 
   /**
@@ -197,6 +199,7 @@ export class DeliveriesService {
         preferredDate: dto.scheduledDate ?? dto.preferredDate ?? null,
         preferredTimeSlot: dto.preferredTimeSlot ?? null,
         notes: dto.notes ?? null,
+        prepaid: dto.prePaid ?? false,
         createdBy: userId,
       });
       if (dto.personnelId) d.assignedAt = new Date();
@@ -212,34 +215,59 @@ export class DeliveriesService {
           quantity: String(it.quantity ?? it.orderedQty ?? '0'),
           orderedQty: String(it.orderedQty ?? '0'),
           unitPrice: String(it.unitPrice ?? '0'),
+          taxRate: String(it.taxRate ?? '0'),
           deliveredQty: '0',
           returnedQty: '0',
         }),
       );
       await itemRepo.save(items);
 
+      // STAGE 1 (phase1.md): assigning at creation dispatches the stock —
+      // Sales Order (or prepaid Invoice+Payment) + Dr Goods in Transit /
+      // Cr Inventory, atomically with the delivery itself.
+      let ledgerResult = null;
+      if (dto.personnelId) {
+        ledgerResult = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+      }
+
+      const fresh = await repo.findOne({ where: { id: d.id, companyId } });
       return {
-        ...d,
+        ...(fresh ?? d),
         assignedTo: d.personnelId,
         scheduledDate: d.preferredDate,
         items,
+        ledger: ledgerResult,
       };
     });
   }
 
-  async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string) {
-    const deliveries = await this.repo.find({
-      where: deliveryIds.map((id) => ({ id, companyId })),
-      relations: ['items'],
-    });
-    for (const d of deliveries) {
-      d.personnelId = personnelId;
-      if (d.status === 'unassigned' || d.status === 'pending') {
-        d.status = 'pending';
-        d.assignedAt = new Date();
+  async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string, userId: string) {
+    // One transaction for the whole batch: either every delivery is assigned
+    // AND its stock committed to Goods in Transit, or none is (e.g. one item
+    // short on stock → the admin sees the error and nothing half-happens).
+    const { deliveries, ledgerResults } = await this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(Delivery);
+      const rows = await repo.find({
+        where: deliveryIds.map((id) => ({ id, companyId })),
+        relations: ['items'],
+      });
+      for (const d of rows) {
+        d.personnelId = personnelId;
+        if (d.status === 'unassigned' || d.status === 'pending') {
+          d.status = 'pending';
+          d.assignedAt = new Date();
+        }
       }
-    }
-    await this.repo.save(deliveries);
+      await repo.save(rows);
+
+      // STAGE 1 (phase1.md): dispatch posts Dr Goods in Transit / Cr
+      // Inventory and creates the Sales Order — atomic with the assignment.
+      const results: Record<string, unknown> = {};
+      for (const d of rows) {
+        results[d.id] = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+      }
+      return { deliveries: rows, ledgerResults: results };
+    });
 
     // Notify the delivery personnel for each newly assigned delivery
     for (const d of deliveries) {
@@ -258,39 +286,58 @@ export class DeliveriesService {
         ...d,
         assignedTo: d.personnelId,
         scheduledDate: d.preferredDate,
+        ledger: ledgerResults[d.id] ?? null,
       })),
     };
   }
 
-  async update(companyId: string, id: string, dto: UpdateDeliveryDto) {
-    const d = await this.getById(companyId, id);
-    if (dto.personnelId !== undefined && dto.personnelId !== d.personnelId) {
-      d.personnelId = dto.personnelId;
-      if (dto.personnelId && d.status === 'unassigned') {
-        d.status = 'pending';
-        d.assignedAt = new Date();
+  async update(companyId: string, id: string, dto: UpdateDeliveryDto, userId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(Delivery);
+      const d = await repo.findOne({ where: { id, companyId }, relations: ['items'] });
+      if (!d) throw new NotFoundException('Delivery not found');
+      let newlyAssigned = false;
+      if (dto.personnelId !== undefined && dto.personnelId !== d.personnelId) {
+        d.personnelId = dto.personnelId;
+        if (dto.personnelId && d.status === 'unassigned') {
+          d.status = 'pending';
+          d.assignedAt = new Date();
+          newlyAssigned = true;
+        }
       }
-    }
-    const { destAddress, ...rest } = dto;
-    Object.assign(d, rest);
-    if (destAddress !== undefined) d.address = destAddress;
-    if (dto.destLat != null && dto.destLng != null) d.geocodedAt = new Date();
-    return this.repo.save(d);
+      const { destAddress, ...rest } = dto;
+      Object.assign(d, rest);
+      if (destAddress !== undefined) d.address = destAddress;
+      if (dto.destLat != null && dto.destLng != null) d.geocodedAt = new Date();
+      const saved = await repo.save(d);
+      // STAGE 1 (phase1.md) when the edit is what assigns the rider.
+      const ledger = newlyAssigned
+        ? await this.ledger.commitStockOnAssign(em, companyId, userId, d.id)
+        : null;
+      return { ...saved, ledger };
+    });
   }
 
-  async autoAssign(companyId: string, id: string) {
-    const d = await this.getById(companyId, id);
-    if (d.status !== 'unassigned') throw new BadRequestException('Delivery already assigned');
-    const personnel = await this.personnelRepo.find({
-      where: { companyId, isAvailable: true, status: 'active' },
-      order: { currentLoad: 'ASC' },
-      take: 1,
+  async autoAssign(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(Delivery);
+      const d = await repo.findOne({ where: { id, companyId } });
+      if (!d) throw new NotFoundException('Delivery not found');
+      if (d.status !== 'unassigned') throw new BadRequestException('Delivery already assigned');
+      const personnel = await em.getRepository(DeliveryPersonnelProfile).find({
+        where: { companyId, isAvailable: true, status: 'active' },
+        order: { currentLoad: 'ASC' },
+        take: 1,
+      });
+      if (!personnel.length) throw new BadRequestException('No available personnel');
+      d.personnelId = personnel[0].userId;
+      d.status = 'pending';
+      d.assignedAt = new Date();
+      const saved = await repo.save(d);
+      // STAGE 1 (phase1.md): dispatch consequence of the auto-assignment.
+      const ledger = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+      return { ...saved, ledger };
     });
-    if (!personnel.length) throw new BadRequestException('No available personnel');
-    d.personnelId = personnel[0].userId;
-    d.status = 'pending';
-    d.assignedAt = new Date();
-    return this.repo.save(d);
   }
 
   async updateStatus(
@@ -457,6 +504,14 @@ export class DeliveriesService {
         message: 'This delivery is not assigned to you.',
       });
     }
+    // STAGE 2 (phase1.md): the rider's PAID / NOT PAID flag. It posts NOTHING
+    // — it only rides into the admin approval queue and decides whether the
+    // Stage-3 revenue entry debits Cash or Accounts Receivable.
+    if (dto.paidStatus && d.paidStatus !== dto.paidStatus) {
+      d.paidStatus = dto.paidStatus;
+      await this.repo.save(d);
+    }
+
     // Idempotent replay: confirming an already-delivered delivery succeeds
     // without changing anything (a retried/double-tapped confirm must not
     // error or double-advance).

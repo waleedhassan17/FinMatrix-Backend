@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Payment } from './entities/payment.entity';
 import { PaymentApplication } from './entities/payment-application.entity';
 import { Customer } from '../customers/entities/customer.entity';
@@ -101,7 +101,23 @@ export class PaymentsService {
     userId: string,
     dto: ReceivePaymentDto,
   ): Promise<Payment> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) =>
+      this.receiveInTransaction(manager, companyId, userId, dto),
+    );
+  }
+
+  /**
+   * Transaction-aware variant of receive(): lets the delivery approval flow
+   * record the rider-collected cash atomically with the invoice + COGS
+   * postings. Same logic, same postings.
+   */
+  async receiveInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: ReceivePaymentDto,
+  ): Promise<Payment> {
+    {
       const customer = await manager.findOne(Customer, {
         where: { id: dto.customerId, companyId },
       });
@@ -230,7 +246,7 @@ export class PaymentsService {
       await manager.save(payment);
 
       return payment;
-    });
+    }
   }
 
   async delete(companyId: string, id: string) {

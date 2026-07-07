@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { SalesOrder, DiscountType, SalesOrderStatus } from './entities/sales-order.entity';
 import { SalesOrderLineItem } from './entities/sales-order-line-item.entity';
@@ -81,7 +81,24 @@ export class SalesOrdersService {
     dto: CreateSalesOrderDto,
     sourceEstimateId: string | null = null,
   ): Promise<SalesOrder> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) =>
+      this.createInTransaction(manager, companyId, userId, dto, sourceEstimateId),
+    );
+  }
+
+  /**
+   * Transaction-aware variant of create(): lets the delivery Stage-1 dispatch
+   * create the (non-posting) Sales Order atomically with the Goods-in-Transit
+   * posting and the stock reduction.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: CreateSalesOrderDto,
+    sourceEstimateId: string | null = null,
+  ): Promise<SalesOrder> {
+    {
       const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
 
@@ -116,7 +133,7 @@ export class SalesOrdersService {
       await manager.save(lines);
       order.lines = lines;
       return order;
-    });
+    }
   }
 
   async update(companyId: string, id: string, dto: UpdateSalesOrderDto): Promise<SalesOrder> {

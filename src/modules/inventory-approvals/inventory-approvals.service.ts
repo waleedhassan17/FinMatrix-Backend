@@ -14,6 +14,8 @@ import { InventoryApprovalAuditEntry } from './entities/inventory-approval-audit
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
+import { DeliveryItem } from '../deliveries/entities/delivery-item.entity';
+import { DeliveryLedgerService } from '../deliveries/delivery-ledger.service';
 import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inventory-snapshot.entity';
 import { User } from '../users/entities/user.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
@@ -58,6 +60,7 @@ export class InventoryApprovalsService {
     private readonly storage: StorageService,
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
+    private readonly deliveryLedger: DeliveryLedgerService,
   ) {}
 
   // ==========================================================================
@@ -73,7 +76,7 @@ export class InventoryApprovalsService {
     qb.orderBy('r.submittedAt', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [rows, total] = await qb.getManyAndCount();
-    return rows.map((r) => this.formatRequest(r));
+    return this.enrichWithDelivery(companyId, rows.map((r) => this.formatRequest(r)));
   }
 
   async getById(companyId: string, id: string) {
@@ -235,7 +238,11 @@ export class InventoryApprovalsService {
         publicPath: `/inventory-update-requests/${req.id}/bill-photo`,
       });
 
-      // 7) Update delivery columns + request proof block with photo info
+      // 7) Update delivery columns + request proof block with photo info.
+      // STAGE 2 (phase1.md): record the rider's PAID / NOT PAID choice. This
+      // posts NOTHING — it rides into the admin approval queue and decides
+      // whether Stage 3 debits Cash or Accounts Receivable.
+      delivery.paidStatus = body.paidStatus ?? delivery.paidStatus ?? 'unpaid';
       delivery.billPhotoUrl = stored.url;
       delivery.billPhotoStorageKey = stored.key;
       delivery.billPhotoCapturedAt = now;
@@ -340,7 +347,10 @@ export class InventoryApprovalsService {
     qb.skip((page - 1) * pageSize).take(pageSize);
     const [rows, total] = await qb.getManyAndCount();
     return {
-      items: rows.map((r) => this.formatRequest(r)),
+      items: await this.enrichWithDelivery(
+        companyId,
+        rows.map((r) => this.formatRequest(r)),
+      ),
       total,
       page,
       pageSize,
@@ -356,7 +366,8 @@ export class InventoryApprovalsService {
     if (role === 'delivery' && req.personnelId !== userId) {
       throw new ForbiddenException('Not your request');
     }
-    return this.formatRequest(req);
+    const [enriched] = await this.enrichWithDelivery(companyId, [this.formatRequest(req)]);
+    return enriched;
   }
 
   async approve(
@@ -367,8 +378,6 @@ export class InventoryApprovalsService {
   ) {
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
-      const itemRepo = em.getRepository(InventoryItem);
-      const moveRepo = em.getRepository(InventoryMovement);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
       const shadowRepo = em.getRepository(ShadowInventorySnapshot);
 
@@ -383,11 +392,116 @@ export class InventoryApprovalsService {
         );
       }
 
-      // Apply each line with row-locking + negative-stock guard. Accumulate
-      // the signed cost of goods leaving stock so the ledger commit below
-      // matches the quantity change exactly (weighted-average unit cost).
-      let netCost = toDecimal(0);
-      for (const line of req.lines) {
+      // STAGE 3 (phase1.md) — deliveries dispatched under the Goods-in-Transit
+      // flow: on-hand already fell at assignment, so approval must NOT touch
+      // it again. Instead: SO → Invoice (Cash or A/R per the rider's flag),
+      // Dr COGS / Cr Goods in Transit for the delivered part and
+      // Dr Inventory / Cr Goods in Transit (+restock) for the rest — all
+      // through DeliveryLedgerService in THIS transaction.
+      const approvalDelivery = await em.getRepository(Delivery).findOne({
+        where: { id: req.deliveryId, companyId },
+      });
+      let ledgerResult: import('../deliveries/delivery-ledger.service').ApprovalLedgerResult | null =
+        null;
+      let journalEntryId: string | null = null;
+
+      if (approvalDelivery?.stockCommittedAt) {
+        const deliveredByItem = new Map<string, string>();
+        for (const line of req.lines) {
+          deliveredByItem.set(line.itemId, String(line.deliveredQty));
+        }
+        ledgerResult = await this.deliveryLedger.commitApproval(
+          em,
+          companyId,
+          reviewerId,
+          req.deliveryId,
+          deliveredByItem,
+        );
+        journalEntryId = ledgerResult.cogsJournalEntryId;
+      } else {
+        // Legacy path (delivery predates the Goods-in-Transit flow): apply
+        // each line with row-locking + negative-stock guard and post
+        // Dr COGS / Cr Inventory as before.
+        journalEntryId = await this.applyLegacyApproval(em, companyId, req, reviewerId);
+      }
+
+      // Zero-out / delete shadow inventory entries for approved items
+      if (req.lines.length > 0) {
+        await shadowRepo
+          .createQueryBuilder()
+          .update()
+          .set({ currentQty: '0', syncStatus: 'synced', lastSyncAt: new Date() })
+          .where('company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)', {
+            cid: companyId,
+            pid: req.personnelId,
+            itemIds: req.lines.map((l) => l.itemId),
+          })
+          .execute();
+      }
+
+      // Set delivery status to 'delivered' if not already
+      const deliveryRepo = em.getRepository(Delivery);
+      const delivery = await deliveryRepo.findOne({ where: { id: req.deliveryId, companyId } });
+      if (delivery && delivery.status !== 'delivered') {
+        delivery.status = 'delivered';
+        delivery.completedAt = new Date();
+        await deliveryRepo.save(delivery);
+      }
+
+      const now = new Date();
+      req.status = 'approved';
+      req.shadowStatus = 'synced';
+      req.journalEntryId = journalEntryId;
+      req.reviewedAt = now;
+      req.reviewedBy = reviewerId;
+      req.reviewerComment = dto.reviewerComment ?? null;
+      req.approvalNotes = dto.reviewerComment ?? null;
+      await reqRepo.save(req);
+
+      await auditRepo.save(
+        auditRepo.create({
+          companyId,
+          requestId: req.id,
+          action: 'approved',
+          reviewedBy: reviewerId,
+          details:
+            dto.reviewerComment ??
+            (ledgerResult
+              ? `Approved (${ledgerResult.paidStatus.toUpperCase()}) — invoice ${ledgerResult.invoiceNumber ?? 'n/a'}, COGS ${ledgerResult.cogsAmount}`
+              : `Approved ${req.lines.length} item changes`),
+        }),
+      );
+
+      // Notify the DP (best-effort)
+      void this.notifications.create({
+        companyId,
+        userId: req.personnelId,
+        type: 'approval_results',
+        title: 'Inventory request approved',
+        message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were approved and synced.`,
+        data: { requestId: req.id, route: 'DPHistory' },
+      });
+
+      return { ...this.formatRequest(req), ledger: ledgerResult };
+    });
+  }
+
+  /**
+   * Pre-Goods-in-Transit approval: reduce on-hand at approval and post
+   * Dr COGS / Cr Inventory (chunk 2 behaviour), unchanged for old deliveries.
+   * Returns the journal entry id (or null when the net cost is ~0).
+   */
+  private async applyLegacyApproval(
+    em: import('typeorm').EntityManager,
+    companyId: string,
+    req: InventoryUpdateRequest,
+    reviewerId: string,
+  ): Promise<string | null> {
+    const itemRepo = em.getRepository(InventoryItem);
+    const moveRepo = em.getRepository(InventoryMovement);
+
+    let netCost = toDecimal(0);
+    for (const line of req.lines) {
         const item = await itemRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
@@ -469,61 +583,7 @@ export class InventoryApprovalsService {
         journalEntryId = entry.id;
       }
 
-      // Zero-out / delete shadow inventory entries for approved items
-      if (req.lines.length > 0) {
-        await shadowRepo
-          .createQueryBuilder()
-          .update()
-          .set({ currentQty: '0', syncStatus: 'synced', lastSyncAt: new Date() })
-          .where('company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)', {
-            cid: companyId,
-            pid: req.personnelId,
-            itemIds: req.lines.map((l) => l.itemId),
-          })
-          .execute();
-      }
-
-      // Set delivery status to 'delivered' if not already
-      const deliveryRepo = em.getRepository(Delivery);
-      const delivery = await deliveryRepo.findOne({ where: { id: req.deliveryId, companyId } });
-      if (delivery && delivery.status !== 'delivered') {
-        delivery.status = 'delivered';
-        delivery.completedAt = new Date();
-        await deliveryRepo.save(delivery);
-      }
-
-      const now = new Date();
-      req.status = 'approved';
-      req.shadowStatus = 'synced';
-      req.journalEntryId = journalEntryId;
-      req.reviewedAt = now;
-      req.reviewedBy = reviewerId;
-      req.reviewerComment = dto.reviewerComment ?? null;
-      req.approvalNotes = dto.reviewerComment ?? null;
-      await reqRepo.save(req);
-
-      await auditRepo.save(
-        auditRepo.create({
-          companyId,
-          requestId: req.id,
-          action: 'approved',
-          reviewedBy: reviewerId,
-          details: dto.reviewerComment ?? `Approved ${req.lines.length} item changes`,
-        }),
-      );
-
-      // Notify the DP (best-effort)
-      void this.notifications.create({
-        companyId,
-        userId: req.personnelId,
-        type: 'approval_results',
-        title: 'Inventory request approved',
-        message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were approved and synced.`,
-        data: { requestId: req.id, route: 'DPHistory' },
-      });
-
-      return this.formatRequest(req);
-    });
+    return journalEntryId;
   }
 
   async reject(
@@ -546,6 +606,30 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Request is already ${req.status}; cannot reject`,
         );
+      }
+
+      // Reject/return path (phase1.md Stage 3): for a delivery dispatched
+      // under the Goods-in-Transit flow, reverse Stage 1 — Dr Inventory /
+      // Cr Goods in Transit at the frozen cost, restock everything. NO
+      // revenue reverses (nothing was sold). Same transaction as the request
+      // status change. Legacy deliveries never touched stock, so no-op.
+      const rejectDelivery = await em.getRepository(Delivery).findOne({
+        where: { id: req.deliveryId, companyId },
+      });
+      let ledgerReversal: { reversed: boolean; journalEntryId: string | null; restockedCost: string } | null =
+        null;
+      if (rejectDelivery?.stockCommittedAt) {
+        ledgerReversal = await this.deliveryLedger.releaseOnReject(
+          em,
+          companyId,
+          reviewerId,
+          req.deliveryId,
+        );
+        if (rejectDelivery.status !== 'returned') {
+          rejectDelivery.status = 'returned';
+          rejectDelivery.completedAt = new Date();
+          await em.getRepository(Delivery).save(rejectDelivery);
+        }
       }
 
       const now = new Date();
@@ -593,7 +677,7 @@ export class InventoryApprovalsService {
         data: { requestId: req.id, route: 'DPHistory' },
       });
 
-      return this.formatRequest(req);
+      return { ...this.formatRequest(req), ledger: ledgerReversal };
     });
   }
 
@@ -622,6 +706,21 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Only approved requests can be undone (current status: ${req.status})`,
         );
+      }
+
+      // Approvals posted under the Goods-in-Transit flow produced an invoice
+      // (and possibly a payment) — a blanket undo would leave revenue and cash
+      // dangling. Voids/returns must reverse, never delete: use the invoice
+      // void / credit-memo flows instead.
+      const undoDelivery = await em.getRepository(Delivery).findOne({
+        where: { id: req.deliveryId, companyId },
+      });
+      if (undoDelivery?.ledgerStatus === 'committed') {
+        throw new ConflictException({
+          code: 'LEDGER_COMMITTED',
+          message:
+            'This delivery was posted to the ledger (invoice/COGS). Undo is not available — void the invoice or issue a credit memo instead.',
+        });
       }
 
       // Reverse inventory changes with row-locking
@@ -825,6 +924,58 @@ export class InventoryApprovalsService {
       // eslint-disable-next-line no-console
       console.error('[notifyAdmins] failed:', err);
     }
+  }
+
+  /**
+   * Attach the accounting context the approval queue needs (phase1.md Phase B):
+   * the rider's PAID/NOT PAID flag, the customer, and the sale amount that
+   * approval will invoice (delivered qty x delivery unit price, tax included).
+   */
+  private async enrichWithDelivery<
+    T extends { deliveryId: string; changes: { itemId: string; deliveredQty: number }[] },
+  >(companyId: string, formatted: T[]): Promise<
+    (T & {
+      paidStatus: 'paid' | 'unpaid';
+      prepaid: boolean;
+      ledgerStatus: string;
+      customerId: string | null;
+      customerName: string | null;
+      saleAmount: string;
+    })[]
+  > {
+    const deliveryIds = [...new Set(formatted.map((f) => f.deliveryId).filter(Boolean))];
+    const deliveries = deliveryIds.length
+      ? await this.deliveryRepo.find({
+          where: deliveryIds.map((did) => ({ id: did, companyId })),
+          relations: ['items'],
+        })
+      : [];
+    const byId = new Map(deliveries.map((d) => [d.id, d]));
+
+    return formatted.map((f) => {
+      const d = byId.get(f.deliveryId);
+      let saleAmount = toDecimal(0);
+      if (d) {
+        const itemByItemId = new Map((d.items ?? []).map((i) => [i.itemId, i]));
+        for (const c of f.changes) {
+          const line = itemByItemId.get(c.itemId);
+          if (!line) continue;
+          const price = toDecimal(line.unitPrice);
+          const taxRate = toDecimal(line.taxRate ?? '0');
+          const base = toDecimal(c.deliveredQty).times(price);
+          saleAmount = saleAmount.plus(base).plus(base.times(taxRate).dividedBy(100));
+        }
+      }
+      return {
+        ...f,
+        paidStatus: (d?.paidStatus ?? 'unpaid') as 'paid' | 'unpaid',
+        prepaid: d?.prepaid ?? false,
+        ledgerStatus: d?.ledgerStatus ?? 'none',
+        customerId: d?.customerId ?? null,
+        customerName: d?.customerName ?? null,
+        saleAmount: saleAmount.toFixed(2),
+      };
+    });
   }
 
   private formatRouteLabel(d: Delivery): string {

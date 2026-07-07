@@ -11,7 +11,13 @@ import { Customer } from '../customers/entities/customer.entity';
 import { DeliveriesService } from './deliveries.service';
 import { DeliveriesController } from './deliveries.controller';
 import { GeocodingService } from './geocoding.service';
+import { DeliveryLedgerService } from './delivery-ledger.service';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
+import { AccountsModule } from '../accounts/accounts.module';
+import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
+import { InvoicesModule } from '../invoices/invoices.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
@@ -26,9 +32,16 @@ import { NotificationsModule } from '../notifications/notifications.module';
       Customer,
     ]),
     NotificationsModule,
+    // Ledger link (phase1.md): dispatch/approval postings reuse the shared
+    // PostingService and the SO / Invoice / Payment services.
+    JournalEntriesModule,
+    AccountsModule,
+    SalesOrdersModule,
+    InvoicesModule,
+    PaymentsModule,
   ],
-  providers: [DeliveriesService, GeocodingService],
+  providers: [DeliveriesService, GeocodingService, DeliveryLedgerService],
   controllers: [DeliveriesController],
-  exports: [DeliveriesService],
+  exports: [DeliveriesService, DeliveryLedgerService],
 })
 export class DeliveriesModule {}

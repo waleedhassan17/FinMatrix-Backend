@@ -251,17 +251,34 @@ async function main() {
   check('tax payment posted', taxPay.status === 201 || taxPay.status === 200, taxPay.body);
   await assertBooksBalanced('after tax payment');
 
-  // ── 11. Delivery approval commits stock to the ledger ────────────────────
-  console.log('\n— Delivery approval → ledger commit (the chunk-1 CHUNK2 marker)');
+  // ── 11. Delivery lifecycle → ledger (phase1.md Goods-in-Transit model) ───
+  // Assignment moves stock to Goods in Transit (1250); approval converts the
+  // SO to an invoice (revenue) and relieves 1250 into COGS. Inventory (1200)
+  // falls at DISPATCH now, not at approval.
+  console.log('\n— Delivery ledger link (Goods in Transit 1250)');
   const rider = data(await req('POST', '/delivery-personnel', {
     ...A, json: { email: `acct_rider_${Date.now()}@qa.local`, password: 'Rider@123', name: 'Acct Rider' },
   }));
   const riderLogin = await signin(rider?.email, 'Rider@123');
   const RT = data(riderLogin)?.tokens?.accessToken;
   check('rider ready', !!rider?.userId && !!RT);
+
+  const bsPreDispatch = await balanceSheet();
+  const invBefore = bsLine(bsPreDispatch, '1200');
+  const arBeforeApproval = bsLine(bsPreDispatch, '1100');
   const delivery = data(await req('POST', '/deliveries', {
     ...A, json: { customerId: customer.id, customerName: 'Acct Customer', personnelId: rider.userId, items: [{ itemId, itemName: 'Widget', orderedQty: 2, unitPrice: 150 }] },
   }));
+  check('delivery created + assigned (Stage 1)', !!delivery?.id, delivery);
+  const bsDispatched = await balanceSheet();
+  check('dispatch moved cost to Goods in Transit (1250 = 200 = 2 × avg 100)',
+    close(bsLine(bsDispatched, '1250'), 200, 0.01), bsLine(bsDispatched, '1250'));
+  check('dispatch relieved Inventory 1200 by the same 200',
+    close(invBefore - bsLine(bsDispatched, '1200'), 200, 0.01),
+    { before: invBefore, after: bsLine(bsDispatched, '1200') });
+  await assertBooksBalanced('after dispatch (Stage 1)');
+  await assertInventoryTies('after dispatch (on-hand fell at dispatch)');
+
   for (const st of ['picked_up', 'in_transit', 'arrived']) {
     await req('PATCH', `/deliveries/${delivery.id}/status`, { token: RT, companyId: cid, json: { status: st } });
   }
@@ -269,33 +286,48 @@ async function main() {
   fd.append('photo', new Blob([PNG], { type: 'image/png' }), 'bill.png');
   fd.append('signedBy', 'Acct Customer');
   fd.append('source', 'camera');
+  fd.append('paidStatus', 'unpaid');
   fd.append('changes', JSON.stringify([{ itemId, itemName: 'Widget', beforeQty: 14, deliveredQty: 2, returnedQty: 0 }]));
   const up = await fetch(`${BASE}/deliveries/${delivery.id}/bill-photo`, {
     method: 'POST', headers: { Authorization: `Bearer ${RT}`, 'x-company-id': cid }, body: fd as any,
   });
   const upBody: any = await up.json().catch(() => null);
   const reqId = upBody?.data?.requestId;
-  check('POD submitted', up.status === 201 && !!reqId, upBody);
+  check('POD submitted (rider posts NOTHING)', up.status === 201 && !!reqId, upBody);
+  const bsAfterPod = await balanceSheet();
+  check('rider flag posted nothing (1250 still 200, A/R unchanged)',
+    close(bsLine(bsAfterPod, '1250'), 200, 0.01) && close(bsLine(bsAfterPod, '1100'), arBeforeApproval, 0.01),
+    { git: bsLine(bsAfterPod, '1250'), ar: bsLine(bsAfterPod, '1100') });
 
-  const invBefore = bsLine(await balanceSheet(), '1200');
   const approve = await req('POST', `/inventory-update-requests/${reqId}/approve`, { ...A, json: {} });
-  check('approval succeeded', approve.status === 200 || approve.status === 201, approve.body);
+  check('approval succeeded (Stage 3)', approve.status === 200 || approve.status === 201, approve.body);
   const bsApproved = await balanceSheet();
-  check('approval posted Dr COGS / Cr Inventory (1200 −200 = 2 × avg 100)',
-    close(invBefore - bsLine(bsApproved, '1200'), 200, 0.01),
-    { before: invBefore, after: bsLine(bsApproved, '1200') });
+  check('approval relieved Goods in Transit to exactly 0',
+    close(bsLine(bsApproved, '1250'), 0, 0.005), bsLine(bsApproved, '1250'));
+  check('approval did NOT touch on-hand Inventory again (fell only at dispatch)',
+    close(bsLine(bsApproved, '1200'), bsLine(bsDispatched, '1200'), 0.01),
+    { atDispatch: bsLine(bsDispatched, '1200'), atApproval: bsLine(bsApproved, '1200') });
+  check('NOT PAID approval debited A/R with the sale (2 × 150 = 300)',
+    close(bsLine(bsApproved, '1100') - arBeforeApproval, 300, 0.01),
+    { before: arBeforeApproval, after: bsLine(bsApproved, '1100') });
   await assertBooksBalanced('after delivery approval');
   await assertInventoryTies('after delivery approval (qty 12 × 100)');
   const jeLink = await pg.query(`SELECT journal_entry_id FROM inventory_update_requests WHERE id = $1`, [reqId]);
   check('approval linked to its journal entry', !!jeLink.rows[0]?.journal_entry_id, jeLink.rows[0]);
 
+  // Ledger-committed approvals cannot be blanket-undone (invoice + COGS were
+  // posted). Voids must reverse through the invoice-void / credit-memo flow.
   const undo = await req('POST', `/inventory-update-requests/${reqId}/undo`, { ...A, json: {} });
-  check('undo succeeded', undo.status === 200 || undo.status === 201, undo.body);
+  check('undo is blocked for ledger-committed deliveries (409)', undo.status === 409, undo.status);
   const bsUndone = await balanceSheet();
-  check('undo posted the exact reversal (1200 restored)', close(bsLine(bsUndone, '1200'), invBefore, 0.01),
-    { restored: bsLine(bsUndone, '1200'), expected: invBefore });
-  await assertBooksBalanced('after approval undo');
-  await assertInventoryTies('after approval undo (qty 14 × 100)');
+  check('blocked undo changed nothing (1250 still 0)', close(bsLine(bsUndone, '1250'), 0, 0.005), bsLine(bsUndone, '1250'));
+  await assertBooksBalanced('after blocked undo');
+  // Settle the delivery invoice so the closing cross-checks stay simple.
+  const delInvRow = await pg.query(`SELECT invoice_id FROM deliveries WHERE id = $1`, [delivery.id]);
+  const delInvId = delInvRow.rows[0]?.invoice_id;
+  check('delivery linked to its invoice', !!delInvId, delInvRow.rows[0]);
+  await req('POST', '/payments', { ...A, json: { customerId: customer.id, paymentDate: TODAY, paymentMethod: 'cash', amount: '300.00', applications: [{ invoiceId: delInvId, amount: '300.00' }] } });
+  await assertBooksBalanced('after delivery invoice settled');
 
   // ── 12. Cross-report invariants ──────────────────────────────────────────
   console.log('\n— Cross-report invariants');

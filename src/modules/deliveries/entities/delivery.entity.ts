@@ -64,6 +64,34 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
 
+  // -------- Ledger link (phase1.md: Goods in Transit model) --------
+  // Rider's PAID / NOT PAID choice; decides the debit side of the Stage-3
+  // revenue entry. Set by the rider, posts nothing by itself.
+  @Column({ type: 'varchar', length: 8, nullable: true, name: 'paid_status' })
+  paidStatus!: 'paid' | 'unpaid' | null;
+
+  // Sale collected before dispatch → Invoice + Payment at Stage 1 instead of
+  // a Sales Order.
+  @Column({ type: 'boolean', default: false })
+  prepaid!: boolean;
+
+  @Column({ type: 'uuid', nullable: true, name: 'sales_order_id' })
+  salesOrderId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'invoice_id' })
+  invoiceId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'git_journal_entry_id' })
+  gitJournalEntryId!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'stock_committed_at' })
+  stockCommittedAt!: Date | null;
+
+  // 'none' → 'in_transit' (Stage 1 posted) → 'committed' (Stage 3 posted)
+  //                                        ↘ 'returned' (rejected/reversed)
+  @Column({ type: 'varchar', length: 16, default: 'none', name: 'ledger_status' })
+  ledgerStatus!: 'none' | 'in_transit' | 'committed' | 'returned';
+
   // -------- Bill-photo capture (replaces digital signature) --------
   @Column({ type: 'text', nullable: true, name: 'bill_photo_url' })
   billPhotoUrl!: string | null;

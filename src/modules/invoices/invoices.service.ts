@@ -177,7 +177,23 @@ export class InvoicesService {
     userId: string,
     dto: CreateInvoiceDto,
   ): Promise<Invoice> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) =>
+      this.createInTransaction(manager, companyId, userId, dto),
+    );
+  }
+
+  /**
+   * Transaction-aware variant of create(): lets a caller that already holds a
+   * transaction (delivery Stage-1 prepaid / Stage-3 approval) create + post the
+   * invoice atomically with its stock movement. Same logic, same postings.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: CreateInvoiceDto,
+  ): Promise<Invoice> {
+    {
       const customer = await manager.findOne(Customer, {
         where: { id: dto.customerId, companyId },
       });
@@ -249,7 +265,7 @@ export class InvoicesService {
       }
 
       return invoice;
-    });
+    }
   }
 
   async update(

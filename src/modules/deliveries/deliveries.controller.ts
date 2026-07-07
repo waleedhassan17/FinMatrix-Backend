@@ -113,8 +113,9 @@ export class DeliveriesController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeliveryDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.update(companyId, id, dto);
+    return this.svc.update(companyId, id, dto, user.id);
   }
 
   @Post(':id/auto-assign')
@@ -122,8 +123,9 @@ export class DeliveriesController {
   autoAssign(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.autoAssign(companyId, id);
+    return this.svc.autoAssign(companyId, id, user.id);
   }
 
   @Patch(':id/status')
@@ -175,8 +177,9 @@ export class DeliveriesController {
   assign(
     @CurrentCompany() companyId: string,
     @Body() dto: { deliveryIds: string[]; personnelId: string },
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.assignDeliveries(companyId, dto.deliveryIds, dto.personnelId);
+    return this.svc.assignDeliveries(companyId, dto.deliveryIds, dto.personnelId, user.id);
   }
 
   @Post(':id/confirm')

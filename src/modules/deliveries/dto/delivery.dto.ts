@@ -4,6 +4,7 @@ import {
   IsUUID,
   IsEnum,
   IsArray,
+  IsDefined,
   ValidateNested,
   IsNumberString,
   IsNumber,
@@ -21,8 +22,13 @@ export class DeliveryItemDto {
   @ApiPropertyOptional() @IsOptional() @IsString() agencyId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() agencyName?: string;
   @ApiPropertyOptional() @IsOptional() quantity?: number | string;
-  @ApiProperty() orderedQty!: number | string;
+  // IsDefined matters: the global ValidationPipe runs with whitelist:true and
+  // silently STRIPS properties that carry no class-validator decorator —
+  // without it orderedQty always arrived as 0.
+  @ApiProperty() @IsDefined() orderedQty!: number | string;
   @ApiPropertyOptional() @IsOptional() unitPrice?: number | string;
+  @ApiPropertyOptional({ description: 'Sales tax %, flows to the Sales Order / Invoice line' })
+  @IsOptional() taxRate?: number | string;
 }
 
 export class CreateDeliveryDto {
@@ -40,6 +46,11 @@ export class CreateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
+  @ApiPropertyOptional({
+    description:
+      'Sale collected before dispatch. Stage 1 then creates an Invoice + recorded Payment instead of a Sales Order.',
+  })
+  @IsOptional() prePaid?: boolean;
   @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => DeliveryItemDto) items!: DeliveryItemDto[];
 }
 
@@ -94,4 +105,10 @@ export class ConfirmDeliveryDto {
   @ApiPropertyOptional({ type: [ConfirmDeliveryItemDto] }) @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmDeliveryItemDto) deliveredItems?: ConfirmDeliveryItemDto[];
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() verifiedBy?: string;
+  @ApiPropertyOptional({
+    enum: ['paid', 'unpaid'],
+    description:
+      "Rider's cash flag. Posts NOTHING — it rides into the admin approval queue and decides the debit side (Cash vs A/R) of the Stage-3 revenue entry.",
+  })
+  @IsOptional() @IsEnum(['paid', 'unpaid']) paidStatus?: 'paid' | 'unpaid';
 }

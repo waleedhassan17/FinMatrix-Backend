@@ -12,6 +12,8 @@ import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inv
 import { NotificationsModule } from '../notifications/notifications.module';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
+import { DeliveriesModule } from '../deliveries/deliveries.module';
+import { DeliveryItem } from '../deliveries/entities/delivery-item.entity';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import { InventoryApprovalsController } from './inventory-approvals.controller';
 import { BillPhotoController } from './bill-photo.controller';
@@ -24,6 +26,7 @@ import { InventoryUpdateRequestsController } from './inventory-update-requests.c
       InventoryUpdateRequestLine,
       InventoryApprovalAuditEntry,
       Delivery,
+      DeliveryItem,
       User,
       UserCompany,
       InventoryItem,
@@ -33,6 +36,8 @@ import { InventoryUpdateRequestsController } from './inventory-update-requests.c
     NotificationsModule,
     JournalEntriesModule,
     AccountsModule,
+    // Stage-3 postings (phase1.md) live in DeliveryLedgerService.
+    DeliveriesModule,
   ],
   providers: [InventoryApprovalsService],
   controllers: [

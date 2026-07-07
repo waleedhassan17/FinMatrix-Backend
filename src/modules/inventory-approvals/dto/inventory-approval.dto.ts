@@ -63,6 +63,17 @@ export class SubmitBillPhotoDto {
   @IsEnum(['camera', 'gallery'])
   source!: 'camera' | 'gallery';
 
+  @ApiPropertyOptional({
+    enum: ['paid', 'unpaid'],
+    description:
+      "Rider's PAID / NOT PAID choice for the delivery. Posts NOTHING here — " +
+      'it decides the debit side (Cash vs A/R) when the admin approves. ' +
+      "Defaults to 'unpaid' when omitted (older app versions).",
+  })
+  @IsOptional()
+  @IsEnum(['paid', 'unpaid'])
+  paidStatus?: 'paid' | 'unpaid';
+
   @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() deliveryReference?: string;
