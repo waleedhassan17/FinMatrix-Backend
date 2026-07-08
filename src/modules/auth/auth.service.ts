@@ -13,7 +13,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 // bcryptjs (pure JS) instead of native bcrypt: the native .node binary cannot
 // be bundled by Vercel's serverless builder. Hashes are byte-compatible.
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes, randomInt } from 'crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'crypto';
 import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
@@ -519,10 +519,16 @@ export class AuthService {
       secret,
       expiresIn: accessExpires as unknown as number,
     });
-    const refreshTokenStr = await this.jwt.signAsync(payload, {
-      secret,
-      expiresIn: refreshExpires as unknown as number,
-    });
+    // jti makes every refresh token unique. Without it, two sign-ins by the
+    // same user within the same second mint byte-identical JWTs (iat has
+    // second granularity) and the token_hash unique index 500s the second one.
+    const refreshTokenStr = await this.jwt.signAsync(
+      { ...payload, jti: randomUUID() },
+      {
+        secret,
+        expiresIn: refreshExpires as unknown as number,
+      },
+    );
 
     const decoded = this.jwt.decode(refreshTokenStr) as { exp: number };
     const expiresAt = new Date(decoded.exp * 1000);

@@ -398,6 +398,17 @@ export class DeliveriesService {
       if (dto.status === 'delivered') d.completedAt = new Date();
       await repo.save(d);
 
+      // A delivery that dies before hand-over (cancelled / failed / returned)
+      // must give its stock back: reverse Stage 1 (Dr Inventory / Cr Goods in
+      // Transit at the frozen cost) and restock. Without this the dispatched
+      // units stay off the shelf and 1250 carries their value forever.
+      // releaseOnReject is idempotent (no-op unless ledger status is
+      // 'in_transit'), so a later approval-queue rejection double-releases
+      // nothing.
+      if (['cancelled', 'failed', 'returned'].includes(dto.status)) {
+        await this.ledger.releaseOnReject(em, companyId, userId, id);
+      }
+
       const historyRepo = em.getRepository(DeliveryStatusHistory);
       await historyRepo.save(
         historyRepo.create({
