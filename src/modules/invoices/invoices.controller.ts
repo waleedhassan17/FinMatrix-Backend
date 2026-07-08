@@ -43,6 +43,9 @@ import { Company } from '../companies/entities/company.entity';
 @ApiTags('invoices')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+// Financial data: company staff only — the delivery role must never read
+// or write here (handler-level @Roles overrides where narrower).
+@Roles('admin', 'staff')
 @Controller('invoices')
 export class InvoicesController {
   constructor(

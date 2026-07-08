@@ -17,8 +17,8 @@ export class PaymentSubmission extends BaseEntity {
   @Column({ type: 'uuid', name: 'company_id' })
   companyId!: string;
 
-  @Column({ type: 'varchar', length: 16 })
-  plan!: string; // free | standard | pro (paid plans only in practice)
+  @Column({ type: 'varchar', length: 32 })
+  plan!: string; // legacy standard|pro or a tier plan key (e.g. small_business_3mo)
 
   @Column({ type: 'varchar', length: 16 })
   kind!: SubmissionKind;

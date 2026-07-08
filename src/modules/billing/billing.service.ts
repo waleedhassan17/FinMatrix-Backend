@@ -63,6 +63,18 @@ export class BillingService {
     private readonly dataSource: DataSource,
   ) {}
 
+  /**
+   * Resolve the company for a billing call. A fresh-signup JWT carries no
+   * companyId (the company is created AFTER signin), so fall back to the
+   * user's own membership — never to a client-supplied header, which could
+   * name someone else's company.
+   */
+  async resolveCompanyId(userId: string, jwtCompanyId: string | null): Promise<string | null> {
+    if (jwtCompanyId) return jwtCompanyId;
+    const membership = await this.userCompanyRepo.findOne({ where: { userId } });
+    return membership?.companyId ?? null;
+  }
+
   // ── Read-only status for the app (renew screen + settings) ────────────────
 
   async getStatus(companyId: string) {

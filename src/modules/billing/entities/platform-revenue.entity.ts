@@ -18,7 +18,7 @@ export class PlatformRevenue extends BaseEntity {
   @Column({ type: 'uuid', name: 'company_id' })
   companyId!: string;
 
-  @Column({ type: 'varchar', length: 16 })
+  @Column({ type: 'varchar', length: 32 })
   plan!: string;
 
   @Column({ type: 'integer', name: 'amount_minor_units' })

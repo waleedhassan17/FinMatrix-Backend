@@ -38,6 +38,9 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
 @RequiresFeature('purchaseOrders') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
+// Financial data: company staff only — the delivery role must never read
+// or write here (handler-level @Roles overrides where narrower).
+@Roles('admin', 'staff')
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
   constructor(private readonly service: PurchaseOrdersService) {}

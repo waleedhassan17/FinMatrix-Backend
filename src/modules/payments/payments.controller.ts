@@ -29,6 +29,9 @@ import {
 @ApiTags('payments')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+// Financial data: company staff only — the delivery role must never read
+// or write here (handler-level @Roles overrides where narrower).
+@Roles('admin', 'staff')
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}

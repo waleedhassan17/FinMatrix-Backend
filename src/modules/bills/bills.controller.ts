@@ -38,6 +38,9 @@ import {
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
 // `bill` is a backwards-compat alias for older app builds that called the
 // singular `/api/v1/bill` route; both prefixes resolve to the same handlers.
+// Financial data: company staff only — the delivery role must never read
+// or write here (handler-level @Roles overrides where narrower).
+@Roles('admin', 'staff')
 @Controller(['bills', 'bill'])
 export class BillsController {
   constructor(private readonly bills: BillsService) {}

@@ -37,11 +37,16 @@ const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB
 export class BillingController {
   constructor(private readonly billing: BillingService) {}
 
-  private companyIdOf(user: AuthenticatedUser): string {
-    if (!user.companyId) {
+  /**
+   * Fresh-signup JWTs carry no companyId (the company is created after
+   * signin), so resolve via the user's membership when missing.
+   */
+  private async companyIdOf(user: AuthenticatedUser): Promise<string> {
+    const cid = await this.billing.resolveCompanyId(user.id, user.companyId ?? null);
+    if (!cid) {
       throw new ForbiddenException('You must belong to a company to manage billing.');
     }
-    return user.companyId;
+    return cid;
   }
 
   private assertAdmin(user: AuthenticatedUser) {
@@ -56,30 +61,29 @@ export class BillingController {
    * (FinMatrix.md Phase 2 §2). Defaults to the caller's own company type.
    */
   @Get('plans')
-  plans(
+  async plans(
     @CurrentUser() user: AuthenticatedUser,
     @Query('companyType') companyType?: string,
   ) {
-    this.companyIdOf(user);
-    return this.billing.getPlansForType(this.companyIdOf(user), companyType);
+    return this.billing.getPlansForType(await this.companyIdOf(user), companyType);
   }
 
   @Get('status')
-  status(@CurrentUser() user: AuthenticatedUser) {
-    return this.billing.getStatus(this.companyIdOf(user));
+  async status(@CurrentUser() user: AuthenticatedUser) {
+    return this.billing.getStatus(await this.companyIdOf(user));
   }
 
   @Get('plan-limits')
-  planLimits(@CurrentUser() user: AuthenticatedUser) {
-    return this.billing.getPlanLimits(this.companyIdOf(user));
+  async planLimits(@CurrentUser() user: AuthenticatedUser) {
+    return this.billing.getPlanLimits(await this.companyIdOf(user));
   }
 
   @Get('bank-details')
-  bankDetails(
+  async bankDetails(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: BankDetailsQueryDto,
   ) {
-    this.companyIdOf(user);
+    await this.companyIdOf(user);
     return this.billing.getBankDetails(query.plan as PlanKey);
   }
 
@@ -102,7 +106,7 @@ export class BillingController {
       },
     }),
   )
-  submit(
+  async submit(
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     // The `plan` text field travels in the multipart body (multer populates
@@ -111,7 +115,7 @@ export class BillingController {
     @Query('plan') planQuery?: string,
   ) {
     this.assertAdmin(user);
-    const companyId = this.companyIdOf(user);
+    const companyId = await this.companyIdOf(user);
     const candidate = body?.plan ?? planQuery;
     if (!isPlanKey(candidate)) {
       throw new BadRequestException('A valid plan key is required.');
@@ -120,8 +124,8 @@ export class BillingController {
   }
 
   @Get('submissions')
-  submissions(@CurrentUser() user: AuthenticatedUser) {
-    return this.billing.getMySubmissions(this.companyIdOf(user));
+  async submissions(@CurrentUser() user: AuthenticatedUser) {
+    return this.billing.getMySubmissions(await this.companyIdOf(user));
   }
 
   @Get('submissions/:id/screenshot')
@@ -130,7 +134,7 @@ export class BillingController {
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
-    const companyId = this.companyIdOf(user);
+    const companyId = await this.companyIdOf(user);
     await this.billing.assertOwnsSubmission(id, companyId);
     const { stream, mime, length } = await this.billing.getScreenshot(id);
     res.setHeader('Content-Type', mime);

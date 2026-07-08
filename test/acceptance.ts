@@ -7,18 +7,21 @@
  *
  * Usage:
  *   API_BASE=https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1 \
- *   ADMIN_EMAIL=metromatrix@gmail.com ADMIN_PASSWORD=123456 \
- *   RIDER_EMAIL=saim@metromatrix.com RIDER_PASSWORD=123456 \
+ *   ADMIN_EMAIL=warehouse@gmail.com ADMIN_PASSWORD=123456 \
+ *   RIDER_EMAIL=rider1@warehouseco.com RIDER_PASSWORD=123456 \
  *   npm run test:acceptance
+ *
+ * Runs against the WAREHOUSE demo company (three-tier model): it has every
+ * feature (inventory + delivery + payroll), so the full matrix is testable.
  *
  * Exits non-zero if any check fails.
  */
 import 'reflect-metadata';
 
 const API = process.env.API_BASE || 'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'metromatrix@gmail.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'warehouse@gmail.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '123456';
-const RIDER_EMAIL = process.env.RIDER_EMAIL || 'saim@metromatrix.com';
+const RIDER_EMAIL = process.env.RIDER_EMAIL || 'rider1@warehouseco.com';
 const RIDER_PASSWORD = process.env.RIDER_PASSWORD || '123456';
 
 let token = '';
@@ -159,7 +162,7 @@ async function deliveryE2E() {
   let rider2Email = rider2Create.body?.email;
   let rider2Password = 'Rider2@123';
   if (rider2Create.status >= 400 || !rider2Email) {
-    rider2Email = process.env.RIDER2_EMAIL || 'haseeb@metromatrix.com';
+    rider2Email = process.env.RIDER2_EMAIL || 'rider2@warehouseco.com';
     rider2Password = process.env.RIDER2_PASSWORD || '123456';
   }
   const rider2Signin = await signinRetry(rider2Email, rider2Password);

@@ -39,7 +39,8 @@
     "test:delivery-ledger": "ts-node -r tsconfig-paths/register test/delivery-ledger.acceptance.ts",
     "verify:demo": "ts-node -r tsconfig-paths/register test/demo-invariants.ts",
     "seed:tier-demos": "ts-node -r tsconfig-paths/register src/database/seeds/tier-demos.seed.ts",
-    "seed:tier-demos:prod": "node dist/database/seeds/tier-demos.seed.js"
+    "seed:tier-demos:prod": "node dist/database/seeds/tier-demos.seed.js",
+    "test:tiering": "ts-node -r tsconfig-paths/register test/tiering.acceptance.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

@@ -28,6 +28,12 @@ export class CompanyTiering1783750000000 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "companies" ALTER COLUMN "subscription_plan" TYPE varchar(32)`,
     );
+    await queryRunner.query(
+      `ALTER TABLE "platform_payment_submissions" ALTER COLUMN "plan" TYPE varchar(32)`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "platform_revenue" ALTER COLUMN "plan" TYPE varchar(32)`,
+    );
     // Pre-tiering companies keep everything they have today.
     await queryRunner.query(
       `UPDATE "companies" SET "company_type" = 'warehouse' WHERE "company_type" IS NULL`,

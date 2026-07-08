@@ -36,6 +36,12 @@ async function main(): Promise<void> {
   await client.query(
     `ALTER TABLE "companies" ALTER COLUMN "subscription_plan" TYPE character varying(32)`,
   );
+  await client.query(
+    `ALTER TABLE "platform_payment_submissions" ALTER COLUMN "plan" TYPE character varying(32)`,
+  );
+  await client.query(
+    `ALTER TABLE "platform_revenue" ALTER COLUMN "plan" TYPE character varying(32)`,
+  );
   // Pre-tiering companies keep everything they have today (audit §7.2).
   const res = await client.query(
     `UPDATE "companies" SET "company_type" = 'warehouse' WHERE "company_type" IS NULL`,
