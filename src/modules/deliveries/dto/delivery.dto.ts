@@ -4,31 +4,63 @@ import {
   IsUUID,
   IsEnum,
   IsArray,
-  IsDefined,
   ValidateNested,
   IsNumberString,
   IsNumber,
+  IsInt,
   Length,
   Max,
   Min,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
+
+// Clients send quantities as numbers or numeric strings; normalise before
+// validating so '12' passes and '', 'abc', {} all become NaN and fail IsInt
+// with a 400 instead of dispatching garbage (or 500ing) downstream.
+const toNumberOrNaN = ({ value }: { value: unknown }) =>
+  value === undefined || value === null
+    ? value
+    : typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : NaN;
 
 export class DeliveryItemDto {
   @ApiProperty() @IsString() itemId!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() itemName?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() agencyId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() agencyName?: string;
-  @ApiPropertyOptional() @IsOptional() quantity?: number | string;
-  // IsDefined matters: the global ValidationPipe runs with whitelist:true and
-  // silently STRIPS properties that carry no class-validator decorator —
-  // without it orderedQty always arrived as 0.
-  @ApiProperty() @IsDefined() orderedQty!: number | string;
-  @ApiPropertyOptional() @IsOptional() unitPrice?: number | string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toNumberOrNaN)
+  @IsInt({ message: 'quantity must be a whole number of units' })
+  @Min(0, { message: 'quantity cannot be negative' })
+  quantity?: number;
+  // Stock is dispatched in whole units only: zero, negative, and fractional
+  // quantities are rejected here so inventory can never go negative or
+  // fractional through the delivery flow. (The decorator also keeps the
+  // property from being stripped by the whitelist ValidationPipe.)
+  @ApiProperty()
+  @Transform(toNumberOrNaN)
+  @IsInt({ message: 'orderedQty must be a whole number of units' })
+  @Min(1, { message: 'orderedQty must be at least 1' })
+  orderedQty!: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(toNumberOrNaN)
+  @IsNumber({}, { message: 'unitPrice must be a number' })
+  @Min(0, { message: 'unitPrice cannot be negative' })
+  unitPrice?: number;
   @ApiPropertyOptional({ description: 'Sales tax %, flows to the Sales Order / Invoice line' })
-  @IsOptional() taxRate?: number | string;
+  @IsOptional()
+  @Transform(toNumberOrNaN)
+  @IsNumber({}, { message: 'taxRate must be a number' })
+  @Min(0, { message: 'taxRate cannot be negative' })
+  @Max(100, { message: 'taxRate cannot exceed 100%' })
+  taxRate?: number;
 }
 
 export class CreateDeliveryDto {

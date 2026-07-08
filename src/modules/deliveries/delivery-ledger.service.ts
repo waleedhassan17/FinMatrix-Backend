@@ -124,7 +124,20 @@ export class DeliveryLedgerService {
     }
 
     const items = await itemRepo.find({ where: { deliveryId: delivery.id } });
-    const activeItems = items.filter((i) => this.lineQty(i).greaterThan(0));
+    // Stock moves in whole units only. The DTO already rejects bad input on
+    // the HTTP surface; this guards every other path (auto-assign, legacy
+    // rows, direct service calls) so a zero/negative/fractional line can
+    // never silently dispatch or corrupt the books.
+    for (const line of items) {
+      const q = this.lineQty(line);
+      if (!q.isInteger() || q.lessThanOrEqualTo(0)) {
+        throw new UnprocessableEntityException({
+          code: 'INVALID_QUANTITY',
+          message: `Cannot dispatch ${q.toString()} x ${line.itemName ?? line.itemId}: quantity must be a positive whole number.`,
+        });
+      }
+    }
+    const activeItems = items;
     if (activeItems.length === 0) {
       // Nothing physical to dispatch — no stock movement, no documents.
       return { committed: false };
