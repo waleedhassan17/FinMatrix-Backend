@@ -225,6 +225,25 @@ async function main() {
       !!three && !!six && six.monthlyMinorUnits < three.monthlyMinorUnits && !!six.monthlySavingsLabel,
       { three: three?.monthlyMinorUnits, six: six?.monthlyMinorUnits });
   }
+  // Super-admin plans view serves the SAME six tier plans (config-defined).
+  const adminPlans = await req('GET', '/super-admin/plans', { token: superU.token });
+  const adminList = data(adminPlans) ?? [];
+  ok('super-admin plans lists exactly the six tier plans',
+    Array.isArray(adminList) && adminList.length === 6 &&
+    adminList.every((p: any) => p.companyType && p.totalLabel && p.currency === 'PKR'),
+    adminList.length);
+  const publicPlans = await req('GET', '/super-admin/plans/public', {});
+  const publicList = data(publicPlans) ?? [];
+  ok('public plans endpoint serves the six tier plans too',
+    Array.isArray(publicList) && publicList.length === 6, publicList.length);
+  const editAttempt = await req('POST', '/super-admin/plans', {
+    token: superU.token,
+    json: { name: 'Hack Plan', priceMonthly: 1, priceYearly: 1, maxUsers: 1 },
+  });
+  ok('creating/editing plans via API rejected (config-defined)',
+    editAttempt.status === 400 && JSON.stringify(editAttempt.body).includes('PLANS_CONFIG_DEFINED'),
+    editAttempt.status);
+
   const mismatch = await submitPayment(sb.token, sb.companyId, 'warehouse_3mo');
   ok('small business buying a warehouse plan → 400 PLAN_TYPE_MISMATCH',
     mismatch.status === 400 && JSON.stringify(mismatch.body).includes('PLAN_TYPE_MISMATCH'), mismatch.body);

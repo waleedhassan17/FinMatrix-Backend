@@ -13,6 +13,7 @@ import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
+import { PLAN_CONFIG, TIER_PLAN_KEYS, formatMinorUnits } from '../billing/plan-config';
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
@@ -322,11 +323,77 @@ export class SuperAdminService {
 
   // ─── Subscription Plans ─────────────────────────────────────────────────────
 
+  /**
+   * Three-tier model (FinMatrix.md): the subscription plans are defined in
+   * ONE server-side config — billing/plan-config.ts — not in the database.
+   * This returns the six tier plans in the legacy plan shape (so existing
+   * clients keep rendering) PLUS the tier fields (companyType, duration,
+   * PKR labels). The old subscription_plans table is retained read-only for
+   * historical company_subscriptions rows; it is no longer served or
+   * editable here.
+   */
   async getSubscriptionPlans() {
-    return this.planRepo.find({ order: { sortOrder: 'ASC', createdAt: 'ASC' } });
+    const tierNames: Record<string, string> = {
+      small_business: 'Small Business',
+      large_org: 'Large Organization',
+      warehouse: 'Warehouse',
+    };
+    const tierFeatures: Record<string, string[]> = {
+      small_business: [
+        'Invoices, bills, payments & estimates',
+        'Customers, vendors & chart of accounts',
+        'Tax tracking + core reports (P&L, BS, TB, aging)',
+      ],
+      large_org: [
+        'Everything in Small Business',
+        'Payroll, employees & payslips',
+        'Budgets vs actual, team roles & bank reconciliation',
+        'Optional inventory (per-company toggle)',
+      ],
+      warehouse: [
+        'Everything in Large Organization',
+        'Full inventory + purchase orders (GRNI 3-way match)',
+        'Deliveries with rider app & admin approval',
+        'Goods-in-Transit accounting built in',
+      ],
+    };
+    return TIER_PLAN_KEYS.map((key, i) => {
+      const p = PLAN_CONFIG[key];
+      return {
+        // Legacy shape (id/name/priceMonthly/priceYearly/features/…):
+        id: p.key,
+        name: p.label,
+        description: `${tierNames[p.companyType ?? '']} · ${p.durationMonths} months, billed once`,
+        priceMonthly: String(p.monthlyMinorUnits / 100),
+        priceYearly: String(p.priceMinorUnits / 100), // legacy field = TOTAL for the period
+        maxUsers: p.companyType === 'small_business' ? 3 : 25,
+        maxInvoices: null,
+        features: tierFeatures[p.companyType ?? ''] ?? [],
+        isActive: true,
+        sortOrder: i,
+        // Tier fields:
+        companyType: p.companyType,
+        durationMonths: p.durationMonths,
+        monthlyMinorUnits: p.monthlyMinorUnits,
+        totalMinorUnits: p.priceMinorUnits,
+        monthlyLabel: formatMinorUnits(p.monthlyMinorUnits, p.currency),
+        totalLabel: formatMinorUnits(p.priceMinorUnits, p.currency),
+        currency: p.currency,
+        deliveryPersonnelLimit: p.deliveryPersonnelLimit,
+      };
+    });
   }
 
   async createSubscriptionPlan(dto: CreateSubscriptionPlanDto) {
+    void dto;
+    throw new BadRequestException({
+      code: 'PLANS_CONFIG_DEFINED',
+      message:
+        'Subscription plans are defined in the server configuration (billing/plan-config.ts), not in the database. Change the config and redeploy to adjust pricing.',
+    });
+  }
+
+  private async legacyCreateSubscriptionPlan(dto: CreateSubscriptionPlanDto) {
     const plan = this.planRepo.create({
       name: dto.name,
       description: dto.description ?? null,
@@ -342,6 +409,16 @@ export class SuperAdminService {
   }
 
   async updateSubscriptionPlan(planId: string, dto: Partial<CreateSubscriptionPlanDto>) {
+    void planId;
+    void dto;
+    throw new BadRequestException({
+      code: 'PLANS_CONFIG_DEFINED',
+      message:
+        'Subscription plans are defined in the server configuration (billing/plan-config.ts), not in the database. Change the config and redeploy to adjust pricing.',
+    });
+  }
+
+  private async legacyUpdateSubscriptionPlan(planId: string, dto: Partial<CreateSubscriptionPlanDto>) {
     const plan = await this.planRepo.findOne({ where: { id: planId } });
     if (!plan) throw new NotFoundException('Plan not found');
 
@@ -359,6 +436,15 @@ export class SuperAdminService {
   }
 
   async deleteSubscriptionPlan(planId: string) {
+    void planId;
+    throw new BadRequestException({
+      code: 'PLANS_CONFIG_DEFINED',
+      message:
+        'Subscription plans are defined in the server configuration (billing/plan-config.ts) and cannot be deleted.',
+    });
+  }
+
+  private async legacyDeleteSubscriptionPlan(planId: string) {
     const plan = await this.planRepo.findOne({ where: { id: planId } });
     if (!plan) throw new NotFoundException('Plan not found');
 
