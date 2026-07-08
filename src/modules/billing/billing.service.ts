@@ -25,6 +25,7 @@ import {
   normalizePlan,
   PLAN_CONFIG,
   PlanKey,
+  plansForType,
 } from './plan-config';
 
 /** Add whole months to a date (clamps to end-of-month like most billing systems). */
@@ -110,6 +111,47 @@ export class BillingService {
     };
   }
 
+  // ── Selectable plans for a company type (FinMatrix.md Phase 2) ────────────
+
+  /**
+   * The TWO plan cards (3-month + 6-month) for a company type, with the
+   * 6-month savings pre-computed so the client renders, never calculates.
+   */
+  async getPlansForType(companyId: string, companyTypeOverride?: string) {
+    const company = await this.getCompanyOrFail(companyId);
+    const companyType = companyTypeOverride ?? company.companyType ?? 'warehouse';
+    const plans = plansForType(companyType);
+    if (plans.length === 0) {
+      throw new BadRequestException(
+        'companyType must be one of small_business | large_org | warehouse.',
+      );
+    }
+    const threeMo = plans.find((p) => p.durationMonths === 3);
+    return {
+      companyType,
+      plans: plans.map((p) => {
+        const monthlySavings =
+          threeMo && p.durationMonths === 6
+            ? threeMo.monthlyMinorUnits - p.monthlyMinorUnits
+            : 0;
+        return {
+          key: p.key,
+          label: p.label,
+          durationMonths: p.durationMonths,
+          monthlyMinorUnits: p.monthlyMinorUnits,
+          monthlyLabel: formatMinorUnits(p.monthlyMinorUnits, p.currency),
+          totalMinorUnits: p.priceMinorUnits,
+          totalLabel: formatMinorUnits(p.priceMinorUnits, p.currency),
+          currency: p.currency,
+          deliveryPersonnelLimit: p.deliveryPersonnelLimit,
+          monthlySavingsMinorUnits: monthlySavings,
+          monthlySavingsLabel:
+            monthlySavings > 0 ? `${formatMinorUnits(monthlySavings, p.currency)}/month` : null,
+        };
+      }),
+    };
+  }
+
   // ── Delivery-personnel plan limits ────────────────────────────────────────
 
   async getPlanLimits(companyId: string) {
@@ -171,6 +213,16 @@ export class BillingService {
     const config = getPlanConfig(plan);
     if (config.priceMinorUnits <= 0) {
       throw new BadRequestException('The Free plan does not require a payment.');
+    }
+    // Tier plans are only purchasable by their own company type (legacy plans
+    // carry companyType null and stay renewable by whoever already has one).
+    if (config.companyType && company.companyType && config.companyType !== company.companyType) {
+      throw new BadRequestException({
+        code: 'PLAN_TYPE_MISMATCH',
+        message:
+          `The "${config.label}" plan is for ${config.companyType.replace(/_/g, ' ')} companies; ` +
+          `this company is registered as ${company.companyType.replace(/_/g, ' ')}.`,
+      });
     }
     if (!file) {
       throw new BadRequestException('A payment screenshot is required.');

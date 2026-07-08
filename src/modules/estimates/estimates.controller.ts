@@ -13,10 +13,12 @@ import {
   ConvertEstimateDto, CreateEstimateDto, EstimateStatusDto, ListEstimatesQueryDto, UpdateEstimateDto,
 } from './dto/estimate.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('estimates')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('estimates') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('estimates')
 export class EstimatesController {
   constructor(private readonly estimates: EstimatesService) {}

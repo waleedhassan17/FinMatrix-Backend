@@ -19,10 +19,12 @@ import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto, AddAgencyItemDto } from './dto/agency.dto';
 import { HttpCode } from '@nestjs/common';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Agencies')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('agencies') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('agencies')
 export class AgenciesController {
   constructor(private readonly svc: AgenciesService) {}

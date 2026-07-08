@@ -93,9 +93,30 @@ export class Company extends BaseEntity {
   @Column({ type: 'boolean', default: false, name: 'setup_completed' })
   setupCompleted!: boolean;
 
-  // Chosen plan (Phase1.md): free | standard | pro. Only 'free' is selectable
-  // for now; the paid tiers are display-only ("coming soon").
-  @Column({ type: 'varchar', length: 16, default: 'free', name: 'subscription_plan' })
+  // ── Three-tier model (FinMatrix.md) ───────────────────────────────────────
+  // small_business | large_org | warehouse. Chosen at registration; existing
+  // pre-tiering companies were defaulted to 'warehouse' by the migration (they
+  // already had full access — nothing may be taken away). NULL is treated as
+  // fully unlocked by computeFeatures for the same reason.
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'company_type' })
+  companyType!: string | null;
+
+  // Large-organization per-company inventory toggle (basic stock + COGS only).
+  // Ignored for the other types: small_business is always off, warehouse
+  // always on.
+  @Column({ type: 'boolean', default: false, name: 'inventory_enabled' })
+  inventoryEnabled!: boolean;
+
+  // KILL SWITCH (FinMatrix.md SAFETY §4): checked FIRST in computeFeatures —
+  // when true every feature gate passes regardless of type/plan. Flippable by
+  // a super-admin endpoint or a one-line DB update; no deploy needed.
+  @Column({ type: 'boolean', default: false, name: 'all_features_unlocked' })
+  allFeaturesUnlocked!: boolean;
+
+  // Chosen plan. Legacy keys free | standard | pro (pre-tiering) plus the six
+  // tier plans (small_business|large_org|warehouse × 3mo|6mo) — see
+  // billing/plan-config.ts, the single source of truth.
+  @Column({ type: 'varchar', length: 32, default: 'free', name: 'subscription_plan' })
   subscriptionPlan!: string;
 
   // ── Subscription lifecycle (phase2.md) ────────────────────────────────────

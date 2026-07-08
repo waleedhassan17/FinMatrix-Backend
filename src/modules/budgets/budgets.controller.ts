@@ -10,10 +10,12 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { BudgetsService } from './budgets.service';
 import { CreateBudgetDto, ListBudgetsQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('budgets')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('budgets') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('budgets')
 export class BudgetsController {
   constructor(private readonly svc: BudgetsService) {}

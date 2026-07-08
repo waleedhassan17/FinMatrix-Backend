@@ -232,6 +232,35 @@ export class SuperAdminService {
     };
   }
 
+  /**
+   * KILL SWITCH + tier override (FinMatrix.md SAFETY §4). Super-admin only.
+   * allFeaturesUnlocked=true short-circuits FeatureGuard before any type/plan
+   * check — instant full access, no deploy.
+   */
+  async updateFeatureOverride(
+    companyId: string,
+    dto: { allFeaturesUnlocked?: boolean; companyType?: string; inventoryEnabled?: boolean },
+    reviewerId: string,
+  ) {
+    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    if (!company) throw new NotFoundException('Company not found');
+
+    if (dto.allFeaturesUnlocked !== undefined) company.allFeaturesUnlocked = dto.allFeaturesUnlocked;
+    if (dto.companyType !== undefined) company.companyType = dto.companyType;
+    if (dto.inventoryEnabled !== undefined) company.inventoryEnabled = dto.inventoryEnabled;
+    company.reviewedBy = reviewerId;
+    company.reviewedAt = new Date();
+    await this.companyRepo.save(company);
+
+    return {
+      id: company.id,
+      name: company.name,
+      companyType: company.companyType,
+      inventoryEnabled: company.inventoryEnabled,
+      allFeaturesUnlocked: company.allFeaturesUnlocked,
+    };
+  }
+
   async updateCompanyStatus(
     companyId: string,
     dto: UpdateCompanyStatusDto,

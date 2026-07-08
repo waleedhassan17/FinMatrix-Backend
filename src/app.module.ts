@@ -16,6 +16,7 @@ import { ResponseEnvelopeInterceptor } from './common/interceptors/response-enve
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { IdempotencyRecord } from './common/interceptors/idempotency-record.entity';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { FeatureGuard } from './common/features/feature.guard';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -158,6 +159,9 @@ import { SentryModule } from '@sentry/nestjs/setup';
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Tier enforcement (FinMatrix.md): runs after JwtAuthGuard so req.user is
+    // set; no-ops on routes without @RequiresFeature (accounting core).
+    { provide: APP_GUARD, useClass: FeatureGuard },
   ],
 })
 export class AppModule implements NestModule {

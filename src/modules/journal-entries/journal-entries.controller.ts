@@ -25,10 +25,12 @@ import {
   ListJournalEntriesQueryDto,
   VoidJournalEntryDto,
 } from './dto/journal-entry.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('journal-entries')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('journalEntries') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('journal-entries')
 export class JournalEntriesController {
   constructor(private readonly svc: JournalEntriesService) {}

@@ -9,10 +9,12 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { DeliveryPersonnelService } from './delivery-personnel.service';
 import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Delivery Personnel')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('delivery-personnel')
 export class DeliveryPersonnelController {
   constructor(private readonly svc: DeliveryPersonnelService) {}

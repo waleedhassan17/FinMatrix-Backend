@@ -7,10 +7,12 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { InventoryApprovalsService } from './inventory-approvals.service';
 import { CreateInventoryUpdateRequestDto, ReviewRequestDto } from './dto/inventory-approval.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Inventory Approvals')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('inventory-approvals')
 export class InventoryApprovalsController {
   constructor(private readonly svc: InventoryApprovalsService) {}

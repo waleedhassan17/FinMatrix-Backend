@@ -7,10 +7,12 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ShadowInventoryService } from './shadow-inventory.service';
 import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Shadow Inventory')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('shadow-inventory')
 export class ShadowInventoryController {
   constructor(private readonly svc: ShadowInventoryService) {}

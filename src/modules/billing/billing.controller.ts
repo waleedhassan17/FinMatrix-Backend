@@ -50,6 +50,20 @@ export class BillingController {
     }
   }
 
+  /**
+   * The two selectable plans (3-month + 6-month) for a company type — read
+   * straight from PLAN_CONFIG so the client can never invent a price
+   * (FinMatrix.md Phase 2 §2). Defaults to the caller's own company type.
+   */
+  @Get('plans')
+  plans(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('companyType') companyType?: string,
+  ) {
+    this.companyIdOf(user);
+    return this.billing.getPlansForType(this.companyIdOf(user), companyType);
+  }
+
   @Get('status')
   status(@CurrentUser() user: AuthenticatedUser) {
     return this.billing.getStatus(this.companyIdOf(user));
@@ -100,7 +114,7 @@ export class BillingController {
     const companyId = this.companyIdOf(user);
     const candidate = body?.plan ?? planQuery;
     if (!isPlanKey(candidate)) {
-      throw new BadRequestException('A valid plan (standard | pro) is required.');
+      throw new BadRequestException('A valid plan key is required.');
     }
     return this.billing.createSubmission(companyId, user.id, candidate, file);
   }

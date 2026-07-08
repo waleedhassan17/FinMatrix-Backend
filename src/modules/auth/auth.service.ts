@@ -33,6 +33,7 @@ import {
 import { JwtPayload } from './strategies/jwt.strategy';
 import { UserRole } from '../../types';
 import { MailService } from '../mail/mail.service';
+import { computeFeatures } from '../../common/features/feature-map';
 
 export interface TokenPair {
   accessToken: string;
@@ -55,6 +56,10 @@ export interface AuthResult {
   companyId: string | null;
   company: { id: string; name: string; status: string | null } | null;
   companyStatus: string | null;
+  /** Three-tier model (FinMatrix.md): drives which navigator the app mounts. */
+  companyType: string | null;
+  /** Effective feature flags for the company (kill switch already applied). */
+  features: Record<string, boolean> | null;
 }
 
 @Injectable()
@@ -162,6 +167,14 @@ export class AuthService {
         ? { id: result.company.id, name: result.company.name, status: result.company.status }
         : null,
       companyStatus: result.company?.status ?? null,
+      companyType: result.company?.companyType ?? null,
+      features: result.company
+        ? computeFeatures({
+            companyType: result.company.companyType ?? null,
+            inventoryEnabled: result.company.inventoryEnabled ?? false,
+            allFeaturesUnlocked: result.company.allFeaturesUnlocked ?? false,
+          })
+        : null,
     };
   }
 
@@ -250,6 +263,14 @@ export class AuthService {
       companyId,
       company: company ? { id: company.id, name: company.name, status: company.status } : null,
       companyStatus: company ? normalizeCompanyStatus(company.status) : null,
+      companyType: company?.companyType ?? null,
+      features: company
+        ? computeFeatures({
+            companyType: company.companyType ?? null,
+            inventoryEnabled: company.inventoryEnabled ?? false,
+            allFeaturesUnlocked: company.allFeaturesUnlocked ?? false,
+          })
+        : null,
     };
   }
 
@@ -473,6 +494,8 @@ export class AuthService {
     companyId: string | null;
     company: { id: string; name: string; status: string | null } | null;
     companyStatus: string | null;
+    companyType: string | null;
+    features: Record<string, boolean> | null;
   }> {
     const user = await this.users.getByIdOrFail(userId);
     const memberships = await this.userCompanyRepo.find({
@@ -498,6 +521,14 @@ export class AuthService {
       // deactivation (status → inactive) surfaces here and routes the user out.
       companyStatus: primary?.company
         ? normalizeCompanyStatus(primary.company.status)
+        : null,
+      companyType: primary?.company?.companyType ?? null,
+      features: primary?.company
+        ? computeFeatures({
+            companyType: primary.company.companyType ?? null,
+            inventoryEnabled: primary.company.inventoryEnabled ?? false,
+            allFeaturesUnlocked: primary.company.allFeaturesUnlocked ?? false,
+          })
         : null,
     };
   }

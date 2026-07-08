@@ -29,10 +29,12 @@ import {
   ListInventoryUpdateRequestsQueryDto,
   RejectInventoryUpdateRequestDto,
 } from './dto/inventory-approval.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Inventory Update Requests')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('inventory-update-requests')
 export class InventoryUpdateRequestsController {
   constructor(private readonly svc: InventoryApprovalsService) {}

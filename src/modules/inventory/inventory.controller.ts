@@ -26,10 +26,12 @@ import {
   CreatePhysicalCountDto,
   MovementQueryDto,
 } from './dto/inventory.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('inventory') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('inventory')
 export class InventoryController {
   constructor(private readonly svc: InventoryService) {}

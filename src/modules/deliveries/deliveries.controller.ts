@@ -16,10 +16,12 @@ import {
   DeliveryIssueDto,
   ConfirmDeliveryDto,
 } from './dto/delivery.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Deliveries')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('deliveries')
 export class DeliveriesController {
   constructor(private readonly svc: DeliveriesService) {}

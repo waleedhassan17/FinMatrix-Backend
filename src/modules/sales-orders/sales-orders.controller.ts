@@ -13,10 +13,12 @@ import {
   ConvertSalesOrderDto, CreateSalesOrderDto, FulfillSalesOrderDto, ListSalesOrdersQueryDto, UpdateSalesOrderDto,
 } from './dto/sales-order.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('sales-orders')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('salesOrders') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('sales-orders')
 export class SalesOrdersController {
   constructor(private readonly salesOrders: SalesOrdersService) {}

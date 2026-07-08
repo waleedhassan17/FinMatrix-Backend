@@ -11,10 +11,12 @@ import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-
 import { CreditMemosService } from './credit-memos.service';
 import { ApplyCreditMemoDto, CreateCreditMemoDto, ListCreditMemosQueryDto } from './dto/credit-memo.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('credit-memos')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('creditMemos') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('credit-memos')
 export class CreditMemosController {
   constructor(private readonly svc: CreditMemosService) {}

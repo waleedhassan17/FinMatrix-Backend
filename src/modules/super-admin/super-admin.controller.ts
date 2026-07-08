@@ -16,6 +16,7 @@ import { IsString, IsNotEmpty, MinLength } from 'class-validator';
 import { SuperAdminService } from './super-admin.service';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
+import { FeatureOverrideDto } from './dto/feature-override.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { PublicRoute } from '../../common/decorators/public.decorator';
@@ -98,6 +99,22 @@ export class SuperAdminController {
   ) {
     guardSuperAdmin(user);
     return this.service.updateCompanyStatus(id, dto, user.id);
+  }
+
+  /**
+   * KILL SWITCH (FinMatrix.md SAFETY §4): flip all_features_unlocked (and
+   * optionally companyType / the large-org inventory toggle) per company in
+   * seconds — no deploy. FeatureGuard checks the unlock BEFORE any type/plan
+   * logic, so this instantly restores full access if gating misbehaves.
+   */
+  @Patch('companies/:id/feature-override')
+  async updateFeatureOverride(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FeatureOverrideDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    guardSuperAdmin(user);
+    return this.service.updateFeatureOverride(id, dto, user.id);
   }
 
   // ─── Public Plans (for signup subscription-select screen) ───────────────────

@@ -56,6 +56,10 @@ export class CompaniesService {
         accountingMethod: dto.accountingMethod ?? null,
         homeCurrency: dto.homeCurrency ?? null,
         logo: dto.logo ?? null,
+        // Three-tier model: chosen on the registration type step. Never
+        // changeable via the normal update path (self-upgrade would bypass
+        // the plans) — only super-admin can change it later.
+        companyType: dto.companyType ?? null,
         inviteCode,
         createdBy: userId,
         // Onboarding draft — not yet submitted for approval.
@@ -149,6 +153,10 @@ export class CompaniesService {
       ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
       ...(dto.booksLockedUntil !== undefined ? { booksLockedUntil: dto.booksLockedUntil } : {}),
       ...(dto.salesTaxRegistered !== undefined ? { salesTaxRegistered: dto.salesTaxRegistered } : {}),
+      // Large-org per-company inventory opt-in. Harmless for other types:
+      // FEATURE_MAP only honors the toggle when companyType is large_org.
+      // companyType itself is deliberately NOT updatable here.
+      ...(dto.inventoryEnabled !== undefined ? { inventoryEnabled: dto.inventoryEnabled } : {}),
     });
     return this.companyRepo.save(company);
   }

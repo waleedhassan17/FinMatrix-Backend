@@ -16,6 +16,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 import { SettingsService } from './settings.service';
 import { UpdateSettingsDto } from './dto/settings.dto';
 import { CompaniesService } from '../companies/companies.service';
@@ -95,6 +96,7 @@ export class SettingsController {
 
   // Users management
   @Get('users')
+  @RequiresFeature('multiUser') // tier gate — team management is large_org+
   @Roles('admin')
   async listUsers(
     @CurrentCompany() companyId: string,
@@ -106,6 +108,7 @@ export class SettingsController {
   }
 
   @Patch('users/:userId')
+  @RequiresFeature('multiUser') // tier gate — team management is large_org+
   @Roles('admin')
   async updateUser(
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -119,12 +122,14 @@ export class SettingsController {
   }
 
   @Delete('users/:userId')
+  @RequiresFeature('multiUser') // tier gate — team management is large_org+
   @Roles('admin')
   async removeUser(@Param('userId', ParseUUIDPipe) userId: string) {
     return { id: userId, deleted: true };
   }
 
   @Patch('users/:userId/role')
+  @RequiresFeature('multiUser') // tier gate — team management is large_org+
   @Roles('admin')
   async updateUserRole(
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -138,6 +143,7 @@ export class SettingsController {
   }
 
   @Post('users/invite')
+  @RequiresFeature('multiUser') // tier gate — team management is large_org+
   @Roles('admin')
   @HttpCode(200)
   async inviteUser(@Body() dto: { email: string; role: string; displayName: string }) {

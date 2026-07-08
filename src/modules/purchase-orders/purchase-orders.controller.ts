@@ -32,10 +32,12 @@ import {
   ParsePaginationPipe,
   PaginationParams,
 } from '../../common/pipes/parse-pagination.pipe';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('purchase-orders')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('purchaseOrders') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
   constructor(private readonly service: PurchaseOrdersService) {}

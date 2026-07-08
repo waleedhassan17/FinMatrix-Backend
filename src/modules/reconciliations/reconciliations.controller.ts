@@ -24,10 +24,12 @@ import {
   ListReconciliationsQueryDto,
   UnreconciledQueryDto,
 } from './dto/reconciliation.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Bank Reconciliation')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
+@RequiresFeature('bankReconciliation') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('reconciliations')
 export class ReconciliationsController {
   constructor(private readonly svc: ReconciliationsService) {}

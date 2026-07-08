@@ -94,6 +94,15 @@ export class CreateCompanyDto {
   @IsOptional()
   @IsString()
   logo?: string;
+
+  @ApiPropertyOptional({
+    enum: ['small_business', 'large_org', 'warehouse'],
+    description:
+      'Three-tier model (FinMatrix.md): decides the feature set and which two subscription plans are offered.',
+  })
+  @IsOptional()
+  @IsIn(['small_business', 'large_org', 'warehouse'])
+  companyType?: string;
 }
 
 export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
@@ -114,6 +123,14 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional()
   @IsBoolean()
   salesTaxRegistered?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Large-organization per-company inventory opt-in (basic stock + COGS). Ignored for other company types.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  inventoryEnabled?: boolean;
 }
 
 export class JoinCompanyDto {

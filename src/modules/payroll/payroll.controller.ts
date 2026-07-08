@@ -13,10 +13,12 @@ import {
   CreateEmployeeDto, CreatePayrollRunDto, ListEmployeesQueryDto, UpdateEmployeeDto,
 } from './dto/payroll.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('payroll')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+@RequiresFeature('payroll') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller()
 export class PayrollController {
   constructor(private readonly svc: PayrollService) {}

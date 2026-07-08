@@ -4,6 +4,7 @@ import {
   getPlatformBank,
   normalizePlan,
   PLAN_CONFIG,
+  plansForType,
 } from './plan-config';
 
 describe('PLAN_CONFIG (phase2.md contract)', () => {
@@ -51,5 +52,47 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
     expect(bank.accountTitle).toContain('Waleed');
     expect(bank.bankName).toBe('Allied Bank');
     expect(bank.accountNumber).toBeTruthy();
+  });
+});
+
+describe('Six tier plans (FinMatrix.md CONFIRMED FINAL PRICING, PKR)', () => {
+  const expected: Array<[string, string, number, number, number]> = [
+    // key, companyType, durationMonths, monthly Rs, total Rs
+    ['small_business_3mo', 'small_business', 3, 2500, 7500],
+    ['small_business_6mo', 'small_business', 6, 2000, 12000],
+    ['large_org_3mo', 'large_org', 3, 5000, 15000],
+    ['large_org_6mo', 'large_org', 6, 4000, 24000],
+    ['warehouse_3mo', 'warehouse', 3, 4000, 12000],
+    ['warehouse_6mo', 'warehouse', 6, 3000, 18000],
+  ];
+
+  it.each(expected)('%s: %s, %imo, Rs %i/mo, Rs %i total', (key, type, months, monthly, total) => {
+    const p = PLAN_CONFIG[key as keyof typeof PLAN_CONFIG];
+    expect(p.companyType).toBe(type);
+    expect(p.durationMonths).toBe(months);
+    expect(p.monthlyMinorUnits).toBe(monthly * 100);
+    expect(p.priceMinorUnits).toBe(total * 100);
+    expect(p.priceMinorUnits).toBe(p.monthlyMinorUnits * p.durationMonths!);
+    expect(p.currency).toBe('PKR');
+  });
+
+  it('every type: the 6-month plan has a LOWER effective monthly rate', () => {
+    for (const type of ['small_business', 'large_org', 'warehouse']) {
+      const plans = plansForType(type);
+      expect(plans).toHaveLength(2);
+      const three = plans.find((p) => p.durationMonths === 3)!;
+      const six = plans.find((p) => p.durationMonths === 6)!;
+      expect(six.monthlyMinorUnits).toBeLessThan(three.monthlyMinorUnits);
+    }
+  });
+
+  it('NO free plan among the tier plans; legacy keys are never offered', () => {
+    for (const type of ['small_business', 'large_org', 'warehouse']) {
+      for (const p of plansForType(type)) {
+        expect(p.priceMinorUnits).toBeGreaterThan(0);
+        expect(['free', 'standard', 'pro']).not.toContain(p.key);
+      }
+    }
+    expect(plansForType(null)).toHaveLength(0); // legacy plans not selectable
   });
 });
