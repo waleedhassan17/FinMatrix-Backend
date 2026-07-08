@@ -153,10 +153,11 @@ export class InventoryUpdateRequestsController {
   @ApiResponse({ status: 404, description: 'Photo not found' })
   async streamBillPhoto(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
-    const file = await this.svc.streamBillPhoto(companyId, id);
+    const file = await this.svc.streamBillPhoto(companyId, id, { id: user.id, role: user.role });
     res.setHeader('Content-Type', file.mimeType ?? 'image/jpeg');
     if (file.size != null) res.setHeader('Content-Length', String(file.size));
     res.setHeader('Cache-Control', 'private, max-age=3600');

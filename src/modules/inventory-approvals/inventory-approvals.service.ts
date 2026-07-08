@@ -199,12 +199,34 @@ export class InventoryApprovalsService {
         );
       }
 
-      // 4) Validate change shapes against current inventory (don't trust client beforeQty)
-      for (const c of changes) {
-        if (c.deliveredQty + c.returnedQty > c.beforeQty) {
-          throw new BadRequestException(
-            `Item ${c.itemName}: delivered + returned exceeds beforeQty`,
-          );
+      // 4) Validate the rider's counts against SERVER data. For deliveries
+      // whose stock was committed to Goods in Transit at assignment, the
+      // bound is the DISPATCHED quantity on the delivery line (the goods are
+      // already off the shelf, so warehouse on-hand — the old beforeQty
+      // check — is irrelevant and would wrongly block an exact-stock
+      // dispatch). Legacy pre-GIT deliveries keep the beforeQty bound.
+      if (delivery.stockCommittedAt) {
+        const deliveryLines = await em.getRepository(DeliveryItem).find({
+          where: { deliveryId: delivery.id },
+        });
+        const dispatchedByItem = new Map(
+          deliveryLines.map((l) => [l.itemId, Number(l.orderedQty) || Number(l.quantity) || 0]),
+        );
+        for (const c of changes) {
+          const dispatched = dispatchedByItem.get(c.itemId) ?? 0;
+          if (c.deliveredQty + c.returnedQty > dispatched) {
+            throw new BadRequestException(
+              `Item ${c.itemName}: delivered + returned (${c.deliveredQty + c.returnedQty}) exceeds the ${dispatched} dispatched with this delivery`,
+            );
+          }
+        }
+      } else {
+        for (const c of changes) {
+          if (c.deliveredQty + c.returnedQty > c.beforeQty) {
+            throw new BadRequestException(
+              `Item ${c.itemName}: delivered + returned exceeds beforeQty`,
+            );
+          }
         }
       }
 
@@ -850,12 +872,24 @@ export class InventoryApprovalsService {
     });
   }
 
-  async streamBillPhoto(companyId: string, requestId: string) {
+  async streamBillPhoto(
+    companyId: string,
+    requestId: string,
+    viewer?: { id: string; role: string },
+  ) {
     const req = await this.reqRepo.findOne({
       where: { id: requestId, companyId },
     });
     if (!req || !req.proofBillPhotoStorageKey) {
       throw new NotFoundException('Bill photo not found');
+    }
+    // Proof-of-delivery photos are visible to admins/staff and the rider who
+    // submitted them — never to another rider in the same company.
+    if (viewer && viewer.role === 'delivery' && req.personnelId !== viewer.id) {
+      throw new ForbiddenException({
+        code: 'NOT_YOUR_REQUEST',
+        message: 'You can only view proof photos for your own deliveries.',
+      });
     }
     const file = await this.storage.read(req.proofBillPhotoStorageKey);
     if (!file) throw new NotFoundException('Bill photo missing on storage');
