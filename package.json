@@ -37,7 +37,9 @@
     "test:chunk1": "ts-node -r tsconfig-paths/register test/chunk1.acceptance.ts",
     "test:chunk2": "ts-node -r tsconfig-paths/register test/chunk2.acceptance.ts",
     "test:delivery-ledger": "ts-node -r tsconfig-paths/register test/delivery-ledger.acceptance.ts",
-    "verify:demo": "ts-node -r tsconfig-paths/register test/demo-invariants.ts"
+    "verify:demo": "ts-node -r tsconfig-paths/register test/demo-invariants.ts",
+    "seed:tier-demos": "ts-node -r tsconfig-paths/register src/database/seeds/tier-demos.seed.ts",
+    "seed:tier-demos:prod": "node dist/database/seeds/tier-demos.seed.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
