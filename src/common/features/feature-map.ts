@@ -45,7 +45,9 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     estimates: true,
     journalEntries: true,
     creditMemos: true,
-    bankReconciliation: false,
+    // phase3.md: Chart of Accounts and Bank Reconciliation are CORE features,
+    // available to every tier.
+    bankReconciliation: true,
     multiUser: false,
     auditLog: false,
     periodClose: false,

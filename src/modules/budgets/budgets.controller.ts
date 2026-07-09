@@ -1,5 +1,6 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body, Controller, Delete, Get, Param, ParseUUIDPipe,
+  ParseIntPipe, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -24,6 +25,21 @@ export class BudgetsController {
   @Roles('admin', 'staff')
   list(@CurrentCompany() companyId: string, @Query() query: ListBudgetsQueryDto) {
     return this.svc.list(companyId, query);
+  }
+
+  /**
+   * QuickBooks "create budget from previous year's data": per-account
+   * monthly actuals for the given fiscal year, ready to use as a new
+   * budget's monthlyAmounts. Registered BEFORE :id so 'prefill' never
+   * matches the UUID param route.
+   */
+  @Get('prefill')
+  @Roles('admin', 'staff')
+  prefill(
+    @CurrentCompany() companyId: string,
+    @Query('fiscalYear', new ParseIntPipe({ optional: true })) fiscalYear?: number,
+  ) {
+    return this.svc.prefillFromActuals(companyId, fiscalYear ?? new Date().getFullYear() - 1);
   }
 
   @Get(':id')

@@ -78,7 +78,13 @@ export class BudgetsService {
     return { id, deleted: true };
   }
 
-  /** Budget vs Actual: actual = net GL movement per account within the fiscal year. */
+  /**
+   * Budget vs Actual (QuickBooks flow): actual = net GL movement per account,
+   * with the sign driven by the account's normal balance. Returns BOTH the
+   * annual comparison and a per-month breakdown (the budget stores 12 monthly
+   * amounts, so the report compares month by month). Money math is Decimal —
+   * never floats. Read-only: posts nothing.
+   */
   async budgetVsActual(companyId: string, id: string) {
     const budget = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
     if (!budget) throw new NotFoundException({ code: 'BUDGET_NOT_FOUND', message: 'Budget not found' });
@@ -88,32 +94,130 @@ export class BudgetsService {
     const to = `${budget.fiscalYear}-12-31`;
 
     const rows = await Promise.all(budget.lines.map(async (l) => {
-      const r = await this.dataSource.query(
-        `SELECT COALESCE(SUM(debit::numeric),0) dr, COALESCE(SUM(credit::numeric),0) cr
-         FROM general_ledger WHERE company_id=$1 AND account_id=$2 AND date BETWEEN $3 AND $4`,
+      // One query per line: per-month debit/credit sums for the fiscal year.
+      const monthly = await this.dataSource.query(
+        `SELECT EXTRACT(MONTH FROM date)::int AS m,
+                COALESCE(SUM(debit::numeric),0) dr, COALESCE(SUM(credit::numeric),0) cr
+           FROM general_ledger
+          WHERE company_id=$1 AND account_id=$2 AND date BETWEEN $3 AND $4
+          GROUP BY 1`,
         [companyId, l.accountId, from, to]);
       const acc = accMap[l.accountId];
       // Expense/asset accounts: debit-positive; revenue/liability: credit-positive.
       const debitNormal = ['expense', 'asset'].includes((acc?.type ?? '').toLowerCase());
-      const actual = debitNormal ? num(r[0].dr) - num(r[0].cr) : num(r[0].cr) - num(r[0].dr);
-      const budgeted = num(l.annualTotal);
+      const actualByMonth = Array.from({ length: 12 }, () => new Decimal(0));
+      for (const r of monthly) {
+        const net = debitNormal
+          ? new Decimal(r.dr ?? 0).minus(r.cr ?? 0)
+          : new Decimal(r.cr ?? 0).minus(r.dr ?? 0);
+        actualByMonth[(r.m ?? 1) - 1] = net;
+      }
+      const budgetByMonth = (l.monthlyAmounts ?? []).map((v: any) => new Decimal(num(v)));
+      while (budgetByMonth.length < 12) budgetByMonth.push(new Decimal(0));
+
+      const months = actualByMonth.map((actualM, i) => ({
+        month: i + 1,
+        budgeted: budgetByMonth[i].toDecimalPlaces(2).toNumber(),
+        actual: actualM.toDecimalPlaces(2).toNumber(),
+        variance: budgetByMonth[i].minus(actualM).toDecimalPlaces(2).toNumber(),
+      }));
+
+      const actual = actualByMonth.reduce((s, v) => s.plus(v), new Decimal(0));
+      const budgeted = new Decimal(num(l.annualTotal));
       return {
         accountId: l.accountId,
         accountCode: acc?.accountNumber ?? '',
         accountName: acc?.name ?? '',
         accountType: acc?.type ?? '',
-        budgeted: Math.round(budgeted * 100) / 100,
-        actual: Math.round(actual * 100) / 100,
-        variance: Math.round((budgeted - actual) * 100) / 100,
-        percentUsed: budgeted > 0 ? Math.round((actual / budgeted) * 1000) / 10 : 0,
+        budgeted: budgeted.toDecimalPlaces(2).toNumber(),
+        actual: actual.toDecimalPlaces(2).toNumber(),
+        variance: budgeted.minus(actual).toDecimalPlaces(2).toNumber(),
+        percentUsed: budgeted.greaterThan(0)
+          ? actual.dividedBy(budgeted).times(100).toDecimalPlaces(1).toNumber()
+          : 0,
+        months,
       };
     }));
 
-    const totals = rows.reduce((t, r) => ({
-      budgeted: t.budgeted + r.budgeted, actual: t.actual + r.actual, variance: t.variance + r.variance,
-    }), { budgeted: 0, actual: 0, variance: 0 });
-    Object.keys(totals).forEach((k) => ((totals as any)[k] = Math.round((totals as any)[k] * 100) / 100));
-    return { budget: { id: budget.id, name: budget.name, fiscalYear: budget.fiscalYear, status: budget.status }, rows, totals };
+    const totals = rows.reduce(
+      (t, r) => ({
+        budgeted: t.budgeted.plus(r.budgeted),
+        actual: t.actual.plus(r.actual),
+        variance: t.variance.plus(r.variance),
+      }),
+      { budgeted: new Decimal(0), actual: new Decimal(0), variance: new Decimal(0) },
+    );
+    return {
+      budget: { id: budget.id, name: budget.name, fiscalYear: budget.fiscalYear, status: budget.status },
+      rows,
+      totals: {
+        budgeted: totals.budgeted.toDecimalPlaces(2).toNumber(),
+        actual: totals.actual.toDecimalPlaces(2).toNumber(),
+        variance: totals.variance.toDecimalPlaces(2).toNumber(),
+      },
+    };
+  }
+
+  /**
+   * Pre-fill helper (QuickBooks "create budget from previous year's data"):
+   * per-account monthly ACTUALS from the ledger for the given fiscal year,
+   * for income/expense accounts with activity. The client uses these as the
+   * starting monthlyAmounts of a new budget. Read-only — posts nothing.
+   */
+  async prefillFromActuals(companyId: string, fiscalYear: number) {
+    const from = `${fiscalYear}-01-01`;
+    const to = `${fiscalYear}-12-31`;
+    const rows = await this.dataSource.query(
+      `SELECT g.account_id, a.account_number, a.name, a.type,
+              EXTRACT(MONTH FROM g.date)::int AS m,
+              COALESCE(SUM(g.debit::numeric),0) dr, COALESCE(SUM(g.credit::numeric),0) cr
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND g.date BETWEEN $2 AND $3
+          AND a.type IN ('income','expense')
+        GROUP BY g.account_id, a.account_number, a.name, a.type
+        ORDER BY a.account_number`,
+      [companyId, from, to],
+    );
+    // GROUP BY above loses the month split — re-query grouped by month too.
+    const monthlyRows = await this.dataSource.query(
+      `SELECT g.account_id, EXTRACT(MONTH FROM g.date)::int AS m,
+              COALESCE(SUM(g.debit::numeric),0) dr, COALESCE(SUM(g.credit::numeric),0) cr
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND g.date BETWEEN $2 AND $3
+          AND a.type IN ('income','expense')
+        GROUP BY g.account_id, EXTRACT(MONTH FROM g.date)`,
+      [companyId, from, to],
+    );
+    const byAccount = new Map<string, Decimal[]>();
+    const typeMap = new Map<string, string>(rows.map((r: any) => [r.account_id, r.type]));
+    for (const r of monthlyRows) {
+      const debitNormal = (typeMap.get(r.account_id) ?? '') === 'expense';
+      const net = debitNormal
+        ? new Decimal(r.dr ?? 0).minus(r.cr ?? 0)
+        : new Decimal(r.cr ?? 0).minus(r.dr ?? 0);
+      const arr = byAccount.get(r.account_id) ?? Array.from({ length: 12 }, () => new Decimal(0));
+      arr[(r.m ?? 1) - 1] = net;
+      byAccount.set(r.account_id, arr);
+    }
+    return {
+      fiscalYear,
+      lines: rows.map((r: any) => {
+        const months = (byAccount.get(r.account_id) ?? []).map((v) =>
+          Decimal.max(v, 0).toDecimalPlaces(2).toNumber(),
+        );
+        while (months.length < 12) months.push(0);
+        return {
+          accountId: r.account_id,
+          accountCode: r.account_number,
+          accountName: r.name,
+          accountType: r.type,
+          monthlyAmounts: months,
+          annualTotal: months.reduce((s, v) => s + v, 0),
+        };
+      }).filter((l: any) => l.annualTotal > 0),
+    };
   }
 
   private computeLines(lines: BudgetLineDto[]) {

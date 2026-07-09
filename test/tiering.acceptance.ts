@@ -134,7 +134,8 @@ async function main() {
   ok('SB invoices 200', (await probe(sb, '/invoices')) === 200);
   ok('SB estimates 200', (await probe(sb, '/estimates')) === 200);
   ok('SB trial balance 200', (await probe(sb, '/reports/trial-balance')) === 200);
-  for (const p of ['/employees', '/payroll/runs', '/inventory/items', '/deliveries', '/budgets', '/purchase-orders', '/sales-orders', '/agencies', '/reconciliations', '/settings/users']) {
+  ok('SB bank reconciliation 200 (core feature, all tiers)', (await probe(sb, '/reconciliations')) === 200);
+  for (const p of ['/employees', '/payroll/runs', '/inventory/items', '/deliveries', '/budgets', '/purchase-orders', '/sales-orders', '/agencies', '/settings/users']) {
     ok(`SB ${p} → 403`, (await probe(sb, p)) === 403);
   }
   // Large org: people/planning yes; warehouse world no.

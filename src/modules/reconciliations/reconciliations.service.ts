@@ -130,11 +130,31 @@ export class ReconciliationsService {
       amount: subtractMoney(g.debit, g.credit).toFixed(2),
     }));
 
+    // QuickBooks warns when the beginning balance no longer matches the
+    // last statement's ending balance (someone touched reconciled history —
+    // e.g. an out-of-band DB edit). Derived beginning == last statement
+    // ending by construction, so any difference IS the broken amount.
+    const beginning = toDecimal(await this.beginningBalance(companyId, account.id));
+    const lastRecon = await this.reconRepo.findOne({
+      where: { companyId, accountId: account.id },
+      order: { statementDate: 'DESC', createdAt: 'DESC' },
+    });
+    const lastEnding = lastRecon ? toDecimal(lastRecon.statementEndingBalance) : null;
+    const beginningMismatch =
+      lastEnding !== null && !moneyEquals(beginning, lastEnding)
+        ? subtractMoney(beginning.toFixed(4), lastEnding.toFixed(4)).toFixed(2)
+        : null;
+
     return {
       accountId: account.id,
       accountName: account.name,
       accountNumber: account.accountNumber,
-      beginningBalance: toDecimal(await this.beginningBalance(companyId, account.id)).toFixed(2),
+      beginningBalance: beginning.toFixed(2),
+      lastStatementDate: lastRecon?.statementDate ?? null,
+      lastStatementEndingBalance: lastEnding !== null ? lastEnding.toFixed(2) : null,
+      // Non-null = WARN: beginning balance is off by this amount vs the last
+      // reconciliation (reconciled history was altered outside the app).
+      beginningMismatch,
       entries,
     };
   }
@@ -161,7 +181,7 @@ export class ReconciliationsService {
       where: { companyId, reconciliationId: id },
       order: { date: 'ASC', createdAt: 'ASC' },
     });
-    const entries = rows.map((g) => ({
+    const shape = (g: GeneralLedgerEntry) => ({
       id: g.id,
       date: g.date,
       reference: g.reference,
@@ -170,8 +190,33 @@ export class ReconciliationsService {
       debit: toDecimal(g.debit).toFixed(2),
       credit: toDecimal(g.credit).toFixed(2),
       amount: subtractMoney(g.debit, g.credit).toFixed(2),
-    }));
-    return { ...recon, entries };
+    });
+    const entries = rows.map(shape);
+
+    // RECONCILIATION REPORT (QuickBooks): the outstanding/uncleared items —
+    // book transactions dated on/before the statement date that this
+    // reconciliation did NOT clear (still unreconciled now, or cleared only
+    // by a LATER reconciliation). They explain book-vs-bank timing.
+    const outstandingRows: GeneralLedgerEntry[] = await this.glRepo
+      .createQueryBuilder('g')
+      .leftJoin(Reconciliation, 'r2', 'r2.id = g.reconciliationId')
+      .where('g.companyId = :cid AND g.accountId = :aid', {
+        cid: companyId,
+        aid: recon.accountId,
+      })
+      .andWhere('g.date <= :sd', { sd: recon.statementDate })
+      .andWhere('(g.reconciliationId IS NULL OR r2.createdAt > :ca)', {
+        ca: recon.createdAt,
+      })
+      .orderBy('g.date', 'ASC')
+      .addOrderBy('g.createdAt', 'ASC')
+      .getMany();
+    const outstanding = outstandingRows.map(shape);
+    const outstandingTotal = outstandingRows
+      .reduce((sum, g) => addMoney(sum, subtractMoney(g.debit, g.credit)), toDecimal('0'))
+      .toFixed(2);
+
+    return { ...recon, entries, outstanding, outstandingTotal };
   }
 
   /**
@@ -185,6 +230,20 @@ export class ReconciliationsService {
     return this.dataSource.transaction(async (manager) => {
       const glRepo = manager.getRepository(GeneralLedgerEntry);
       const reconRepo = manager.getRepository(Reconciliation);
+
+      // Statements reconcile in chronological order — a statement dated on or
+      // before the last reconciliation would corrupt the rolled-forward
+      // beginning balance of everything after it.
+      const lastRecon = await reconRepo.findOne({
+        where: { companyId, accountId: account.id },
+        order: { statementDate: 'DESC', createdAt: 'DESC' },
+      });
+      if (lastRecon && dto.statementDate <= lastRecon.statementDate) {
+        throw new BadRequestException({
+          code: 'RECONCILIATION_OUT_OF_ORDER',
+          message: `This account is already reconciled through ${lastRecon.statementDate}. The new statement date must be after that.`,
+        });
+      }
 
       const beginning = await this.beginningBalance(companyId, account.id);
 
@@ -203,6 +262,15 @@ export class ReconciliationsService {
             code: 'INVALID_CLEARED_ENTRIES',
             message:
               'Some selected entries do not belong to this account or are already reconciled.',
+          });
+        }
+        // A statement can only clear transactions dated on/before its own
+        // ending date — later book items belong to the NEXT statement.
+        const late = clearedEntries.filter((g) => g.date > dto.statementDate);
+        if (late.length > 0) {
+          throw new BadRequestException({
+            code: 'CLEARED_ENTRY_AFTER_STATEMENT',
+            message: `${late.length} selected entr${late.length === 1 ? 'y is' : 'ies are'} dated after the statement ending date and cannot be cleared by this statement.`,
           });
         }
       }

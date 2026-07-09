@@ -8,9 +8,10 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     expect(f.estimates).toBe(true);
     expect(f.journalEntries).toBe(true);
     expect(f.creditMemos).toBe(true);
+    expect(f.bankReconciliation).toBe(true); // core feature, all tiers (phase3.md)
     for (const k of [
       'inventory', 'purchaseOrders', 'salesOrders', 'agencies', 'delivery',
-      'payroll', 'budgets', 'multiUser', 'auditLog', 'periodClose', 'bankReconciliation',
+      'payroll', 'budgets', 'multiUser', 'auditLog', 'periodClose',
     ] as const) {
       expect(f[k]).toBe(false);
     }

@@ -75,6 +75,16 @@ export class PayrollService {
 
   async deleteEmployee(companyId: string, id: string) {
     const e = await this.getEmployee(companyId, id);
+    // An employee who has been paid is part of the books — never hard-delete
+    // (it would orphan payroll runs/payslips). QuickBooks-style: deactivate.
+    const historyCount = await this.itemRepo.count({ where: { employeeId: id } });
+    if (historyCount > 0) {
+      throw new BadRequestException({
+        code: 'EMPLOYEE_HAS_PAYROLL_HISTORY',
+        message:
+          'This employee appears on payroll runs and cannot be deleted. Set their status to inactive instead to preserve history.',
+      });
+    }
     await this.empRepo.remove(e);
     return { id, deleted: true };
   }
@@ -99,11 +109,20 @@ export class PayrollService {
     return toDecimal(emp.salary).dividedBy(periods);
   }
 
+  /**
+   * Withheld tax/deductions for one pay period. QuickBooks-style: the amount
+   * comes from what the USER set up on the employee — we never hardcode a
+   * tax slab or a default rate. No deductions configured → 0 withheld.
+   *
+   * EXTENSION POINT: auto-calculation (e.g. FBR slabs) plugs in here later —
+   * derive from `gross` + a company tax table instead of the stored amount.
+   */
   private deductionFor(emp: Employee, gross: Decimal): Decimal {
+    void gross;
     const d: any = emp.deductions;
     if (d && typeof d.amount === 'number') return new Decimal(d.amount);
     if (Array.isArray(d)) return d.reduce((s: Decimal, x: any) => s.plus(num(x?.amount)), new Decimal(0));
-    return gross.times(0.1); // default 10% withholding
+    return new Decimal(0);
   }
 
   async createRun(companyId: string, userId: string, dto: CreatePayrollRunDto): Promise<PayrollRun> {
@@ -118,6 +137,18 @@ export class PayrollService {
         employees = await manager.find(Employee, { where: { companyId, status: 'active' as EmployeeStatus } });
       }
       if (employees.length === 0) throw new BadRequestException({ code: 'NO_EMPLOYEES', message: 'No employees to pay' });
+
+      // Idempotency at the period level: once a period is PAID, a second run
+      // for the same period label is almost certainly a double-pay mistake.
+      const paidTwin = await manager.findOne(PayrollRun, {
+        where: { companyId, payPeriod: dto.payPeriod, status: 'paid' as PayrollStatus },
+      });
+      if (paidTwin) {
+        throw new BadRequestException({
+          code: 'PERIOD_ALREADY_PAID',
+          message: `Payroll for "${dto.payPeriod}" has already been processed. Use a different pay period label for an off-cycle run.`,
+        });
+      }
 
       let totalGross = new Decimal(0), totalDed = new Decimal(0), totalNet = new Decimal(0);
       const itemDrafts = employees.map((emp) => {
@@ -143,9 +174,18 @@ export class PayrollService {
 
   async processRun(companyId: string, id: string, userId: string): Promise<PayrollRun> {
     return this.dataSource.transaction(async (manager) => {
-      const run = await manager.findOne(PayrollRun, { where: { id, companyId } });
+      // Row-lock the run: two concurrent process calls (double-tap, retry
+      // after timeout) serialize here, and the second one sees status='paid'
+      // and is rejected — the journal entry can never post twice.
+      const run = await manager
+        .getRepository(PayrollRun)
+        .createQueryBuilder('r')
+        .setLock('pessimistic_write')
+        .where('r.id = :id AND r.companyId = :cid', { id, cid: companyId })
+        .getOne();
       if (!run) throw new NotFoundException({ code: 'PAYROLL_RUN_NOT_FOUND', message: 'Payroll run not found' });
       if (run.status === 'paid') throw new BadRequestException({ code: 'ALREADY_PAID', message: 'Payroll already processed' });
+      if (run.journalEntryId) throw new BadRequestException({ code: 'ALREADY_POSTED', message: 'This payroll run already posted a journal entry.' });
 
       const expense = await this.accounts.getByNumberOrFail(companyId, ACCT_SALARY_EXPENSE, manager);
       const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, manager);
