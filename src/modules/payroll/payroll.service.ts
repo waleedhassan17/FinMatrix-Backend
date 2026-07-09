@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
@@ -101,6 +101,38 @@ export class PayrollService {
     const emps = await this.empRepo.findByIds(run.items.map((i) => i.employeeId));
     const empMap = Object.fromEntries(emps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
     return { ...run, items: run.items.map((i) => ({ ...i, employeeName: empMap[i.employeeId] ?? '' })) };
+  }
+
+  /**
+   * Data for one employee's official payslip. Only processed (paid) runs
+   * issue payslips, and every figure comes off the stored PayrollItem —
+   * the same rows the posted journal entry totals were built from — so
+   * the PDF ties to the ledger by construction. Nothing is recomputed.
+   */
+  async getPayslipData(companyId: string, runId: string, employeeId: string) {
+    const run = await this.runRepo.findOne({ where: { id: runId, companyId }, relations: { items: true } });
+    if (!run) throw new NotFoundException({ code: 'PAYROLL_RUN_NOT_FOUND', message: 'Payroll run not found' });
+    if (run.status !== 'paid') {
+      throw new BadRequestException({
+        code: 'PAYSLIP_NOT_AVAILABLE',
+        message: 'Payslips are issued once payroll is processed. Process this run first.',
+      });
+    }
+    const item = run.items.find((i) => i.employeeId === employeeId);
+    if (!item) throw new NotFoundException({ code: 'PAYSLIP_NOT_FOUND', message: 'This employee is not on this payroll run' });
+
+    // Ledger tie: sum of net across the run's payslips must equal the net
+    // pay credited by the posted entry (run.totalNet fed that JE line).
+    const sumNet = run.items.reduce((s, i) => s.plus(toDecimal(i.net)), new Decimal(0));
+    if (!sumNet.equals(toDecimal(run.totalNet))) {
+      throw new ConflictException({
+        code: 'PAYSLIP_LEDGER_MISMATCH',
+        message: 'Payslip figures do not reconcile with the posted payroll entry.',
+      });
+    }
+
+    const employee = await this.getEmployee(companyId, employeeId);
+    return { run, item, employee };
   }
 
   private grossFor(emp: Employee, hours: number): Decimal {

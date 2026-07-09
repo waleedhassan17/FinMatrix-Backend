@@ -1,7 +1,12 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import type { Response } from 'express';
+import { Company } from '../companies/entities/company.entity';
+import { PayslipPdfService } from './payslip-pdf.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -21,7 +26,11 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @RequiresFeature('payroll') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller()
 export class PayrollController {
-  constructor(private readonly svc: PayrollService) {}
+  constructor(
+    private readonly svc: PayrollService,
+    private readonly payslipPdf: PayslipPdfService,
+    @InjectRepository(Company) private readonly companyRepo: Repository<Company>,
+  ) {}
 
   // ── Employees ──
   @Get('employees')
@@ -90,5 +99,26 @@ export class PayrollController {
   @Roles('admin')
   deleteRun(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.svc.deleteRun(companyId, id);
+  }
+
+  @Get('payroll/runs/:runId/payslip/:employeeId/pdf')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Official PDF payslip for one employee on a processed run (figures from the posted entry).' })
+  async payslipPdfStream(
+    @CurrentCompany() companyId: string,
+    @Param('runId', ParseUUIDPipe) runId: string,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Res() res: Response,
+  ) {
+    const { run, item, employee } = await this.svc.getPayslipData(companyId, runId, employeeId);
+    const company = await this.companyRepo.findOneByOrFail({ id: companyId });
+
+    const safe = (v: string) => v.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Payslip_${safe(run.payPeriod)}_${safe(`${employee.firstName}_${employee.lastName}`)}.pdf"`,
+    );
+    this.payslipPdf.render({ company, employee, run, item }).pipe(res);
   }
 }
