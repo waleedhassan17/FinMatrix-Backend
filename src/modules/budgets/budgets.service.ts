@@ -169,7 +169,6 @@ export class BudgetsService {
     const to = `${fiscalYear}-12-31`;
     const rows = await this.dataSource.query(
       `SELECT g.account_id, a.account_number, a.name, a.type,
-              EXTRACT(MONTH FROM g.date)::int AS m,
               COALESCE(SUM(g.debit::numeric),0) dr, COALESCE(SUM(g.credit::numeric),0) cr
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id

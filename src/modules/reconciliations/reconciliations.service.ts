@@ -231,17 +231,19 @@ export class ReconciliationsService {
       const glRepo = manager.getRepository(GeneralLedgerEntry);
       const reconRepo = manager.getRepository(Reconciliation);
 
-      // Statements reconcile in chronological order — a statement dated on or
-      // before the last reconciliation would corrupt the rolled-forward
-      // beginning balance of everything after it.
+      // Statements reconcile in chronological order — a statement dated
+      // BEFORE the last reconciliation would corrupt the rolled-forward
+      // beginning balance of everything after it. Same-date is allowed
+      // (a catch-up reconciliation later the same day); undo ordering
+      // tie-breaks those by creation time.
       const lastRecon = await reconRepo.findOne({
         where: { companyId, accountId: account.id },
         order: { statementDate: 'DESC', createdAt: 'DESC' },
       });
-      if (lastRecon && dto.statementDate <= lastRecon.statementDate) {
+      if (lastRecon && dto.statementDate < lastRecon.statementDate) {
         throw new BadRequestException({
           code: 'RECONCILIATION_OUT_OF_ORDER',
-          message: `This account is already reconciled through ${lastRecon.statementDate}. The new statement date must be after that.`,
+          message: `This account is already reconciled through ${lastRecon.statementDate}. The new statement date must not be earlier than that.`,
         });
       }
 
