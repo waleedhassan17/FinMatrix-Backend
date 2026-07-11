@@ -14,13 +14,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 // be bundled by Vercel's serverless builder. Hashes are byte-compatible.
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto';
-import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
+import { DataSource, IsNull, LessThan, MoreThan, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { RevokedAccessToken } from './entities/revoked-access-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { SignupDto } from './dto/signup.dto';
@@ -74,6 +75,8 @@ export class AuthService {
     private readonly mail: MailService,
     @InjectRepository(RefreshToken)
     private readonly refreshRepo: Repository<RefreshToken>,
+    @InjectRepository(RevokedAccessToken)
+    private readonly revokedAccessRepo: Repository<RevokedAccessToken>,
     @InjectRepository(EmailVerification)
     private readonly verificationRepo: Repository<EmailVerification>,
     @InjectRepository(PasswordResetOtp)
@@ -308,6 +311,56 @@ export class AuthService {
       { revokedAt: new Date() },
     );
     return { revoked: res.affected ?? 0 };
+  }
+
+  /**
+   * Sign out by bearer token (POST /auth/logout, alias /auth/signout). The
+   * route is public and this method authenticates the token itself, so an
+   * expired, malformed or already-revoked token is a no-op success: sign-out
+   * is idempotent and never leaks whether the token was valid. A valid token
+   * revokes all of the user's refresh tokens AND denylists the access token's
+   * jti, so the old access token is rejected immediately (not at exp).
+   */
+  async signoutByToken(
+    authorization?: string,
+  ): Promise<{ success: true; message: string }> {
+    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+    if (token) {
+      try {
+        const payload = this.jwt.verify<JwtPayload>(token, {
+          secret: this.config.getOrThrow<string>('jwt.secret'),
+        });
+        if (payload?.sub) {
+          if (payload.jti && payload.exp) {
+            // orIgnore(): signing out twice with the same token must not 500
+            // on the jti primary key.
+            await this.revokedAccessRepo
+              .createQueryBuilder()
+              .insert()
+              .values({
+                jti: payload.jti,
+                userId: payload.sub,
+                expiresAt: new Date(payload.exp * 1000),
+              })
+              .orIgnore()
+              .execute();
+          }
+          await this.signout(payload.sub);
+          // Opportunistic pruning: expired jtis are rejected by `exp` anyway.
+          await this.revokedAccessRepo.delete({
+            expiresAt: LessThan(new Date()),
+          });
+        }
+      } catch {
+        // Invalid/expired token: nothing to revoke, still a successful signout.
+      }
+    }
+    return { success: true, message: 'Signed out' };
+  }
+
+  /** Checked by JwtStrategy on every request carrying a jti. */
+  async isAccessTokenRevoked(jti: string): Promise<boolean> {
+    return this.revokedAccessRepo.exists({ where: { jti } });
   }
 
   // ── Email verification ────────────────────────────────────────────────────
@@ -546,10 +599,16 @@ export class AuthService {
     const accessExpires = this.config.get<string>('jwt.accessExpiresIn', '15m');
     const refreshExpires = this.config.get<string>('jwt.refreshExpiresIn', '30d');
 
-    const accessToken = await this.jwt.signAsync(payload, {
-      secret,
-      expiresIn: accessExpires as unknown as number,
-    });
+    // jti on the ACCESS token lets sign-out denylist it individually
+    // (revoked_access_tokens); without it a stateless access token stays
+    // usable until exp even after signout.
+    const accessToken = await this.jwt.signAsync(
+      { ...payload, jti: randomUUID() },
+      {
+        secret,
+        expiresIn: accessExpires as unknown as number,
+      },
+    );
     // jti makes every refresh token unique. Without it, two sign-ins by the
     // same user within the same second mint byte-identical JWTs (iat has
     // second granularity) and the token_hash unique index 500s the second one.

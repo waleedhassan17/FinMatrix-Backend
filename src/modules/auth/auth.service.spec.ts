@@ -10,6 +10,7 @@ import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { RevokedAccessToken } from './entities/revoked-access-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { Company } from '../companies/entities/company.entity';
@@ -28,11 +29,29 @@ function repoMock() {
   };
 }
 
+function revokedRepoMock() {
+  const insertExecute = jest.fn(async () => ({}));
+  return {
+    exists: jest.fn(async () => false),
+    delete: jest.fn(async () => ({ affected: 0 })),
+    createQueryBuilder: jest.fn(() => ({
+      insert: jest.fn().mockReturnThis(),
+      values: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      execute: insertExecute,
+    })),
+    insertExecute,
+  };
+}
+
 describe('AuthService', () => {
   let service: AuthService;
   let users: { findByEmail: jest.Mock; getByIdOrFail: jest.Mock; save: jest.Mock };
   let verificationRepo: ReturnType<typeof repoMock>;
   let otpRepo: ReturnType<typeof repoMock>;
+  let refreshRepo: ReturnType<typeof repoMock>;
+  let revokedRepo: ReturnType<typeof revokedRepoMock>;
+  let jwtMock: { signAsync: jest.Mock; decode: jest.Mock; verify: jest.Mock };
   let mail: {
     sendVerificationEmail: jest.Mock;
     sendOtpEmail: jest.Mock;
@@ -46,6 +65,9 @@ describe('AuthService', () => {
     };
     verificationRepo = repoMock();
     otpRepo = repoMock();
+    refreshRepo = repoMock();
+    revokedRepo = revokedRepoMock();
+    jwtMock = { signAsync: jest.fn(), decode: jest.fn(), verify: jest.fn() };
     mail = {
       sendVerificationEmail: jest.fn(),
       sendOtpEmail: jest.fn(),
@@ -55,7 +77,7 @@ describe('AuthService', () => {
       providers: [
         AuthService,
         { provide: UsersService, useValue: users },
-        { provide: JwtService, useValue: { signAsync: jest.fn(), decode: jest.fn(), verify: jest.fn() } },
+        { provide: JwtService, useValue: jwtMock },
         {
           provide: ConfigService,
           useValue: {
@@ -73,7 +95,8 @@ describe('AuthService', () => {
         },
         { provide: DataSource, useValue: { transaction: jest.fn() } },
         { provide: MailService, useValue: mail },
-        { provide: getRepositoryToken(RefreshToken), useValue: repoMock() },
+        { provide: getRepositoryToken(RefreshToken), useValue: refreshRepo },
+        { provide: getRepositoryToken(RevokedAccessToken), useValue: revokedRepo },
         { provide: getRepositoryToken(EmailVerification), useValue: verificationRepo },
         { provide: getRepositoryToken(PasswordResetOtp), useValue: otpRepo },
         { provide: getRepositoryToken(Company), useValue: repoMock() },
@@ -193,6 +216,78 @@ describe('AuthService', () => {
       const res = await service.verifyOtp({ email: 'a@b.c', otp: '123456' });
       expect(typeof res.resetToken).toBe('string');
       expect(res.resetToken.length).toBeGreaterThan(10);
+    });
+  });
+
+  describe('signoutByToken (POST /auth/logout)', () => {
+    const exp = Math.floor(Date.now() / 1000) + 900;
+
+    it.each(['admin', 'super_admin', 'delivery'] as const)(
+      'revokes refresh tokens and denylists the access jti for role %s',
+      async (role) => {
+        jwtMock.verify.mockReturnValue({
+          sub: 'u1',
+          companyId: role === 'super_admin' ? null : 'c1',
+          role,
+          jti: `jti-${role}`,
+          exp,
+        });
+        const res = await service.signoutByToken('Bearer some.valid.token');
+        expect(res).toEqual({ success: true, message: 'Signed out' });
+        // All active refresh tokens revoked for the user…
+        expect(refreshRepo.update).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'u1' }),
+          expect.objectContaining({ revokedAt: expect.any(Date) }),
+        );
+        // …and the access token's jti denylisted with its expiry.
+        expect(revokedRepo.insertExecute).toHaveBeenCalled();
+        const qb = revokedRepo.createQueryBuilder.mock.results[0].value;
+        expect(qb.values).toHaveBeenCalledWith({
+          jti: `jti-${role}`,
+          userId: 'u1',
+          expiresAt: new Date(exp * 1000),
+        });
+      },
+    );
+
+    it('is idempotent: an invalid/expired token still returns success and reveals nothing', async () => {
+      jwtMock.verify.mockImplementation(() => {
+        throw new Error('jwt expired');
+      });
+      const res = await service.signoutByToken('Bearer expired.token');
+      expect(res).toEqual({ success: true, message: 'Signed out' });
+      expect(refreshRepo.update).not.toHaveBeenCalled();
+      expect(revokedRepo.insertExecute).not.toHaveBeenCalled();
+    });
+
+    it('handles a missing Authorization header as a no-op success', async () => {
+      const res = await service.signoutByToken(undefined);
+      expect(res).toEqual({ success: true, message: 'Signed out' });
+      expect(jwtMock.verify).not.toHaveBeenCalled();
+      expect(refreshRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('still revokes refresh tokens for a valid pre-jti token (no jti claim)', async () => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', exp });
+      const res = await service.signoutByToken('Bearer legacy.token');
+      expect(res.success).toBe(true);
+      expect(refreshRepo.update).toHaveBeenCalled();
+      expect(revokedRepo.insertExecute).not.toHaveBeenCalled();
+    });
+
+    it('prunes expired denylist rows opportunistically', async () => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', jti: 'j1', exp });
+      await service.signoutByToken('Bearer some.valid.token');
+      expect(revokedRepo.delete).toHaveBeenCalled();
+    });
+  });
+
+  describe('isAccessTokenRevoked', () => {
+    it('reflects the denylist (guard rejects a signed-out token with 401)', async () => {
+      revokedRepo.exists.mockResolvedValueOnce(true);
+      await expect(service.isAccessTokenRevoked('j1')).resolves.toBe(true);
+      revokedRepo.exists.mockResolvedValueOnce(false);
+      await expect(service.isAccessTokenRevoked('j2')).resolves.toBe(false);
     });
   });
 });

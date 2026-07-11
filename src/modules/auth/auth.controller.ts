@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Post,
   Query,
@@ -96,12 +97,22 @@ export class AuthController {
     return this.auth.getMe(user.id);
   }
 
-  @Post('signout')
-  @ApiBearerAuth()
+  // Public + self-authenticating (the service verifies the bearer token) so
+  // sign-out is idempotent: an already-invalid/expired token still gets 200
+  // and leaks nothing. A valid token revokes the user's refresh tokens and
+  // denylists the access token's jti (immediate 401 on reuse). '/signout' is
+  // kept as an alias for clients already calling it.
+  @Post(['logout', 'signout'])
+  @PublicRoute()
   @HttpCode(200)
-  @ApiOperation({ summary: 'Revoke all active refresh tokens for this user.' })
-  signout(@CurrentUser() user: AuthenticatedUser) {
-    return this.auth.signout(user.id);
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Sign out: revoke refresh tokens + denylist the access token. Idempotent.',
+  })
+  signout(@Headers('authorization') authorization?: string) {
+    return this.auth.signoutByToken(authorization);
   }
 
   // ── Email verification ──────────────────────────────────────────────────

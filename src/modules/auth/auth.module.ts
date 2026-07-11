@@ -6,6 +6,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { RevokedAccessToken } from './entities/revoked-access-token.entity';
 import { PasswordReset } from './entities/password-reset.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { EmailVerification } from './entities/email-verification.entity';
@@ -20,6 +21,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     PassportModule,
     TypeOrmModule.forFeature([
       RefreshToken,
+      RevokedAccessToken,
       PasswordReset,
       PasswordResetOtp,
       EmailVerification,
