@@ -255,7 +255,7 @@ export class BillsService {
     id: string,
     dto: UpdateBillDto,
   ): Promise<Bill> {
-    return this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction(async (manager) => {
       const bill = await manager.findOne(Bill, {
         where: { id, companyId },
         relations: { lines: true },
@@ -309,10 +309,16 @@ export class BillsService {
           manager.create(BillLineItem, { billId: bill.id, ...l }),
         );
         await manager.save(lines);
+        // Replace the stale in-memory collection: `lines` has cascade:true,
+        // so saving the bill while it still references the just-deleted line
+        // entities re-cascades them and dies on the bill_id NOT NULL (500).
+        bill.lines = lines;
       }
       await manager.save(bill);
-      return this.getById(companyId, id);
     });
+    // Read back AFTER commit — getById queries outside the transaction, so
+    // calling it inside returned the pre-update (stale) lines.
+    return this.getById(companyId, id);
   }
 
   async pay(
