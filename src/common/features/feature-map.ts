@@ -35,8 +35,9 @@ export type FeatureKey =
   | 'delivery'; // deliveries + delivery personnel + approvals + shadow inventory
 
 /**
- * 'toggle' = decided by the company's own inventory_enabled flag (the
- * large-organization per-company inventory option from THE MODEL).
+ * 'toggle' = decided by the company's own inventory_enabled flag. No tier
+ * uses it today (large-org inventory was demoted to warehouse-only); the
+ * mechanism is kept so a per-company opt-in can be reintroduced per tier.
  */
 type FeatureSetting = boolean | 'toggle';
 
@@ -69,11 +70,11 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     periodClose: true,
     payroll: true,
     budgets: true,
-    inventory: 'toggle', // per-company opt-in (basic stock + COGS only)
-    purchaseOrders: false, // no PO/GRNI even with inventory toggled on
+    inventory: false, // warehouse-only: large orgs never see inventory
+    purchaseOrders: false,
     salesOrders: false,
     agencies: false,
-    delivery: false, // never, even with inventory on
+    delivery: false, // warehouse-only: never on this tier
   },
   warehouse: {
     estimates: true,
