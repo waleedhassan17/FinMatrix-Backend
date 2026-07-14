@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Bill } from './entities/bill.entity';
 import { BillLineItem } from './entities/bill-line-item.entity';
@@ -109,7 +109,59 @@ export class BillsService {
       });
     }
     b.lines.sort((a, b) => a.lineOrder - b.lineOrder);
+
+    // Enrich lines with the account name/number so the app's bill detail
+    // and edit screens can display which account each line posts to.
+    const accountIds = [...new Set(b.lines.map((l) => l.accountId).filter(Boolean))];
+    if (accountIds.length) {
+      const accounts = await this.dataSource
+        .getRepository(Account)
+        .findBy({ id: In(accountIds), companyId });
+      const nameMap = Object.fromEntries(accounts.map((a) => [a.id, a]));
+      b.lines = b.lines.map((l) =>
+        Object.assign(l, {
+          accountName: nameMap[l.accountId]?.name ?? '',
+          accountNumber: nameMap[l.accountId]?.accountNumber ?? '',
+        }),
+      );
+    }
     return b;
+  }
+
+  /**
+   * Bill lines must post to real, active accounts owned by this company —
+   * otherwise the journal entry insert dies on an FK violation (500) or,
+   * worse, a valid UUID from another tenant would post cross-company.
+   */
+  private async assertLineAccountsValid(
+    manager: EntityManager,
+    companyId: string,
+    accountIds: string[],
+  ): Promise<void> {
+    const ids = [...new Set(accountIds.filter(Boolean))];
+    if (ids.length === 0) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_REQUIRED',
+        message: 'Each bill line must reference an account',
+      });
+    }
+    const accounts = await manager.findBy(Account, { id: In(ids), companyId });
+    const found = new Map(accounts.map((a) => [a.id, a]));
+    for (const id of ids) {
+      const acct = found.get(id);
+      if (!acct) {
+        throw new NotFoundException({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `Line account ${id} does not exist in this company's chart of accounts`,
+        });
+      }
+      if (!acct.isActive) {
+        throw new BadRequestException({
+          code: 'ACCOUNT_INACTIVE',
+          message: `Account ${acct.accountNumber} — ${acct.name} is inactive and cannot be used on bill lines`,
+        });
+      }
+    }
   }
 
   async create(
@@ -150,7 +202,19 @@ export class BillsService {
         ),
       }));
 
+      await this.assertLineAccountsValid(
+        manager,
+        companyId,
+        resolvedLines.map((l) => l.accountId),
+      );
+
       const totals = this.computeTotals(resolvedLines);
+      if (!isPositive(toDecimal(totals.total))) {
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'Bill total must be greater than zero',
+        });
+      }
       const status: BillStatus = dto.status ?? 'open';
 
       const bill = manager.create(Bill, {
@@ -224,7 +288,18 @@ export class BillsService {
               : '0'
           ),
         }));
+        await this.assertLineAccountsValid(
+          manager,
+          companyId,
+          resolvedUpdateLines.map((l) => l.accountId),
+        );
         const totals = this.computeTotals(resolvedUpdateLines);
+        if (!isPositive(toDecimal(totals.total))) {
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'Bill total must be greater than zero',
+          });
+        }
         bill.subtotal = totals.subtotal;
         bill.taxAmount = totals.taxAmount;
         bill.total = totals.total;
