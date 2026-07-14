@@ -40,6 +40,8 @@
     "verify:demo": "ts-node -r tsconfig-paths/register test/demo-invariants.ts",
     "seed:tier-demos": "ts-node -r tsconfig-paths/register src/database/seeds/tier-demos.seed.ts",
     "seed:tier-demos:prod": "node dist/database/seeds/tier-demos.seed.js",
+    "seed:largeorg-test": "ts-node -r tsconfig-paths/register src/database/seeds/large-org-test.seed.ts",
+    "seed:largeorg-test:prod": "node dist/database/seeds/large-org-test.seed.js",
     "test:tiering": "ts-node -r tsconfig-paths/register test/tiering.acceptance.ts",
     "test:five-features": "ts-node -r tsconfig-paths/register test/five-features.acceptance.ts"
   },
