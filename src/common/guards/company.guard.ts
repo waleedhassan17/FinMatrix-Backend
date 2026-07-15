@@ -7,7 +7,10 @@ import {
 import { Request } from 'express';
 import { DataSource } from 'typeorm';
 import { AuthenticatedUser } from '../decorators/current-user.decorator';
-import { normalizeCompanyStatus } from '../utils/company-status.util';
+import {
+  effectiveCompanyStatus,
+  normalizeCompanyStatus,
+} from '../utils/company-status.util';
 
 /**
  * Extracts companyId from the authenticated user (JWT), enforces that the
@@ -35,19 +38,42 @@ export class CompanyGuard implements CanActivate {
       });
     }
 
-    const rows: Array<{ status: string | null }> = await this.dataSource.query(
-      `SELECT status FROM companies WHERE id = $1 LIMIT 1`,
+    const rows: Array<{
+      status: string | null;
+      subscription_plan: string | null;
+      subscription_expiry_date: Date | null;
+    }> = await this.dataSource.query(
+      `SELECT status, subscription_plan, subscription_expiry_date
+         FROM companies WHERE id = $1 LIMIT 1`,
       [companyId],
     );
-    const acctStatus = normalizeCompanyStatus(rows[0]?.status);
+    // effectiveCompanyStatus applies the LIVE subscription-expiry check, so a
+    // paid plan is cut off the moment it lapses — not at the next 1AM billing
+    // cron (which persists status='inactive' and sends the notification).
+    const row = rows[0];
+    const acctStatus = effectiveCompanyStatus(
+      row
+        ? {
+            status: row.status,
+            subscriptionPlan: row.subscription_plan,
+            subscriptionExpiryDate: row.subscription_expiry_date,
+          }
+        : null,
+    );
     if (acctStatus !== 'active') {
+      const subscriptionLapsed =
+        row != null &&
+        normalizeCompanyStatus(row.status) === 'active' &&
+        acctStatus === 'inactive';
       throw new ForbiddenException({
         code: 'COMPANY_NOT_ACTIVE',
         message:
           acctStatus === 'rejected'
             ? 'Your company registration was rejected.'
             : acctStatus === 'inactive'
-              ? 'Your company account has been deactivated.'
+              ? subscriptionLapsed
+                ? 'Your subscription has expired. Renew your plan to restore access.'
+                : 'Your company account has been deactivated.'
               : 'Your company is awaiting approval.',
         companyStatus: acctStatus,
       });

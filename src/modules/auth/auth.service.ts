@@ -19,7 +19,7 @@ import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
-import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
+import { effectiveCompanyStatus } from '../../common/utils/company-status.util';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { RevokedAccessToken } from './entities/revoked-access-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
@@ -238,7 +238,10 @@ export class AuthService {
     // business endpoint, and only /billing/* stays reachable. Super-admins and
     // delivery riders are exempt from this gate entirely.
     if (!isSuperAdmin && role !== 'delivery' && company) {
-      const acctStatus = normalizeCompanyStatus(company.status);
+      // effectiveCompanyStatus applies the LIVE expiry check: a paid plan past
+      // its expiry date reports 'inactive' (renew-only) even before the daily
+      // billing cron persists the flip.
+      const acctStatus = effectiveCompanyStatus(company);
       if (acctStatus === 'pending' || acctStatus === 'rejected') {
         const code = acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
         const message =
@@ -265,7 +268,7 @@ export class AuthService {
       tokens,
       companyId,
       company: company ? { id: company.id, name: company.name, status: company.status } : null,
-      companyStatus: company ? normalizeCompanyStatus(company.status) : null,
+      companyStatus: company ? effectiveCompanyStatus(company) : null,
       companyType: company?.companyType ?? null,
       features: company
         ? computeFeatures({
@@ -571,9 +574,11 @@ export class AuthService {
         ? { id: primary.company.id, name: primary.company.name, status: primary.company.status }
         : null,
       // Normalized so the client routes on a stable model; mid-session
-      // deactivation (status → inactive) surfaces here and routes the user out.
+      // deactivation (status → inactive) AND a lapsed paid subscription (live
+      // expiry check, ahead of the daily cron) surface here and route the
+      // user out to the renew-only flow.
       companyStatus: primary?.company
-        ? normalizeCompanyStatus(primary.company.status)
+        ? effectiveCompanyStatus(primary.company)
         : null,
       companyType: primary?.company?.companyType ?? null,
       features: primary?.company
