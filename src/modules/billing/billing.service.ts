@@ -236,6 +236,21 @@ export class BillingService {
           `this company is registered as ${company.companyType.replace(/_/g, ' ')}.`,
       });
     }
+    // Legacy plans (standard/pro) are grandfathered ONLY for companies already
+    // on that same plan; a tier company must buy one of its own tier plans.
+    // Without this, a stale client offering the legacy cards could move a
+    // tier company onto legacy pricing.
+    if (!config.companyType && company.companyType) {
+      const currentPlan = normalizePlan(company.subscriptionPlan);
+      if (currentPlan !== plan) {
+        throw new BadRequestException({
+          code: 'PLAN_TYPE_MISMATCH',
+          message:
+            `The "${config.label}" plan is no longer offered. Please choose one of the ` +
+            `${company.companyType.replace(/_/g, ' ')} plans.`,
+        });
+      }
+    }
     if (!file) {
       throw new BadRequestException('A payment screenshot is required.');
     }
