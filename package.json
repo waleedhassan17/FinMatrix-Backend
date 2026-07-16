@@ -43,7 +43,8 @@
     "seed:largeorg-test": "ts-node -r tsconfig-paths/register src/database/seeds/large-org-test.seed.ts",
     "seed:largeorg-test:prod": "node dist/database/seeds/large-org-test.seed.js",
     "test:tiering": "ts-node -r tsconfig-paths/register test/tiering.acceptance.ts",
-    "test:five-features": "ts-node -r tsconfig-paths/register test/five-features.acceptance.ts"
+    "test:five-features": "ts-node -r tsconfig-paths/register test/five-features.acceptance.ts",
+    "test:bankrec": "ts-node -r tsconfig-paths/register test/bankrec.acceptance.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

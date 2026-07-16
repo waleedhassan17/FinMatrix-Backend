@@ -12,6 +12,7 @@ import { OperationalAuditService } from '../../common/audit/operational-audit.se
 import {
   CreateReconciliationDto,
   ListReconciliationsQueryDto,
+  MarkClearedDto,
   UnreconciledQueryDto,
 } from './dto/reconciliation.dto';
 import {
@@ -128,6 +129,8 @@ export class ReconciliationsService {
       credit: toDecimal(g.credit).toFixed(2),
       // Signed amount for the account (debit-normal): + = deposit, − = payment.
       amount: subtractMoney(g.debit, g.credit).toFixed(2),
+      // Save-and-resume: in-progress tick persisted by PATCH /reconciliations/mark.
+      cleared: g.cleared,
     }));
 
     // QuickBooks warns when the beginning balance no longer matches the
@@ -157,6 +160,45 @@ export class ReconciliationsService {
       beginningMismatch,
       entries,
     };
+  }
+
+  /**
+   * Save-and-resume (behavior 11): persist in-progress cleared ticks on the
+   * GL rows so exiting mid-reconciliation retains them. Touches ONLY
+   * unreconciled rows of the given Cash/Bank account — rows stamped by a
+   * finished reconciliation are immutable here. Posts nothing.
+   */
+  async markCleared(companyId: string, dto: MarkClearedDto) {
+    const account = await this.getReconcilableAccount(companyId, dto.accountId);
+    const toSet = dto.marks.filter((m) => m.cleared).map((m) => m.entryId);
+    const toUnset = dto.marks.filter((m) => !m.cleared).map((m) => m.entryId);
+
+    let updated = 0;
+    if (toSet.length > 0) {
+      const res = await this.glRepo.update(
+        {
+          companyId,
+          accountId: account.id,
+          id: In(toSet),
+          reconciliationId: IsNull(),
+        },
+        { cleared: true },
+      );
+      updated += res.affected ?? 0;
+    }
+    if (toUnset.length > 0) {
+      const res = await this.glRepo.update(
+        {
+          companyId,
+          accountId: account.id,
+          id: In(toUnset),
+          reconciliationId: IsNull(),
+        },
+        { cleared: false },
+      );
+      updated += res.affected ?? 0;
+    }
+    return { accountId: account.id, updated };
   }
 
   async list(companyId: string, query: ListReconciliationsQueryDto) {

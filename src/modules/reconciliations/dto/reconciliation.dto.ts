@@ -1,12 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsNumberString,
   IsOptional,
   IsString,
   IsUUID,
+  ValidateNested,
 } from 'class-validator';
 
 export class UnreconciledQueryDto {
@@ -28,6 +31,34 @@ export class ListReconciliationsQueryDto {
   @IsOptional()
   @IsUUID()
   accountId?: string;
+}
+
+export class ClearedMarkDto {
+  @ApiProperty({ description: 'GL entry id.' })
+  @IsUUID()
+  entryId!: string;
+
+  @ApiProperty({ description: 'Ticked (true) or unticked (false).' })
+  @IsBoolean()
+  cleared!: boolean;
+}
+
+/**
+ * Save-and-resume (bankreconcillation.md behavior 11): persists the in-progress
+ * cleared ticks on the GL rows themselves so exiting mid-reconciliation loses
+ * nothing. Only UNRECONCILED rows of the given Cash/Bank account are touched.
+ */
+export class MarkClearedDto {
+  @ApiProperty()
+  @IsUUID()
+  accountId!: string;
+
+  @ApiProperty({ type: [ClearedMarkDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ClearedMarkDto)
+  marks!: ClearedMarkDto[];
 }
 
 export class CreateReconciliationDto {

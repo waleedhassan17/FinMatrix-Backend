@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -22,6 +23,7 @@ import { ReconciliationsService } from './reconciliations.service';
 import {
   CreateReconciliationDto,
   ListReconciliationsQueryDto,
+  MarkClearedDto,
   UnreconciledQueryDto,
 } from './dto/reconciliation.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
@@ -48,6 +50,20 @@ export class ReconciliationsController {
     @Query() query: UnreconciledQueryDto,
   ) {
     return this.svc.getUnreconciled(companyId, query);
+  }
+
+  /**
+   * Save-and-resume: persist in-progress cleared ticks (GL `cleared` flag)
+   * so leaving the reconcile screen loses nothing. Marks only — no ledger
+   * impact, and finalized (reconciled) rows are never touched.
+   */
+  @Patch('mark')
+  @Roles('admin', 'staff')
+  markCleared(
+    @CurrentCompany() companyId: string,
+    @Body() dto: MarkClearedDto,
+  ) {
+    return this.svc.markCleared(companyId, dto);
   }
 
   @Get()

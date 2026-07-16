@@ -80,7 +80,8 @@ export class PaymentsController {
   remove(
     @CurrentCompany() companyId: string,
     @Param('paymentId', ParseUUIDPipe) paymentId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.payments.delete(companyId, paymentId);
+    return this.payments.delete(companyId, paymentId, user.id);
   }
 }

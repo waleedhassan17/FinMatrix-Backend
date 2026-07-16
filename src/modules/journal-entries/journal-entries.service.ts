@@ -15,6 +15,7 @@ import {
   VoidJournalEntryDto,
 } from './dto/journal-entry.dto';
 import { toDecimal } from '../../common/utils/money.util';
+import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 
 /**
  * HTTP-facing service for the manual General Journal.
@@ -132,6 +133,13 @@ export class JournalEntriesService {
           message: 'Journal entry is already void',
         });
       }
+
+      // Bank-reconciliation lock: a posted entry whose GL rows are part of a
+      // completed reconciliation must not be voided — the reversal would not
+      // touch the reconciled row, but QuickBooks semantics (and our beginning
+      // balance sanity) require an explicit admin undo of the reconciliation
+      // before altering the underlying transaction.
+      await assertNotReconciled(manager, companyId, [entry.id], 'journal entry');
 
       if (entry.status === 'posted') {
         // Reversing entry: swap debit and credit on every line.

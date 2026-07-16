@@ -26,6 +26,8 @@ import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { ACCT_AR, ACCT_BANK, ACCT_CASH } from '../accounts/accounts.constants';
 import { Account } from '../accounts/entities/account.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
+import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 
 @Injectable()
 export class PaymentsService {
@@ -249,10 +251,104 @@ export class PaymentsService {
     }
   }
 
-  async delete(companyId: string, id: string) {
-    const p = await this.getById(companyId, id);
-    await this.repo.softRemove(p);
-    return { id, deleted: true };
+  /**
+   * Delete a payment (QuickBooks "delete payment"): reverses everything
+   * receive() did — un-applies the invoices, restores the customer's AR
+   * balance, posts a REVERSING journal entry (Dr AR / Cr Bank) — and then
+   * removes the payment record. Blocked with TRANSACTION_RECONCILED when the
+   * payment's bank GL row is part of a completed reconciliation.
+   *
+   * (The previous implementation was a silent no-op: softRemove on an entity
+   * with no @DeleteDateColumn, and it never touched the ledger, the invoices
+   * or the customer balance even if it had worked.)
+   */
+  async delete(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const payment = await manager.findOne(Payment, {
+        where: { id, companyId },
+        relations: { applications: true },
+      });
+      if (!payment) {
+        throw new NotFoundException({
+          code: 'PAYMENT_NOT_FOUND',
+          message: 'Payment not found',
+        });
+      }
+
+      // Bank-reconciliation lock (bankreconcillation.md behavior 9).
+      await assertNotReconciled(manager, companyId, [payment.id], 'payment');
+
+      // Un-apply from invoices — exact reverse of invoices.applyPayment,
+      // with the same row lock against concurrent applications.
+      const today = new Date().toISOString().slice(0, 10);
+      for (const app of payment.applications ?? []) {
+        const invoice = await manager.findOne(Invoice, {
+          where: { id: app.invoiceId, companyId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!invoice) continue;
+        const reducedPaid = subtractMoney(invoice.amountPaid, app.amountApplied);
+        invoice.amountPaid = (reducedPaid.lessThan(0) ? toDecimal('0') : reducedPaid).toFixed(4);
+        invoice.balance = subtractMoney(invoice.total, invoice.amountPaid).toFixed(4);
+        if (toDecimal(invoice.amountPaid).greaterThanOrEqualTo(toDecimal(invoice.total))) {
+          invoice.status = 'paid';
+        } else if (invoice.dueDate < today) {
+          invoice.status = 'overdue';
+        } else if (isPositive(invoice.amountPaid)) {
+          invoice.status = 'partial';
+        } else {
+          invoice.status = 'sent';
+        }
+        await manager.save(invoice);
+      }
+
+      // Restore the customer's AR balance (receive() decremented it).
+      const customer = await manager.findOne(Customer, {
+        where: { id: payment.customerId, companyId },
+      });
+      if (customer) {
+        customer.balance = addMoney(customer.balance, payment.amount).toFixed(4);
+        await manager.save(customer);
+      }
+
+      // Reversing entry: Dr AR / Cr Bank — keeps the ledger auditable instead
+      // of deleting posted GL history.
+      if (payment.journalEntryId) {
+        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
+        await this.posting.createEntry(manager, {
+          companyId,
+          createdBy: userId,
+          date: today,
+          memo: `Delete payment ${payment.reference ?? payment.id.slice(0, 8)}`,
+          status: 'posted',
+          sourceType: 'payment_void',
+          sourceId: payment.id,
+          reversalOfId: payment.journalEntryId,
+          lines: [
+            {
+              accountId: ar.id,
+              description: 'Reverse payment application',
+              debit: payment.amount,
+              credit: '0',
+              lineOrder: 0,
+            },
+            {
+              accountId: payment.bankAccountId,
+              description: 'Reverse bank deposit',
+              debit: '0',
+              credit: payment.amount,
+              lineOrder: 1,
+            },
+          ],
+        });
+      }
+
+      if (payment.applications?.length) {
+        await manager.remove(payment.applications);
+      }
+      await manager.remove(payment);
+      return { id, deleted: true };
+    });
   }
 
   private async autoApply(
