@@ -12,7 +12,8 @@
  *     service invoices + payments, expense bills — NO inventory, NO COGS.
  *   LARGE ORG       "MetroMatrix"   metromatrix@gmail.com  / 123456  (large_org_6mo)
  *     service invoices/bills + employees + a PROCESSED payroll run + budget.
- *     NO deliveries (existing rider logins remain but the module is gated).
+ *     NO deliveries (stale rider logins from older seeds are DELETED; the
+ *     module is gated for this tier anyway).
  *   WAREHOUSE       "Warehouse Co"  warehouse@gmail.com    / 123456  (warehouse_3mo)
  *     inventory via PO→GRNI, item invoices, TWO riders with credentials,
  *     and deliveries in every state: delivered+PAID, delivered+UNPAID
@@ -193,6 +194,37 @@ async function run() {
     await del(`DELETE FROM delivery_signatures WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
     await del(`DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
     await del(`DELETE FROM deliveries WHERE company_id=$1`);
+    // Delivery personnel: wipe seeded rider profiles AND their login users so
+    // every reseed starts from a clean roster. Stale riders from older seeds
+    // (e.g. saim@metromatrix.com / haseeb@metromatrix.com) are removed here too.
+    const riderRows: Array<{ user_id: string }> = await ds
+      .query(
+        `SELECT user_id FROM delivery_personnel_profiles WHERE company_id=$1
+         UNION
+         SELECT user_id FROM user_companies WHERE company_id=$1 AND role='delivery'`,
+        [cid],
+      )
+      .catch(() => []);
+    await del(`DELETE FROM delivery_personnel_profiles WHERE company_id=$1`);
+    await del(`DELETE FROM user_companies WHERE company_id=$1 AND role='delivery'`);
+    for (const { user_id } of riderRows) {
+      // Keep the login if it still belongs to another company's roster.
+      const elsewhere = await ds
+        .query(
+          `SELECT 1 FROM user_companies WHERE user_id=$1
+           UNION ALL
+           SELECT 1 FROM delivery_personnel_profiles WHERE user_id=$1
+           LIMIT 1`,
+          [user_id],
+        )
+        .catch(() => [1]);
+      if (elsewhere.length > 0) continue;
+      await ds.query(`DELETE FROM delivery_location_logs WHERE personnel_id=$1`, [user_id]).catch(() => undefined);
+      for (const t of ['refresh_tokens', 'revoked_access_tokens', 'password_resets', 'password_reset_otps', 'email_verifications']) {
+        await ds.query(`DELETE FROM ${t} WHERE user_id=$1`, [user_id]).catch(() => undefined);
+      }
+      await ds.query(`DELETE FROM users WHERE id=$1 AND role='delivery'`, [user_id]).catch(() => undefined);
+    }
     await del(`DELETE FROM customers WHERE company_id=$1`);
     await del(`DELETE FROM vendors WHERE company_id=$1`);
     await del(`DELETE FROM inventory_items WHERE company_id=$1`);
@@ -453,6 +485,8 @@ async function run() {
     const cashId = await postOpeningCash(cid, uid, '300000');
 
     // TWO riders with credentials (through the real service: user + profile).
+    // resetCompanyData wiped the previous roster, so these are created fresh;
+    // the `existing` branch only covers a login that survived the wipe.
     const riderDefs = [
       { email: 'rider1@warehouseco.com', name: 'Saim Raza' },
       { email: 'rider2@warehouseco.com', name: 'Haseeb Ali' },
@@ -464,10 +498,22 @@ async function run() {
         existing.passwordHash = await bcrypt.hash(PASSWORD, 12);
         existing.isActive = true;
         await ds.getRepository(User).save(existing);
-        await ds.query(
-          `UPDATE delivery_personnel_profiles SET status='active' WHERE user_id=$1 AND company_id=$2`,
+        const ucRepo = ds.getRepository(UserCompany);
+        if (!(await ucRepo.findOne({ where: { userId: existing.id, companyId: cid } }))) {
+          await ucRepo.save(ucRepo.create({ userId: existing.id, companyId: cid, role: 'delivery' } as any));
+        }
+        const hasProfile = await ds.query(
+          `SELECT 1 FROM delivery_personnel_profiles WHERE user_id=$1 AND company_id=$2`,
           [existing.id, cid],
         );
+        if (hasProfile.length === 0) {
+          await personnel.create(cid, { userId: existing.id } as any);
+        } else {
+          await ds.query(
+            `UPDATE delivery_personnel_profiles SET status='active' WHERE user_id=$1 AND company_id=$2`,
+            [existing.id, cid],
+          );
+        }
         riderIds.push(existing.id);
       } else {
         const created = await personnel.create(cid, { email: r.email, password: PASSWORD, name: r.name } as any);
@@ -629,6 +675,29 @@ async function run() {
     console.log(`  ${valOk ? '✓' : '✗'} Inventory Valuation (${(val as any)?.totalValue}) ties to GL 1200 (${gl1200[0]?.v})`);
 
     await assertBooks('Warehouse Co', cid);
+  }
+
+  // Orphaned rider logins left behind by older seeds (e.g. imran@finmatrix.pk
+  // from demo-data.seed): delivery-role users with no company membership and
+  // no personnel profile anywhere. They can't be managed from any company's
+  // roster, so remove them outright.
+  const orphanRiders: Array<{ id: string; email: string }> = await ds
+    .query(
+      `SELECT id, email FROM users u
+        WHERE u.role='delivery'
+          AND NOT EXISTS (SELECT 1 FROM user_companies uc WHERE uc.user_id=u.id)
+          AND NOT EXISTS (SELECT 1 FROM delivery_personnel_profiles p WHERE p.user_id=u.id)`,
+    )
+    .catch(() => []);
+  for (const o of orphanRiders) {
+    for (const t of ['refresh_tokens', 'revoked_access_tokens', 'password_resets', 'password_reset_otps', 'email_verifications', 'delivery_location_logs']) {
+      const col = t === 'delivery_location_logs' ? 'personnel_id' : 'user_id';
+      await ds.query(`DELETE FROM ${t} WHERE ${col}=$1`, [o.id]).catch(() => undefined);
+    }
+    await ds.query(`DELETE FROM users WHERE id=$1 AND role='delivery'`, [o.id]).catch(() => undefined);
+  }
+  if (orphanRiders.length > 0) {
+    console.log(`  ✓ removed ${orphanRiders.length} orphaned delivery login(s): ${orphanRiders.map((o) => o.email).join(', ')}`);
   }
 
   console.log(`\n${tieFailures === 0 ? '✓ ALL TIES HOLD' : `✗ ${tieFailures} TIE FAILURES`} — demo companies ready.`);
