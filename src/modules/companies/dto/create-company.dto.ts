@@ -8,14 +8,13 @@ import {
   IsObject,
   IsOptional,
   IsString,
-  Matches,
   Max,
   MaxLength,
   Min,
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { PK_PHONE_REGEX } from '../../auth/dto/signup.dto';
+import { IsPkPhone } from '../../../common/validation/phone';
 
 export const LEGAL_STRUCTURES = [
   'sole_proprietor',
@@ -54,12 +53,15 @@ export class CreateCompanyDto {
   @Type(() => AddressDto)
   address?: AddressDto;
 
-  @ApiPropertyOptional({ example: '+92-42-1234567' })
+  @ApiPropertyOptional({
+    example: '042-35761234',
+    description:
+      'Pakistani mobile or landline. Accepts local (042-35761234, 03124890176) ' +
+      'and international (+92…) forms; stored as +92XXXXXXXXXX.',
+  })
   @IsOptional()
   @IsString()
-  @Matches(PK_PHONE_REGEX, {
-    message: 'Phone must match Pakistani format +92-XXX-XXXXXXX',
-  })
+  @IsPkPhone({ allowLandline: true })
   phone?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsEmail() email?: string;

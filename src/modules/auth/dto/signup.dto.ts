@@ -8,18 +8,20 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { IsPkPhone } from '../../../common/validation/phone';
 
 export const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
-export const PK_PHONE_REGEX = /^\+92-\d{2,3}-\d{7}$/;
 
 export class SignupDto {
   @ApiProperty({ example: 'admin@finmatrix.pk' })
   @IsEmail()
   email!: string;
 
-  @ApiProperty({ example: 'Admin123!', minLength: 6 })
+  // Kept in step with ResetPasswordDto (min 8) — a shorter signup floor meant
+  // a password could be created that could never be re-set to itself.
+  @ApiProperty({ example: 'Admin123!', minLength: 8 })
   @IsString()
-  @MinLength(6, { message: 'Password must be at least 6 characters' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
   @Matches(PASSWORD_REGEX, {
     message:
       'Password must contain at least one lowercase letter, one uppercase letter, and one digit',
@@ -31,12 +33,15 @@ export class SignupDto {
   @MinLength(2, { message: 'Display name must be at least 2 characters' })
   displayName!: string;
 
-  @ApiPropertyOptional({ example: '+92-300-1234567' })
+  @ApiPropertyOptional({
+    example: '03124890176',
+    description:
+      'Pakistani mobile. Accepts 03XXXXXXXXX, +923XXXXXXXXX or 923XXXXXXXXX ' +
+      '(spaces/dashes allowed); stored as +923XXXXXXXXX.',
+  })
   @IsOptional()
   @IsString()
-  @Matches(PK_PHONE_REGEX, {
-    message: 'Phone must match Pakistani format +92-XXX-XXXXXXX',
-  })
+  @IsPkPhone()
   phone?: string;
 
   @ApiProperty({ enum: ['admin', 'delivery'], example: 'admin' })
