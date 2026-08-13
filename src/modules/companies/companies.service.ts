@@ -14,6 +14,7 @@ import {
   CreateCompanyDto,
   JoinCompanyDto,
   UpdateCompanyDto,
+  WAREHOUSE_ONLY_COMPANY_TYPE,
 } from './dto/create-company.dto';
 import { generateInviteCode } from '../../common/utils/reference-generator.util';
 import { Account } from '../accounts/entities/account.entity';
@@ -59,7 +60,12 @@ export class CompaniesService {
         // Three-tier model: chosen on the registration type step. Never
         // changeable via the normal update path (self-upgrade would bypass
         // the plans) — only super-admin can change it later.
-        companyType: dto.companyType ?? null,
+        //
+        // WAREHOUSE-ONLY BUILD: default to warehouse rather than null. The
+        // DTO's @Transform only fires when the key is PRESENT, so a caller
+        // that omits companyType entirely would otherwise land a null row.
+        // Restore `?? null` alongside the DTO enum to bring back three tiers.
+        companyType: dto.companyType ?? WAREHOUSE_ONLY_COMPANY_TYPE,
         inviteCode,
         createdBy: userId,
         // Onboarding draft — not yet submitted for approval.

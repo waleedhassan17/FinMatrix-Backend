@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
@@ -24,6 +24,12 @@ export const LEGAL_STRUCTURES = [
 ] as const;
 
 export const ACCOUNTING_METHODS = ['cash', 'accrual'] as const;
+
+/**
+ * WAREHOUSE-ONLY BUILD — the single company type new registrations may use.
+ * Mirrors DEFAULT_COMPANY_TYPE in the app's utils/featureGates.ts.
+ */
+export const WAREHOUSE_ONLY_COMPANY_TYPE = 'warehouse';
 
 class AddressDto {
   @ApiPropertyOptional() @IsOptional() @IsString() street?: string;
@@ -97,13 +103,27 @@ export class CreateCompanyDto {
   @IsString()
   logo?: string;
 
+  // ══ WAREHOUSE-ONLY BUILD ═══════════════════════════════════════════════
+  // Every new company is created as `warehouse`, whatever the client sends.
+  // Coerced rather than rejected so older app builds (and anything hitting
+  // the API directly) keep working instead of hard-failing on registration.
+  //
+  // Existing small_business / large_org companies are untouched: FEATURE_MAP
+  // still carries their rows, so their sessions resolve exactly as before.
+  //
+  // To restore the three-tier model, drop the @Transform and re-open the
+  // enum below — see WAREHOUSE_ONLY_BUILD in the app's utils/featureGates.ts.
   @ApiPropertyOptional({
-    enum: ['small_business', 'large_org', 'warehouse'],
+    enum: ['warehouse'],
     description:
-      'Three-tier model (FinMatrix.md): decides the feature set and which two subscription plans are offered.',
+      'Warehouse-only build: any value sent here is coerced to "warehouse".',
   })
   @IsOptional()
-  @IsIn(['small_business', 'large_org', 'warehouse'])
+  @Transform(() => WAREHOUSE_ONLY_COMPANY_TYPE)
+  @IsIn([WAREHOUSE_ONLY_COMPANY_TYPE])
+  // Three-tier model (FinMatrix.md): decides the feature set and which two
+  // subscription plans are offered.
+  // @IsIn(['small_business', 'large_org', 'warehouse'])
   companyType?: string;
 }
 
