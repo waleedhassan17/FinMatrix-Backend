@@ -28,12 +28,12 @@ export type TierPlanKey =
   | 'small_business_6mo'
   | 'large_org_3mo'
   | 'large_org_6mo'
-  | 'warehouse_starter_3mo'
   | 'warehouse_starter_6mo'
-  | 'warehouse_growth_3mo'
+  | 'warehouse_starter_1yr'
   | 'warehouse_growth_6mo'
-  | 'warehouse_scale_3mo'
-  | 'warehouse_scale_6mo';
+  | 'warehouse_growth_1yr'
+  | 'warehouse_scale_6mo'
+  | 'warehouse_scale_1yr';
 
 /** Retired warehouse keys — resolvable for grandfathering, never offered. */
 export type RetiredPlanKey = 'warehouse_3mo' | 'warehouse_6mo';
@@ -159,67 +159,66 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
 
   // ── Warehouse ladder — the only plans on offer ────────────────────────
   // Tiers differ ONLY by how many delivery personnel may be active at once
-  // (2 / 5 / 10); every accounting and warehouse feature is on all three.
-  // Each comes in 3-month and 6-month, the 6-month at 75% of the 3-month
-  // monthly rate (a 25% saving) — the same discount rule the other company
-  // types use. Growth deliberately keeps the retired plans' exact pricing.
-  warehouse_starter_3mo: {
-    key: 'warehouse_starter_3mo',
-    label: 'Warehouse Starter — 3 months',
-    companyType: 'warehouse',
-    priceMinorUnits: 900000, // Rs 9,000 total
-    monthlyMinorUnits: 300000, // Rs 3,000/month
-    durationMonths: 3,
-    deliveryPersonnelLimit: 2,
-    currency: 'PKR',
-  },
+  // (3 / 5 / 10); every accounting and warehouse feature is on all three.
+  // Each rung is sold as 6 months or 1 year, the annual at 75% of the
+  // six-month monthly rate — a 25% saving for committing to the year.
   warehouse_starter_6mo: {
     key: 'warehouse_starter_6mo',
     label: 'Warehouse Starter — 6 months',
     companyType: 'warehouse',
-    priceMinorUnits: 1350000, // Rs 13,500 total
-    monthlyMinorUnits: 225000, // Rs 2,250/month — lower than 3mo
+    priceMinorUnits: 1800000, // Rs 18,000 total
+    monthlyMinorUnits: 300000, // Rs 3,000/month
     durationMonths: 6,
-    deliveryPersonnelLimit: 2,
+    deliveryPersonnelLimit: 3,
     currency: 'PKR',
   },
-  warehouse_growth_3mo: {
-    key: 'warehouse_growth_3mo',
-    label: 'Warehouse Growth — 3 months',
+  warehouse_starter_1yr: {
+    key: 'warehouse_starter_1yr',
+    label: 'Warehouse Starter — 1 year',
     companyType: 'warehouse',
-    priceMinorUnits: 1200000, // Rs 12,000 total
-    monthlyMinorUnits: 400000, // Rs 4,000/month
-    durationMonths: 3,
-    deliveryPersonnelLimit: 5,
+    priceMinorUnits: 2700000, // Rs 27,000 total
+    monthlyMinorUnits: 225000, // Rs 2,250/month — lower than 6mo
+    durationMonths: 12,
+    deliveryPersonnelLimit: 3,
     currency: 'PKR',
   },
   warehouse_growth_6mo: {
     key: 'warehouse_growth_6mo',
     label: 'Warehouse Growth — 6 months',
     companyType: 'warehouse',
-    priceMinorUnits: 1800000, // Rs 18,000 total
-    monthlyMinorUnits: 300000, // Rs 3,000/month — lower than 3mo
+    priceMinorUnits: 2400000, // Rs 24,000 total
+    monthlyMinorUnits: 400000, // Rs 4,000/month
     durationMonths: 6,
     deliveryPersonnelLimit: 5,
     currency: 'PKR',
   },
-  warehouse_scale_3mo: {
-    key: 'warehouse_scale_3mo',
-    label: 'Warehouse Scale — 3 months',
+  warehouse_growth_1yr: {
+    key: 'warehouse_growth_1yr',
+    label: 'Warehouse Growth — 1 year',
     companyType: 'warehouse',
-    priceMinorUnits: 1800000, // Rs 18,000 total
-    monthlyMinorUnits: 600000, // Rs 6,000/month
-    durationMonths: 3,
-    deliveryPersonnelLimit: 10,
+    priceMinorUnits: 3600000, // Rs 36,000 total
+    monthlyMinorUnits: 300000, // Rs 3,000/month — lower than 6mo
+    durationMonths: 12,
+    deliveryPersonnelLimit: 5,
     currency: 'PKR',
   },
   warehouse_scale_6mo: {
     key: 'warehouse_scale_6mo',
     label: 'Warehouse Scale — 6 months',
     companyType: 'warehouse',
-    priceMinorUnits: 2700000, // Rs 27,000 total
-    monthlyMinorUnits: 450000, // Rs 4,500/month — lower than 3mo
+    priceMinorUnits: 3600000, // Rs 36,000 total
+    monthlyMinorUnits: 600000, // Rs 6,000/month
     durationMonths: 6,
+    deliveryPersonnelLimit: 10,
+    currency: 'PKR',
+  },
+  warehouse_scale_1yr: {
+    key: 'warehouse_scale_1yr',
+    label: 'Warehouse Scale — 1 year',
+    companyType: 'warehouse',
+    priceMinorUnits: 5400000, // Rs 54,000 total
+    monthlyMinorUnits: 450000, // Rs 4,500/month — lower than 6mo
+    durationMonths: 12,
     deliveryPersonnelLimit: 10,
     currency: 'PKR',
   },
@@ -235,12 +234,12 @@ export const PLAN_KEYS: PlanKey[] = [
   'large_org_6mo',
   'warehouse_3mo',
   'warehouse_6mo',
-  'warehouse_starter_3mo',
   'warehouse_starter_6mo',
-  'warehouse_growth_3mo',
+  'warehouse_starter_1yr',
   'warehouse_growth_6mo',
-  'warehouse_scale_3mo',
+  'warehouse_growth_1yr',
   'warehouse_scale_6mo',
+  'warehouse_scale_1yr',
 ];
 
 // Order matters: this is the order plans render in. Cheapest first within a
@@ -258,12 +257,12 @@ export const TIER_PLAN_KEYS: TierPlanKey[] = [
   // 'small_business_6mo',
   // 'large_org_3mo',
   // 'large_org_6mo',
-  'warehouse_starter_3mo',
   'warehouse_starter_6mo',
-  'warehouse_growth_3mo',
+  'warehouse_starter_1yr',
   'warehouse_growth_6mo',
-  'warehouse_scale_3mo',
+  'warehouse_growth_1yr',
   'warehouse_scale_6mo',
+  'warehouse_scale_1yr',
 ];
 
 /**

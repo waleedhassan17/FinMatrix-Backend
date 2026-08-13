@@ -25,6 +25,7 @@ import {
   normalizePlan,
   PLAN_CONFIG,
   PlanKey,
+  type PlanConfig,
   plansForType,
 } from './plan-config';
 
@@ -138,14 +139,25 @@ export class BillingService {
         'companyType must be one of small_business | large_org | warehouse.',
       );
     }
-    const threeMo = plans.find((p) => p.durationMonths === 3);
+    // Savings are measured against the SHORTEST billing period within the
+    // same delivery-personnel rung. The previous version hardcoded "3 months
+    // vs 6" and searched every plan of the company type, so it silently
+    // stopped computing when the offered durations changed, and compared one
+    // rung's pricing against another's.
+    const baselineForRung = new Map<number, PlanConfig>();
+    for (const p of plans) {
+      const cur = baselineForRung.get(p.deliveryPersonnelLimit);
+      const shorter =
+        !cur || (p.durationMonths ?? Infinity) < (cur.durationMonths ?? Infinity);
+      if (shorter) baselineForRung.set(p.deliveryPersonnelLimit, p);
+    }
     return {
       companyType,
       plans: plans.map((p) => {
-        const monthlySavings =
-          threeMo && p.durationMonths === 6
-            ? threeMo.monthlyMinorUnits - p.monthlyMinorUnits
-            : 0;
+        const baseline =
+          baselineForRung.get(p.deliveryPersonnelLimit)?.monthlyMinorUnits ??
+          p.monthlyMinorUnits;
+        const monthlySavings = Math.max(0, baseline - p.monthlyMinorUnits);
         return {
           key: p.key,
           label: p.label,

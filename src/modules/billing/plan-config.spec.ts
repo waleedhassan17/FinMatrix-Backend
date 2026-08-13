@@ -65,12 +65,12 @@ describe('Offered tier plans (PKR)', () => {
     ['large_org_3mo', null, 3, 5000, 15000, 0],
     ['large_org_6mo', null, 6, 4000, 24000, 0],
     // Warehouse ladder — tiers differ only by delivery-personnel allowance.
-    ['warehouse_starter_3mo', 'warehouse', 3, 3000, 9000, 2],
-    ['warehouse_starter_6mo', 'warehouse', 6, 2250, 13500, 2],
-    ['warehouse_growth_3mo', 'warehouse', 3, 4000, 12000, 5],
-    ['warehouse_growth_6mo', 'warehouse', 6, 3000, 18000, 5],
-    ['warehouse_scale_3mo', 'warehouse', 3, 6000, 18000, 10],
-    ['warehouse_scale_6mo', 'warehouse', 6, 4500, 27000, 10],
+    ['warehouse_starter_6mo', 'warehouse', 6, 3000, 18000, 3],
+    ['warehouse_starter_1yr', 'warehouse', 12, 2250, 27000, 3],
+    ['warehouse_growth_6mo', 'warehouse', 6, 4000, 24000, 5],
+    ['warehouse_growth_1yr', 'warehouse', 12, 3000, 36000, 5],
+    ['warehouse_scale_6mo', 'warehouse', 6, 6000, 36000, 10],
+    ['warehouse_scale_1yr', 'warehouse', 12, 4500, 54000, 10],
   ];
 
   it.each(expected)(
@@ -87,21 +87,21 @@ describe('Offered tier plans (PKR)', () => {
     },
   );
 
-  it('warehouse offers exactly the 2 / 5 / 10 personnel ladder', () => {
+  it('warehouse offers exactly the 3 / 5 / 10 personnel ladder', () => {
     const plans = plansForType('warehouse');
     expect(plans).toHaveLength(6);
     expect(
       [...new Set(plans.map((p) => p.deliveryPersonnelLimit))].sort((a, b) => a - b),
-    ).toEqual([2, 5, 10]);
+    ).toEqual([3, 5, 10]);
     // Each limit is available in both billing periods.
-    for (const limit of [2, 5, 10]) {
+    for (const limit of [3, 5, 10]) {
       const forLimit = plans.filter((p) => p.deliveryPersonnelLimit === limit);
-      expect(forLimit.map((p) => p.durationMonths).sort()).toEqual([3, 6]);
+      expect(forLimit.map((p) => p.durationMonths).sort((a, b) => a! - b!)).toEqual([6, 12]);
     }
   });
 
   it('a higher personnel allowance never costs less per month', () => {
-    for (const months of [3, 6]) {
+    for (const months of [6, 12]) {
       const rung = plansForType('warehouse')
         .filter((p) => p.durationMonths === months)
         .sort((a, b) => a.deliveryPersonnelLimit - b.deliveryPersonnelLimit);
@@ -126,15 +126,14 @@ describe('Offered tier plans (PKR)', () => {
     }
   });
 
-  it('the 6-month plan has a LOWER effective monthly rate', () => {
-    // Warehouse: compare within each personnel rung.
-    for (const limit of [2, 5, 10]) {
+  it('the 1-year plan has a LOWER effective monthly rate than its 6-month', () => {
+    for (const limit of [3, 5, 10]) {
       const rung = plansForType('warehouse').filter(
         (p) => p.deliveryPersonnelLimit === limit,
       );
-      const three = rung.find((p) => p.durationMonths === 3)!;
-      const six = rung.find((p) => p.durationMonths === 6)!;
-      expect(six.monthlyMinorUnits).toBeLessThan(three.monthlyMinorUnits);
+      const half = rung.find((p) => p.durationMonths === 6)!;
+      const year = rung.find((p) => p.durationMonths === 12)!;
+      expect(year.monthlyMinorUnits).toBeLessThan(half.monthlyMinorUnits);
     }
   });
 
