@@ -147,6 +147,30 @@ describe('company-status.util', () => {
       expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe('draft');
     });
 
+    it('a draft whose payment is awaiting verification reports pending', () => {
+      // Payment submission sets paymentStatus='submitted' but leaves
+      // company.status='email_verified' (only approval flips it to active).
+      // Reporting `draft` here bounced the owner back to plan selection after
+      // they had already paid — and invited a second payment.
+      expect(
+        effectiveCompanyStatus(
+          { status: 'email_verified', paymentStatus: 'submitted' },
+          NOW,
+        ),
+      ).toBe('pending');
+    });
+
+    it('a draft with no payment yet is still a draft', () => {
+      expect(effectiveCompanyStatus({ status: 'email_verified', paymentStatus: 'none' }, NOW)).toBe('draft');
+      expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe('draft');
+    });
+
+    it('a rejected payment returns the owner to onboarding, not to waiting', () => {
+      expect(
+        effectiveCompanyStatus({ status: 'email_verified', paymentStatus: 'rejected' }, NOW),
+      ).toBe('draft');
+    });
+
     it('isCompanyDraft answers only for the draft state', () => {
       expect(isCompanyDraft('email_verified')).toBe(true);
       expect(isCompanyDraft('pending_approval')).toBe(false);

@@ -67,6 +67,8 @@ export function isCompanyActive(raw: string | null | undefined): boolean {
 export interface SubscriptionFields {
   subscriptionPlan?: string | null;
   subscriptionExpiryDate?: Date | string | null;
+  /** none | submitted | paid | rejected — set when a receipt is uploaded. */
+  paymentStatus?: string | null;
 }
 
 export function isSubscriptionExpired(
@@ -93,6 +95,13 @@ export function effectiveCompanyStatus(
   const status = normalizeCompanyStatus(company?.status);
   if (status === 'active' && company && isSubscriptionExpired(company, now)) {
     return 'inactive';
+  }
+  // A draft whose payment receipt is with an administrator is genuinely
+  // awaiting review, so it must report `pending` — even though the raw
+  // company.status is only flipped to `active` on approval. Without this the
+  // owner is bounced back to plan selection after paying, and could pay twice.
+  if (status === 'draft' && company?.paymentStatus === 'submitted') {
+    return 'pending';
   }
   return status;
 }
