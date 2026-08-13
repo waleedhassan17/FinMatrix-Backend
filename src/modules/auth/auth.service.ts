@@ -242,6 +242,12 @@ export class AuthService {
       // its expiry date reports 'inactive' (renew-only) even before the daily
       // billing cron persists the flip.
       const acctStatus = effectiveCompanyStatus(company);
+      // NOTE: 'draft' is deliberately NOT blocked. A draft company is one this
+      // same user created and has not submitted, so blocking it only locked
+      // them out of finishing their own onboarding once their token expired —
+      // with no way back in. They still reach nothing: CompanyGuard rejects
+      // every business endpoint for anything that is not `active`, so signing
+      // in buys them exactly the onboarding screens they need and no more.
       if (acctStatus === 'pending' || acctStatus === 'rejected') {
         const code = acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
         const message =

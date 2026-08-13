@@ -74,7 +74,11 @@ export class CompanyGuard implements CanActivate {
               ? subscriptionLapsed
                 ? 'Your subscription has expired. Renew your plan to restore access.'
                 : 'Your company account has been deactivated.'
-              : 'Your company is awaiting approval.',
+              : // A draft has not been submitted, so "awaiting approval" would
+                // describe work the user has not done yet.
+                acctStatus === 'draft'
+                ? 'Finish setting up your company to continue.'
+                : 'Your company is awaiting approval.',
         companyStatus: acctStatus,
       });
     }

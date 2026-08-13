@@ -51,6 +51,7 @@ describe('AuthService', () => {
   let otpRepo: ReturnType<typeof repoMock>;
   let refreshRepo: ReturnType<typeof repoMock>;
   let revokedRepo: ReturnType<typeof revokedRepoMock>;
+  let userCompanyRepo: ReturnType<typeof repoMock>;
   let jwtMock: { signAsync: jest.Mock; decode: jest.Mock; verify: jest.Mock };
   let mail: {
     sendVerificationEmail: jest.Mock;
@@ -67,6 +68,7 @@ describe('AuthService', () => {
     otpRepo = repoMock();
     refreshRepo = repoMock();
     revokedRepo = revokedRepoMock();
+    userCompanyRepo = repoMock();
     jwtMock = { signAsync: jest.fn(), decode: jest.fn(), verify: jest.fn() };
     mail = {
       sendVerificationEmail: jest.fn(),
@@ -100,7 +102,7 @@ describe('AuthService', () => {
         { provide: getRepositoryToken(EmailVerification), useValue: verificationRepo },
         { provide: getRepositoryToken(PasswordResetOtp), useValue: otpRepo },
         { provide: getRepositoryToken(Company), useValue: repoMock() },
-        { provide: getRepositoryToken(UserCompany), useValue: repoMock() },
+        { provide: getRepositoryToken(UserCompany), useValue: userCompanyRepo },
       ],
     }).compile();
 
@@ -129,6 +131,54 @@ describe('AuthService', () => {
         service.signin({ email: 'admin@x.z', password: 'Admin123!' }),
       ).rejects.toMatchObject({ response: { code: 'EMAIL_NOT_VERIFIED' } });
     });
+
+    // ── Onboarding resume ────────────────────────────────────────────────
+    // A company that was created but never submitted must NOT be treated as
+    // "awaiting approval": its owner still has onboarding to finish, and
+    // blocking the login left them unable to get back to it once their token
+    // expired.
+    const signInWithCompanyStatus = async (status: string) => {
+      const passwordHash = await bcrypt.hash('Admin123!', 4);
+      users.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'admin@x.z',
+        passwordHash,
+        role: 'admin',
+        isActive: true,
+        isEmailVerified: true,
+        defaultCompanyId: 'c1',
+      });
+      userCompanyRepo.findOne.mockResolvedValue({
+        userId: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        company: { id: 'c1', name: 'Acme', status, rejectionReason: null },
+      });
+      jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
+      // issueTokens decodes the refresh token to persist its expiry.
+      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      return service.signin({ email: 'admin@x.z', password: 'Admin123!' });
+    };
+
+    it('lets a DRAFT company sign in and issues tokens', async () => {
+      const res = await signInWithCompanyStatus('email_verified');
+      expect(res.tokens.accessToken).toBeTruthy();
+      expect(res.tokens.refreshToken).toBeTruthy();
+      expect(res.companyStatus).toBe('draft');
+    });
+
+    it('still blocks a SUBMITTED company awaiting approval', async () => {
+      await expect(signInWithCompanyStatus('pending_approval')).rejects.toMatchObject({
+        response: { code: 'COMPANY_PENDING' },
+      });
+    });
+
+    it('still blocks a rejected company', async () => {
+      await expect(signInWithCompanyStatus('rejected')).rejects.toMatchObject({
+        response: { code: 'COMPANY_REJECTED' },
+      });
+    });
+
   });
 
   describe('verifyEmail', () => {

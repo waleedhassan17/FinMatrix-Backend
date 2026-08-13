@@ -1,10 +1,28 @@
 /**
  * Canonical account-status model (Phase1.md): a company is one of
- * `pending | active | inactive | rejected`. Login/app access is allowed ONLY
- * when active. This normalizes the fragmented historical values (Stage-1 state
- * machine + legacy) onto that model so existing companies keep working.
+ * `draft | pending | active | inactive | rejected`. Login/app access is allowed
+ * ONLY when active. This normalizes the fragmented historical values (Stage-1
+ * state machine + legacy) onto that model so existing companies keep working.
+ *
+ * `draft` vs `pending` is a real distinction and must not be collapsed:
+ *
+ *   draft   — the owner created the company but has NOT submitted it. There is
+ *             no plan yet (submitForApproval refuses without one), so the next
+ *             thing they need is the rest of onboarding.
+ *   pending — submitted, waiting on a platform admin. Nothing for the owner to
+ *             do but wait.
+ *
+ * They used to share the value `pending`, so a half-finished registration was
+ * shown "Awaiting approval" — a screen for work the user had not done — with
+ * no route back to plan selection, and the sign-in gate locked them out of
+ * their own unfinished onboarding as soon as their token expired.
  */
-export type AccountStatus = 'pending' | 'active' | 'inactive' | 'rejected';
+export type AccountStatus =
+  | 'draft'
+  | 'pending'
+  | 'active'
+  | 'inactive'
+  | 'rejected';
 
 export function normalizeCompanyStatus(
   raw: string | null | undefined,
@@ -20,10 +38,18 @@ export function normalizeCompanyStatus(
     case 'inactive':
     case 'suspended':
       return 'inactive';
-    // unverified | email_verified | pending_approval | pending | trial | …
+    // Created but never submitted — onboarding is still in progress.
+    case 'email_verified':
+      return 'draft';
+    // unverified | pending_approval | pending | trial | …
     default:
       return 'pending';
   }
+}
+
+/** True while the owner still has onboarding steps left to complete. */
+export function isCompanyDraft(raw: string | null | undefined): boolean {
+  return normalizeCompanyStatus(raw) === 'draft';
 }
 
 export function isCompanyActive(raw: string | null | undefined): boolean {
