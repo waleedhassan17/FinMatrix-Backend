@@ -56,12 +56,14 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
 });
 
 describe('Offered tier plans (PKR)', () => {
-  const expected: Array<[string, string, number, number, number, number]> = [
+  const expected: Array<[string, string | null, number, number, number, number]> = [
     // key, companyType, durationMonths, monthly Rs, total Rs, personnel limit
-    ['small_business_3mo', 'small_business', 3, 2500, 7500, 0],
-    ['small_business_6mo', 'small_business', 6, 2000, 12000, 0],
-    ['large_org_3mo', 'large_org', 3, 5000, 15000, 0],
-    ['large_org_6mo', 'large_org', 6, 4000, 24000, 0],
+    // WAREHOUSE-ONLY: small_business/large_org are retired to companyType
+    // null — still resolvable for the companies on them, never offered.
+    ['small_business_3mo', null, 3, 2500, 7500, 0],
+    ['small_business_6mo', null, 6, 2000, 12000, 0],
+    ['large_org_3mo', null, 3, 5000, 15000, 0],
+    ['large_org_6mo', null, 6, 4000, 24000, 0],
     // Warehouse ladder — tiers differ only by delivery-personnel allowance.
     ['warehouse_starter_3mo', 'warehouse', 3, 3000, 9000, 2],
     ['warehouse_starter_6mo', 'warehouse', 6, 2250, 13500, 2],
@@ -109,14 +111,22 @@ describe('Offered tier plans (PKR)', () => {
     }
   });
 
-  it('every type: the 6-month plan has a LOWER effective monthly rate', () => {
-    for (const type of ['small_business', 'large_org']) {
-      const plans = plansForType(type);
-      expect(plans).toHaveLength(2);
-      const three = plans.find((p) => p.durationMonths === 3)!;
-      const six = plans.find((p) => p.durationMonths === 6)!;
-      expect(six.monthlyMinorUnits).toBeLessThan(three.monthlyMinorUnits);
+  it('warehouse is the ONLY type with plans on offer', () => {
+    expect(plansForType('small_business')).toHaveLength(0);
+    expect(plansForType('large_org')).toHaveLength(0);
+    expect(plansForType('warehouse')).toHaveLength(6);
+  });
+
+  it('retired tier plans still RESOLVE for the companies sitting on them', () => {
+    for (const key of ['small_business_6mo', 'large_org_6mo'] as const) {
+      const p = getPlanConfig(key);
+      expect(p.key).toBe(key); // not silently downgraded to `free`
+      expect(p.companyType).toBeNull(); // ⇒ excluded from plansForType
+      expect(p.priceMinorUnits).toBeGreaterThan(0);
     }
+  });
+
+  it('the 6-month plan has a LOWER effective monthly rate', () => {
     // Warehouse: compare within each personnel rung.
     for (const limit of [2, 5, 10]) {
       const rung = plansForType('warehouse').filter(
