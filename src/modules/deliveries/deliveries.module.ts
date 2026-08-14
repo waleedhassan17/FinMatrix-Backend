@@ -18,6 +18,7 @@ import { AccountsModule } from '../accounts/accounts.module';
 import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { PaymentsModule } from '../payments/payments.module';
+import { CreditMemosModule } from '../credit-memos/credit-memos.module';
 
 @Module({
   imports: [
@@ -39,6 +40,8 @@ import { PaymentsModule } from '../payments/payments.module';
     SalesOrdersModule,
     InvoicesModule,
     PaymentsModule,
+    // Prepaid partial deliveries credit the customer for undelivered goods.
+    CreditMemosModule,
   ],
   providers: [DeliveriesService, GeocodingService, DeliveryLedgerService],
   controllers: [DeliveriesController],
