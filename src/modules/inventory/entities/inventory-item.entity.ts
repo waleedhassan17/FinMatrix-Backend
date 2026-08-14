@@ -5,6 +5,12 @@ import { InventoryCostMethod } from '../../../types';
 // G1 (invariant I11): stock may never go negative. Declared here as well as in
 // the LedgerIntegrityConstraints migration so dev-mode synchronize keeps it.
 // Services guard first and raise INSUFFICIENT_STOCK — this is the backstop.
+//
+// The migration installs it NOT VALID against production, which already holds
+// one pre-existing negative row; see that migration for why, and for the one
+// command that promotes it to fully validated once the data is corrected.
+// TypeORM has no NOT VALID option, so a dev database built by synchronize gets
+// the fully validated form — which is correct there, since dev has no such row.
 @Entity('inventory_items')
 @Index(['companyId', 'sku'], { unique: true })
 @Index(['companyId', 'isActive'])

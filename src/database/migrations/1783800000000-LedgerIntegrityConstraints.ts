@@ -65,11 +65,30 @@ export class LedgerIntegrityConstraints1783800000000
       END $$;
     `);
 
+    // NOT VALID, deliberately.
+    //
+    // Production already carries stock that went negative before any guard
+    // existed (Cooking Oil 5L at -18, from two oversells against 44 on hand).
+    // A plain ADD CONSTRAINT validates every existing row, so it would abort
+    // this migration — and because DB_MIGRATIONS_RUN=true runs migrations at
+    // boot, that means a crash-looping dyno rather than a failed deploy.
+    //
+    // NOT VALID enforces the check on every INSERT and UPDATE from now on
+    // while leaving the existing rows unexamined. New negative stock is
+    // impossible; the historical row stays put until it is corrected
+    // deliberately, because bringing it to zero needs a journal entry
+    // (Dr 1200 / Cr 6400) that moves reported profit — an accounting decision,
+    // not a migration's business.
+    //
+    // Once the data is corrected, promote it with:
+    //   ALTER TABLE inventory_items VALIDATE CONSTRAINT chk_no_negative_stock;
+    // which takes only a SHARE UPDATE EXCLUSIVE lock and does not block reads
+    // or writes.
     await queryRunner.query(`
       DO $$ BEGIN
         ALTER TABLE "inventory_items"
           ADD CONSTRAINT "chk_no_negative_stock"
-          CHECK (quantity_on_hand >= 0);
+          CHECK (quantity_on_hand >= 0) NOT VALID;
       EXCEPTION WHEN duplicate_object THEN NULL;
       END $$;
     `);
