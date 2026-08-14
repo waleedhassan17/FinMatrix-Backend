@@ -55,7 +55,8 @@ export class Company extends BaseEntity {
     nullable: true,
     name: 'accounting_method',
   })
-  accountingMethod!: string | null; // cash | accrual
+  // Always 'accrual' — the only basis reports.service.ts implements (G8).
+  accountingMethod!: string | null;
 
   @Column({
     type: 'varchar',

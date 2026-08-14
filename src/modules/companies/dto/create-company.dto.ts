@@ -23,7 +23,20 @@ export const LEGAL_STRUCTURES = [
   'corporation',
 ] as const;
 
-export const ACCOUNTING_METHODS = ['cash', 'accrual'] as const;
+/**
+ * Accrual is the only basis FinMatrix reports on.
+ *
+ * Every financial statement is derived from general_ledger, which records
+ * revenue at invoice date and expense at bill date — that is accrual by
+ * construction. 'cash' was accepted here and stored on the company, but
+ * reports.service.ts never read the column, so choosing it changed nothing
+ * (audit gap G8). A toggle that silently does nothing is worse than no
+ * toggle: it tells the owner their P&L is on a basis it is not.
+ *
+ * Cash-basis reporting means a recognition switch in the report queries, not
+ * a new value here.
+ */
+export const ACCOUNTING_METHODS = ['accrual'] as const;
 
 /**
  * WAREHOUSE-ONLY BUILD — the single company type new registrations may use.
@@ -87,7 +100,11 @@ export class CreateCompanyDto {
   @Max(12)
   fiscalYearStartMonth?: number;
 
-  @ApiPropertyOptional({ enum: ACCOUNTING_METHODS })
+  @ApiPropertyOptional({
+    enum: ACCOUNTING_METHODS,
+    default: 'accrual',
+    description: 'Accrual only — see ACCOUNTING_METHODS.',
+  })
   @IsOptional()
   @IsIn(ACCOUNTING_METHODS as unknown as string[])
   accountingMethod?: string;

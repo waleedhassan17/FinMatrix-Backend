@@ -54,7 +54,9 @@ export class CompaniesService {
         website: dto.website ?? null,
         taxId: dto.taxId ?? null,
         fiscalYearStartMonth: dto.fiscalYearStartMonth ?? null,
-        accountingMethod: dto.accountingMethod ?? null,
+        // Accrual is the only basis the reports implement (G8); record it
+        // explicitly rather than leaving NULL to be interpreted.
+        accountingMethod: 'accrual',
         homeCurrency: dto.homeCurrency ?? null,
         logo: dto.logo ?? null,
         // Three-tier model: chosen on the registration type step. Never

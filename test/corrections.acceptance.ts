@@ -21,6 +21,8 @@
  *   E. Tax payment: Dr Sales Tax Payable / Cr Cash, liability drops
  *   F. Weighted-average costing behaves as labelled, and fifo/lifo are now
  *      rejected rather than silently stored and ignored (gap G6)
+ *   G. Reports recognise revenue at invoice date — accrual — and a cash-basis
+ *      selection the reports cannot honour is rejected (gap G8)
  *
  * Invariants I1-I5, I8 and I11 are re-checked after every step.
  *
@@ -557,6 +559,66 @@ async function main() {
   ok('F remaining inventory is 15 × 110 = 1650',
     near(n(afterSale.quantityOnHand) * n(afterSale.unitCost), 1650), {
       qty: afterSale.quantityOnHand, cost: afterSale.unitCost,
+    });
+
+  // ══ G. Reports are accrual basis, and say so (G8) ══════════════
+  // accounting_method accepted cash|accrual, was NULL everywhere, and
+  // reports.service.ts never read it. Prove the basis the reports actually
+  // use, so the setting cannot drift away from the behaviour again.
+  console.log('\n— G: accrual-basis reporting (G8)');
+
+  const { rows: methodRows } = await db.query(
+    `SELECT accounting_method FROM companies WHERE id = $1`,
+    [COMPANY],
+  );
+  ok('G company records its basis explicitly',
+    methodRows[0]?.accounting_method === 'accrual', methodRows);
+
+  const cashRejected = await req('PATCH', `/companies/${COMPANY}`, {
+    accountingMethod: 'cash',
+  });
+  ok('G the API REJECTS a cash-basis selection it cannot honour',
+    cashRejected.status === 400, cashRejected.status);
+
+  // An issued but UNPAID invoice must appear in the period's P&L. On a cash
+  // basis it would not — this is what makes the books accrual.
+  const periodStart = TODAY.slice(0, 8) + '01';
+  const plBefore = data(
+    await req('GET', `/reports/profit-loss?startDate=${periodStart}&endDate=${TODAY}`),
+  ) as any;
+
+  const unpaid = await req('POST', '/invoices', {
+    customerId: customer.id,
+    invoiceDate: TODAY,
+    dueDate: '2099-12-31',
+    status: 'sent',
+    lines: [{ description: 'G8 unpaid', quantity: '1', unitPrice: '777', taxRate: '0' }],
+  });
+  ok('G unpaid invoice issued', unpaid.status === 201, unpaid.body);
+  const unpaidInv = data(unpaid) as any;
+  ok('G it really is unpaid', near(n(unpaidInv.amountPaid), 0), unpaidInv.amountPaid);
+
+  const plAfter = data(
+    await req('GET', `/reports/profit-loss?startDate=${periodStart}&endDate=${TODAY}`),
+  ) as any;
+  ok('G revenue is recognised at INVOICE date, with nothing collected',
+    near(n(plAfter.revenue) - n(plBefore.revenue), 777), {
+      before: plBefore.revenue, after: plAfter.revenue,
+    });
+
+  const bs = data(await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`)) as any;
+  ok('G balance sheet still balances under the accrual basis',
+    bs?.isBalanced === true, {
+      assets: bs?.totalAssets,
+      liabEquity: n(bs?.totalLiabilities) + n(bs?.totalEquity),
+    });
+
+  const tb = data(
+    await req('GET', `/reports/trial-balance?startDate=1970-01-01&endDate=2999-12-31`),
+  ) as any;
+  ok('G trial balance still balances',
+    near(n(tb?.totalDebits), n(tb?.totalCredits)), {
+      dr: tb?.totalDebits, cr: tb?.totalCredits,
     });
 
   await invariants('final');
