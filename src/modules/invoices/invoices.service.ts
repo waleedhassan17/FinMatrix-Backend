@@ -26,6 +26,7 @@ import {
   toDecimal,
   toMoneyString,
 } from '../../common/utils/money.util';
+import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatInvoiceRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -781,6 +782,9 @@ export class InvoicesService {
       total = total.plus(cost);
 
       const onHand = toDecimal(item.quantityOnHand);
+      // Selling more than is on the shelf would drive stock negative and trip
+      // chk_no_negative_stock as a raw 500 — refuse it cleanly first (I11).
+      if (!reverse) assertSufficientStock(item.name, onHand, qty);
       const newQty = reverse ? onHand.plus(qty) : onHand.minus(qty);
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);

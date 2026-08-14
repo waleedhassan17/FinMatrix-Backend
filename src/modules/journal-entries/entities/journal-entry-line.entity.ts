@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -9,8 +10,18 @@ import {
 } from 'typeorm';
 import { JournalEntry } from './journal-entry.entity';
 
+/**
+ * G1: the CHECKs are declared here as well as in the
+ * LedgerIntegrityConstraints migration, so TypeORM's synchronize (on in local
+ * dev) recognises them as ours and does not drop them.
+ *
+ * Entry-level balance spans rows and so cannot be a row CHECK — it lives in a
+ * deferred constraint trigger installed by that same migration.
+ */
 @Entity('journal_entry_lines')
 @Index(['entryId', 'lineOrder'])
+@Check('chk_line_shape', '(debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0)')
+@Check('chk_non_negative', 'debit >= 0 AND credit >= 0')
 export class JournalEntryLine {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

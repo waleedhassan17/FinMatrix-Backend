@@ -12,6 +12,7 @@ import {
 } from './dto/credit-memo.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, toDecimal } from '../../common/utils/money.util';
+import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatYearlyRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -241,6 +242,10 @@ export class CreditMemosService {
       total = total.plus(cost);
 
       const onHand = toDecimal(item.quantityOnHand);
+      // Voiding a return pulls the restocked goods back out; if they have
+      // since been sold on, refuse cleanly rather than tripping
+      // chk_no_negative_stock as a raw 500 (I11).
+      if (reverse) assertSufficientStock(item.name, onHand, qty);
       const newQty = reverse ? onHand.minus(qty) : onHand.plus(qty);
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);

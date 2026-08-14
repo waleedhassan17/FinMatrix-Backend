@@ -17,6 +17,7 @@ import {
 } from './dto/purchase-order.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
+import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatPurchaseOrderRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { BillsService } from '../bills/bills.service';
@@ -193,6 +194,11 @@ export class PurchaseOrdersService {
           });
           if (item) {
             const onHand = toDecimal(item.quantityOnHand);
+            // A negative delta is a receipt correction; it must not claw back
+            // more than is on the shelf (I11 / chk_no_negative_stock).
+            if (delta.lessThan(0)) {
+              assertSufficientStock(item.name, onHand, delta.negated());
+            }
             const newQty = onHand.plus(delta);
             // WEIGHTED-AVERAGE COST (the system's single cost method): fold
             // the purchase cost into the item's average so every outflow

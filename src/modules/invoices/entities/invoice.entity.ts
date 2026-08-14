@@ -1,11 +1,15 @@
-import { Column, Entity, Index, OneToMany, VersionColumn } from 'typeorm';
+import { Check, Column, Entity, Index, OneToMany, VersionColumn } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
 import { InvoiceLineItem } from './invoice-line-item.entity';
 
 export type DiscountType = 'percent' | 'amount' | 'none';
 
+// G1 (invariant I8): invoice arithmetic must hold at all times. Declared here
+// as well as in the LedgerIntegrityConstraints migration so dev-mode
+// synchronize keeps it. amount_paid and balance are always written together.
 @Entity('invoices')
+@Check('chk_invoice_math', 'total - amount_paid = balance')
 @Index(['companyId', 'invoiceNumber'], { unique: true })
 @Index(['companyId', 'status'])
 @Index(['companyId', 'customerId'])

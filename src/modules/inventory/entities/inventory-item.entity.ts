@@ -1,11 +1,15 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Check, Column, Entity, Index } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { InventoryCostMethod } from '../../../types';
 
+// G1 (invariant I11): stock may never go negative. Declared here as well as in
+// the LedgerIntegrityConstraints migration so dev-mode synchronize keeps it.
+// Services guard first and raise INSUFFICIENT_STOCK — this is the backstop.
 @Entity('inventory_items')
 @Index(['companyId', 'sku'], { unique: true })
 @Index(['companyId', 'isActive'])
 @Index(['companyId', 'sourceAgencyId'])
+@Check('chk_no_negative_stock', 'quantity_on_hand >= 0')
 export class InventoryItem extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 64 })
   sku!: string;

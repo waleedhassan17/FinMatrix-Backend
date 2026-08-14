@@ -23,6 +23,7 @@ import {
   MovementQueryDto,
 } from './dto/inventory.dto';
 import { toDecimal } from '../../common/utils/money.util';
+import { assertNonNegativeQuantity } from '../../common/utils/stock.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import {
@@ -100,6 +101,9 @@ export class InventoryService {
 
       const prev = toDecimal(item.quantityOnHand);
       const next = toDecimal(dto.newQty);
+      // An adjustment sets an absolute quantity; a negative target would trip
+      // chk_no_negative_stock as a raw 500 (I11).
+      assertNonNegativeQuantity(item.name, next);
       const variance = next.minus(prev);
 
       item.quantityOnHand = next.toFixed(4);
@@ -243,6 +247,8 @@ export class InventoryService {
 
         // Reconcile stock + post the GL adjustment for any non-zero variance.
         if (item && !variance.isZero()) {
+          // A counted quantity is absolute; negative is not a real count (I11).
+          assertNonNegativeQuantity(item.name, counted);
           item.quantityOnHand = counted.toFixed(4);
           await itemRepo.save(item);
 
