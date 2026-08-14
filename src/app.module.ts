@@ -57,10 +57,12 @@ import { HealthModule } from './modules/health/health.module';
 import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
 import { MailModule } from './modules/mail/mail.module';
 import { OperationalAuditModule } from './common/audit/operational-audit.module';
+import { FinancialAuditModule } from './common/audit/financial-audit.module';
 import { SentryModule } from '@sentry/nestjs/setup';
 
 @Module({
@@ -91,6 +93,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     }),
     MailModule,
     OperationalAuditModule,
+    FinancialAuditModule,
     UsersModule,
     TypeOrmModule.forFeature([IdempotencyRecord]),
     AuthModule,
@@ -166,6 +169,12 @@ import { SentryModule } from '@sentry/nestjs/setup';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestIdMiddleware).forRoutes('*');
+    // RequestContextMiddleware first: it opens the AsyncLocalStorage scope
+    // that carries the acting user/company down to the audit subscriber at the
+    // data layer. Guards populate req.user a step later, which is why the
+    // context holds the request object rather than a snapshot of its fields.
+    consumer
+      .apply(RequestContextMiddleware, RequestIdMiddleware)
+      .forRoutes('*');
   }
 }
