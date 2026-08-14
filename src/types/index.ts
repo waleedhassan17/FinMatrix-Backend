@@ -130,6 +130,9 @@ export type InventoryAdjustmentReason =
   | 'theft'
   | 'correction'
   | 'obsolescence'
+  // Written only by reverseAdjustment (G7); not selectable by a user, and the
+  // marker that stops a reversal being reversed again.
+  | 'reversal'
   | 'other';
 
 export type StockTransferStatus = 'draft' | 'in_transit' | 'completed' | 'cancelled';

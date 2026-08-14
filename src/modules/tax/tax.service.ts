@@ -8,6 +8,7 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_CASH, ACCT_TAX_PAYABLE, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
+import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 
 @Injectable()
 export class TaxService {
@@ -137,6 +138,70 @@ export class TaxService {
         await payRepo.save(saved);
       }
       return saved;
+    });
+  }
+
+  /**
+   * Unwind a tax payment (audit gap G7).
+   *
+   * Tax payments had no correction path at all: a remittance keyed wrong could
+   * only be fixed with a manual journal entry. Reverses Dr Cash / Cr Sales Tax
+   * Payable — putting the liability back and the money back in the bank —
+   * through the shared posting engine, so the period lock and the reconciled
+   * lock both apply, and the original entry stays on file.
+   */
+  async deletePayment(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const payment = await em.findOne(TaxPayment, { where: { id, companyId } });
+      if (!payment) {
+        throw new NotFoundException({
+          code: 'TAX_PAYMENT_NOT_FOUND',
+          message: 'Tax payment not found',
+        });
+      }
+
+      // A remittance that has been reconciled against a bank statement must
+      // not be unwound silently — undo the reconciliation first.
+      await assertNotReconciled(em, companyId, [payment.id], 'tax payment');
+
+      if (payment.journalEntryId) {
+        const amount = toDecimal(payment.amount);
+        const taxPayable = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_TAX_PAYABLE,
+          em,
+        );
+        const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
+        await this.posting.createEntry(em, {
+          companyId,
+          createdBy: userId,
+          date: new Date().toISOString().slice(0, 10),
+          memo: `Reverse tax payment ${payment.period}`,
+          status: 'posted',
+          sourceType: 'tax_payment_void',
+          sourceId: payment.id,
+          reversalOfId: payment.journalEntryId,
+          lines: [
+            {
+              accountId: cash.id,
+              description: 'Reverse tax remittance',
+              debit: amount.toFixed(4),
+              credit: '0',
+              lineOrder: 0,
+            },
+            {
+              accountId: taxPayable.id,
+              description: 'Restore tax liability',
+              debit: '0',
+              credit: amount.toFixed(4),
+              lineOrder: 1,
+            },
+          ],
+        });
+      }
+
+      await em.remove(payment);
+      return { id, deleted: true };
     });
   }
 

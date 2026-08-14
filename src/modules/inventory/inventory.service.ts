@@ -23,6 +23,7 @@ import {
   MovementQueryDto,
 } from './dto/inventory.dto';
 import { toDecimal } from '../../common/utils/money.util';
+import { InventoryAdjustmentReason } from '../../types';
 import { assertNonNegativeQuantity } from '../../common/utils/stock.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
@@ -156,6 +157,146 @@ export class InventoryService {
 
       return { item, adjustment: adj, movement: move };
     });
+  }
+
+  /**
+   * Unwind an inventory adjustment (audit gap G7).
+   *
+   * Adjustments had no correction path: a shrinkage written off against the
+   * wrong item, or the wrong quantity, could only be fixed by adjusting again
+   * — which leaves two unexplained entries instead of one reversal.
+   *
+   * Puts the quantity back, values the reversal at the SAME unit cost the
+   * original used (recomputed from the entry's own value, not today's average,
+   * so a drifted cost cannot leave residue in Inventory or 6400), and posts a
+   * mirrored entry through the shared engine so the period lock applies.
+   */
+  async reverseAdjustment(companyId: string, id: string, userId: string) {
+    return this.dataSource.transaction(async (em) => {
+      const adjRepo = em.getRepository(InventoryAdjustment);
+      const itemRepo = em.getRepository(InventoryItem);
+      const moveRepo = em.getRepository(InventoryMovement);
+
+      const adj = await adjRepo.findOne({ where: { id, companyId } });
+      if (!adj) throw new NotFoundException('Inventory adjustment not found');
+      if (adj.reason === 'reversal') {
+        throw new BadRequestException('That adjustment is itself a reversal');
+      }
+
+      const item = await itemRepo.findOne({ where: { id: adj.itemId, companyId } });
+      if (!item) throw new NotFoundException('Item not found');
+
+      // Value the reversal at the ORIGINAL cost basis, recovered from the
+      // entry that was posted, so it cancels that entry exactly.
+      const variance = toDecimal(adj.variance);
+      const originalValue = await this.originalAdjustmentValue(em, adj);
+      const originalUnitCost = variance.isZero()
+        ? new Decimal(0)
+        : originalValue.dividedBy(variance.abs());
+
+      const onHand = toDecimal(item.quantityOnHand);
+      const restored = onHand.minus(variance);
+      assertNonNegativeQuantity(item.name, restored);
+
+      // Keep the subledger tied to GL 1200: total value must move by exactly
+      // the amount the reversing entry posts (see credit-memo restock).
+      if (restored.greaterThan(0)) {
+        const nextValue = onHand
+          .times(toDecimal(item.unitCost))
+          .minus(variance.times(originalUnitCost));
+        item.unitCost = nextValue
+          .dividedBy(restored)
+          .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+          .toFixed(4);
+      }
+      item.quantityOnHand = restored.toFixed(4);
+      await itemRepo.save(item);
+
+      const today = new Date().toISOString().split('T')[0];
+      const reversal = await adjRepo.save(
+        adjRepo.create({
+          companyId,
+          itemId: adj.itemId,
+          date: today,
+          previousQty: onHand.toFixed(4),
+          newQty: restored.toFixed(4),
+          variance: variance.negated().toFixed(4),
+          reason: 'reversal' as InventoryAdjustmentReason,
+          notes: `Reversal of adjustment ${adj.id}`,
+          createdBy: userId,
+        }),
+      );
+
+      await moveRepo.save(
+        moveRepo.create({
+          companyId,
+          itemId: adj.itemId,
+          date: today,
+          type: 'adjustment',
+          quantityChange: variance.negated().toFixed(4),
+          balanceAfter: restored.toFixed(4),
+          description: `Reversal of adjustment ${adj.id}`,
+          sourceType: 'inventory_adjustment_void',
+          sourceId: reversal.id,
+          createdBy: userId,
+        }),
+      );
+
+      if (originalValue.greaterThan(0)) {
+        const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+        const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
+          em,
+          companyId,
+          ACCT_INVENTORY_ADJUSTMENT,
+        );
+        const amount = originalValue.toFixed(4);
+        // Mirror of postInventoryAdjustmentJe: the original write-down debited
+        // 6400 and credited 1200, so the reversal does the opposite.
+        const wasIncrease = variance.greaterThan(0);
+        const lines = wasIncrease
+          ? [
+              { accountId: adjustmentAcct.id, debit: amount, credit: '0' },
+              { accountId: inventoryAcct.id, debit: '0', credit: amount },
+            ]
+          : [
+              { accountId: inventoryAcct.id, debit: amount, credit: '0' },
+              { accountId: adjustmentAcct.id, debit: '0', credit: amount },
+            ];
+        const entry = await this.posting.createEntry(em, {
+          companyId,
+          createdBy: userId,
+          date: today,
+          memo: `Reverse inventory adjustment ${item.sku}`,
+          status: 'posted',
+          lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
+          sourceType: 'inventory_adjustment_void',
+          sourceId: reversal.id,
+          reversalOfId: adj.journalEntryId,
+        });
+        reversal.journalEntryId = entry.id;
+        await adjRepo.save(reversal);
+      }
+
+      return { item, adjustment: reversal, reversedId: adj.id };
+    });
+  }
+
+  /**
+   * The value the original adjustment actually posted, read back from its own
+   * journal entry. Recomputing from today's unit cost would size the reversal
+   * wrongly whenever the weighted average has moved since.
+   */
+  private async originalAdjustmentValue(
+    em: import('typeorm').EntityManager,
+    adj: InventoryAdjustment,
+  ): Promise<Decimal> {
+    if (!adj.journalEntryId) return new Decimal(0);
+    const rows = await em.query(
+      `SELECT COALESCE(SUM(debit), 0) AS total
+         FROM journal_entry_lines WHERE entry_id = $1`,
+      [adj.journalEntryId],
+    );
+    return toDecimal(rows[0]?.total);
   }
 
   // Transfer

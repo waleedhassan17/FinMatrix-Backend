@@ -88,6 +88,18 @@ export class TaxController {
     return this.svc.createPayment(companyId, dto, user.id);
   }
 
+  // G7: tax payments previously had no correction path — a mis-keyed
+  // remittance could only be fixed with a manual journal entry.
+  @Delete('payments/:id')
+  @Roles('admin')
+  deletePayment(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.deletePayment(companyId, id, user.id);
+  }
+
   @Get('liability')
   @Roles('admin', 'staff')
   getLiability(

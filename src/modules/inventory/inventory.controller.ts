@@ -108,6 +108,18 @@ export class InventoryController {
   }
 
   // Transfers
+  // G7: adjustments previously had no correction path — a mistake could only
+  // be papered over with a second adjustment.
+  @Post('adjustments/:id/reverse')
+  @Roles('admin')
+  reverseAdjustment(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.reverseAdjustment(companyId, id, user.id);
+  }
+
   @Post('transfers')
   @Roles('admin', 'staff')
   createTransfer(
