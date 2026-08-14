@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -201,7 +205,23 @@ export class StorageService {
       sign_url: true,
       secure: true,
     });
-    const res = await fetch(signedUrl);
+    // A non-OK response means the asset is gone (null -> the caller's 404).
+    // A THROWN fetch is different: DNS failure, no egress, TLS problem — the
+    // asset may be perfectly fine and we simply cannot reach it. That used to
+    // escape as an unhandled 500 with a stack trace; report it as an upstream
+    // problem so the client can retry instead of concluding the file is lost.
+    let res: Awaited<ReturnType<typeof fetch>>;
+    try {
+      res = await fetch(signedUrl);
+    } catch (err) {
+      this.logger.error(
+        `Cloudinary unreachable for ${key}: ${(err as Error).message}`,
+      );
+      throw new ServiceUnavailableException({
+        code: 'STORAGE_UNREACHABLE',
+        message: 'File storage is temporarily unreachable. Please try again.',
+      });
+    }
     if (!res.ok || !res.body) {
       this.logger.error(`Cloudinary fetch failed for ${key}: HTTP ${res.status}`);
       return null;

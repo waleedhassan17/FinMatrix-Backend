@@ -62,6 +62,16 @@ import {
 
 loadEnv();
 
+/**
+ * WAREHOUSE-ONLY BUILD: seed only the warehouse demo by default.
+ *
+ * New registrations are coerced to `warehouse` and the app ships that tier
+ * alone, so the small_business and large_org demos exercise nothing. Set
+ * SEED_LEGACY_TIERS=true to seed all three again.
+ */
+const SEED_LEGACY_TIERS =
+  (process.env.SEED_LEGACY_TIERS ?? '').toLowerCase() === 'true';
+
 const PASSWORD = '123456';
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 const TODAY = new Date();
@@ -308,7 +318,11 @@ async function run() {
   };
 
   // ═══ 1. SUKOON — small business (service-only books) ═══
-  {
+  // WAREHOUSE-ONLY BUILD: skipped by default. Registrations are coerced to
+  // `warehouse` and the app ships that tier alone, so seeding two companies
+  // nothing exercises just slows every run and leaves demo data that has to be
+  // reasoned about. Set SEED_LEGACY_TIERS=true to bring them back.
+  if (SEED_LEGACY_TIERS) {
     console.log('— Sukoon (small_business_6mo)');
     const { cid, uid } = await ensureCompany(
       'Sukoon', 'sukoon@gmail.com', 'Sukoon Admin', 'small_business', 'small_business_6mo', 'Consulting',
@@ -379,7 +393,7 @@ async function run() {
   }
 
   // ═══ 2. METROMATRIX — large organization (payroll + budgets, no deliveries) ═══
-  {
+  if (SEED_LEGACY_TIERS) {
     console.log('\n— MetroMatrix (large_org_6mo)');
     const { cid, uid } = await ensureCompany(
       'MetroMatrix', 'metromatrix@gmail.com', 'MetroMatrix Admin', 'large_org', 'large_org_6mo', 'Distribution Services',
@@ -701,8 +715,10 @@ async function run() {
   }
 
   console.log(`\n${tieFailures === 0 ? '✓ ALL TIES HOLD' : `✗ ${tieFailures} TIE FAILURES`} — demo companies ready.`);
-  console.log('  Sukoon        sukoon@gmail.com / 123456        (small business)');
-  console.log('  MetroMatrix   metromatrix@gmail.com / 123456   (large organization)');
+  if (SEED_LEGACY_TIERS) {
+    console.log('  Sukoon        sukoon@gmail.com / 123456        (small business)');
+    console.log('  MetroMatrix   metromatrix@gmail.com / 123456   (large organization)');
+  }
   console.log('  Warehouse Co  warehouse@gmail.com / 123456     (warehouse)');
   console.log('  Riders        rider1@warehouseco.com, rider2@warehouseco.com / 123456');
   await app.close();

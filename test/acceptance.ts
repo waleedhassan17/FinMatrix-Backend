@@ -493,12 +493,19 @@ async function run() {
   const itemsRes = await api('GET', '/inventory/items');
   const itemsRaw = itemsRes.body?.data ?? itemsRes.body?.items ?? itemsRes.body;
   const items = (Array.isArray(itemsRaw) ? itemsRaw : []) as any[];
-  const item = items.find((i) => n(i.unitCost) > 0);
-  const hasInventory = itemsRes.status < 300 && !!item;
+  // Pick the BEST-STOCKED costed item, not merely the first costed one. This
+  // suite sells 3 and then 2 more, and re-running it against the same database
+  // depletes whatever it picked last time — after which the sale is correctly
+  // refused with INSUFFICIENT_STOCK and every later assertion falls over for a
+  // reason that has nothing to do with the code under test.
+  const item = items
+    .filter((i) => n(i.unitCost) > 0)
+    .sort((a, b) => n(b.quantityOnHand) - n(a.quantityOnHand))[0];
+  const hasInventory = itemsRes.status < 300 && !!item && n(item.quantityOnHand) >= 5;
   console.log(
     hasInventory
-      ? '  · inventory available — COGS and restock assertions included'
-      : `  · inventory not on this tier (${itemsRes.status}) — invoice runs without an item line`,
+      ? `  · inventory available (${item.name}, ${n(item.quantityOnHand)} on hand) — COGS and restock assertions included`
+      : `  · no stocked item available (status ${itemsRes.status}) — invoice runs without an item line`,
   );
 
   // ── #2 Issue invoice → ledger (COGS + qty down when stock is tracked) ──
@@ -558,8 +565,16 @@ async function run() {
     const qtyAfterVoid = await readQty();
     ok('#10 stock restored on void', approx(qtyAfterVoid - qtyBeforeVoid, 2), `Δ=${qtyAfterVoid - qtyBeforeVoid}`);
   }
-  ok('#10 A/R released on void', approx(await acctBalance('1100'), arBeforeVoid - 200),
-    `before=${arBeforeVoid} after=${await acctBalance('1100')}`);
+  // Derive the expected release from the invoice itself: the line price is the
+  // item's selling price when stock is tracked and a fixed 100 when it is not,
+  // so a hard-coded figure is only right in one of the two branches.
+  const inv2Total = n(
+    (await api('GET', `/invoices/${inv2.body.id}`)).body?.invoice?.total
+      ?? (await api('GET', `/invoices/${inv2.body.id}`)).body?.total
+      ?? inv2.body?.total,
+  );
+  ok('#10 A/R released on void', approx(await acctBalance('1100'), arBeforeVoid - inv2Total),
+    `before=${arBeforeVoid} after=${await acctBalance('1100')} total=${inv2Total}`);
   await invariants('after void');
 
   // ── #11 Tax payment → Tax Payable down, Cash down ──

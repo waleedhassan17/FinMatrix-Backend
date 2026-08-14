@@ -78,7 +78,13 @@ async function run() {
   const parsed = dbUrl ? parseDatabaseUrl(dbUrl) : null;
 
   const isProd = process.env.NODE_ENV === 'production';
-  const useSsl = isProd || !!dbUrl;
+  // Default SSL on for managed providers, but honour an explicit opt-out —
+  // a plain Postgres (CI service container, self-hosted) has no TLS and the
+  // unconditional form failed with "The server does not support SSL".
+  const sslDisabled =
+    (process.env.DB_SSL ?? '').toLowerCase() === 'false' ||
+    (dbUrl ?? '').includes('sslmode=disable');
+  const useSsl = sslDisabled ? false : isProd || !!dbUrl;
 
   const ds = new DataSource({
     type: 'postgres',

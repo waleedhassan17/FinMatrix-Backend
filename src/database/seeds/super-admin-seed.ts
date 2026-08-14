@@ -34,7 +34,13 @@ async function run() {
       ? {
           type: 'postgres',
           url: process.env.DATABASE_URL,
-          ssl: { rejectUnauthorized: false },
+          // Managed providers need SSL; a plain Postgres has none. Honour the
+          // opt-out instead of failing with "server does not support SSL".
+          ssl:
+            (process.env.DB_SSL ?? '').toLowerCase() === 'false' ||
+            process.env.DATABASE_URL.includes('sslmode=disable')
+              ? false
+              : { rejectUnauthorized: false },
           entities: [User, Company, UserCompany, SubscriptionPlan, CompanySubscription],
           synchronize: true,
         }

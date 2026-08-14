@@ -40,12 +40,26 @@ jobs:
       CORS_ORIGINS: http://localhost:3000
       EMAIL_ENABLED: 'false'
       SWAGGER_ENABLED: 'false'
-      # Credentials the acceptance suite logs in with (see test/acceptance.ts).
+      # The API throttles 100 requests/minute. That protects production from
+      # abuse; in CI the only client is our own harness, and four suites in a
+      # row saturate the window and fail on 429s that say nothing about the
+      # ledger. Raise it here rather than pad the suites with sleeps.
+      # ThrottlerGuard itself is still active and still covered by test #18.
+      THROTTLE_TTL: '60'
+      THROTTLE_LIMIT: '100000'
+      # Credentials the acceptance suites log in with (see test/acceptance.ts).
+      # WAREHOUSE-ONLY BUILD: warehouse is the tier the product ships, and the
+      # only one with inventory and delivery — so it is also the tier that
+      # exercises the most of the accounting engine.
       API_BASE: http://localhost:3000/api/v1
-      ADMIN_EMAIL: metromatrix@gmail.com
+      ADMIN_EMAIL: warehouse@gmail.com
       ADMIN_PASSWORD: '123456'
-      RIDER_EMAIL: saim@metromatrix.com
+      WH_EMAIL: warehouse@gmail.com
+      WH_PASSWORD: '123456'
+      RIDER_EMAIL: rider1@warehouseco.com
       RIDER_PASSWORD: '123456'
+      RIDER2_EMAIL: rider2@warehouseco.com
+      RIDER2_PASSWORD: '123456'
 
     steps:
       - uses: actions/checkout@v4
@@ -60,14 +74,12 @@ jobs:
       - name: Run migrations
         run: npm run migration:run
 
-      - name: Seed chart of accounts + acceptance demo data
-        run: |
-          npm run seed:coa
-          npm run seed:metromatrix
-          npm run seed:metromatrix:ledger
-          # The accounting suites run against the warehouse tier, the only one
-          # with inventory and delivery.
-          npm run seed:tier-demos
+      # Seeds the warehouse demo company and its two riders. The chart of
+      # accounts needs no separate step — CompaniesService seeds it per company
+      # on creation. (The old `seed:coa` step pointed at a file that has never
+      # existed in this repo, so it failed the job on every run.)
+      - name: Seed the warehouse demo
+        run: npm run seed:tier-demos
 
       - name: Build
         run: npm run build
@@ -85,9 +97,6 @@ jobs:
       # that the period lock holds for every document type.
       - name: Run accounting suite
         run: npm run test:accounting
-        env:
-          WH_EMAIL: warehouse@gmail.com
-          WH_PASSWORD: '123456'
 
       # Last, and non-negotiable: the twelve ledger invariants. Any query in
       # qa/invariants.sql returning a row fails the build.

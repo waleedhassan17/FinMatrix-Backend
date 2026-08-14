@@ -25,10 +25,18 @@ export default registerAs(
     const dbUrl = process.env.DATABASE_URL;
     const parsed = dbUrl ? parseDatabaseUrl(dbUrl) : null;
 
-    // When DATABASE_URL is present (Heroku/Render/etc), force SSL on with
-    // rejectUnauthorized=false because most managed providers use self-signed certs.
+    // When DATABASE_URL is present (Heroku/Render/etc) default SSL on, because
+    // most managed providers require it and present self-signed certs.
+    //
+    // "Default", not "force": this used to be unconditional, so DB_SSL=false
+    // was ignored whenever DATABASE_URL was set and a plain Postgres with no
+    // TLS failed to connect at all — every CI service container and every
+    // self-hosted database. Opt out with DB_SSL=false or ?sslmode=disable.
+    const sslDisabled =
+      (process.env.DB_SSL ?? '').toLowerCase() === 'false' ||
+      (dbUrl ?? '').includes('sslmode=disable');
     const sslFromEnv = process.env.DB_SSL === 'true';
-    const useSsl = parsed ? true : sslFromEnv;
+    const useSsl = sslDisabled ? false : parsed ? true : sslFromEnv;
     const rejectUnauthorized = parsed
       ? process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
       : process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';

@@ -57,18 +57,33 @@ async function req(method: string, path: string, body?: unknown) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  let parsed: any = null;
-  try {
-    parsed = await res.json();
-  } catch {
-    /* empty */
+  // The API throttles (THROTTLE_LIMIT requests per THROTTLE_TTL). Running the
+  // accounting suites back to back trips it, and a 429 is not a test failure —
+  // back off and retry rather than reporting rate limiting as a broken ledger.
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 429 && attempt < 3) {
+      // /auth/signin is capped at 5 per minute by a route-level @Throttle —
+      // brute-force protection worth keeping, and not something a test should
+      // turn off. Wait out the whole window for auth; back off more gently for
+      // everything else, which only trips the global limit.
+      const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
+      console.log(`    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    let parsed: any = null;
+    try {
+      parsed = await res.json();
+    } catch {
+      /* empty */
+    }
+    return { status: res.status, body: parsed };
   }
-  return { status: res.status, body: parsed };
 }
 const data = (r: { body: any }) => r.body?.data ?? r.body;
 const errCode = (r: { body: any }) => r.body?.error?.code ?? r.body?.code;
