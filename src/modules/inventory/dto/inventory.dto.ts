@@ -24,7 +24,10 @@ export class CreateInventoryItemDto {
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 100) category?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 32) unitOfMeasure?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['fifo', 'lifo', 'average'] as InventoryCostMethod[]) costMethod?: InventoryCostMethod;
+  // Weighted average only — see InventoryCostMethod. Anything else is rejected
+  // rather than silently stored and ignored.
+  @ApiPropertyOptional({ enum: ['average'], default: 'average' })
+  @IsOptional() @IsEnum(['average'] as InventoryCostMethod[]) costMethod?: InventoryCostMethod;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() unitCost?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() sellingPrice?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() reorderPoint?: string;

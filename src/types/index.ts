@@ -101,7 +101,20 @@ export type PurchaseOrderStatus =
 
 export type AgencyType = 'manufacturing' | 'supply' | 'distribution';
 
-export type InventoryCostMethod = 'fifo' | 'lifo' | 'average';
+/**
+ * Weighted average is the ONLY costing method this system implements.
+ *
+ * 'fifo' and 'lifo' used to be accepted here and stored on the item, but
+ * nothing ever branched on the value: every outflow — invoice COGS,
+ * credit-memo restock, delivery dispatch, inventory approvals, adjustments —
+ * values stock at the item's running weighted-average unit_cost, and no cost
+ * layers are tracked anywhere. Offering the other two labels misstated COGS
+ * and inventory for anyone who picked one (audit gap G6).
+ *
+ * Reintroducing them means per-receipt cost layers consumed in order, not a
+ * new enum value.
+ */
+export type InventoryCostMethod = 'average';
 
 export type InventoryMovementType =
   | 'adjustment'

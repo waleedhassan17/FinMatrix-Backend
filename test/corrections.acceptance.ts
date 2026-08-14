@@ -19,7 +19,10 @@
  *   D. Inventory adjustment: write-down Dr 6400 / Cr 1200, write-up reversed,
  *      and quantity never moves without a journal entry
  *   E. Tax payment: Dr Sales Tax Payable / Cr Cash, liability drops
- *   F. Invariants I1-I5, I8, I11 after every step
+ *   F. Weighted-average costing behaves as labelled, and fifo/lifo are now
+ *      rejected rather than silently stored and ignored (gap G6)
+ *
+ * Invariants I1-I5, I8 and I11 are re-checked after every step.
  *
  * Usage: boot the API, then
  *   API_BASE=http://localhost:3000/api/v1 \
@@ -483,6 +486,78 @@ async function main() {
       before: liabBefore?.taxRemitted, after: liabAfter?.taxRemitted,
     });
   ok('E the payment row links to its journal entry', !!tp.journalEntryId, tp);
+
+  // ══ F. Weighted-average costing behaves as labelled (G6) ═══════
+  // costMethod used to accept fifo/lifo while every code path valued stock at
+  // the running weighted average. Prove the one remaining method is real.
+  console.log('\n— F: weighted-average costing (G6)');
+
+  const sku = `G6-AVG-${Date.now()}`;
+  const newItem = data(await req('POST', '/inventory/items', {
+    sku,
+    name: 'G6 costing probe',
+    unitOfMeasure: 'unit',
+    costMethod: 'average',
+    unitCost: '0',
+    sellingPrice: '200',
+  })) as any;
+  ok('F item created with costMethod=average', !!newItem?.id, newItem);
+
+  const badMethod = await req('POST', '/inventory/items', {
+    sku: `${sku}-BAD`,
+    name: 'G6 rejects fifo',
+    unitOfMeasure: 'unit',
+    costMethod: 'fifo',
+    unitCost: '0',
+    sellingPrice: '200',
+  });
+  ok('F the API now REJECTS fifo instead of silently storing it',
+    badMethod.status === 400, badMethod.status);
+
+  // Buy 10 @ 100, then 10 @ 120 → average must be 110.
+  const avgPo = data(await req('POST', '/purchase-orders', {
+    vendorId: vendor.id,
+    orderDate: TODAY,
+    lines: [{ description: 'first lot', orderedQty: '10', unitCost: '100', itemId: newItem.id }],
+  })) as any;
+  await req('POST', `/purchase-orders/${avgPo.id}/receive`, {
+    lines: [{ lineId: avgPo.lines[0].id, receivedQty: '10' }],
+  });
+  const avgPo2 = data(await req('POST', '/purchase-orders', {
+    vendorId: vendor.id,
+    orderDate: TODAY,
+    lines: [{ description: 'second lot', orderedQty: '10', unitCost: '120', itemId: newItem.id }],
+  })) as any;
+  await req('POST', `/purchase-orders/${avgPo2.id}/receive`, {
+    lines: [{ lineId: avgPo2.lines[0].id, receivedQty: '10' }],
+  });
+
+  const priced = data(await req('GET', `/inventory/items/${newItem.id}`)) as any;
+  ok('F 10 @ 100 + 10 @ 120 → unit cost 110 (average, not FIFO 100 / LIFO 120)',
+    near(n(priced.unitCost), 110), { unitCost: priced.unitCost });
+  ok('F on hand is 20', near(n(priced.quantityOnHand), 20), priced.quantityOnHand);
+
+  // Sell 5 → COGS 550 (5 × 110). FIFO would be 500, LIFO 600.
+  const cogsBeforeSale = await acctBalance('5000');
+  const saleRes = await req('POST', '/invoices', {
+    customerId: customer.id,
+    invoiceDate: TODAY,
+    dueDate: TODAY,
+    status: 'sent',
+    lines: [{ description: 'G6 sale', quantity: '5', unitPrice: '200', taxRate: '0', itemId: newItem.id }],
+  });
+  ok('F sale posted', saleRes.status === 201, saleRes.body);
+  const cogsAfterSale = await acctBalance('5000');
+  ok('F selling 5 costs 550 — average, not FIFO 500 or LIFO 600',
+    near(cogsAfterSale - cogsBeforeSale, 550), {
+      delta: cogsAfterSale - cogsBeforeSale,
+    });
+
+  const afterSale = data(await req('GET', `/inventory/items/${newItem.id}`)) as any;
+  ok('F remaining inventory is 15 × 110 = 1650',
+    near(n(afterSale.quantityOnHand) * n(afterSale.unitCost), 1650), {
+      qty: afterSale.quantityOnHand, cost: afterSale.unitCost,
+    });
 
   await invariants('final');
 
