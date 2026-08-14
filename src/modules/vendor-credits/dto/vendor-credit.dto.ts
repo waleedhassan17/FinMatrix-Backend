@@ -6,7 +6,15 @@ import {
 
 export class VendorCreditLineDto {
   @ApiProperty() @IsString() description!: string;
-  @ApiProperty({ example: '100' }) @IsNumberString() amount!: string;
+  @ApiProperty({ example: '100', description: 'Net amount, excluding tax.' })
+  @IsNumberString() amount!: string;
+  @ApiPropertyOptional({
+    example: '17',
+    description:
+      'Tax percent to reverse out of Sales Tax Recoverable (1300) — the input ' +
+      'tax claimed on the original bill. Omit or 0 for a tax-free credit.',
+  })
+  @IsOptional() @IsNumberString() taxRate?: string;
   @ApiPropertyOptional({ description: 'Expense/inventory account to credit.' })
   @IsOptional() @IsUUID() accountId?: string;
 }

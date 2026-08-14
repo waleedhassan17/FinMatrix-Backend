@@ -6,7 +6,7 @@ import { VendorCredit, VendorCreditStatus } from './entities/vendor-credit.entit
 import { VendorCreditLine } from './entities/vendor-credit-line.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import {
-  ApplyVendorCreditDto, CreateVendorCreditDto, ListVendorCreditsQueryDto,
+  ApplyVendorCreditDto, CreateVendorCreditDto, ListVendorCreditsQueryDto, VendorCreditLineDto,
 } from './dto/vendor-credit.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, toDecimal } from '../../common/utils/money.util';
@@ -15,7 +15,7 @@ import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
-import { ACCT_AP, ACCT_COGS } from '../accounts/accounts.constants';
+import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 
 @Injectable()
 export class VendorCreditsService {
@@ -58,7 +58,7 @@ export class VendorCreditsService {
       if (!vendor) throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
 
       const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
-      const total = dto.lines.reduce((sum, l) => sum.plus(toDecimal(l.amount)), new Decimal(0));
+      const totals = this.computeTotals(dto.lines);
       const year = parseInt(dto.date.slice(0, 4), 10);
       const seq = await nextYearlySequence(manager, 'vendor_credits', companyId, year, 'date', 'VC', 'vendor_credit_number');
       const number = formatYearlyRef('VC', year, seq);
@@ -66,22 +66,34 @@ export class VendorCreditsService {
       const vc = manager.create(VendorCredit, {
         companyId, vendorId: dto.vendorId, vendorCreditNumber: number, date: dto.date,
         originalBillId: dto.originalBillId ?? null, reason: dto.reason ?? null,
-        total: total.toFixed(4), amountApplied: '0', balance: total.toFixed(4),
+        subtotal: totals.subtotal, taxAmount: totals.taxAmount, total: totals.total,
+        amountApplied: '0', balance: totals.total,
         status: 'open' as VendorCreditStatus, journalEntryId: null, createdBy: userId,
       });
       await manager.save(vc);
       vc.lines = dto.lines.map((l, i) => manager.create(VendorCreditLine, {
         vendorCreditId: vc.id, accountId: l.accountId ?? cogs.id, description: l.description,
-        amount: toDecimal(l.amount).toFixed(4), lineOrder: i,
+        amount: toDecimal(l.amount).toFixed(4),
+        taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineOrder: i,
       }));
       await manager.save(vc.lines);
 
-      // JE: DR Accounts Payable (reduce owed), CR expense account(s) per line.
+      // JE (mirror of the credit memo, on the AP side): DR Accounts Payable for
+      // the gross the vendor no longer owes us; CR the expense/inventory
+      // account(s) for the net; CR Sales Tax Recoverable (1300) for the input
+      // tax originally claimed on the bill, which is no longer recoverable.
       const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
       const jeLines = [
-        { accountId: ap.id, description: `Vendor credit ${number}`, debit: total.toFixed(4), credit: '0', lineOrder: 0 },
+        { accountId: ap.id, description: `Vendor credit ${number}`, debit: totals.total, credit: '0', lineOrder: 0 },
         ...vc.lines.map((l, i) => ({ accountId: l.accountId!, description: l.description, debit: '0', credit: l.amount, lineOrder: i + 1 })),
       ];
+      if (toDecimal(totals.taxAmount).greaterThan(0)) {
+        const inputTax = await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_INPUT_TAX);
+        jeLines.push({
+          accountId: inputTax.id, description: 'Input tax reversed on vendor credit',
+          debit: '0', credit: totals.taxAmount, lineOrder: jeLines.length,
+        });
+      }
       const entry = await this.posting.createEntry(manager, {
         companyId, createdBy: userId, date: dto.date, memo: `Vendor credit ${number}`,
         status: 'posted', lines: jeLines, sourceType: 'vendor_credit', sourceId: vc.id,
@@ -89,7 +101,8 @@ export class VendorCreditsService {
       vc.journalEntryId = entry.id;
       await manager.save(vc);
 
-      vendor.balance = addMoney(vendor.balance, total.negated().toFixed(4)).toFixed(4);
+      // The vendor owes us the gross, tax included.
+      vendor.balance = addMoney(vendor.balance, toDecimal(totals.total).negated().toFixed(4)).toFixed(4);
       await manager.save(vendor);
       return vc;
     });
@@ -123,11 +136,19 @@ export class VendorCreditsService {
         throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a vendor credit that has been applied' });
       }
       if (vc.journalEntryId) {
+        // Exact mirror of create(), including the input-tax leg, so the void
+        // cancels the original entry to the cent.
         const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
         const jeLines = [
           { accountId: ap.id, debit: '0', credit: vc.total, lineOrder: 0 },
           ...vc.lines.map((l, i) => ({ accountId: l.accountId!, debit: l.amount, credit: '0', lineOrder: i + 1 })),
         ];
+        if (toDecimal(vc.taxAmount).greaterThan(0)) {
+          const inputTax = await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_INPUT_TAX);
+          jeLines.push({
+            accountId: inputTax.id, debit: vc.taxAmount, credit: '0', lineOrder: jeLines.length,
+          });
+        }
         await this.posting.createEntry(manager, {
           companyId, createdBy: userId, date: new Date().toISOString().slice(0, 10),
           memo: `Void vendor credit ${vc.vendorCreditNumber}`, status: 'posted', lines: jeLines,
@@ -141,6 +162,26 @@ export class VendorCreditsService {
       await manager.save(vc);
       return vc;
     });
+  }
+
+  /**
+   * Net, tax and gross for the credit. Tax is computed per line so a credit
+   * spanning taxed and zero-rated goods reverses only the input tax actually
+   * claimed — the same proportional treatment credit memos use on the AR side.
+   */
+  private computeTotals(lines: VendorCreditLineDto[]) {
+    let subtotal = new Decimal(0);
+    let tax = new Decimal(0);
+    for (const l of lines) {
+      const net = toDecimal(l.amount);
+      subtotal = subtotal.plus(net);
+      tax = tax.plus(net.times(toDecimal(l.taxRate ?? '0')).dividedBy(100));
+    }
+    return {
+      subtotal: subtotal.toFixed(4),
+      taxAmount: tax.toFixed(4),
+      total: subtotal.plus(tax).toFixed(4),
+    };
   }
 
   async delete(companyId: string, id: string, userId: string) {

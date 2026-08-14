@@ -23,6 +23,15 @@ export class VendorCredit extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true })
   reason!: string | null;
 
+  // G3: a vendor credit reverses the net cost AND the recoverable input tax
+  // claimed on the original bill. total = subtotal + taxAmount, mirroring how
+  // credit memos already split the AR side.
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
+  subtotal!: string;
+
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  taxAmount!: string;
+
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   total!: string;
 

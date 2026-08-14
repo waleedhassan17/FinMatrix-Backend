@@ -16,8 +16,13 @@ export class VendorCreditLine {
   @Column({ type: 'text' })
   description!: string;
 
+  /** Net amount, excluding tax. */
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   amount!: string;
+
+  /** Percent, e.g. '17.0000'. Drives the credit to Input Tax (1300). */
+  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  taxRate!: string;
 
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;

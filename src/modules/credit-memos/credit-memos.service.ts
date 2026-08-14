@@ -237,9 +237,24 @@ export class CreditMemosService {
       const item = await itemRepo.findOne({ where: { id: line.itemId, companyId: cm.companyId } });
       if (!item) continue;
       const qty = toDecimal(line.quantity);
-      const cost = qty.times(toDecimal(item.unitCost));
+
+      // Value the return at the cost FROZEN when the memo was issued. Re-reading
+      // item.unitCost here would use whatever the weighted-average has drifted
+      // to since — a single purchase at a new price is enough — and the void
+      // would then not cancel the original entry, leaving residue in Inventory
+      // and COGS. Memos issued before this column existed fall back to the
+      // item cost, which is the best available basis for them.
+      const unitCost = reverse
+        ? toDecimal(line.restockUnitCost ?? item.unitCost)
+        : toDecimal(item.unitCost);
+      const cost = qty.times(unitCost);
       if (cost.lessThanOrEqualTo(0)) continue;
       total = total.plus(cost);
+
+      if (!reverse) {
+        line.restockUnitCost = unitCost.toFixed(4);
+        await manager.getRepository(CreditMemoLine).save(line);
+      }
 
       const onHand = toDecimal(item.quantityOnHand);
       // Voiding a return pulls the restocked goods back out; if they have

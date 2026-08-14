@@ -30,6 +30,22 @@ export class CreditMemoLine {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'line_total' })
   lineTotal!: string;
 
+  /**
+   * G3: the unit cost this restock was actually valued at, frozen when the memo
+   * was issued. Voiding re-reads THIS rather than the item's current
+   * weighted-average, so the reversal exactly cancels the original entry even
+   * if a purchase has re-averaged the item since. Mirrors how delivery lines
+   * freeze unit_cost at dispatch. NULL on memos issued before this change.
+   */
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    nullable: true,
+    name: 'restock_unit_cost',
+  })
+  restockUnitCost!: string | null;
+
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;
 
