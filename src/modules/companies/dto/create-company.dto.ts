@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsDateString,
   IsEmail,
   IsIn,
   IsInt,
@@ -150,11 +151,10 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsBoolean()
   setupCompleted?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Close the books up to this date (YYYY-MM-DD); blocks postings on/before it. Send null to reopen.',
-  })
-  @IsOptional()
-  booksLockedUntil?: string | null;
+  // booksLockedUntil is deliberately NOT updatable here. Closing the books
+  // goes through POST :companyId/period-close, which tier-gates the action and
+  // stamps books_locked_at — the timestamp that makes a back-dated posting
+  // detectable. Setting the lock through a generic field edit would skip both.
 
   @ApiPropertyOptional({
     description: 'GST/Sales-tax registered: reclaim input tax on bills to a recoverable asset (1300).',
@@ -170,6 +170,21 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional()
   @IsBoolean()
   inventoryEnabled?: boolean;
+}
+
+/**
+ * G4: closing the books is a deliberate accounting act, not a field edit.
+ * It goes through its own endpoint so it can be tier-gated by `periodClose`,
+ * validated, and stamped with the time the lock was applied — which is what
+ * makes back-dating detectable (see Company.booksLockedAt).
+ */
+export class ClosePeriodDto {
+  @ApiProperty({
+    example: '2026-07-31',
+    description: 'Close the books through this date. Postings dated on or before it are rejected.',
+  })
+  @IsDateString()
+  lockDate!: string;
 }
 
 export class JoinCompanyDto {

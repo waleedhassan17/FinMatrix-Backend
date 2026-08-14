@@ -177,6 +177,20 @@ async function main() {
       ],
       ['I8 invoice math', `SELECT 1 FROM invoices WHERE total - amount_paid <> balance`],
       ['I11 negative stock', `SELECT 1 FROM inventory_items WHERE quantity_on_hand < 0`],
+      // Inventory subledger must tie to its control account. Any path that
+      // moves GL 1200 by one amount while moving qty x unit_cost by another
+      // shows up here — which is exactly how freezing the credit-memo restock
+      // cost was caught breaking the weighted average.
+      [
+        'inventory subledger = GL 1200',
+        `SELECT 1 FROM (
+           SELECT (SELECT COALESCE(SUM(l.debit-l.credit),0)
+                     FROM journal_entry_lines l JOIN accounts a ON a.id=l.account_id
+                    WHERE a.company_id = '${COMPANY}' AND a.account_number='1200') AS gl,
+                  (SELECT COALESCE(SUM(quantity_on_hand*unit_cost),0)
+                     FROM inventory_items WHERE company_id = '${COMPANY}') AS val
+         ) t WHERE abs(t.gl - t.val) > 0.01`,
+      ],
     ];
     for (const [name, sql] of checks) {
       const { rows } = await db.query(sql);

@@ -262,6 +262,28 @@ export class CreditMemosService {
       // chk_no_negative_stock as a raw 500 (I11).
       if (reverse) assertSufficientStock(item.name, onHand, qty);
       const newQty = reverse ? onHand.minus(qty) : onHand.plus(qty);
+
+      // Fold the movement back into the weighted average, exactly as a
+      // purchase receipt does. The journal entry above moves Inventory 1200 by
+      // qty × the frozen cost, so unless the average absorbs those units at
+      // that same cost, the valuation report (qty × unit_cost) drifts away
+      // from the control account by qty × (current average − frozen cost).
+      //   restock: (Q·A + q·f) / (Q + q)
+      //   void:    (Q·A − q·f) / (Q − q)
+      // Both move total value by exactly q·f, which is what keeps the
+      // subledger tied to the GL.
+      if (newQty.greaterThan(0)) {
+        const currentValue = onHand.times(toDecimal(item.unitCost));
+        const movedValue = qty.times(unitCost);
+        const nextValue = reverse
+          ? currentValue.minus(movedValue)
+          : currentValue.plus(movedValue);
+        item.unitCost = nextValue
+          .dividedBy(newQty)
+          .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+          .toFixed(4);
+      }
+
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);
 

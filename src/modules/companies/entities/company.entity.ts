@@ -157,6 +157,15 @@ export class Company extends BaseEntity {
   @Column({ type: 'date', nullable: true, name: 'books_locked_until' })
   booksLockedUntil!: string | null;
 
+  /**
+   * When that lock was applied. Distinguishes an entry legitimately posted
+   * before the close from one BACK-DATED into a shut period afterwards —
+   * without it, invariant I12 flags every historical entry the moment a
+   * period is closed (audit gap G4).
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'books_locked_at' })
+  booksLockedAt!: Date | null;
+
   @OneToMany(() => UserCompany, (uc) => uc.company)
   memberships!: UserCompany[];
 }

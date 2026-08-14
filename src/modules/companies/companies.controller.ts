@@ -14,10 +14,12 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompaniesService } from './companies.service';
 import {
+  ClosePeriodDto,
   CreateCompanyDto,
   JoinCompanyDto,
   UpdateCompanyDto,
 } from './dto/create-company.dto';
+import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 import {
   AuthenticatedUser,
   CurrentUser,
@@ -59,6 +61,33 @@ export class CompaniesController {
     @Body() dto: UpdateCompanyDto,
   ) {
     return this.companies.update(user.id, companyId, dto);
+  }
+
+  // Closing the books is a deliberate accounting act, not a field edit, so it
+  // gets its own route — tier-gated by `periodClose`, which the feature map
+  // has always declared but nothing enforced until now (audit gap G4).
+  @Post(':companyId/period-close')
+  @RequiresFeature('periodClose')
+  @ApiOperation({
+    summary:
+      'Close the books through a date. Postings dated on or before it are rejected. Admin only.',
+  })
+  closePeriod(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body() dto: ClosePeriodDto,
+  ) {
+    return this.companies.closePeriod(user.id, companyId, dto.lockDate);
+  }
+
+  @Post(':companyId/period-reopen')
+  @RequiresFeature('periodClose')
+  @ApiOperation({ summary: 'Reopen closed books. Admin only.' })
+  reopenPeriod(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+  ) {
+    return this.companies.reopenPeriod(user.id, companyId);
   }
 
   @Get(':companyId/members')

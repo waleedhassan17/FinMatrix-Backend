@@ -159,13 +159,74 @@ export class CompaniesService {
       ...(dto.homeCurrency !== undefined ? { homeCurrency: dto.homeCurrency } : {}),
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
       ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
-      ...(dto.booksLockedUntil !== undefined ? { booksLockedUntil: dto.booksLockedUntil } : {}),
       ...(dto.salesTaxRegistered !== undefined ? { salesTaxRegistered: dto.salesTaxRegistered } : {}),
       // Large-org per-company inventory opt-in. Harmless for other types:
       // FEATURE_MAP only honors the toggle when companyType is large_org.
       // companyType itself is deliberately NOT updatable here.
       ...(dto.inventoryEnabled !== undefined ? { inventoryEnabled: dto.inventoryEnabled } : {}),
     });
+    return this.companyRepo.save(company);
+  }
+
+  /**
+   * Close the books through `lockDate` (audit gap G4).
+   *
+   * PostingService.assertPeriodOpen already rejects anything dated on or
+   * before the lock, centrally, for every document type. What was missing was
+   * a way to set the lock deliberately: books_locked_until was reachable only
+   * through the generic company PATCH, and the `periodClose` tier feature was
+   * declared but wired to nothing.
+   *
+   * Stamps books_locked_at so a later back-dated posting is distinguishable
+   * from one legitimately made before the close — the distinction invariant
+   * I12 depends on.
+   */
+  async closePeriod(
+    userId: string,
+    companyId: string,
+    lockDate: string,
+  ): Promise<Company> {
+    await this.assertAdmin(userId, companyId);
+    const company = await this.getById(userId, companyId);
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (lockDate > today) {
+      throw new BadRequestException({
+        code: 'LOCK_DATE_IN_FUTURE',
+        message: 'You cannot close a period that has not finished yet.',
+      });
+    }
+    // Closing is one-way until an explicit reopen: moving the lock BACKWARDS
+    // silently would reopen a period without anyone asking for it.
+    if (company.booksLockedUntil && lockDate < company.booksLockedUntil) {
+      throw new BadRequestException({
+        code: 'PERIOD_ALREADY_CLOSED',
+        message:
+          `The books are already closed through ${company.booksLockedUntil}. ` +
+          'Reopen them first to move the lock earlier.',
+      });
+    }
+
+    company.booksLockedUntil = lockDate;
+    company.booksLockedAt = new Date();
+    return this.companyRepo.save(company);
+  }
+
+  /**
+   * Reopen the books. Clears both the lock date and the stamp, so an entry
+   * posted after a reopen is not judged against a lock that no longer applies.
+   */
+  async reopenPeriod(userId: string, companyId: string): Promise<Company> {
+    await this.assertAdmin(userId, companyId);
+    const company = await this.getById(userId, companyId);
+    if (!company.booksLockedUntil) {
+      throw new BadRequestException({
+        code: 'PERIOD_NOT_CLOSED',
+        message: 'The books are not closed.',
+      });
+    }
+    company.booksLockedUntil = null;
+    company.booksLockedAt = null;
     return this.companyRepo.save(company);
   }
 
