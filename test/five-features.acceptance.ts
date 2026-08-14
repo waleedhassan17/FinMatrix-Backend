@@ -230,13 +230,26 @@ async function main() {
   }
 
   // Period lock: a run dated in a locked period must be rejected by the engine.
-  await req('PATCH', `/companies/${cid}`, { ...A, json: { booksLockedUntil: '2999-01-01' } });
+  //
+  // This used to PATCH booksLockedUntil straight onto the company. That field was
+  // deliberately removed from UpdateCompanyDto — closing the books now goes through
+  // period-close, which tier-gates the action and stamps books_locked_at so a
+  // back-dated posting is detectable (invariant I12). Because the global
+  // ValidationPipe runs with forbidNonWhitelisted: false, the old PATCH kept
+  // returning 200 while silently stripping the field, so the lock never applied and
+  // the payroll below posted a SECOND time — which is what made this assertion fail
+  // and then cascaded into four wrong budget figures (wages read 30,000, not 15,000).
+  //
+  // period-close refuses a future lockDate (LOCK_DATE_IN_FUTURE), so lock through
+  // TODAY: payroll is dated TODAY and assertPeriodOpen compares date <= lock.
+  const closeRes = await req('POST', `/companies/${cid}/period-close`, { ...A, json: { lockDate: TODAY } });
+  ok('books close through the period-close endpoint', closeRes.status < 300, closeRes.status);
   const lockedRun = data(await req('POST', '/payroll/runs', {
     ...A, json: { payPeriod: 'QA Locked', periodStart: TODAY, periodEnd: TODAY, payDate: TODAY },
   }));
   const lockedProcess = await req('POST', `/payroll/runs/${lockedRun?.id}/process`, { ...A, json: {} });
   ok('period lock respected (posting into a locked period rejected)', lockedProcess.status >= 400, lockedProcess.status);
-  await req('PATCH', `/companies/${cid}`, { ...A, json: { booksLockedUntil: null } });
+  await req('POST', `/companies/${cid}/period-reopen`, { ...A, json: {} });
   await assertTB('after payroll scenarios');
 
   // ═════ 3. BUDGETS ═════

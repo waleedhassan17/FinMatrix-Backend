@@ -209,15 +209,31 @@ export class AuthService {
       });
     }
 
-    const membership = user.defaultCompanyId
+    let membership = user.defaultCompanyId
       ? await this.userCompanyRepo.findOne({
           where: { userId: user.id, companyId: user.defaultCompanyId },
           relations: { company: true },
         })
-      : await this.userCompanyRepo.findOne({
-          where: { userId: user.id },
-          relations: { company: true },
-        });
+      : null;
+
+    // defaultCompanyId can dangle. Deleting a company cascades away the
+    // user_companies row but leaves the pointer on the user, so keying the
+    // lookup on it alone resolved to nothing and signed the user in with
+    // companyId: null — locked out of companies they still belong to, with
+    // every request answering NOT_COMPANY_MEMBER. Fall back to any membership.
+    if (!membership) {
+      membership = await this.userCompanyRepo.findOne({
+        where: { userId: user.id },
+        relations: { company: true },
+      });
+      // Repair the stale pointer so the next sign-in takes the fast path.
+      if (membership && user.defaultCompanyId !== membership.companyId) {
+        user.defaultCompanyId = membership.companyId;
+        await this.dataSource
+          .getRepository(User)
+          .update(user.id, { defaultCompanyId: membership.companyId });
+      }
+    }
 
     // super_admin is a platform-level role — never let a company membership override it
     const isSuperAdmin = user.role === 'super_admin';

@@ -135,9 +135,18 @@ export class BillingService {
     const companyType = companyTypeOverride ?? company.companyType ?? 'warehouse';
     const plans = plansForType(companyType);
     if (plans.length === 0) {
-      throw new BadRequestException(
-        'companyType must be one of small_business | large_org | warehouse.',
-      );
+      // This fires whenever the catalogue is EMPTY for the type, which is not
+      // the same as the type being invalid. The old message claimed
+      // "companyType must be one of small_business | large_org | warehouse"
+      // and then rejected small_business and large_org — both perfectly valid
+      // names — because this build ships warehouse-only and their catalogues
+      // are empty. Saying so plainly stops the next person debugging their
+      // request instead of the configuration.
+      throw new BadRequestException({
+        code: 'NO_PLANS_FOR_COMPANY_TYPE',
+        message: `No subscription plans are configured for company type '${companyType}'.`,
+        companyType,
+      });
     }
     // Savings are measured against the SHORTEST billing period within the
     // same delivery-personnel rung. The previous version hardcoded "3 months

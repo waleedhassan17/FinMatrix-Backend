@@ -84,13 +84,22 @@ async function main() {
   const list = await req('GET', '/admin/companies?status=all&limit=50', undefined, saHdr);
   ok('super-admin can list companies', list.status === 200);
 
-  // Deactivate → login blocked + existing session blocked.
+  // Deactivate → sign-in survives but lands in renew-only; business endpoints blocked.
   const deact = await req('PATCH', `/admin/companies/${companyId}/deactivate`, {}, saHdr);
   ok('super-admin can deactivate a company', deact.status === 200, `got ${deact.status}`);
 
+  // This used to assert a BLOCKED login with code COMPANY_INACTIVE. That code exists
+  // nowhere in src/ and the design deliberately changed: 'pending' and 'rejected' are
+  // refused at sign-in (COMPANY_PENDING / COMPANY_REJECTED), but 'inactive' — a
+  // deactivation or a lapsed subscription — is let IN so the user can reach the
+  // renew-only flow, while CompanyGuard refuses every business endpoint with
+  // COMPANY_NOT_ACTIVE. Asserting the old contract hid what actually protects the
+  // tenant, which is the 403 immediately below.
   const blocked = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
-  ok('deactivated company cannot log in (COMPANY_INACTIVE)', codeOf(blocked.body) === 'COMPANY_INACTIVE',
-    `code=${codeOf(blocked.body)}`);
+  const blockedStatus = blocked.body?.data?.companyStatus ?? blocked.body?.data?.company?.status;
+  ok('deactivated company signs in to renew-only, reported as inactive',
+    blocked.status === 200 && blockedStatus === 'inactive',
+    `status=${blocked.status} companyStatus=${blockedStatus} code=${codeOf(blocked.body)}`);
 
   const guarded = await req('GET', '/accounts?search=1000', undefined, {
     Authorization: `Bearer ${adminTok}`,
