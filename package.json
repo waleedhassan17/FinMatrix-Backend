@@ -47,7 +47,11 @@
     "test:bankrec": "ts-node -r tsconfig-paths/register test/bankrec.acceptance.ts",
     "test:corrections": "ts-node -r tsconfig-paths/register test/corrections.acceptance.ts",
     "test:period-close": "ts-node -r tsconfig-paths/register test/period-close.acceptance.ts",
-    "test:voids": "ts-node -r tsconfig-paths/register test/voids.acceptance.ts"
+    "test:voids": "ts-node -r tsconfig-paths/register test/voids.acceptance.ts",
+    "test:qa": "bash qa/run-qa.sh",
+    "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close",
+    "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
+    "qa": "npm run qa:scenario && npm run test:qa"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

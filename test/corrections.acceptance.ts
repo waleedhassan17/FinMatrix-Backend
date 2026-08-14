@@ -182,14 +182,19 @@ async function main() {
       // shows up here — which is exactly how freezing the credit-memo restock
       // cost was caught breaking the weighted average.
       [
+        // Tolerance is the arithmetic bound of a 4dp average, not a fudge:
+        // each item can be off by qty/2 x 10^-4 from the exact value the GL
+        // holds. Matches I13 in qa/invariants.sql.
         'inventory subledger = GL 1200',
         `SELECT 1 FROM (
            SELECT (SELECT COALESCE(SUM(l.debit-l.credit),0)
                      FROM journal_entry_lines l JOIN accounts a ON a.id=l.account_id
                     WHERE a.company_id = '${COMPANY}' AND a.account_number='1200') AS gl,
                   (SELECT COALESCE(SUM(quantity_on_hand*unit_cost),0)
-                     FROM inventory_items WHERE company_id = '${COMPANY}') AS val
-         ) t WHERE abs(t.gl - t.val) > 0.01`,
+                     FROM inventory_items WHERE company_id = '${COMPANY}') AS val,
+                  (SELECT COALESCE(SUM(quantity_on_hand),0) * 0.00005 + 0.01
+                     FROM inventory_items WHERE company_id = '${COMPANY}') AS tol
+         ) t WHERE abs(t.gl - t.val) > t.tol`,
       ],
     ];
     for (const [name, sql] of checks) {

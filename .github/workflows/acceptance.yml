@@ -65,6 +65,9 @@ jobs:
           npm run seed:coa
           npm run seed:metromatrix
           npm run seed:metromatrix:ledger
+          # The accounting suites run against the warehouse tier, the only one
+          # with inventory and delivery.
+          npm run seed:tier-demos
 
       - name: Build
         run: npm run build
@@ -76,6 +79,20 @@ jobs:
 
       - name: Run acceptance suite
         run: npm run test:acceptance
+
+      # The accounting gate (audit gap G5). These assert the exact debit/credit
+      # lines each document produces, that every void unwinds the books, and
+      # that the period lock holds for every document type.
+      - name: Run accounting suite
+        run: npm run test:accounting
+        env:
+          WH_EMAIL: warehouse@gmail.com
+          WH_PASSWORD: '123456'
+
+      # Last, and non-negotiable: the twelve ledger invariants. Any query in
+      # qa/invariants.sql returning a row fails the build.
+      - name: Ledger invariants
+        run: npm run test:qa
 
       - name: Run unit tests
         run: npm test

@@ -146,6 +146,16 @@ async function deliveryE2E() {
     ok(`[${label}] Inventory Valuation ties to GL 1200`, approx(n(val?.totalValue), gl1200), `valuation=${val?.totalValue} gl=${gl1200}`);
   };
 
+  // Delivery is warehouse-only (FEATURE_MAP). Probe the tier before driving
+  // twenty-odd rider assertions against a company that will 403 every one of
+  // them — the whole block used to run regardless and reported the tier gate
+  // working correctly as a wall of failures.
+  const deliveryProbe = await api('GET', '/deliveries');
+  if (deliveryProbe.status === 403) {
+    console.log('\n— delivery E2E skipped: not available on this company\'s tier');
+    return;
+  }
+
   // ── Setup: rider Saim + a second rider + item stocked exactly 12 ──
   const riderSignin = await signinRetry(RIDER_EMAIL, RIDER_PASSWORD);
   const riderTok = riderSignin.body?.tokens?.accessToken;
@@ -472,23 +482,46 @@ async function run() {
     const arr = body?.accounts ?? body ?? [];
     return (arr as any[]).find((a) => a.accountNumber === '1000')?.id;
   })());
+  // Inventory is a TIER feature: warehouse companies have it, large_org and
+  // small_business do not (FEATURE_MAP). This suite runs against whichever
+  // demo company it is pointed at, so probe rather than assume — the endpoint
+  // 403s with FEATURE_NOT_AVAILABLE when the tier lacks it, and `body` is then
+  // an error object, not a list.
+  //
+  // Without this the suite died here with "items.find is not a function" the
+  // moment large_org lost inventory, taking every later assertion with it.
   const itemsRes = await api('GET', '/inventory/items');
-  const items = (itemsRes.body?.data ?? itemsRes.body?.items ?? itemsRes.body ?? []) as any[];
+  const itemsRaw = itemsRes.body?.data ?? itemsRes.body?.items ?? itemsRes.body;
+  const items = (Array.isArray(itemsRaw) ? itemsRaw : []) as any[];
   const item = items.find((i) => n(i.unitCost) > 0);
+  const hasInventory = itemsRes.status < 300 && !!item;
+  console.log(
+    hasInventory
+      ? '  · inventory available — COGS and restock assertions included'
+      : `  · inventory not on this tier (${itemsRes.status}) — invoice runs without an item line`,
+  );
 
-  // ── #2 Issue invoice with inventory line → COGS + qty down ──
+  // ── #2 Issue invoice → ledger (COGS + qty down when stock is tracked) ──
   const cogsBefore = await acctBalance('5000');
   const qtyBefore = n(item?.quantityOnHand);
+  const invoiceLine = hasInventory
+    ? { description: item.name, quantity: '3', unitPrice: item.sellingPrice, taxRate: '17', itemId: item.id }
+    : { description: 'Acceptance service line', quantity: '3', unitPrice: '100', taxRate: '17' };
   const inv = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: item.name, quantity: '3', unitPrice: item.sellingPrice, taxRate: '17', itemId: item.id }],
+    lines: [invoiceLine],
   });
-  ok('#2 issue invoice (item line)', inv.status < 300 && !!inv.body?.id);
-  const cogsAfter = await acctBalance('5000');
-  ok('#2 COGS increased by qty×cost', approx(cogsAfter - cogsBefore, 3 * n(item.unitCost)), `Δ=${cogsAfter - cogsBefore}`);
-  const itemAfter = (await api('GET', `/inventory/items/${item.id}`)).body;
-  const qtyAfter = n(itemAfter?.quantityOnHand ?? itemAfter?.item?.quantityOnHand);
-  ok('#2 quantity on hand reduced by 3', approx(qtyBefore - qtyAfter, 3), `before=${qtyBefore} after=${qtyAfter}`);
+  ok('#2 issue invoice', inv.status < 300 && !!inv.body?.id, `status=${inv.status}`);
+  if (hasInventory) {
+    const cogsAfter = await acctBalance('5000');
+    ok('#2 COGS increased by qty×cost', approx(cogsAfter - cogsBefore, 3 * n(item.unitCost)), `Δ=${cogsAfter - cogsBefore}`);
+    const itemAfter = (await api('GET', `/inventory/items/${item.id}`)).body;
+    const qtyAfter = n(itemAfter?.quantityOnHand ?? itemAfter?.item?.quantityOnHand);
+    ok('#2 quantity on hand reduced by 3', approx(qtyBefore - qtyAfter, 3), `before=${qtyBefore} after=${qtyAfter}`);
+  } else {
+    ok('#2 no COGS movement without stock tracking',
+      approx(await acctBalance('5000'), cogsBefore));
+  }
   await invariants('after invoice');
 
   // ── #3 Receive full payment → invoice paid ──
@@ -504,20 +537,29 @@ async function run() {
   ok('#3 invoice status = paid', status === 'paid', `status=${status}`);
   await invariants('after payment');
 
-  // ── #10 Void invoice → reversing entry + restock ──
+  // ── #10 Void invoice → reversing entry (+ restock when stock is tracked) ──
+  const voidLine = hasInventory
+    ? { description: item.name, quantity: '2', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id }
+    : { description: 'Acceptance void line', quantity: '2', unitPrice: '100', taxRate: '0' };
   const inv2 = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: item.name, quantity: '2', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id }],
+    lines: [voidLine],
   });
   const readQty = async () => {
+    if (!hasInventory) return 0;
     const b = (await api('GET', `/inventory/items/${item.id}`)).body;
     return n(b?.item?.quantityOnHand ?? b?.quantityOnHand);
   };
+  const arBeforeVoid = await acctBalance('1100');
   const qtyBeforeVoid = await readQty();
   const voided = await api('POST', `/invoices/${inv2.body.id}/void`, { reason: 'acceptance test' });
   ok('#10 void invoice', voided.status < 300);
-  const qtyAfterVoid = await readQty();
-  ok('#10 stock restored on void', approx(qtyAfterVoid - qtyBeforeVoid, 2), `Δ=${qtyAfterVoid - qtyBeforeVoid}`);
+  if (hasInventory) {
+    const qtyAfterVoid = await readQty();
+    ok('#10 stock restored on void', approx(qtyAfterVoid - qtyBeforeVoid, 2), `Δ=${qtyAfterVoid - qtyBeforeVoid}`);
+  }
+  ok('#10 A/R released on void', approx(await acctBalance('1100'), arBeforeVoid - 200),
+    `before=${arBeforeVoid} after=${await acctBalance('1100')}`);
   await invariants('after void');
 
   // ── #11 Tax payment → Tax Payable down, Cash down ──
@@ -546,13 +588,20 @@ async function run() {
   ok('#15 idempotent replay returns same invoice', !!r1.body?.id && r1.body.id === r2.body.id);
 
   // ── #16 Period lock blocks a posting in a closed period ──
-  await api('PATCH', `/companies/${companyId}`, { booksLockedUntil: '2025-12-31' });
+  // Closing the books goes through its own endpoint now: it is tier-gated by
+  // `periodClose` and stamps books_locked_at, which is what lets invariant I12
+  // tell a back-dated entry from legitimate history. booksLockedUntil is no
+  // longer settable through the generic company PATCH.
+  const closeRes = await api('POST', `/companies/${companyId}/period-close`, {
+    lockDate: '2025-12-31',
+  });
+  ok('#16 books closed through 2025-12-31', closeRes.status < 300, `status=${closeRes.status}`);
   const locked = await api('POST', '/invoices', {
     customerId, invoiceDate: '2025-06-15', dueDate: '2025-07-15', status: 'sent',
     lines: [{ description: 'locked', quantity: '1', unitPrice: '100', taxRate: '0' }],
   });
-  ok('#16 posting in locked period rejected', locked.status >= 400);
-  await api('PATCH', `/companies/${companyId}`, { booksLockedUntil: null });
+  ok('#16 posting in locked period rejected', locked.status >= 400, `status=${locked.status}`);
+  await api('POST', `/companies/${companyId}/period-reopen`);
 
   // ── #18 Role enforcement: rider rejected by financial endpoints ──
   const riderSignin = await signinRetry(RIDER_EMAIL, RIDER_PASSWORD);
