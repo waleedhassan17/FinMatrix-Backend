@@ -56,7 +56,28 @@ export class CreditMemosService {
   }
 
   async create(companyId: string, userId: string, dto: CreateCreditMemoDto): Promise<CreditMemo> {
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) =>
+      this.createInTransaction(manager, companyId, userId, dto),
+    );
+  }
+
+  /**
+   * Same as create(), but joins a transaction the caller already owns. Mirrors
+   * InvoicesService.createInTransaction. Used by the delivery approval flow,
+   * which has to credit a prepaid customer for undelivered goods inside the
+   * same transaction that relieves Goods in Transit.
+   *
+   * Lines WITHOUT an itemId skip the inventory return entirely, so a caller
+   * that has already restocked the goods itself can credit revenue and tax
+   * without putting the same units back on the shelf twice.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: CreateCreditMemoDto,
+  ): Promise<CreditMemo> {
+    {
       const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
 
@@ -109,7 +130,7 @@ export class CreditMemosService {
       customer.balance = addMoney(customer.balance, toDecimal(totals.total).negated().toFixed(4)).toFixed(4);
       await manager.save(customer);
       return cm;
-    });
+    }
   }
 
   async applyToInvoice(companyId: string, id: string, dto: ApplyCreditMemoDto): Promise<CreditMemo> {

@@ -17,6 +17,7 @@ import { AccountsService } from '../accounts/accounts.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
+import { CreditMemosService } from '../credit-memos/credit-memos.service';
 import {
   ACCT_COGS,
   ACCT_GOODS_IN_TRANSIT,
@@ -48,6 +49,10 @@ export interface ApprovalLedgerResult {
   cogsAmount: string;
   restockedCost: string;
   paidStatus: 'paid' | 'unpaid';
+  /** Prepaid deliveries only: credit raised for goods the customer sent back. */
+  creditMemoId: string | null;
+  creditMemoNumber: string | null;
+  creditMemoTotal: string | null;
 }
 
 /**
@@ -75,6 +80,7 @@ export class DeliveryLedgerService {
     private readonly salesOrders: SalesOrdersService,
     private readonly invoices: InvoicesService,
     private readonly payments: PaymentsService,
+    private readonly creditMemos: CreditMemosService,
   ) {}
 
   private today(): string {
@@ -341,6 +347,10 @@ export class DeliveryLedgerService {
     let cogsCost = new Decimal(0);
     let restockCost = new Decimal(0);
     const invoiceLines: { description: string; quantity: string; unitPrice: string; taxRate: string }[] = [];
+    // Prepaid only: the undelivered portion, valued at SALE price. A prepaid
+    // delivery is invoiced in full at dispatch, so anything the customer sends
+    // back has to be credited or revenue and tax stay overstated.
+    const returnedSaleLines: { description: string; quantity: string; unitPrice: string; taxRate: string }[] = [];
 
     for (const line of activeItems) {
       const dispatched = this.lineQty(line);
@@ -372,6 +382,15 @@ export class DeliveryLedgerService {
 
       if (returned.greaterThan(0)) {
         restockCost = restockCost.plus(returned.times(unitCost));
+        // NOTE: no itemId on this line. The restock happens immediately below
+        // as part of the delivery ledger; letting the credit memo restock it
+        // too would put the units back twice and break I13.
+        returnedSaleLines.push({
+          description: line.itemName ?? line.itemId,
+          quantity: returned.toFixed(4),
+          unitPrice: toDecimal(line.unitPrice).toFixed(4),
+          taxRate: toDecimal(line.taxRate ?? '0').toFixed(4),
+        });
         const item = await invRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
@@ -405,6 +424,9 @@ export class DeliveryLedgerService {
     let invoiceNumber: string | null = null;
     let invoiceTotal: string | null = null;
     let paymentId: string | null = null;
+    let creditMemoId: string | null = null;
+    let creditMemoNumber: string | null = null;
+    let creditMemoTotal: string | null = null;
 
     if (!delivery.prepaid && invoiceLines.length > 0) {
       const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
@@ -447,6 +469,29 @@ export class DeliveryLedgerService {
         });
         paymentId = payment.id;
       }
+    } else if (delivery.prepaid && returnedSaleLines.length > 0) {
+      // A prepaid delivery was invoiced and paid IN FULL at dispatch, and the
+      // branch above deliberately skips invoicing at approval. Without this,
+      // goods the customer sent back left revenue and output tax overstated by
+      // the undelivered value forever — the cost side reversed correctly while
+      // the sale side did not. Unreachable until riders could record a partial
+      // delivery, which is why it went unnoticed.
+      //
+      // The memo credits Sales Revenue and Tax Payable against A/R, leaving an
+      // open credit the customer can apply to a later invoice or take as a
+      // refund. Its lines carry no itemId: the units were already restocked
+      // above, and crediting them again would double the stock and drift the
+      // inventory subledger away from account 1200 (invariant I13).
+      const creditMemo = await this.creditMemos.createInTransaction(em, companyId, userId, {
+        customerId: delivery.customerId,
+        date: this.today(),
+        originalInvoiceId: delivery.invoiceId ?? undefined,
+        reason: `Undelivered goods returned — delivery ${delivery.referenceNo ?? delivery.id}`,
+        lines: returnedSaleLines,
+      });
+      creditMemoId = creditMemo.id;
+      creditMemoNumber = creditMemo.creditMemoNumber;
+      creditMemoTotal = creditMemo.total;
     } else if (!delivery.prepaid && invoiceLines.length === 0 && delivery.salesOrderId) {
       // Nothing was delivered — cancel the sales order; the stock reversal
       // below returns everything to the shelf.
@@ -523,6 +568,9 @@ export class DeliveryLedgerService {
       cogsAmount: cogsCost.toFixed(4),
       restockedCost: restockCost.toFixed(4),
       paidStatus,
+      creditMemoId,
+      creditMemoNumber,
+      creditMemoTotal,
     };
   }
 
