@@ -18,6 +18,7 @@ import {
   UpdateInventoryItemDto,
   InventoryItemQueryDto,
   AdjustQuantityDto,
+  SetOpeningStockDto,
   CreateStockTransferDto,
   CreatePhysicalCountDto,
   MovementQueryDto,
@@ -30,6 +31,7 @@ import { AccountsService } from '../accounts/accounts.service';
 import {
   ACCT_INVENTORY,
   ACCT_INVENTORY_ADJUSTMENT,
+  ACCT_OPENING_BALANCE_EQUITY,
 } from '../accounts/accounts.constants';
 
 @Injectable()
@@ -89,6 +91,80 @@ export class InventoryService {
     const item = await this.getItem(companyId, id);
     item.isActive = !item.isActive;
     return this.itemRepo.save(item);
+  }
+
+  /**
+   * Record stock the company already owned before it started using FinMatrix.
+   *
+   * Deliberately a separate, one-time action rather than a field on the item
+   * form. Creating an item is reference data and posts nothing; opening stock
+   * is a real balance-sheet event and must post. Keeping them apart is what
+   * stops someone typing a number into a form and silently minting an asset.
+   */
+  async setOpeningStock(
+    companyId: string,
+    id: string,
+    dto: SetOpeningStockDto,
+    userId: string,
+  ) {
+    return this.dataSource.transaction(async (em) => {
+      const itemRepo = em.getRepository(InventoryItem);
+      const moveRepo = em.getRepository(InventoryMovement);
+
+      const item = await itemRepo
+        .createQueryBuilder('i')
+        .setLock('pessimistic_write')
+        .where('i.id = :id AND i.companyId = :cid', { id, cid: companyId })
+        .getOne();
+      if (!item) throw new NotFoundException('Item not found');
+
+      // One-time only. Opening stock states what was on the shelf on day one;
+      // anything after that is a correction and belongs to adjust(), which
+      // records a reason and is reversible. Without this guard it becomes a
+      // second adjustment route with no reason code and no reversal path.
+      const onHand = toDecimal(item.quantityOnHand);
+      const movements = await moveRepo.count({ where: { companyId, itemId: item.id } });
+      if (!onHand.isZero() || movements > 0) {
+        throw new BadRequestException({
+          code: 'OPENING_STOCK_ALREADY_SET',
+          message:
+            'This item already has stock or movement history. Use a Stock Adjustment to correct the quantity.',
+          quantityOnHand: item.quantityOnHand,
+          movements,
+        });
+      }
+
+      const qty = toDecimal(dto.quantity);
+      assertNonNegativeQuantity(item.name, qty);
+      if (toDecimal(item.unitCost).lessThanOrEqualTo(0)) {
+        throw new BadRequestException({
+          code: 'UNIT_COST_REQUIRED',
+          message: 'Set the item unit cost before recording opening stock — stock with no cost has no value to post.',
+        });
+      }
+
+      const date = dto.asOfDate ?? new Date().toISOString().split('T')[0];
+      item.quantityOnHand = qty.toFixed(4);
+      await itemRepo.save(item);
+
+      const move = await moveRepo.save(
+        moveRepo.create({
+          companyId,
+          itemId: item.id,
+          date,
+          type: 'adjustment',
+          quantityChange: qty.toFixed(4),
+          balanceAfter: qty.toFixed(4),
+          description: dto.notes ?? 'Opening stock',
+          sourceType: 'opening_stock',
+          sourceId: item.id,
+          createdBy: userId,
+        }),
+      );
+
+      const journalEntryId = await this.postOpeningStockJe(em, companyId, userId, item, qty, date);
+      return { item, movement: move, journalEntryId };
+    });
   }
 
   // Adjust
@@ -441,6 +517,59 @@ export class InventoryService {
       }
       return { count, lines };
     });
+  }
+
+  /**
+   * Post the opening balance for stock a company already owned when it started
+   * using FinMatrix.
+   *
+   *   DR Inventory 1200  /  CR Opening Balance Equity 3900
+   *
+   * This is §3.12 applied to inventory. AccountsService.create already does it
+   * for a GL account opened with a balance; stock had no equivalent, so the
+   * only ways to get day-one inventory in were a Purchase Order — which
+   * invents a vendor and a payable that never existed — or a Stock Adjustment,
+   * which credits expense 6400 and so reports the shelf as PROFIT. Opening
+   * Balance Equity is the account that exists for this: no supplier, no P&L,
+   * and an accountant clears it to owner equity when the migration is done.
+   *
+   * Public so AgenciesService can post through the same path; its "Opening Qty"
+   * field created stock and value with no entry at all.
+   */
+  async postOpeningStockJe(
+    em: import('typeorm').EntityManager,
+    companyId: string,
+    userId: string,
+    item: InventoryItem,
+    quantity: Decimal,
+    date: string,
+  ): Promise<string | null> {
+    const value = quantity.times(toDecimal(item.unitCost));
+    if (value.lessThanOrEqualTo(0)) return null;
+
+    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    // 3900 is lazily created — a company that never opened a balance has no row yet.
+    const obe = await this.accounts.getOrCreateSystemAccount(
+      em,
+      companyId,
+      ACCT_OPENING_BALANCE_EQUITY,
+    );
+    const amount = value.toFixed(4);
+
+    const entry = await this.posting.createEntry(em, {
+      companyId,
+      createdBy: userId,
+      date,
+      memo: `Opening stock for ${item.sku} ${item.name}`,
+      status: 'posted',
+      lines: [
+        { accountId: inventoryAcct.id, description: 'Opening stock on hand', debit: amount, credit: '0', lineOrder: 0 },
+        { accountId: obe.id, description: 'Opening balance equity', debit: '0', credit: amount, lineOrder: 1 },
+      ],
+      sourceType: 'opening_stock',
+      sourceId: item.id,
+    });
+    return entry.id;
   }
 
   /**

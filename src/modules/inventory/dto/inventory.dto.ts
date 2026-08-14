@@ -70,6 +70,17 @@ export class InventoryItemQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() lowStock?: boolean;
 }
 
+// --- Opening stock ---
+// Note there is deliberately NO quantity field on CreateInventoryItemDto.
+// Creating an item is reference data and posts nothing; stock the company
+// already owned is a balance-sheet event and comes through here, where it
+// posts Dr Inventory 1200 / Cr Opening Balance Equity 3900 (§3.12).
+export class SetOpeningStockDto {
+  @ApiProperty({ example: '100' }) @IsNumberString() quantity!: string;
+  @ApiPropertyOptional({ example: '2026-08-15' }) @IsOptional() @IsString() asOfDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
 // --- Adjustment ---
 export class AdjustQuantityDto {
   @ApiProperty() @IsUUID() itemId!: string;

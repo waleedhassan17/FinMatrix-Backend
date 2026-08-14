@@ -13,6 +13,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UseGuards } from '@nestjs/common';
@@ -141,7 +142,8 @@ export class AgenciesController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AddAgencyItemDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.addItemToAgency(companyId, id, dto);
+    return this.svc.addItemToAgency(companyId, id, dto, user.id);
   }
 }

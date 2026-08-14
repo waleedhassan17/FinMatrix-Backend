@@ -22,6 +22,7 @@ import {
   UpdateInventoryItemDto,
   InventoryItemQueryDto,
   AdjustQuantityDto,
+  SetOpeningStockDto,
   CreateStockTransferDto,
   CreatePhysicalCountDto,
   MovementQueryDto,
@@ -83,6 +84,20 @@ export class InventoryController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.svc.toggleItem(companyId, id);
+  }
+
+  // Opening stock is admin-only and one-time: it posts straight to equity, so
+  // it is not something staff should be able to do repeatedly. Corrections go
+  // through adjust() below, which records a reason and can be reversed.
+  @Post('items/:id/opening-stock')
+  @Roles('admin')
+  setOpeningStock(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetOpeningStockDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.setOpeningStock(companyId, id, dto, user.id);
   }
 
   @Post('items/:id/adjust')

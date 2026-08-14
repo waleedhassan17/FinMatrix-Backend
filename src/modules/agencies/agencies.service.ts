@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
+import Decimal from 'decimal.js';
+import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
+import { InventoryService } from '../inventory/inventory.service';
+import { toDecimal } from '../../common/utils/money.util';
 import { Agency } from './entities/agency.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto, AddAgencyItemDto } from './dto/agency.dto';
@@ -12,6 +16,8 @@ export class AgenciesService {
     private readonly repo: Repository<Agency>,
     @InjectRepository(InventoryItem)
     private readonly itemRepo: Repository<InventoryItem>,
+    private readonly dataSource: DataSource,
+    private readonly inventory: InventoryService,
   ) {}
 
   async list(companyId: string, query: AgencyQueryDto, page: number, limit: number) {
@@ -128,11 +134,22 @@ export class AgenciesService {
   /**
    * Creates a new InventoryItem linked to the specified agency.
    */
-  async addItemToAgency(companyId: string, agencyId: string, dto: AddAgencyItemDto) {
+  async addItemToAgency(
+    companyId: string,
+    agencyId: string,
+    dto: AddAgencyItemDto,
+    userId: string,
+  ) {
     // Verify agency exists and belongs to this company
     const agency = await this.getById(companyId, agencyId);
 
-    const item = this.itemRepo.create({
+    // The whole thing runs in one transaction: an opening quantity is stock on
+    // a balance sheet, so the item row and its journal entry commit together or
+    // not at all. Previously this method saved the item and posted NOTHING —
+    // quantityOnHand x unitCost appeared on Inventory Valuation while GL 1200
+    // stayed flat, which is exactly the drift invariant I13 exists to catch.
+    return this.dataSource.transaction(async (em) => {
+    const item = em.getRepository(InventoryItem).create({
       companyId,
       sourceAgencyId: agency.id,
       name: dto.name,
@@ -156,7 +173,30 @@ export class AgenciesService {
       description: null,
       locationId: null,
     });
-    return this.itemRepo.save(item);
+      const saved = await em.getRepository(InventoryItem).save(item);
+
+      const qty = toDecimal(saved.quantityOnHand);
+      if (qty.greaterThan(0)) {
+        const date = new Date().toISOString().split('T')[0];
+        await em.getRepository(InventoryMovement).save(
+          em.getRepository(InventoryMovement).create({
+            companyId,
+            itemId: saved.id,
+            date,
+            type: 'adjustment',
+            quantityChange: qty.toFixed(4),
+            balanceAfter: qty.toFixed(4),
+            description: `Opening stock at agency ${agency.name}`,
+            sourceType: 'opening_stock',
+            sourceId: saved.id,
+            createdBy: userId,
+          }),
+        );
+        // Same posting the inventory module uses: Dr 1200 / Cr 3900 (§3.12).
+        await this.inventory.postOpeningStockJe(em, companyId, userId, saved, qty, date);
+      }
+      return saved;
+    });
   }
 
   async syncInventory(companyId: string, id: string, inventory: AgencyInventoryItemDto[]) {
