@@ -351,6 +351,7 @@ export class DeliveryLedgerService {
     // delivery is invoiced in full at dispatch, so anything the customer sends
     // back has to be credited or revenue and tax stay overstated.
     const returnedSaleLines: { description: string; quantity: string; unitPrice: string; taxRate: string }[] = [];
+    let returnedSaleValue = new Decimal(0);
 
     for (const line of activeItems) {
       const dispatched = this.lineQty(line);
@@ -391,6 +392,7 @@ export class DeliveryLedgerService {
           unitPrice: toDecimal(line.unitPrice).toFixed(4),
           taxRate: toDecimal(line.taxRate ?? '0').toFixed(4),
         });
+        returnedSaleValue = returnedSaleValue.plus(returned.times(toDecimal(line.unitPrice)));
         const item = await invRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
@@ -469,7 +471,7 @@ export class DeliveryLedgerService {
         });
         paymentId = payment.id;
       }
-    } else if (delivery.prepaid && returnedSaleLines.length > 0) {
+    } else if (delivery.prepaid && returnedSaleValue.greaterThan(MONEY_TOLERANCE)) {
       // A prepaid delivery was invoiced and paid IN FULL at dispatch, and the
       // branch above deliberately skips invoicing at approval. Without this,
       // goods the customer sent back left revenue and output tax overstated by
@@ -482,6 +484,14 @@ export class DeliveryLedgerService {
       // refund. Its lines carry no itemId: the units were already restocked
       // above, and crediting them again would double the stock and drift the
       // inventory subledger away from account 1200 (invariant I13).
+      //
+      // Guarded on VALUE, not on line count. Returning only zero-priced units
+      // (a free sample on an otherwise paid delivery) yields a zero-total memo,
+      // whose journal line would carry neither a debit nor a credit —
+      // PostingService rejects that, and since this runs inside the approval's
+      // transaction the whole approval would roll back, leaving the admin
+      // unable to approve the delivery at all. Nothing is owed back for goods
+      // that were never charged for, so there is nothing to credit.
       const creditMemo = await this.creditMemos.createInTransaction(em, companyId, userId, {
         customerId: delivery.customerId,
         date: this.today(),
