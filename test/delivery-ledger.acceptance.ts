@@ -155,6 +155,7 @@ async function main() {
   await assertBooksBalanced('after stocking');
 
   const qtyOnHand = async () => Number((data(await req('GET', `/inventory/items/${itemId}`, A)))?.quantityOnHand);
+  const itemCost = async () => Number((data(await req('GET', `/inventory/items/${itemId}`, A)))?.unitCost);
 
   // Helper: full rider lifecycle (statuses + bill photo) → returns requestId
   const riderDelivers = async (deliveryId: string, paidStatus: 'paid' | 'unpaid', changes: any[]) => {
@@ -311,6 +312,56 @@ async function main() {
   check('S7 approval posted COGS only — cash unchanged since dispatch', close(bsLine(bs, '1000') - cashBeforePrepaid, 330, 0.01), bsLine(bs, '1000'));
   check('S7 Goods in Transit nets to ZERO', close(bsLine(bs, '1250'), 0, 0.005), bsLine(bs, '1250'));
   await assertInventoryTies('S7 after prepaid approval');
+
+  // ═════ Scenario F: the average MOVES while the goods are on the van ═════
+  //
+  // Every other scenario here returns stock at the same average it left at, so
+  // the frozen line cost f equals the live average A and a restock that forgets
+  // to re-average looks identical to one that remembers. This scenario is the
+  // one that can tell them apart: dispatch at one cost, change the average with
+  // a receipt WHILE the units are out, then bring them back.
+  //
+  // Before the fix the ledger moved by q x f while the valuation moved by
+  // q x A, drifting the subledger from account 1200 by q x (A - f) — measured
+  // at 333.35 on exactly this shape. assertInventoryTies is what catches it.
+  console.log('\n— Scenario F: price changes mid-flight, then the goods come back');
+  const fCostBefore = await itemCost();
+  const d6 = await mkDelivery(4);                       // freezes f = fCostBefore
+
+  // Receive 10 at DOUBLE the current cost — this is what moves A away from f.
+  const po2 = data(await req('POST', '/purchase-orders', {
+    ...A,
+    json: {
+      vendorId: vendor.id, orderDate: TODAY,
+      lines: [{ description: 'Crates dearer', orderedQty: '10', unitCost: String(fCostBefore * 2), itemId }],
+    },
+  }));
+  await req('POST', `/purchase-orders/${po2.id}/receive`, {
+    ...A, json: { lines: [{ lineId: po2?.lines?.[0]?.id, receivedQty: '10' }] },
+  });
+  const costAfterReceipt = await itemCost();
+  check('SF receipt moved the weighted average away from the frozen cost',
+    costAfterReceipt > fCostBefore, { was: fCostBefore, now: costAfterReceipt });
+  await assertInventoryTies('SF after the dearer receipt');
+
+  // Bring the 4 dispatched units back. They must be absorbed at f, not at A.
+  const qtyBeforeReturn = await qtyOnHand();
+  const cancelRes = await req('PATCH', `/deliveries/${d6.id}/status`, {
+    ...A, json: { status: 'cancelled', notes: 'SF re-average probe' },
+  });
+  check('SF delivery cancelled', cancelRes.status === 200, cancelRes.status);
+
+  const expectedCost =
+    (qtyBeforeReturn * costAfterReceipt + 4 * fCostBefore) / (qtyBeforeReturn + 4);
+  const costAfterReturn = await itemCost();
+  check('SF returned units absorbed at the cost they LEFT at, not today\'s average',
+    close(costAfterReturn, expectedCost, 0.01),
+    { expected: expectedCost, got: costAfterReturn, frozen: fCostBefore, live: costAfterReceipt });
+  check('SF on-hand restored', close(await qtyOnHand(), qtyBeforeReturn + 4), await qtyOnHand());
+
+  // THE assertion this scenario exists for.
+  await assertInventoryTies('SF after a return with a moved average');
+  await assertBooksBalanced('SF after a return with a moved average');
 
   // ═════ Guard: insufficient stock cannot be dispatched ═════
   console.log('\n— Guard: dispatch beyond on-hand is rejected atomically');
