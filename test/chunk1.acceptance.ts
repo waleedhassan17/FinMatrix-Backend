@@ -248,7 +248,16 @@ async function main() {
   }));
   const itemId = item?.id ?? item?.item?.id;
   check('inventory item created', !!itemId, item);
-  await pg.query(`UPDATE inventory_items SET quantity_on_hand = 50 WHERE id = $1`, [itemId]);
+  // Stock this through the API, not raw SQL. The previous UPDATE put 50 units
+  // on the shelf without a journal entry — 50 x 100 = 5,000 of inventory value
+  // the ledger never saw — which failed invariant I13 for this company FOREVER
+  // and left qa/run-qa.sh permanently red, so it stopped being a usable signal.
+  // opening-stock posts Dr 1200 / Cr 3900, which is what this always wanted.
+  const opened = await req('POST', `/inventory/items/${itemId}/opening-stock`, {
+    token: A.token, companyId: A.companyId, json: { quantity: '50' },
+  });
+  check('opening stock posted (no raw-SQL ledger bypass)',
+    opened.status === 201 || opened.status === 200, opened.body);
 
   const delCreate = await req('POST', '/deliveries', {
     token: A.token, companyId: A.companyId,

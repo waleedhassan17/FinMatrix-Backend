@@ -83,6 +83,34 @@ export class InventoryService {
       const exists = await this.itemRepo.findOne({ where: { companyId, sku: dto.sku } });
       if (exists) throw new BadRequestException('SKU already exists');
     }
+
+    // Unit cost is an OUTPUT of the receipt history, not an input. The single
+    // cost method is weighted average, and a purchase receipt recomputes it as
+    // (Q·A + q·P) / (Q + q) — so a hand-typed figure is overwritten by the very
+    // next receipt anyway.
+    //
+    // Worse, Object.assign below used to copy it straight onto the entity with
+    // no journal entry. Inventory Valuation reports qty × unit_cost, so editing
+    // the cost of 100 units from 800 to 900 moved the subledger by 10,000 while
+    // GL 1200 stayed exactly where it was — invariant I13, by hand.
+    //
+    // Zero on-hand is still free to edit: 0 × anything is 0, nothing can drift,
+    // and setOpeningStock requires a cost to be set before it will post.
+    if (dto.unitCost !== undefined) {
+      const incoming = toDecimal(dto.unitCost);
+      const current = toDecimal(item.unitCost);
+      const onHand = toDecimal(item.quantityOnHand);
+      if (!incoming.equals(current) && onHand.greaterThan(0)) {
+        throw new BadRequestException({
+          code: 'UNIT_COST_LOCKED',
+          message:
+            'Unit cost is the weighted average of what you actually paid, so it cannot be edited while stock is on hand. Receive stock at the new price and the average re-computes itself, or correct the quantity with a Stock Adjustment.',
+          quantityOnHand: item.quantityOnHand,
+          unitCost: item.unitCost,
+        });
+      }
+    }
+
     Object.assign(item, dto);
     return this.itemRepo.save(item);
   }
