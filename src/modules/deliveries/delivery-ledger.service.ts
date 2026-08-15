@@ -88,6 +88,48 @@ export class DeliveryLedgerService {
   }
 
   /**
+   * Put returned units back on the shelf and fold them into the weighted
+   * average AT THE COST THEY LEFT AT.
+   *
+   *   (Q·A + q·f) / (Q + q)
+   *
+   * The journal entry for a return moves Inventory 1200 by q × f, the cost
+   * frozen on the delivery line at dispatch. Raising quantityOnHand without
+   * touching unitCost moves the valuation report (qty × unit_cost) by q × A
+   * instead, so the subledger and the control account drift apart by
+   * q × (A − f) — invariant I13.
+   *
+   * Nothing showed it because it needs the average to MOVE while the goods are
+   * on the van: dispatch 5 at 100, receive 10 at 200 (average → 166.6667),
+   * then return the 5. Measured on that exact sequence, the books drifted by
+   * 333.35 — 5 × (166.6667 − 100), to the cent.
+   *
+   * Credit-memo restock has always done this and explains why in a comment
+   * (credit-memos.service.ts). The delivery paths never got the same treatment.
+   *
+   * Mutates the item; the caller saves it.
+   */
+  private absorbReturnIntoAverage(
+    item: InventoryItem,
+    qty: Decimal,
+    frozenUnitCost: Decimal,
+  ): Decimal {
+    const onHand = toDecimal(item.quantityOnHand);
+    const newQty = onHand.plus(qty);
+    if (newQty.greaterThan(0)) {
+      const nextValue = onHand
+        .times(toDecimal(item.unitCost))
+        .plus(qty.times(frozenUnitCost));
+      item.unitCost = nextValue
+        .dividedBy(newQty)
+        .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+        .toFixed(4);
+    }
+    item.quantityOnHand = newQty.toFixed(4);
+    return newQty;
+  }
+
+  /**
    * Dispatched quantity of a delivery line. orderedQty is canonical; rows
    * written before the DTO fix (whitelist stripped orderedQty → 0) carried
    * the real amount in `quantity`, so fall back to it.
@@ -399,8 +441,7 @@ export class DeliveryLedgerService {
           .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
           .getOne();
         if (item) {
-          const newQty = toDecimal(item.quantityOnHand).plus(returned);
-          item.quantityOnHand = newQty.toFixed(4);
+          const newQty = this.absorbReturnIntoAverage(item, returned, unitCost);
           await invRepo.save(item);
           await moveRepo.save(
             moveRepo.create({
@@ -625,8 +666,7 @@ export class DeliveryLedgerService {
         .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
         .getOne();
       if (!item) continue;
-      const newQty = toDecimal(item.quantityOnHand).plus(qty);
-      item.quantityOnHand = newQty.toFixed(4);
+      const newQty = this.absorbReturnIntoAverage(item, qty, toDecimal(line.unitCost));
       await invRepo.save(item);
       await moveRepo.save(
         moveRepo.create({
