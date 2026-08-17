@@ -34,6 +34,9 @@ export class CreateBillDto {
   @IsIn(['draft', 'open'])
   status?: 'draft' | 'open';
 
+  /** Set by the PO conversion path; a PO can back at most one bill. */
+  @ApiPropertyOptional() @IsOptional() @IsUUID() purchaseOrderId?: string;
+
   @ApiProperty({ type: [BillLineDto] })
   @IsArray()
   @ArrayMinSize(1)

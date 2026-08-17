@@ -21,6 +21,7 @@ import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatPurchaseOrderRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { BillsService } from '../bills/bills.service';
+import { Bill } from '../bills/entities/bill.entity';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_GRNI, ACCT_INVENTORY } from '../accounts/accounts.constants';
@@ -46,6 +47,9 @@ export class PurchaseOrdersService {
   ) {
     const qb = this.repo
       .createQueryBuilder('o')
+      // Lines are what the list's received-vs-ordered progress is computed
+      // from; without them every row reads 0 / 0.
+      .leftJoinAndSelect('o.lines', 'lines')
       .where('o.companyId = :companyId', { companyId });
     if (query.status) qb.andWhere('o.status = :s', { s: query.status });
     if (query.vendorId) qb.andWhere('o.vendorId = :v', { v: query.vendorId });
@@ -79,7 +83,15 @@ export class PurchaseOrdersService {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'PO not found' });
     }
     po.lines.sort((a, b) => a.lineOrder - b.lineOrder);
-    return po;
+    // Surface the bill this PO was converted to, so a client can offer "View
+    // Bill" instead of a Convert action that would now be refused.
+    const bill = await this.dataSource.getRepository(Bill).findOne({
+      where: { companyId, purchaseOrderId: po.id },
+    });
+    return Object.assign(po, {
+      billId: bill?.id ?? null,
+      billNumber: bill?.billNumber ?? null,
+    });
   }
 
   async create(
@@ -287,6 +299,23 @@ export class PurchaseOrdersService {
         });
       }
 
+      // Billing posts DR GRNI / CR AP. Doing it twice would clear GRNI twice —
+      // overstating AP and driving GRNI negative — while the vendor is owed
+      // once. The unique index on bills.purchase_order_id is the real
+      // guarantee (two concurrent requests can both pass this read); this
+      // check exists to answer with something the user can act on.
+      const existingBill = await manager.findOne(Bill, {
+        where: { companyId, purchaseOrderId: po.id },
+      });
+      if (existingBill) {
+        throw new BadRequestException({
+          code: 'PO_ALREADY_BILLED',
+          message: `This purchase order was already converted to bill ${existingBill.billNumber}.`,
+          billId: existingBill.id,
+          billNumber: existingBill.billNumber,
+        });
+      }
+
       // Billing a received PO (FinMatrixGuide §3.4): inventory lines were already
       // accrued to Inventory via GRNI on receipt, so the bill debits GRNI to
       // clear it (no second inventory hit). Non-inventory lines are direct
@@ -299,6 +328,7 @@ export class PurchaseOrdersService {
 
       const bill = await this.bills.create(companyId, userId, {
         vendorId: po.vendorId,
+        purchaseOrderId: po.id,
         billNumber: dto.billNumber,
         billDate: dto.billDate,
         dueDate: dto.dueDate,

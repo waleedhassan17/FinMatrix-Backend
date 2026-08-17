@@ -231,6 +231,7 @@ export class BillsService {
         status,
         memo: dto.memo ?? null,
         journalEntryId: null,
+        purchaseOrderId: dto.purchaseOrderId ?? null,
       });
       await manager.save(bill);
 

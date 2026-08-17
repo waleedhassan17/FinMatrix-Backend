@@ -45,6 +45,13 @@ export class Bill extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
+  // The PO this bill was created from, if any. Unique (see the
+  // BillPurchaseOrderLink migration): converting a received PO to a bill posts
+  // DR GRNI / CR AP, and doing that twice would overstate AP and drive GRNI
+  // negative, so a PO can back at most one bill.
+  @Column({ type: 'uuid', nullable: true, name: 'purchase_order_id' })
+  purchaseOrderId!: string | null;
+
   // Optimistic lock (FinMatrixGuide §6.7): prevents concurrent bill payments
   // from both reading the same balance and overpaying.
   @VersionColumn()
