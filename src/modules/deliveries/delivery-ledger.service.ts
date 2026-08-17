@@ -424,7 +424,6 @@ export class DeliveryLedgerService {
       }
 
       if (returned.greaterThan(0)) {
-        restockCost = restockCost.plus(returned.times(unitCost));
         // NOTE: no itemId on this line. The restock happens immediately below
         // as part of the delivery ledger; letting the credit memo restock it
         // too would put the units back twice and break I13.
@@ -440,7 +439,11 @@ export class DeliveryLedgerService {
           .setLock('pessimistic_write')
           .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
           .getOne();
+        // Only owe the GL what the subledger can actually absorb: the restock
+        // cost is added AFTER the item is known to exist, so a deleted item
+        // can never leave 1200 debited for stock nobody holds (I13).
         if (item) {
+          restockCost = restockCost.plus(returned.times(unitCost));
           const newQty = this.absorbReturnIntoAverage(item, returned, unitCost);
           await invRepo.save(item);
           await moveRepo.save(
@@ -627,15 +630,31 @@ export class DeliveryLedgerService {
 
   /**
    * Reject / return path: reverse Stage 1 exactly — Dr Inventory / Cr Goods in
-   * Transit at the frozen cost, restock everything. NO revenue is touched
-   * (nothing was sold). Idempotent via ledgerStatus.
+   * Transit at the frozen cost, restock everything. Idempotent via
+   * ledgerStatus.
+   *
+   * For a POSTPAID delivery no revenue is touched, because none was ever
+   * recognised — the sales order is simply cancelled.
+   *
+   * For a PREPAID delivery the sale WAS posted at dispatch (invoice + payment,
+   * see commitStockOnAssign), so reversing only the stock left Sales, output
+   * tax and Cash overstated forever with the goods back on the shelf. A credit
+   * memo reverses it, mirroring what the partial-return path at approval
+   * already does — an auditable document rather than a silent reversal, and it
+   * handles the tax leg for free.
    */
   async releaseOnReject(
     em: EntityManager,
     companyId: string,
     userId: string,
     deliveryId: string,
-  ): Promise<{ reversed: boolean; journalEntryId: string | null; restockedCost: string }> {
+  ): Promise<{
+    reversed: boolean;
+    journalEntryId: string | null;
+    restockedCost: string;
+    creditMemoId: string | null;
+    creditMemoNumber: string | null;
+  }> {
     const deliveryRepo = em.getRepository(Delivery);
     const itemRepo = em.getRepository(DeliveryItem);
 
@@ -647,7 +666,13 @@ export class DeliveryLedgerService {
     if (!delivery) throw new NotFoundException('Delivery not found');
     if (delivery.ledgerStatus !== 'in_transit') {
       // Never dispatched under the ledger flow, or already resolved — no-op.
-      return { reversed: false, journalEntryId: null, restockedCost: '0.0000' };
+      return {
+        reversed: false,
+        journalEntryId: null,
+        restockedCost: '0.0000',
+        creditMemoId: null,
+        creditMemoNumber: null,
+      };
     }
 
     const items = await itemRepo.find({ where: { deliveryId: delivery.id } });
@@ -658,14 +683,23 @@ export class DeliveryLedgerService {
     for (const line of items) {
       const qty = this.lineQty(line);
       if (!qty.greaterThan(0)) continue;
-      totalCost = totalCost.plus(qty.times(toDecimal(line.unitCost)));
-
       const item = await invRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
         .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
         .getOne();
-      if (!item) continue;
+      // Refuse rather than skip. Accumulating the cost first and then
+      // continuing past a missing item debits Inventory 1200 for stock that is
+      // never restored — the subledger and the control account part company
+      // permanently (I13). commitStockOnAssign already throws here; this path
+      // must too.
+      if (!item) {
+        throw new NotFoundException({
+          code: 'ITEM_NOT_FOUND',
+          message: `Inventory item ${line.itemId} no longer exists, so this delivery cannot be returned to stock.`,
+        });
+      }
+      totalCost = totalCost.plus(qty.times(toDecimal(line.unitCost)));
       const newQty = this.absorbReturnIntoAverage(item, qty, toDecimal(line.unitCost));
       await invRepo.save(item);
       await moveRepo.save(
@@ -711,6 +745,45 @@ export class DeliveryLedgerService {
       journalEntryId = entry.id;
     }
 
+    // A prepaid delivery was invoiced AND paid at dispatch. Reverse the sale;
+    // the stock has already gone back above.
+    let creditMemoId: string | null = null;
+    let creditMemoNumber: string | null = null;
+    if (delivery.prepaid && delivery.invoiceId) {
+      const saleLines = items
+        .filter((line) => this.lineQty(line).greaterThan(0))
+        .map((line) => ({
+          description: line.itemName ?? line.itemId,
+          quantity: this.lineQty(line).toFixed(4),
+          unitPrice: toDecimal(line.unitPrice).toFixed(4),
+          taxRate: toDecimal(line.taxRate ?? '0').toFixed(4),
+          // Deliberately no itemId: the units were restocked by the loop above,
+          // and letting the memo restock them again would double the stock and
+          // drift the subledger away from account 1200 (I13).
+        }));
+
+      const saleValue = saleLines.reduce(
+        (sum, l) => sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+        new Decimal(0),
+      );
+
+      // Guarded on VALUE for the same reason as the approval path: a memo
+      // totalling zero would produce a journal line with neither a debit nor a
+      // credit, PostingService would reject it, and the whole rejection would
+      // roll back — leaving the admin unable to reject the delivery at all.
+      if (saleValue.greaterThan(MONEY_TOLERANCE)) {
+        const creditMemo = await this.creditMemos.createInTransaction(em, companyId, userId, {
+          customerId: delivery.customerId,
+          date: this.today(),
+          originalInvoiceId: delivery.invoiceId ?? undefined,
+          reason: `Prepaid delivery ${delivery.referenceNo ?? delivery.id} rejected — sale reversed`,
+          lines: saleLines,
+        });
+        creditMemoId = creditMemo.id;
+        creditMemoNumber = creditMemo.creditMemoNumber;
+      }
+    }
+
     // Cancel the (never-invoiced) sales order.
     if (delivery.salesOrderId) {
       const soRepo = em.getRepository(SalesOrder);
@@ -724,6 +797,12 @@ export class DeliveryLedgerService {
     delivery.ledgerStatus = 'returned';
     await deliveryRepo.save(delivery);
 
-    return { reversed: true, journalEntryId, restockedCost: totalCost.toFixed(4) };
+    return {
+      reversed: true,
+      journalEntryId,
+      restockedCost: totalCost.toFixed(4),
+      creditMemoId,
+      creditMemoNumber,
+    };
   }
 }

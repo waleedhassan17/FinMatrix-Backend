@@ -15,7 +15,16 @@ export class VendorCreditLineDto {
       'tax claimed on the original bill. Omit or 0 for a tax-free credit.',
   })
   @IsOptional() @IsNumberString() taxRate?: string;
-  @ApiPropertyOptional({ description: 'Expense/inventory account to credit.' })
+  @ApiPropertyOptional({
+    description:
+      'Inventory item being returned to the supplier. When set, the credit ' +
+      'relieves stock and posts to Inventory (1200) rather than an expense ' +
+      'account. Omit for money-only credits such as freight.',
+  })
+  @IsOptional() @IsUUID() itemId?: string;
+  @ApiPropertyOptional({ example: '3', description: 'Units returned. Required when itemId is set.' })
+  @IsOptional() @IsNumberString() quantity?: string;
+  @ApiPropertyOptional({ description: 'Expense account to credit for a non-stock line.' })
   @IsOptional() @IsUUID() accountId?: string;
 }
 

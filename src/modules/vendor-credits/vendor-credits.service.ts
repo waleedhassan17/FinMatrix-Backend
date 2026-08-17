@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { VendorCredit, VendorCreditStatus } from './entities/vendor-credit.entity';
 import { VendorCreditLine } from './entities/vendor-credit-line.entity';
@@ -15,7 +15,11 @@ import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
-import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
+import { Bill } from '../bills/entities/bill.entity';
+import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
+import { assertSufficientStock } from '../../common/utils/stock.util';
 
 @Injectable()
 export class VendorCreditsService {
@@ -58,6 +62,30 @@ export class VendorCreditsService {
       if (!vendor) throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
 
       const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
+      const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
+
+      // A line may name an inventory item OR an expense account, never both by
+      // accident. Pointing a non-stock line at 1200 would credit the control
+      // account while SUM(qty x unit_cost) stayed put — the subledger drift
+      // invariant I13 exists to catch, and the reason this module used to
+      // credit COGS instead of doing the job properly.
+      for (const l of dto.lines) {
+        if (!l.itemId && l.accountId === inventoryAcct.id) {
+          throw new BadRequestException({
+            code: 'INVENTORY_LINE_NEEDS_ITEM',
+            message:
+              'A line crediting Inventory must name the item and quantity being returned, ' +
+              'otherwise stock and the Inventory account would disagree.',
+          });
+        }
+        if (l.itemId && !toDecimal(l.quantity ?? '0').greaterThan(0)) {
+          throw new BadRequestException({
+            code: 'QUANTITY_REQUIRED',
+            message: 'A returned item needs the quantity going back to the supplier.',
+          });
+        }
+      }
+
       const totals = this.computeTotals(dto.lines);
       const year = parseInt(dto.date.slice(0, 4), 10);
       const seq = await nextYearlySequence(manager, 'vendor_credits', companyId, year, 'date', 'VC', 'vendor_credit_number');
@@ -72,11 +100,21 @@ export class VendorCreditsService {
       });
       await manager.save(vc);
       vc.lines = dto.lines.map((l, i) => manager.create(VendorCreditLine, {
-        vendorCreditId: vc.id, accountId: l.accountId ?? cogs.id, description: l.description,
+        vendorCreditId: vc.id,
+        // Goods going back to the supplier leave Inventory; anything else is
+        // a money-only credit against its expense account.
+        accountId: l.itemId ? inventoryAcct.id : l.accountId ?? cogs.id,
+        itemId: l.itemId ?? null,
+        quantity: l.itemId ? toDecimal(l.quantity ?? '0').toFixed(4) : null,
+        description: l.description,
         amount: toDecimal(l.amount).toFixed(4),
         taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineOrder: i,
       }));
       await manager.save(vc.lines);
+
+      // Relieve the stock in the same transaction as the journal entry, so the
+      // subledger and account 1200 can never move apart.
+      await this.relieveReturnedStock(manager, companyId, vc, false);
 
       // JE (mirror of the credit memo, on the AP side): DR Accounts Payable for
       // the gross the vendor no longer owes us; CR the expense/inventory
@@ -110,7 +148,12 @@ export class VendorCreditsService {
 
   async applyToBill(companyId: string, id: string, dto: ApplyVendorCreditDto): Promise<VendorCredit> {
     return this.dataSource.transaction(async (manager) => {
-      const vc = await manager.findOne(VendorCredit, { where: { id, companyId } });
+      // Lock the credit, not just the bill: two concurrent applies of the same
+      // credit would otherwise both read the same balance and both pass (M1).
+      const vc = await manager.findOne(VendorCredit, {
+        where: { id, companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!vc) throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
       if (vc.status === 'void' || vc.status === 'closed') {
         throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Vendor credit is ${vc.status}` });
@@ -118,6 +161,17 @@ export class VendorCreditsService {
       const amt = toDecimal(dto.amount);
       if (amt.greaterThan(toDecimal(vc.balance))) {
         throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
+      }
+      // A vendor's credit can only settle that vendor's bill.
+      const target = await manager.findOne(Bill, { where: { id: dto.billId, companyId } });
+      if (!target) {
+        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+      }
+      if (target.vendorId !== vc.vendorId) {
+        throw new BadRequestException({
+          code: 'VENDOR_MISMATCH',
+          message: 'That bill belongs to a different vendor.',
+        });
       }
       await this.bills.applyCredit(manager, companyId, dto.billId, dto.amount);
       vc.amountApplied = addMoney(vc.amountApplied, amt).toFixed(4);
@@ -132,6 +186,9 @@ export class VendorCreditsService {
     return this.dataSource.transaction(async (manager) => {
       const vc = await manager.findOne(VendorCredit, { where: { id, companyId }, relations: { lines: true } });
       if (!vc) throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
+      if (vc.status === 'void') {
+        throw new BadRequestException({ code: 'ALREADY_VOID', message: 'Vendor credit is already void' });
+      }
       if (toDecimal(vc.amountApplied).greaterThan(0)) {
         throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a vendor credit that has been applied' });
       }
@@ -155,6 +212,10 @@ export class VendorCreditsService {
           reversalOfId: vc.journalEntryId, sourceType: 'vendor_credit_void', sourceId: vc.id,
         });
       }
+      // The goods never went back to the supplier after all — put them on the
+      // shelf, in the same transaction as the reversing entry above.
+      await this.relieveReturnedStock(manager, companyId, vc, true);
+
       const vendor = await manager.findOne(Vendor, { where: { id: vc.vendorId, companyId } });
       if (vendor) { vendor.balance = addMoney(vendor.balance, vc.total).toFixed(4); await manager.save(vendor); }
       vc.status = 'void';
@@ -195,4 +256,84 @@ export class VendorCreditsService {
     await this.repo.remove(vc);
     return { id, deleted: true };
   }
+
+  /**
+   * Move the returned goods off the shelf (or back onto it, on void).
+   *
+   * The journal entry credits Inventory 1200 by the line's `amount`, so the
+   * subledger has to fall by exactly that same figure — otherwise
+   * SUM(qty x unit_cost) and the control account drift apart permanently
+   * (invariant I13). Relieving `quantity` units at the line's implied unit
+   * value (amount / quantity) and re-averaging the remainder is what keeps the
+   * two equal, and it mirrors how a credit-memo restock folds units back in.
+   */
+  private async relieveReturnedStock(
+    manager: EntityManager,
+    companyId: string,
+    vc: VendorCredit,
+    reverse: boolean,
+  ): Promise<void> {
+    const itemRepo = manager.getRepository(InventoryItem);
+    const moveRepo = manager.getRepository(InventoryMovement);
+
+    for (const line of vc.lines) {
+      if (!line.itemId) continue;
+      const qty = toDecimal(line.quantity ?? '0');
+      if (!qty.greaterThan(0)) continue;
+
+      const item = await itemRepo
+        .createQueryBuilder('i')
+        .setLock('pessimistic_write')
+        .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
+        .getOne();
+      if (!item) {
+        throw new NotFoundException({
+          code: 'ITEM_NOT_FOUND',
+          message: `Inventory item ${line.itemId} no longer exists, so this credit cannot move stock.`,
+        });
+      }
+
+      const onHand = toDecimal(item.quantityOnHand);
+      if (!reverse) {
+        // You cannot send back more than you hold. Refuse cleanly rather than
+        // tripping chk_no_negative_stock as a raw 500 (I11).
+        assertSufficientStock(item.name, onHand, qty);
+      }
+      const newQty = reverse ? onHand.plus(qty) : onHand.minus(qty);
+      const movedValue = toDecimal(line.amount);
+
+      if (newQty.greaterThan(0)) {
+        const currentValue = onHand.times(toDecimal(item.unitCost));
+        const nextValue = reverse
+          ? currentValue.plus(movedValue)
+          : currentValue.minus(movedValue);
+        item.unitCost = nextValue
+          .dividedBy(newQty)
+          .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+          .toFixed(4);
+      } else {
+        // Last unit gone: zero stock at zero cost is the only self-consistent
+        // resting state, and the next receipt sets the cost outright.
+        item.unitCost = '0';
+      }
+
+      item.quantityOnHand = newQty.toFixed(4);
+      await itemRepo.save(item);
+
+      await moveRepo.save(
+        moveRepo.create({
+          companyId,
+          itemId: item.id,
+          date: vc.date,
+          type: reverse ? 'return' : 'sale',
+          quantityChange: (reverse ? qty : qty.negated()).toFixed(4),
+          balanceAfter: newQty.toFixed(4),
+          reference: vc.vendorCreditNumber,
+          sourceType: reverse ? 'vendor_credit_void' : 'vendor_credit',
+          sourceId: vc.id,
+        }),
+      );
+    }
+  }
+
 }

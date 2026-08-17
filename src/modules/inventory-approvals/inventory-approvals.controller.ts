@@ -47,8 +47,12 @@ export class InventoryApprovalsController {
     return this.svc.getById(companyId, id);
   }
 
+  // Admin only, matching /inventory-update-requests/:id/approve which reaches
+  // the identical code. Reviewing a delivery posts revenue, COGS and relieves
+  // Goods in Transit — leaving this open to staff meant the stricter guard on
+  // the other route could simply be walked around.
   @Patch(':id/review')
-  @Roles('admin', 'staff')
+  @Roles('admin')
   async review(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,

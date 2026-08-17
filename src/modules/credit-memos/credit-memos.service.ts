@@ -18,6 +18,7 @@ import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { Invoice } from '../invoices/entities/invoice.entity';
 import { ACCT_AR, ACCT_CASH, ACCT_COGS, ACCT_INVENTORY, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
 
 @Injectable()
@@ -135,7 +136,14 @@ export class CreditMemosService {
 
   async applyToInvoice(companyId: string, id: string, dto: ApplyCreditMemoDto): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) => {
-      const cm = await manager.findOne(CreditMemo, { where: { id, companyId } });
+      // Lock the credit itself, not just the invoice. Without this two
+      // concurrent applies of the same credit both read the same balance,
+      // both pass the EXCEEDS_CREDIT check, and the second amountApplied
+      // write wins — spending the credit twice (M1).
+      const cm = await manager.findOne(CreditMemo, {
+        where: { id, companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
       if (cm.status === 'void' || cm.status === 'refunded' || cm.status === 'closed') {
         throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Credit memo is ${cm.status}` });
@@ -143,6 +151,17 @@ export class CreditMemosService {
       const amt = toDecimal(dto.amount);
       if (amt.greaterThan(toDecimal(cm.balance))) {
         throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
+      }
+      // A customer's credit can only settle that customer's invoice.
+      const target = await manager.findOne(Invoice, { where: { id: dto.invoiceId, companyId } });
+      if (!target) {
+        throw new NotFoundException({ code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' });
+      }
+      if (target.customerId !== cm.customerId) {
+        throw new BadRequestException({
+          code: 'CUSTOMER_MISMATCH',
+          message: 'That invoice belongs to a different customer.',
+        });
       }
       await this.invoices.applyPayment(manager, companyId, dto.invoiceId, dto.amount);
       cm.amountApplied = addMoney(cm.amountApplied, amt).toFixed(4);
@@ -185,6 +204,18 @@ export class CreditMemosService {
     return this.dataSource.transaction(async (manager) => {
       const cm = await manager.findOne(CreditMemo, { where: { id, companyId }, relations: { lines: true } });
       if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
+      if (cm.status === 'void') {
+        throw new BadRequestException({ code: 'ALREADY_VOID', message: 'Credit memo is already void' });
+      }
+      // refund() zeroes the balance but leaves amountApplied at 0, so without
+      // this the ALREADY_APPLIED guard lets a refunded memo be voided too —
+      // the cash has gone out AND the memo gets reversed.
+      if (cm.status === 'refunded') {
+        throw new BadRequestException({
+          code: 'ALREADY_REFUNDED',
+          message: 'Cannot void a credit memo that has been refunded.',
+        });
+      }
       if (toDecimal(cm.amountApplied).greaterThan(0)) {
         throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a credit memo that has been applied' });
       }
@@ -303,6 +334,15 @@ export class CreditMemosService {
           .dividedBy(newQty)
           .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
           .toFixed(4);
+      } else if (reverse) {
+        // The void took the last unit out. There is no quantity left to carry
+        // an average, and leaving the old one standing means the NEXT receipt
+        // re-averages against a cost that no longer values anything: the
+        // valuation falls by qty × the stale average while the GL falls by
+        // qty × the frozen cost, and the two never meet again (I13).
+        // Zero stock at zero cost is the only self-consistent resting state —
+        // 0 × anything is 0, and the next receipt sets the cost outright.
+        item.unitCost = '0';
       }
 
       item.quantityOnHand = newQty.toFixed(4);

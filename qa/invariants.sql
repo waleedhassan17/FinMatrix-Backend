@@ -155,3 +155,29 @@ FROM journal_entry_lines l
 JOIN journal_entries e ON e.id = l.entry_id
 JOIN accounts a ON a.id = l.account_id
 WHERE a.company_id <> e.company_id;
+
+-- I15. Goods in Transit (1250) must be a way-station, not a resting place.
+--
+-- Dispatch moves stock Dr 1250 / Cr 1200 at the frozen cost; approval relieves
+-- it Dr COGS + Dr 1200 / Cr 1250, and rejection reverses it Dr 1200 / Cr 1250.
+-- Either way, once a delivery is resolved its net effect on 1250 is zero. A
+-- non-zero residue means a delivery was half-posted -- the goods left inventory
+-- and never arrived anywhere, which no other invariant detects because each
+-- individual entry still balances on its own.
+--
+-- Read from general_ledger, which is the table carrying source_id (journal
+-- entries themselves do not).
+SELECT 'I15 GOODS IN TRANSIT RESIDUE' AS violation,
+       t.company_id, t.delivery_id, t.ledger_status, t.residue
+FROM (
+  SELECT d.id AS delivery_id, d.company_id, d.ledger_status,
+         (SELECT COALESCE(SUM(g.debit - g.credit), 0)
+            FROM general_ledger g
+            JOIN accounts a ON a.id = g.account_id
+           WHERE g.source_id = d.id
+             AND g.company_id = d.company_id
+             AND a.account_number = '1250')::numeric(18,4) AS residue
+    FROM deliveries d
+   WHERE d.ledger_status IN ('committed', 'returned')
+) t
+WHERE abs(t.residue) > 0.01;
