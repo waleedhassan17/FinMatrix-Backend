@@ -6,6 +6,7 @@ const num = (v: any) => parseFloat(v ?? '0') || 0;
 
 interface RawLine {
   date: string;
+  postedAt: string;
   reference: string;
   accountCode: string;
   accountName: string;
@@ -16,64 +17,62 @@ interface RawLine {
   sourceId: string;
 }
 
-// Standard accounts the derived ledger posts against.
-const ACC = {
-  CASH: { code: '1000', name: 'Cash & Bank' },
-  AR: { code: '1100', name: 'Accounts Receivable' },
-  AP: { code: '2000', name: 'Accounts Payable' },
-  TAX: { code: '2100', name: 'Sales Tax Payable' },
-  REVENUE: { code: '4000', name: 'Sales Revenue' },
-  EXPENSE: { code: '5000', name: 'Cost of Goods Sold & Expenses' },
-};
-
 @Injectable()
 export class LedgerService {
   constructor(private readonly dataSource: DataSource) {}
 
-  /** Synthesize double-entry ledger lines from posted documents. */
+  /**
+   * The general ledger, read from the ledger.
+   *
+   * This used to SYNTHESIZE entries from documents: it selected invoices,
+   * bills and payments and invented a two-line entry for each against six
+   * hardcoded "standard accounts" — every bill was reported as
+   * DR 5000 Cost of Goods Sold, whatever had actually been posted. So a bill
+   * that correctly cleared GRNI (DR 2050 / CR 2000) appeared in the general
+   * ledger as an expense, and entries that are not invoice/bill/payment —
+   * goods receipts, inventory adjustments, opening stock, reversals of deleted
+   * documents, and every manual journal entry — did not appear at all. A
+   * report that contradicts the book of record is worse than no report.
+   *
+   * It now reads journal_entry_lines joined to their accounts, so it shows the
+   * entries that exist, with the account each one really hit.
+   */
   private async buildLines(companyId: string, s: string, e: string): Promise<RawLine[]> {
-    const lines: RawLine[] = [];
+    const rows = await this.dataSource.query(
+      `SELECT je.date::text                                   AS date,
+              je.created_at                                   AS "postedAt",
+              je.reference                                    AS reference,
+              COALESCE(NULLIF(l.description, ''), je.memo, '') AS memo,
+              a.account_number                                AS "accountCode",
+              a.name                                          AS "accountName",
+              l.debit                                         AS debit,
+              l.credit                                        AS credit,
+              je.id                                           AS "entryId"
+         FROM journal_entry_lines l
+         JOIN journal_entries je ON je.id = l.entry_id
+         JOIN accounts a        ON a.id = l.account_id
+        WHERE je.company_id = $1
+          AND je.status = 'posted'
+          AND je.date BETWEEN $2 AND $3
+        ORDER BY je.date ASC, je.created_at ASC, l.line_order ASC`,
+      [companyId, s, e],
+    );
 
-    const invoices = await this.dataSource.query(
-      `SELECT id, invoice_number ref, invoice_date d, total, tax_amount tax, subtotal, discount_amount disc
-       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') AND invoice_date BETWEEN $2 AND $3`,
-      [companyId, s, e]);
-    for (const i of invoices) {
-      const net = num(i.subtotal) - num(i.disc);
-      lines.push(mk(i.d, i.ref, ACC.AR, `Invoice ${i.ref}`, num(i.total), 0, 'invoice', i.id));
-      lines.push(mk(i.d, i.ref, ACC.REVENUE, `Invoice ${i.ref}`, 0, net, 'invoice', i.id));
-      if (num(i.tax) > 0) lines.push(mk(i.d, i.ref, ACC.TAX, `Invoice ${i.ref} tax`, 0, num(i.tax), 'invoice', i.id));
-    }
-
-    const bills = await this.dataSource.query(
-      `SELECT id, bill_number ref, bill_date d, total FROM bills
-       WHERE company_id=$1 AND status NOT IN ('void','draft') AND bill_date BETWEEN $2 AND $3`,
-      [companyId, s, e]);
-    for (const b of bills) {
-      lines.push(mk(b.d, b.ref, ACC.EXPENSE, `Bill ${b.ref}`, num(b.total), 0, 'bill', b.id));
-      lines.push(mk(b.d, b.ref, ACC.AP, `Bill ${b.ref}`, 0, num(b.total), 'bill', b.id));
-    }
-
-    const pays = await this.dataSource.query(
-      `SELECT id, payment_date d, amount, reference ref FROM payments
-       WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3`, [companyId, s, e]).catch(() => []);
-    for (const p of pays) {
-      const ref = p.ref || 'Payment';
-      lines.push(mk(p.d, ref, ACC.CASH, `Customer payment`, num(p.amount), 0, 'payment', p.id));
-      lines.push(mk(p.d, ref, ACC.AR, `Customer payment`, 0, num(p.amount), 'payment', p.id));
-    }
-
-    const billPays = await this.dataSource.query(
-      `SELECT id, payment_date d, total_amount amount, reference ref FROM bill_payments
-       WHERE company_id=$1 AND payment_date BETWEEN $2 AND $3`, [companyId, s, e]).catch(() => []);
-    for (const p of billPays) {
-      const ref = p.ref || 'Bill payment';
-      lines.push(mk(p.d, ref, ACC.AP, `Bill payment`, num(p.amount), 0, 'bill_payment', p.id));
-      lines.push(mk(p.d, ref, ACC.CASH, `Bill payment`, 0, num(p.amount), 'bill_payment', p.id));
-    }
-
-    lines.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    return lines;
+    return rows.map((r: any) => ({
+      date: r.date,
+      // The posting date is the accounting date and is a DATE column, so it
+      // carries no time. created_at is when the entry was actually recorded —
+      // that is the timestamp an audit trail needs.
+      postedAt: r.postedAt instanceof Date ? r.postedAt.toISOString() : String(r.postedAt ?? ''),
+      reference: r.reference ?? '',
+      accountCode: r.accountCode ?? '',
+      accountName: r.accountName ?? '',
+      memo: r.memo ?? '',
+      debit: num(r.debit),
+      credit: num(r.credit),
+      sourceType: 'journal_entry',
+      sourceId: r.entryId,
+    }));
   }
 
   /** Chronological ledger, optionally filtered to a single account code. */
@@ -91,6 +90,7 @@ export class LedgerService {
       runningByAccount.set(l.accountCode, balance);
       return {
         date: l.date,
+        postedAt: l.postedAt,
         reference: l.reference,
         accountCode: l.accountCode,
         accountName: l.accountName,
@@ -130,17 +130,4 @@ export class LedgerService {
       .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
     return { range: { startDate: s, endDate: e }, accounts };
   }
-}
-
-function mk(
-  date: string,
-  reference: string,
-  acc: { code: string; name: string },
-  memo: string,
-  debit: number,
-  credit: number,
-  sourceType: string,
-  sourceId: string,
-): RawLine {
-  return { date, reference, accountCode: acc.code, accountName: acc.name, memo, debit, credit, sourceType, sourceId };
 }
