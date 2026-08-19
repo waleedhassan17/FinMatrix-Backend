@@ -106,6 +106,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
         return 'FORBIDDEN';
       case HttpStatus.NOT_FOUND:
         return 'NOT_FOUND';
+      // A conflict and an unprocessable entity are both the caller's answer to
+      // act on, not a server fault. Falling through to INTERNAL_ERROR told
+      // clients a duplicate submission or a refused posting was a crash —
+      // which is exactly the thing a client is entitled to retry.
+      case HttpStatus.CONFLICT:
+        return 'CONFLICT';
+      case HttpStatus.UNPROCESSABLE_ENTITY:
+        return 'UNPROCESSABLE';
       case HttpStatus.TOO_MANY_REQUESTS:
         return 'RATE_LIMIT';
       default:
