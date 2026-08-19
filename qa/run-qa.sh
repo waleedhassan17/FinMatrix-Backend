@@ -47,9 +47,16 @@ run_sql() {
   elif have_container; then
     docker exec -i "$PG_CONTAINER" \
       psql "${PSQL_FLAGS[@]}" -U "$DB_USER" -d "$DB_NAME" < "$SQL_FILE"
+  elif [[ -n "${DATABASE_URL:-}" ]] && command -v node >/dev/null 2>&1; then
+    # No psql binary. Rather than dead-end here -- which is what pushed the
+    # check into a throwaway script that silently parsed nothing -- hand off to
+    # the Node runner, which needs only the `pg` dependency and enforces that
+    # it ran every invariant the file declares.
+    node "$SCRIPT_DIR/run-qa.js"
+    exit $?
   else
-    echo "run-qa: need either DATABASE_URL with a psql client, or a running" >&2
-    echo "        container named '$PG_CONTAINER'." >&2
+    echo "run-qa: need DATABASE_URL with either a psql client or node, or a" >&2
+    echo "        running container named '$PG_CONTAINER'." >&2
     exit 2
   fi
 }

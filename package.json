@@ -50,7 +50,8 @@
     "test:qa": "bash qa/run-qa.sh",
     "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close",
     "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
-    "qa": "npm run qa:scenario && npm run test:qa"
+    "qa": "npm run qa:scenario && npm run test:qa",
+    "qa:invariants": "node qa/run-qa.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
