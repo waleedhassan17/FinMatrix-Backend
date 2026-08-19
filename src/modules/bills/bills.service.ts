@@ -406,6 +406,12 @@ export class BillsService {
             message: 'Bill belongs to a different vendor',
           });
         }
+        if (bill.status === 'draft' || bill.status === 'void') {
+          throw new BadRequestException({
+            code: 'BILL_NOT_POSTED',
+            message: `Bill ${bill.billNumber} is ${bill.status} — it is not owed yet, so it cannot be paid.`,
+          });
+        }
         const amt = toDecimal(app.amount);
         if (!isPositive(amt)) {
           throw new BadRequestException({
@@ -491,6 +497,20 @@ export class BillsService {
       throw new NotFoundException({
         code: 'BILL_NOT_FOUND',
         message: 'Bill not found',
+      });
+    }
+    // A draft bill has no journal entry, so it is not a liability yet: account
+    // 2000 has never heard of it. Settling one — with cash or with a credit —
+    // consumes real money or a real credit against something that was never
+    // owed, and the payables subledger then permanently disagrees with 2000.
+    // A void bill is not owed either.
+    if (bill.status === 'draft' || bill.status === 'void') {
+      throw new BadRequestException({
+        code: 'BILL_NOT_POSTED',
+        message:
+          bill.status === 'draft'
+            ? 'This bill is still a draft. Post it before paying or applying credit to it.'
+            : 'This bill is void.',
       });
     }
     const amt = toDecimal(amount);
