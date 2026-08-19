@@ -103,6 +103,16 @@ export class BillsController {
     return this.bills.pay(companyId, user.id, dto);
   }
 
+  @Post(':billId/post')
+  @Roles('admin')
+  post(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('billId', ParseUUIDPipe) billId: string,
+  ) {
+    return this.bills.post(companyId, billId, user.id);
+  }
+
   @Delete(':billId')
   @Roles('admin')
   remove(

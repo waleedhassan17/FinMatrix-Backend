@@ -332,8 +332,21 @@ export class ReportsService {
     const billTotal = await this.sum('bills', 'total', companyId, 'bill_date', monthStart, monthEnd);
     const outstandingAR = (await this.dataSource.query(
       `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM invoices WHERE company_id=$1 AND status NOT IN ('paid','void')`, [companyId]))[0]?.v;
+    // What we owe suppliers, reconciled to account 2000.
+    //
+    // Two corrections to what this used to be. DRAFT bills post no journal
+    // entry at all, so counting them showed money that does not exist in the
+    // ledger and never cleared (apAging already excludes them — this was an
+    // inconsistency, not a judgement). And an unapplied vendor credit has
+    // already been debited to A/P, so the gross bill balances overstate the
+    // liability until the credit is applied to a specific bill.
     const pendingAP = (await this.dataSource.query(
-      `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM bills WHERE company_id=$1 AND status NOT IN ('paid','void')`, [companyId]))[0]?.v;
+      `SELECT GREATEST(
+                COALESCE((SELECT SUM(balance::numeric) FROM bills
+                           WHERE company_id=$1 AND status NOT IN ('paid','void','draft')), 0)
+              - COALESCE((SELECT SUM(balance::numeric) FROM vendor_credits
+                           WHERE company_id=$1 AND status NOT IN ('void','closed')), 0),
+              0) AS v`, [companyId]))[0]?.v;
     const itemCount = await this.itemRepo.count({ where: { companyId } });
     const deliveryStats = await this.deliveryRepo.createQueryBuilder('d')
       .select('d.status', 'status').addSelect('COUNT(*)', 'count')

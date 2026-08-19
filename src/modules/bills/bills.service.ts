@@ -66,6 +66,25 @@ export class BillsService {
     @InjectRepository(Vendor) private readonly vendorRepo: Repository<Vendor>,
   ) {}
 
+  /**
+   * A bill is overdue when its due date has passed and it still owes money.
+   *
+   * Nothing ever wrote 'overdue' to a bill: not create, not pay, not
+   * applyCredit — so the Overdue tab and the Overdue tile were permanently
+   * empty no matter how far past due a bill was. Invoices derive it when a
+   * payment is applied, which only refreshes on activity; deriving it on READ
+   * means a bill becomes overdue the day it actually does, with no scheduler
+   * and no stored state to drift.
+   */
+  private withDerivedStatus<T extends { status: string; dueDate: string; balance: string }>(bill: T): T {
+    const today = new Date().toISOString().slice(0, 10);
+    const owes = toDecimal(bill.balance).greaterThan(0);
+    if (owes && bill.dueDate < today && (bill.status === 'open' || bill.status === 'partial')) {
+      return { ...bill, status: 'overdue' };
+    }
+    return bill;
+  }
+
   async list(
     companyId: string,
     query: ListBillsQueryDto,
@@ -87,7 +106,9 @@ export class BillsService {
     const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
 
     return {
-      data: data.map((b) => ({ ...b, vendorName: vendorNameMap[b.vendorId] ?? '' })),
+      data: data.map((b) =>
+        this.withDerivedStatus({ ...b, vendorName: vendorNameMap[b.vendorId] ?? '' }),
+      ),
       pagination: {
         page: pagination.page,
         limit: pagination.limit,
@@ -109,6 +130,7 @@ export class BillsService {
       });
     }
     b.lines.sort((a, b) => a.lineOrder - b.lineOrder);
+    Object.assign(b, this.withDerivedStatus(b));
 
     // Enrich lines with the account name/number so the app's bill detail
     // and edit screens can display which account each line posts to.
@@ -493,6 +515,44 @@ export class BillsService {
    * first. Reading the original JE and swapping guarantees the reversal is
    * correct regardless of how it posted (e.g. input-tax split to 1300).
    */
+  /**
+   * Post a draft bill: create its journal entry and put it on the vendor's
+   * account. Until now there was no transition at all — `UpdateBillDto` has no
+   * status field, so the app's "Mark Open" button silently did nothing while
+   * reporting success, and a draft bill was a permanent dead end that still
+   * inflated the Payables tile.
+   */
+  async post(companyId: string, id: string, userId: string): Promise<Bill> {
+    return this.dataSource.transaction(async (manager) => {
+      const bill = await manager.findOne(Bill, {
+        where: { id, companyId },
+        relations: { lines: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!bill) {
+        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+      }
+      if (bill.status !== 'draft') {
+        throw new BadRequestException({
+          code: 'ALREADY_POSTED',
+          message: 'Only a draft bill can be posted.',
+        });
+      }
+
+      const vendor = await manager.findOne(Vendor, { where: { id: bill.vendorId, companyId } });
+      if (!vendor) {
+        throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+      }
+
+      bill.status = 'open';
+      await manager.save(bill);
+      await this.createJournalEntryForBill(manager, bill, userId);
+      vendor.balance = addMoney(vendor.balance, bill.total).toFixed(4);
+      await manager.save(vendor);
+      return bill;
+    });
+  }
+
   async delete(companyId: string, id: string, userId: string) {
     return this.dataSource.transaction(async (manager) => {
       const bill = await manager.findOne(Bill, {
