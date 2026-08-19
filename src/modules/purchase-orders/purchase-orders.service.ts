@@ -219,7 +219,20 @@ export class PurchaseOrdersService {
             // to qty × unitCost. Receipts at a new price re-average; negative
             // deltas (receipt corrections) relieve at the current average.
             if (delta.greaterThan(0) && newQty.greaterThan(0)) {
-              const oldValue = onHand.lessThan(0) ? new Decimal(0) : onHand.times(toDecimal(item.unitCost));
+              // Carry the CURRENT value even when on-hand is negative. Clamping
+              // it to zero here (while still dividing by the netted newQty) put
+              // the whole receipt cost on the smaller surviving quantity: an
+              // item at -18 units receiving 28 @ 1,800 was priced
+              // 50,400 / 10 = 5,040 instead of (-32,400 + 50,400) / 10 = 1,800,
+              // overstating the subledger by 32,400 against a GL that had
+              // correctly been debited the 50,400 actually purchased. That is
+              // precisely the identity I13 checks, and the clamp broke it
+              // silently. The credit-memo, vendor-credit and delivery re-average
+              // paths never clamped; this one now matches them.
+              //
+              // A negative on-hand is the only way the carried value goes
+              // negative, and I11 exists to stop that from arising at all.
+              const oldValue = onHand.times(toDecimal(item.unitCost));
               const newValue = oldValue.plus(delta.times(toDecimal(line.unitCost)));
               item.unitCost = newValue.dividedBy(newQty).toFixed(4);
             }
