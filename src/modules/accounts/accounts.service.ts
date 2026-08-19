@@ -22,8 +22,10 @@ import {
   ACCT_GOODS_IN_TRANSIT,
   ACCT_GRNI,
   ACCT_INVENTORY,
+  ACCT_INPUT_TAX,
   ACCT_INVENTORY_ADJUSTMENT,
   ACCT_OPENING_BALANCE_EQUITY,
+  ACCT_SALARY_EXPENSE,
   ACCT_SALES_REVENUE,
   ACCT_TAX_PAYABLE,
   isValidSubType,
@@ -32,7 +34,13 @@ import {
 import { AccountType } from '../../types';
 
 // Canonical accounts that auto-posting (invoices, payments, bills, tax,
-// payroll, inventory) depends on — these may never be deleted.
+// payroll, inventory) depends on — these may never be deleted OR deactivated.
+//
+// Deactivation used to be unguarded, and it is the more dangerous of the two:
+// delete() at least refuses, while toggle() would happily switch off Cash and
+// leave every cash payment, PAID delivery approval, credit-memo refund, tax
+// payment and payroll run failing with "Account 1000 is not active" — an error
+// naming an account the user was never thinking about.
 const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
   ACCT_CASH,
   ACCT_BANK,
@@ -46,7 +54,13 @@ const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
   ACCT_SALES_REVENUE,
   ACCT_COGS,
   ACCT_INVENTORY_ADJUSTMENT,
+  ACCT_INPUT_TAX,
+  ACCT_SALARY_EXPENSE,
 ]);
+
+/** Shared by delete() and the deactivation guard. */
+export const isSystemAccountNumber = (accountNumber: string): boolean =>
+  SYSTEM_ACCOUNT_NUMBERS.has(accountNumber);
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -87,7 +101,10 @@ export class AccountsService {
     const accounts = await qb.getMany();
 
     const summary = this.summarize(accounts);
-    return { accounts, summary };
+    // Tell the client which accounts auto-posting depends on, so it can hide
+    // the Deactivate action instead of showing "System Account: No" on Cash
+    // and letting the tap fail server-side.
+    return { accounts: accounts.map((a) => this.withSystemFlag(a)), summary };
   }
 
   async getById(companyId: string, id: string): Promise<Account> {
@@ -101,6 +118,10 @@ export class AccountsService {
     return account;
   }
 
+  private withSystemFlag<T extends { accountNumber: string }>(account: T) {
+    return { ...account, isSystemAccount: SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber) };
+  }
+
   async getDetail(companyId: string, id: string) {
     const account = await this.getById(companyId, id);
     const recentEntries = await this.glRepo.find({
@@ -108,7 +129,7 @@ export class AccountsService {
       order: { date: 'DESC', createdAt: 'DESC' },
       take: 10,
     });
-    return { account, recentEntries };
+    return { account: this.withSystemFlag(account), recentEntries };
   }
 
   async create(
@@ -269,12 +290,42 @@ export class AccountsService {
       if (dto.parentId) await this.getById(companyId, dto.parentId);
       account.parentId = dto.parentId ?? null;
     }
-    if (dto.isActive !== undefined) account.isActive = dto.isActive;
+    if (dto.isActive !== undefined) {
+      if (account.isActive && !dto.isActive) this.assertCanDeactivate(account);
+      account.isActive = dto.isActive;
+    }
     return this.repo.save(account);
+  }
+
+  /**
+   * Deactivating an account hides it from new postings but leaves its balance
+   * on the Balance Sheet — so an account switched off with money in it can no
+   * longer be corrected, and any auto-posting that needs it fails on an
+   * unrelated screen days later. Re-ACTIVATING is always allowed.
+   */
+  private assertCanDeactivate(account: Account): void {
+    if (SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber)) {
+      throw new BadRequestException({
+        code: 'SYSTEM_ACCOUNT_REQUIRED',
+        message:
+          `${account.accountNumber} ${account.name} is a system account — invoices, payments, ` +
+          'bills, tax and payroll post to it automatically, so it cannot be deactivated.',
+      });
+    }
+    if (!toDecimal(account.balance).isZero()) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_HAS_BALANCE',
+        message:
+          `${account.accountNumber} ${account.name} still holds ${account.balance}. ` +
+          'Move the balance to another account first — deactivating it would leave that ' +
+          'money on the Balance Sheet with no way to correct it.',
+      });
+    }
   }
 
   async toggle(companyId: string, id: string): Promise<Account> {
     const account = await this.getById(companyId, id);
+    if (account.isActive) this.assertCanDeactivate(account);
     account.isActive = !account.isActive;
     return this.repo.save(account);
   }

@@ -12,10 +12,14 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-
-const ACCT_SALARY_EXPENSE = '6200';
-const ACCT_CASH = '1000';
-const ACCT_TAX_PAYABLE = '2300';
+// Import the canonical numbers rather than re-declaring them: a local copy
+// drifts silently from the set that protects these accounts from deletion
+// and deactivation.
+import {
+  ACCT_CASH,
+  ACCT_SALARY_EXPENSE,
+  ACCT_TAX_PAYABLE,
+} from '../accounts/accounts.constants';
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
 @Injectable()

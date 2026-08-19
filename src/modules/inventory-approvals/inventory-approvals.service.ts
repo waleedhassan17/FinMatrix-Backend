@@ -111,7 +111,16 @@ export class InventoryApprovalsService {
         const beforeQty = item ? item.quantityOnHand : '0';
         const delivered = toDecimal(l.deliveredQty);
         const returned = toDecimal(l.returnedQty ?? '0');
-        const afterQty = toDecimal(beforeQty).plus(delivered).minus(returned);
+        // beforeQty is WAREHOUSE stock, and under the Goods-in-Transit flow the
+        // dispatched units already left it when the delivery was assigned to
+        // the rider. Approval sells the delivered units out of Goods in
+        // Transit (they never return to the shelf) and restocks only what came
+        // back — so the warehouse rises by `returned` and nothing else.
+        //
+        // This used to read `before + delivered - returned`, which moved stock
+        // in the wrong direction on both terms and is the figure every later
+        // report reads.
+        const afterQty = toDecimal(beforeQty).plus(returned);
 
         const line = lineRepo.create({
           requestId: req.id,

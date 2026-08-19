@@ -142,6 +142,7 @@ export const ACCT_AR = '1100';
 export const ACCT_INVENTORY = '1200';
 export const ACCT_GOODS_IN_TRANSIT = '1250';
 export const ACCT_INPUT_TAX = '1300';
+export const ACCT_SALARY_EXPENSE = '6200';
 export const ACCT_GRNI = '2050';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
