@@ -158,12 +158,24 @@ export class InventoryApprovalsService {
     if (dto.action === 'approved') {
       return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewerId);
     }
-    return this.reject(
-      companyId,
-      id,
-      { reviewerComment: dto.notes ?? 'Rejected' },
-      reviewerId,
-    );
+
+    // Rejecting reverses stock out of Goods in Transit and is the reason the
+    // rider is told to bring goods back, so it has to say why. The dedicated
+    // reject route has always required a reason of at least 5 characters —
+    // this route defaulted a missing one to the literal 'Rejected', which meant
+    // the same action carried a real audit note or a meaningless one purely
+    // depending on which endpoint the caller happened to use.
+    const reason = (dto.notes ?? '').trim();
+    if (reason.length < 5) {
+      throw new BadRequestException({
+        code: 'REJECT_REASON_REQUIRED',
+        message:
+          'A rejection needs a reason of at least 5 characters. It is sent to the ' +
+          'delivery personnel and stored as the audit note on the reversal.',
+      });
+    }
+
+    return this.reject(companyId, id, { reviewerComment: reason }, reviewerId);
   }
 
   // ==========================================================================
