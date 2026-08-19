@@ -181,3 +181,34 @@ FROM (
    WHERE d.ledger_status IN ('committed', 'returned')
 ) t
 WHERE abs(t.residue) > 0.01;
+
+-- I16. A delivery approval line's closing shelf figure must be arithmetically
+-- reachable from its own opening figure.
+--
+-- `after_qty` is not decoration: stock reports read it as the closing warehouse
+-- quantity for that item at that moment. Under the Goods-in-Transit flow the
+-- dispatched units left on-hand at assignment, so approval only puts the
+-- returns back (`before + returned`); a request that was never applied left
+-- the shelf exactly where it was (`before`). Subtracting the delivered units
+-- from a figure that already excludes them removes the same goods twice, and
+-- nothing else catches it -- the ledger still balances, because this column
+-- posts nothing.
+--
+-- Legacy pre-GIT deliveries (stock_committed_at IS NULL) never moved stock at
+-- assignment, so `before - delivered + returned` is correct for them.
+SELECT 'I16 DELIVERY AFTER_QTY UNREACHABLE' AS violation,
+       r.company_id, r.id AS request_id, r.status, l.item_name,
+       l.before_qty, l.delivered_qty, l.returned_qty, l.after_qty,
+       CASE
+         WHEN d.stock_committed_at IS NULL THEN l.before_qty - l.delivered_qty + l.returned_qty
+         WHEN r.status = 'approved' THEN l.before_qty + l.returned_qty
+         ELSE l.before_qty
+       END AS expected_after_qty
+FROM inventory_update_request_lines l
+JOIN inventory_update_requests r ON r.id = l.request_id
+LEFT JOIN deliveries d ON d.id = r.delivery_id
+WHERE abs(l.after_qty - CASE
+        WHEN d.stock_committed_at IS NULL THEN l.before_qty - l.delivered_qty + l.returned_qty
+        WHEN r.status = 'approved' THEN l.before_qty + l.returned_qty
+        ELSE l.before_qty
+      END) > 0.0001;
