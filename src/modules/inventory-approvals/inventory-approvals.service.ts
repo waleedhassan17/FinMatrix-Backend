@@ -105,22 +105,34 @@ export class InventoryApprovalsService {
       });
       await reqRepo.save(req);
 
+      // Under the Goods-in-Transit flow the dispatched units left warehouse
+      // stock when the delivery was assigned, so warehouse on-hand no longer
+      // contains them. Legacy pre-GIT deliveries never moved the stock, so it
+      // is still on the shelf. `afterQty` has to follow the same split the
+      // validation below already makes, or it reports the wrong shelf figure.
+      const dispatchedAtAssignment = !!(
+        await em.getRepository(Delivery).findOne({
+          where: { id: dto.deliveryId, companyId },
+          select: { id: true, stockCommittedAt: true } as any,
+        })
+      )?.stockCommittedAt;
+
       const lines: InventoryUpdateRequestLine[] = [];
       for (const l of dto.lines) {
         const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
         const beforeQty = item ? item.quantityOnHand : '0';
         const delivered = toDecimal(l.deliveredQty);
         const returned = toDecimal(l.returnedQty ?? '0');
-        // beforeQty is WAREHOUSE stock, and under the Goods-in-Transit flow the
-        // dispatched units already left it when the delivery was assigned to
-        // the rider. Approval sells the delivered units out of Goods in
-        // Transit (they never return to the shelf) and restocks only what came
-        // back — so the warehouse rises by `returned` and nothing else.
+        // GIT: the delivered units are already out of the warehouse and are sold
+        // straight out of Goods in Transit, so only the returns come back.
+        // Legacy: the goods are still on the shelf and the delivery removes them.
         //
-        // This used to read `before + delivered - returned`, which moved stock
-        // in the wrong direction on both terms and is the figure every later
-        // report reads.
-        const afterQty = toDecimal(beforeQty).plus(returned);
+        // This used to read `before + delivered - returned` in both cases, which
+        // moved stock the wrong way on both terms — and afterQty is the figure
+        // every later report reads.
+        const afterQty = dispatchedAtAssignment
+          ? toDecimal(beforeQty).plus(returned)
+          : toDecimal(beforeQty).minus(delivered).plus(returned);
 
         const line = lineRepo.create({
           requestId: req.id,
@@ -294,7 +306,15 @@ export class InventoryApprovalsService {
       for (const c of changes) {
         const item = itemById.get(c.itemId);
         const serverBeforeQty = item ? Number(item.quantityOnHand) : c.beforeQty;
-        const afterQty = serverBeforeQty - c.deliveredQty + c.returnedQty;
+        // Same split the validation above makes: when stock was committed to
+        // Goods in Transit at assignment, warehouse on-hand already excludes
+        // the dispatched units, so subtracting `delivered` here removes them a
+        // second time. That is how an approved delivery of 10 against 15 on
+        // hand recorded a closing shelf figure of 5 while the item really held
+        // 15 — and afterQty is what every later report reads.
+        const afterQty = delivery.stockCommittedAt
+          ? serverBeforeQty + c.returnedQty
+          : serverBeforeQty - c.deliveredQty + c.returnedQty;
 
         await lineRepo.save(
           lineRepo.create({
