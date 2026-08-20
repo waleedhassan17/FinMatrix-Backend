@@ -183,6 +183,7 @@ async function main() {
   console.log('=== FinMatrix delivery flow vs the diagram ===');
   console.log(`company ${admin.companyId}  api ${BASE}\n`);
 
+  await branchSupplierSide();
   await branchNoEntryOnCreate();
   await branchAssign();
   await branchApprovePaid();
@@ -190,11 +191,82 @@ async function main() {
   await branchReject();
   await branchLaterPayment();
   await branchPrepaid();
+  await branchCreditMemo();
+  await branchVendorCredit();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\nbranches: ${results.length} | conforming: ${results.length - failed.length} | deviating: ${failed.length}`);
   await db.end();
   process.exit(failed.length === 0 ? 0 : 1);
+}
+
+// ── SUPPLIER SIDE: PO -> Receive -> Bill -> Pay ─────────────────────────────
+async function branchSupplierSide() {
+  const o = { token: admin.token, companyId: admin.companyId };
+  const item = seed.items.A;
+  const qty = 6, cost = 100;
+
+  // Purchase Order -> no entry (a commitment, not a transaction)
+  const mPo = mark();
+  const po = data(await post('/purchase-orders', {
+    vendorId: seed.vendorId, orderDate: today(),
+    lines: [{ description: item.name, orderedQty: String(qty), unitCost: String(cost), itemId: item.id }],
+  }, o));
+  await new Promise((r) => setTimeout(r, 500));
+  record('Purchase Order -> no entry (a commitment, not a transaction)', [
+    nothingPosted(await ledgerSince(mPo), 'no journal lines posted'),
+  ]);
+
+  // Receive Items -> Dr Inventory / Cr GRNI
+  const mRec = mark();
+  const rec = await post(`/purchase-orders/${po.id}/receive`,
+    { lines: (po.lines || []).map((l) => ({ lineId: l.id, receivedQty: String(qty) })) }, o);
+  await new Promise((r) => setTimeout(r, 600));
+  const ledRec = await ledgerSince(mRec);
+  const value = qty * cost;
+  record('Receive Items -> Dr Inventory / Cr GRNI (stock arrives, we owe "something")', [
+    { label: `receive ${rec.status}`, pass: rec.status < 400, expected: '<400', actual: String(rec.status) },
+    movement(ledRec, '1200', 'Inventory', value, 0),
+    movement(ledRec, '2050', 'GRNI', 0, value),
+    untouched(ledRec, '2000', 'Accounts Payable'),
+  ]);
+
+  // Convert to Bill -> Dr GRNI / Cr A/P (GRNI nets to ZERO)
+  const mBill = mark();
+  const br = await post(`/purchase-orders/${po.id}/create-bill`,
+    { billNumber: 'FT-B-' + Date.now().toString().slice(-6), billDate: today(), dueDate: today() }, o);
+  await new Promise((r) => setTimeout(r, 600));
+  const ledBill = await ledgerSince(mBill);
+  // create-bill answers { po, billId } — fetch the bill for its total.
+  const billId = (data(br) || {}).billId || ((data(br) || {}).bill || {}).id;
+  const bill = billId ? data(await get(`/bills/${billId}`, o)) || {} : {};
+  const { rows: grni } = await db.query(
+    `SELECT COALESCE(ROUND(SUM(g.debit - g.credit), 2), 0) AS bal
+       FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+      WHERE g.company_id = $1 AND a.account_number = '2050'`, [admin.companyId]);
+  record('Convert to Bill -> Dr GRNI / Cr Accounts Payable (GRNI nets to ZERO)', [
+    { label: `create bill ${br.status}`, pass: br.status < 400, expected: '<400', actual: String(br.status) },
+    movement(ledBill, '2050', 'GRNI', value, 0),
+    movement(ledBill, '2000', 'Accounts Payable', 0, value),
+    { label: 'GRNI balance is zero across the whole company', pass: near(grni[0].bal, 0), expected: '0.00', actual: String(grni[0].bal) },
+  ]);
+
+  // Pay Bill -> Dr A/P / Cr Bank
+  const mPay = mark();
+  const pay = await post('/bills/pay', {
+    vendorId: seed.vendorId, paymentDate: today(), paymentMethod: 'bank_transfer',
+    bankAccountId: seed.accounts['1010'] ? seed.accounts['1010'].id : seed.accounts['1000'].id,
+    applications: [{ billId: bill.id, amount: String(bill.total) }],
+  }, o);
+  await new Promise((r) => setTimeout(r, 600));
+  const ledPay = await ledgerSince(mPay);
+  const bank = seed.accounts['1010'] ? '1010' : '1000';
+  record('Pay Bill -> Dr Accounts Payable / Cr Bank', [
+    { label: `pay ${pay.status}`, pass: pay.status < 400, expected: '<400', actual: `${pay.status} ${JSON.stringify(pay.body).slice(0, 160)}` },
+    movement(ledPay, '2000', 'Accounts Payable', money(bill.total), 0),
+    movement(ledPay, bank, 'Bank', 0, money(bill.total)),
+    untouched(ledPay, '5000', 'Cost of Goods Sold'),
+  ]);
 }
 
 // ── Branch: creating a delivery must post nothing ────────────────────────────
@@ -369,18 +441,89 @@ async function branchLaterPayment() {
 
 // ── Branch: PREPAID -- the diagram forbids revenue at dispatch ──────────────
 async function branchPrepaid() {
+  const o = { token: admin.token, companyId: admin.companyId };
   const m = mark();
   const { deliveryId, item, qty } = await runDelivery({ itemKey: 'B', qty: 3, prepaid: true });
   await new Promise((r) => setTimeout(r, 700));
   const led = await ledgerSince(m);
   const cost = item.cost * qty;
-  record('Assign to Rider (PREPAID) -> stock to Goods in Transit; NO revenue yet (diagram: "nothing is sold yet")', [
+  const revenue = item.price * qty;
+  record('Assign to Rider (PREPAID) -> stock to transit + cash to a LIABILITY; NO revenue yet', [
     movement(led, '1250', 'Goods in Transit', cost, 0),
     movement(led, '1200', 'Inventory', 0, cost),
+    movement(led, '1000', 'Cash', revenue, 0),
+    movement(led, '2400', 'Customer Advances', 0, revenue),
     untouched(led, '4000', 'Sales Revenue'),
     untouched(led, '5000', 'Cost of Goods Sold'),
   ]);
-  branchPrepaid.deliveryId = deliveryId;
+
+  await patch(`/deliveries/${deliveryId}/status`, { status: 'in_transit' }, o);
+  await patch(`/deliveries/${deliveryId}/status`, { status: 'delivered' }, o);
+  const sub = await submitBillPhoto({ deliveryId, item, qty });
+  const reqId = ((sub.body || {}).data || {}).requestId || ((sub.body || {}).data || {}).id;
+
+  const m2 = mark();
+  const appr = await patch(`/inventory-approvals/${reqId}/review`, { action: 'approved', notes: 'flow e2e prepaid' }, o);
+  await new Promise((r) => setTimeout(r, 800));
+  const led2 = await ledgerSince(m2);
+  record('Admin APPROVES (PREPAID) -> advance released to Sales + Dr COGS / Cr Goods in Transit', [
+    { label: `approve ${appr.status}`, pass: appr.status < 400, expected: '<400', actual: `${appr.status} ${JSON.stringify(appr.body).slice(0, 160)}` },
+    movement(led2, '4000', 'Sales Revenue', 0, revenue),
+    movement(led2, '2400', 'Customer Advances', revenue, 0),
+    untouched(led2, '1000', 'Cash'),
+    movement(led2, '5000', 'Cost of Goods Sold', cost, 0),
+    movement(led2, '1250', 'Goods in Transit', 0, cost),
+  ]);
+}
+
+// ── After a sale is posted, a return needs a CREDIT MEMO ────────────────────
+async function branchCreditMemo() {
+  const o = { token: admin.token, companyId: admin.companyId };
+  const inv = rows(await get('/invoices?limit=100', o)).find((i) => money(i.total) > 0);
+  const item = seed.items.A;
+  const qty = 2;
+  const m = mark();
+  const cm = await post('/credit-memos', {
+    customerId: seed.customerId,
+    date: today(),
+    originalInvoiceId: inv ? inv.id : undefined,
+    reason: 'flow e2e customer return',
+    lines: [{ description: item.name, quantity: String(qty), unitPrice: String(item.price), taxRate: '0', itemId: item.id }],
+  }, o);
+  await new Promise((r) => setTimeout(r, 800));
+  const led = await ledgerSince(m);
+  const revenue = item.price * qty;
+  const cost = item.cost * qty;
+  record('AFTER a sale is posted, a return needs a CREDIT MEMO -> Dr Sales / Cr A-R + Dr Inventory / Cr COGS', [
+    { label: `credit memo ${cm.status}`, pass: cm.status < 400, expected: '<400', actual: `${cm.status} ${JSON.stringify(cm.body).slice(0, 200)}` },
+    movement(led, '4000', 'Sales Revenue', revenue, 0),
+    movement(led, '1100', 'Accounts Receivable', 0, revenue),
+    movement(led, '1200', 'Inventory', cost, 0),
+    movement(led, '5000', 'Cost of Goods Sold', 0, cost),
+  ]);
+}
+
+// ── After a purchase is billed, a return needs a VENDOR CREDIT ──────────────
+async function branchVendorCredit() {
+  const o = { token: admin.token, companyId: admin.companyId };
+  const item = seed.items.B;
+  const qty = 2;
+  const m = mark();
+  const vc = await post('/vendor-credits', {
+    vendorId: seed.vendorId,
+    date: today(),
+    reason: 'flow e2e purchase return',
+    lines: [{ description: item.name, amount: String(item.cost * qty), itemId: item.id, quantity: String(qty) }],
+  }, o);
+  await new Promise((r) => setTimeout(r, 800));
+  const led = await ledgerSince(m);
+  const cost = item.cost * qty;
+  record('AFTER a purchase is billed, a return needs a VENDOR CREDIT -> Dr Accounts Payable / Cr Inventory', [
+    { label: `vendor credit ${vc.status}`, pass: vc.status < 400, expected: '<400', actual: `${vc.status} ${JSON.stringify(vc.body).slice(0, 200)}` },
+    movement(led, '2000', 'Accounts Payable', cost, 0),
+    movement(led, '1200', 'Inventory', 0, cost),
+    untouched(led, '5000', 'Cost of Goods Sold'),
+  ]);
 }
 
 main().catch((e) => {
