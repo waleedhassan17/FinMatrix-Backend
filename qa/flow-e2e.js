@@ -188,6 +188,8 @@ async function main() {
   await branchApprovePaid();
   await branchApproveUnpaid();
   await branchReject();
+  await branchLaterPayment();
+  await branchPrepaid();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\nbranches: ${results.length} | conforming: ${results.length - failed.length} | deviating: ${failed.length}`);
@@ -331,6 +333,54 @@ async function branchReject() {
       actual: String(d.ledger_status),
     },
   ]);
+}
+
+// ── Branch: paying an already-approved UNPAID sale must not move the P&L ────
+async function branchLaterPayment() {
+  const o = { token: admin.token, companyId: admin.companyId };
+  const inv = rows(await get('/invoices?limit=100', o)).find((i) => money(i.balance) > 0);
+  if (!inv) {
+    record('if NOT PAID -> later: Dr Bank / Cr A/R (payment only - P&L does NOT move again)', [
+      { label: 'an open invoice exists to pay', pass: false, expected: 'open invoice', actual: 'none found' },
+    ]);
+    return;
+  }
+  const m = mark();
+  const pay = await post('/payments', {
+    customerId: seed.customerId,
+    paymentDate: today(),
+    paymentMethod: 'bank_transfer',
+    accountId: seed.accounts['1010'] ? seed.accounts['1010'].id : seed.accounts['1000'].id,
+    amount: String(inv.balance),
+    applications: [{ invoiceId: inv.id, amount: String(inv.balance) }],
+  }, o);
+  await new Promise((r) => setTimeout(r, 700));
+  const led = await ledgerSince(m);
+  const amt = money(inv.balance);
+  const bank = seed.accounts['1010'] ? '1010' : '1000';
+  record('if NOT PAID -> later: Dr Bank / Cr A/R (payment only - P&L does NOT move again)', [
+    { label: `payment ${pay.status}`, pass: pay.status < 400, expected: '<400', actual: `${pay.status} ${JSON.stringify(pay.body).slice(0, 160)}` },
+    movement(led, bank, 'Bank', amt, 0),
+    movement(led, '1100', 'Accounts Receivable', 0, amt),
+    untouched(led, '4000', 'Sales Revenue'),
+    untouched(led, '5000', 'Cost of Goods Sold'),
+  ]);
+}
+
+// ── Branch: PREPAID -- the diagram forbids revenue at dispatch ──────────────
+async function branchPrepaid() {
+  const m = mark();
+  const { deliveryId, item, qty } = await runDelivery({ itemKey: 'B', qty: 3, prepaid: true });
+  await new Promise((r) => setTimeout(r, 700));
+  const led = await ledgerSince(m);
+  const cost = item.cost * qty;
+  record('Assign to Rider (PREPAID) -> stock to Goods in Transit; NO revenue yet (diagram: "nothing is sold yet")', [
+    movement(led, '1250', 'Goods in Transit', cost, 0),
+    movement(led, '1200', 'Inventory', 0, cost),
+    untouched(led, '4000', 'Sales Revenue'),
+    untouched(led, '5000', 'Cost of Goods Sold'),
+  ]);
+  branchPrepaid.deliveryId = deliveryId;
 }
 
 main().catch((e) => {
