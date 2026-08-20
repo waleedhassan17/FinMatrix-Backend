@@ -91,7 +91,9 @@ export class JournalEntriesService {
           credit: l.credit,
           lineOrder: l.lineOrder ?? i,
         })),
-        sourceType: 'journal_entry',
+        // Stamping the opening entry lets the dashboard's setup checklist
+        // recognise it; everything else is an ordinary manual journal.
+        sourceType: dto.isOpeningBalance ? 'opening_balance' : 'journal_entry',
       }),
     );
     return this.getById(companyId, entry.id);

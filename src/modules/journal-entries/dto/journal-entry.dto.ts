@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNumberString,
@@ -35,6 +36,24 @@ export class CreateJournalEntryDto {
   @ValidateNested({ each: true })
   @Type(() => JournalLineDto)
   lines!: JournalLineDto[];
+
+  /**
+   * Marks this as the company's opening entry, which stamps its GL rows with
+   * source_type='opening_balance'.
+   *
+   * A boolean rather than a free-text sourceType on purpose: the guided
+   * Opening Balances screen needs exactly this one classification, and the
+   * dashboard's setup checklist looks for it, but letting clients write an
+   * arbitrary source_type would let anything pollute the GL taxonomy that
+   * reports and reconciliation read.
+   */
+  @ApiPropertyOptional({
+    description:
+      "Tag this entry as the company's opening balances (source_type=opening_balance).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  isOpeningBalance?: boolean;
 }
 
 export class UpdateJournalEntryDto {
