@@ -394,6 +394,12 @@ export class DeliveriesService {
       }
 
       d.status = dto.status;
+      // The rider's cash flag normally arrives with the bill photo, but a
+      // client that settles it while marking the delivery delivered had no way
+      // to record it: the field was not on this DTO, so it was stripped and the
+      // delivery stayed 'unpaid' — and approval then debited Accounts
+      // Receivable instead of Cash, with no error to say why.
+      if (dto.paidStatus) d.paidStatus = dto.paidStatus;
       if (dto.status === 'cancelled') d.cancelReason = dto.notes ?? 'Cancelled by user';
       if (dto.status === 'delivered') d.completedAt = new Date();
       await repo.save(d);

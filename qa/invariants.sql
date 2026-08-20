@@ -212,3 +212,20 @@ WHERE abs(l.after_qty - CASE
         WHEN r.status = 'approved' THEN l.before_qty + l.returned_qty
         ELSE l.before_qty
       END) > 0.0001;
+
+-- I17. A delivery that has stopped moving must have a settled ledger status.
+--
+-- I15 only inspects deliveries whose ledger_status is already 'committed' or
+-- 'returned', so a delivery stuck at 'in_transit' is invisible to it -- which
+-- is exactly the state produced when a rejection posted its reversal but the
+-- status write was lost. Those deliveries are the ones most likely to be
+-- wrong, and nothing was watching them.
+--
+-- Terminal delivery statuses (delivered / returned / cancelled / failed) mean
+-- the goods are no longer in flight, so the ledger must have been settled too.
+SELECT 'I17 DELIVERY LEDGER STATUS UNSETTLED' AS violation,
+       d.company_id, d.reference_no, d.status, d.ledger_status
+FROM deliveries d
+WHERE d.status IN ('delivered', 'returned', 'cancelled', 'failed')
+  AND d.stock_committed_at IS NOT NULL
+  AND d.ledger_status NOT IN ('committed', 'returned');

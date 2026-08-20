@@ -103,6 +103,14 @@ export class DeliveryStatusUpdateDto {
   ] as DeliveryStatus[]) status!: DeliveryStatus;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() location?: { lat: number; lng: number };
+  @ApiPropertyOptional({
+    enum: ['paid', 'unpaid'],
+    description:
+      "Rider's cash flag, when it is settled at the same moment the delivery " +
+      'is marked delivered rather than at bill-photo capture. Posts NOTHING — ' +
+      'it decides the debit side (Cash vs A/R) of the Stage-3 revenue entry.',
+  })
+  @IsOptional() @IsEnum(['paid', 'unpaid']) paidStatus?: 'paid' | 'unpaid';
 }
 
 export class DeliveryQueryDto {

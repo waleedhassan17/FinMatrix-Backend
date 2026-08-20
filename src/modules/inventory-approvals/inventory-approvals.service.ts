@@ -688,10 +688,20 @@ export class InventoryApprovalsService {
           reviewerId,
           req.deliveryId,
         );
-        if (rejectDelivery.status !== 'returned') {
-          rejectDelivery.status = 'returned';
-          rejectDelivery.completedAt = new Date();
-          await em.getRepository(Delivery).save(rejectDelivery);
+        // Re-read: releaseOnReject loaded its OWN copy of this delivery and
+        // saved ledgerStatus='returned' on it. `rejectDelivery` was fetched
+        // before that call, so saving it here wrote the stale 'in_transit'
+        // straight back over the ledger's own update — which is why rejected
+        // deliveries kept reading 'in_transit' while their Goods in Transit
+        // residue was correctly 0. I15 only inspects committed/returned, so
+        // nothing caught it.
+        const fresh = await em.getRepository(Delivery).findOne({
+          where: { id: req.deliveryId, companyId },
+        });
+        if (fresh && fresh.status !== 'returned') {
+          fresh.status = 'returned';
+          fresh.completedAt = new Date();
+          await em.getRepository(Delivery).save(fresh);
         }
       }
 

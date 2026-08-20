@@ -1,0 +1,109 @@
+{
+ "companyId": "c52b2b7b-a3b3-41b8-9da1-a621eb7aa87d",
+ "admin": {
+  "email": "flowtest432850@finmatrix.pk",
+  "password": "FlowTest123!"
+ },
+ "rider": {
+  "email": "flowrider432850@finmatrix.pk",
+  "password": "FlowTest123!"
+ },
+ "seed": {
+  "customerId": "7740cd6c-6f86-41a7-b206-3c038eb48847",
+  "vendorId": "2af0bd6d-5eaf-4076-aefa-807b665b9c13",
+  "items": {
+   "A": {
+    "id": "eddc5357-e8b2-4af9-b729-3874b30b9ef6",
+    "name": "Widget A",
+    "sku": "FT-A",
+    "cost": 100,
+    "price": 150
+   },
+   "B": {
+    "id": "e6ea78d3-743a-4756-abff-3b87c8f765c8",
+    "name": "Widget B",
+    "sku": "FT-B",
+    "cost": 200,
+    "price": 300
+   }
+  },
+  "accounts": {
+   "1000": {
+    "id": "6d3b6657-6c44-45e5-8c26-7a89e2bbcbe9",
+    "name": "Cash"
+   },
+   "1010": {
+    "id": "391372fe-2a1f-4355-a0f4-1b48138afaef",
+    "name": "Business Checking"
+   },
+   "1100": {
+    "id": "f751837c-ba7e-4693-b1e8-339a77f2ba5b",
+    "name": "Accounts Receivable"
+   },
+   "1200": {
+    "id": "97e24896-892d-4088-b118-806c4adcdd17",
+    "name": "Inventory"
+   },
+   "1250": {
+    "id": "75f8cf36-f1f3-4867-8b6d-4f23d2574811",
+    "name": "Goods in Transit"
+   },
+   "1300": {
+    "id": "a3b597b0-8630-4d57-a099-130adfc7da80",
+    "name": "Sales Tax Recoverable (Input Tax)"
+   },
+   "2000": {
+    "id": "f393f07e-7ba6-4bf5-a60b-502c08bab0a6",
+    "name": "Accounts Payable"
+   },
+   "2050": {
+    "id": "5f10f1d4-75f5-4e01-b92a-b9aad52abcb5",
+    "name": "Inventory Received Not Billed (GRNI)"
+   },
+   "2300": {
+    "id": "f6413972-5c9f-4460-802a-436b65b94bad",
+    "name": "Sales Tax Payable"
+   },
+   "3000": {
+    "id": "1f66535e-dba2-426c-99b7-50fd862d1924",
+    "name": "Owner Equity"
+   },
+   "3100": {
+    "id": "73138404-a23b-4141-bb70-8f80f0d36b83",
+    "name": "Retained Earnings"
+   },
+   "3900": {
+    "id": "d5db2dd2-b68f-4582-b8ee-21682827f086",
+    "name": "Opening Balance Equity"
+   },
+   "4000": {
+    "id": "38dc0fd6-15ef-427c-bcc0-4e75e490eb0b",
+    "name": "Sales Revenue"
+   },
+   "5000": {
+    "id": "5b42d30f-7277-41c7-8b90-c999e799af79",
+    "name": "Cost of Goods Sold"
+   },
+   "6000": {
+    "id": "67665bab-20e7-4aea-99c8-c9fef64e657b",
+    "name": "Rent Expense"
+   },
+   "6100": {
+    "id": "56ecdf79-de90-4884-973d-17def4bae18b",
+    "name": "Utilities Expense"
+   },
+   "6200": {
+    "id": "44fb61bd-edec-41b4-b832-f417e8ad32f9",
+    "name": "Salary Expense"
+   },
+   "6300": {
+    "id": "07cd4590-e796-4268-b8c8-b93238f02fad",
+    "name": "Office Supplies"
+   },
+   "6400": {
+    "id": "e2b7f313-0431-4a00-9643-af025054e374",
+    "name": "Inventory Adjustment / Shrinkage"
+   }
+  }
+ }
+}
