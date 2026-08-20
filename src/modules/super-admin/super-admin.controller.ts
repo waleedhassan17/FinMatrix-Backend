@@ -20,6 +20,8 @@ import { FeatureOverrideDto } from './dto/feature-override.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { PublicRoute } from '../../common/decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 class SeedAdminDto {
   @IsString()
@@ -39,6 +41,17 @@ class SeedAdminDto {
   displayName!: string;
 }
 
+/**
+ * Constant-time string comparison. Hash first so the lengths always match:
+ * timingSafeEqual throws on unequal lengths, and that throw would itself leak
+ * the key's length.
+ */
+function timingSafeEquals(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(String(a ?? '')).digest();
+  const hb = createHash('sha256').update(String(b ?? '')).digest();
+  return timingSafeEqual(ha, hb);
+}
+
 function guardSuperAdmin(user: AuthenticatedUser) {
   if (user.role !== 'super_admin') {
     throw new ForbiddenException('Super admin access required');
@@ -51,13 +64,34 @@ export class SuperAdminController {
 
   // ─── Seed Super Admin (one-time setup) ──────────────────────────────────────
 
+  /**
+   * ONE-TIME platform bootstrap. This is the only unauthenticated route that
+   * can mint privilege, so it is deliberately hard to reach:
+   *
+   *  1. It used to fall back to a hardcoded master key when the env var was
+   *     unset — and the env var WAS unset in production, so a string published
+   *     in this repository was a working key to create a super admin over the
+   *     internet. A default that ships in source is not a secret. There is no
+   *     fallback now: no key configured means the route is closed.
+   *  2. Once any super admin exists the route is closed permanently, so the
+   *     window is a fresh install and nothing else.
+   *  3. The key is compared in constant time; a byte-by-byte compare on a
+   *     public endpoint leaks it.
+   *  4. Every rejection returns the SAME message, so a caller cannot learn
+   *     whether the key was wrong, the platform was already bootstrapped, or
+   *     bootstrapping is disabled entirely.
+   */
   @PublicRoute()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('seed')
   async seedAdmin(@Body() dto: SeedAdminDto) {
-    const masterKey = process.env.SUPER_ADMIN_MASTER_KEY ?? 'finmatrix-super-secret-2024';
-    if (dto.masterKey !== masterKey) {
-      throw new ForbiddenException('Invalid master key');
-    }
+    const closed = new ForbiddenException('Super admin bootstrap is not available.');
+
+    const masterKey = process.env.SUPER_ADMIN_MASTER_KEY;
+    if (!masterKey || masterKey.length < 32) throw closed;
+    if (await this.service.superAdminExists()) throw closed;
+    if (!timingSafeEquals(dto.masterKey, masterKey)) throw closed;
+
     return this.service.seedSuperAdmin(dto.email, dto.password, dto.displayName);
   }
 

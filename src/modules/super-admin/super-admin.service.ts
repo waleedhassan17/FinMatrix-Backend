@@ -37,6 +37,14 @@ export class SuperAdminService {
 
   // ─── Seed Super Admin ───────────────────────────────────────────────────────
 
+  /**
+   * Is the platform already bootstrapped? Once true, the public seed route is
+   * closed permanently — see SuperAdminController.seedAdmin.
+   */
+  async superAdminExists(): Promise<boolean> {
+    return (await this.userRepo.count({ where: { role: 'super_admin' } })) > 0;
+  }
+
   async seedSuperAdmin(email: string, password: string, displayName: string) {
     const existing = await this.userRepo.findOne({ where: { email: email.toLowerCase() } });
     if (existing) {
