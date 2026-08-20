@@ -30,6 +30,7 @@ import {
   ACCT_TAX_PAYABLE,
   isValidSubType,
   SYSTEM_ACCOUNT_DEFS,
+  ACCT_CUSTOMER_ADVANCES,
 } from './accounts.constants';
 import { AccountType } from '../../types';
 
@@ -56,6 +57,7 @@ const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
   ACCT_INVENTORY_ADJUSTMENT,
   ACCT_INPUT_TAX,
   ACCT_SALARY_EXPENSE,
+  ACCT_CUSTOMER_ADVANCES,
 ]);
 
 /** Shared by delete() and the deactivation guard. */

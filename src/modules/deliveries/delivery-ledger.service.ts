@@ -12,6 +12,7 @@ import { DeliveryItem } from './entities/delivery-item.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { SalesOrder } from '../sales-orders/entities/sales-order.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
@@ -22,6 +23,9 @@ import {
   ACCT_COGS,
   ACCT_GOODS_IN_TRANSIT,
   ACCT_INVENTORY,
+  ACCT_CASH,
+  ACCT_CUSTOMER_ADVANCES,
+  ACCT_AR,
 } from '../accounts/accounts.constants';
 import { toDecimal, MONEY_TOLERANCE } from '../../common/utils/money.util';
 
@@ -244,7 +248,7 @@ export class DeliveryLedgerService {
       );
     }
 
-    // ---- Sale document: SO (non-posting) or Invoice+Payment when prepaid ----
+    // ---- Sale document: a NON-POSTING sales order, always ----
     const soLines = activeItems.map((l) => ({
       description: l.itemName ?? l.itemId,
       quantity: this.lineQty(l).toFixed(4),
@@ -254,43 +258,31 @@ export class DeliveryLedgerService {
 
     let salesOrderId: string | null = null;
     let salesOrderNumber: string | null = null;
-    let invoiceId: string | null = null;
-    let invoiceNumber: string | null = null;
+    const invoiceId: string | null = null;
+    const invoiceNumber: string | null = null;
+    let prepaidAdvance = toDecimal('0');
 
+    // Every delivery — prepaid or not — gets a NON-POSTING sales order here.
+    // The diagram is explicit at this step: "NO revenue, NO COGS — nothing is
+    // sold yet". Prepaid used to raise a full invoice and payment right here,
+    // recognising revenue at dispatch: wrong against the diagram and against
+    // IFRS 15 / ASC 606, which recognise revenue when control transfers (on
+    // delivery). It also split a sale from its own cost across periods, since
+    // COGS only posts at approval.
+    const so = await this.salesOrders.createInTransaction(em, companyId, userId, {
+      customerId: delivery.customerId,
+      orderDate: this.today(),
+      notes: `Delivery ${delivery.referenceNo ?? delivery.id}`,
+      lines: soLines,
+    });
+    salesOrderId = so.id;
+    salesOrderNumber = so.orderNumber;
+
+    // Cash taken before hand-over is a CONTRACT LIABILITY, not income. It is
+    // released to revenue at approval, where the goods actually change hands.
     if (delivery.prepaid) {
-      // Pre-paid before dispatch: Invoice posts Dr A/R / Cr Sales / Cr Tax and
-      // the recorded Payment posts Dr Cash / Cr A/R — net Dr Cash / Cr Sales.
-      // Lines carry NO itemId: the cost side flows through Goods in Transit,
-      // not the invoice COGS path (which would double-relieve Inventory).
-      const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
-        customerId: delivery.customerId,
-        invoiceDate: this.today(),
-        dueDate: this.today(),
-        status: 'sent',
-        notes: `Pre-paid delivery ${delivery.referenceNo ?? delivery.id}`,
-        lines: soLines,
-      });
-      invoiceId = invoice.id;
-      invoiceNumber = invoice.invoiceNumber;
-      await this.payments.receiveInTransaction(em, companyId, userId, {
-        customerId: delivery.customerId,
-        paymentDate: this.today(),
-        paymentMethod: 'cash',
-        amount: invoice.total,
-        reference: delivery.referenceNo ?? undefined,
-        memo: `Pre-paid before dispatch — delivery ${delivery.referenceNo ?? delivery.id}`,
-        applications: [{ invoiceId: invoice.id, amount: invoice.total }],
-      });
+      prepaidAdvance = toDecimal(so.total ?? '0');
       delivery.paidStatus = 'paid';
-    } else {
-      const so = await this.salesOrders.createInTransaction(em, companyId, userId, {
-        customerId: delivery.customerId,
-        orderDate: this.today(),
-        notes: `Delivery ${delivery.referenceNo ?? delivery.id}`,
-        lines: soLines,
-      });
-      salesOrderId = so.id;
-      salesOrderNumber = so.orderNumber;
     }
 
     // ---- The Stage-1 posting: Dr Goods in Transit / Cr Inventory at cost ----
@@ -321,6 +313,27 @@ export class DeliveryLedgerService {
         ],
       });
       journalEntryId = entry.id;
+    }
+
+    // Prepaid cash, recorded as a liability in its own entry so the stock
+    // movement above stays a clean Dr Goods in Transit / Cr Inventory.
+    if (prepaidAdvance.greaterThan(MONEY_TOLERANCE)) {
+      const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
+      const advances = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_CUSTOMER_ADVANCES);
+      const amt = prepaidAdvance.toFixed(4);
+      await this.posting.createEntry(em, {
+        companyId,
+        date: this.today(),
+        memo: `Delivery ${delivery.referenceNo ?? delivery.id} — customer paid in advance`,
+        createdBy: userId,
+        status: 'posted',
+        sourceType: 'delivery_advance',
+        sourceId: delivery.id,
+        lines: [
+          { accountId: cash.id, description: 'Cash received before delivery', debit: amt, credit: '0', lineOrder: 0 },
+          { accountId: advances.id, description: 'Customer advance (unearned)', debit: '0', credit: amt, lineOrder: 1 },
+        ],
+      });
     }
 
     delivery.salesOrderId = salesOrderId;
@@ -465,7 +478,7 @@ export class DeliveryLedgerService {
       }
     }
 
-    // ---- Revenue entry: SO → Invoice (skipped when prepaid — already posted) ----
+    // ---- Revenue entry: SO → Invoice. This is the recognition moment ----
     let invoiceId: string | null = delivery.invoiceId;
     let invoiceNumber: string | null = null;
     let invoiceTotal: string | null = null;
@@ -474,7 +487,7 @@ export class DeliveryLedgerService {
     let creditMemoNumber: string | null = null;
     let creditMemoTotal: string | null = null;
 
-    if (!delivery.prepaid && invoiceLines.length > 0) {
+    if (invoiceLines.length > 0) {
       const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
         customerId: delivery.customerId,
         invoiceDate: this.today(),
@@ -501,7 +514,34 @@ export class DeliveryLedgerService {
         }
       }
 
-      if (paidStatus === 'paid') {
+      if (delivery.prepaid) {
+        // The customer paid at dispatch and that cash sits in Customer
+        // Advances. Approval is the moment control transfers, so the liability
+        // is released against the invoice: Dr Customer Advances / Cr A/R.
+        // Together with the invoice above the net is
+        // Dr Customer Advances / Cr Sales — revenue recognised on delivery,
+        // matched to the COGS entry posted below in the same approval.
+        const advances = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_CUSTOMER_ADVANCES);
+        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, em);
+        const settled = toDecimal(invoice.total).toFixed(4);
+        await this.posting.createEntry(em, {
+          companyId,
+          date: this.today(),
+          memo: `Delivery ${delivery.referenceNo ?? delivery.id} approved — advance applied`,
+          createdBy: userId,
+          status: 'posted',
+          sourceType: 'delivery_advance_release',
+          sourceId: delivery.id,
+          lines: [
+            { accountId: advances.id, description: 'Customer advance earned on delivery', debit: settled, credit: '0', lineOrder: 0 },
+            { accountId: ar.id, description: 'Invoice settled from advance', debit: '0', credit: settled, lineOrder: 1 },
+          ],
+        });
+        invoice.amountPaid = invoice.total;
+        invoice.balance = '0.0000';
+        invoice.status = 'paid';
+        await em.getRepository(Invoice).save(invoice);
+      } else if (paidStatus === 'paid') {
         // Rider collected cash on the doorstep: clear the invoice now.
         // Net effect of invoice + payment = Dr Cash / Cr Sales / Cr Tax.
         const payment = await this.payments.receiveInTransaction(em, companyId, userId, {
@@ -515,38 +555,7 @@ export class DeliveryLedgerService {
         });
         paymentId = payment.id;
       }
-    } else if (delivery.prepaid && returnedSaleValue.greaterThan(MONEY_TOLERANCE)) {
-      // A prepaid delivery was invoiced and paid IN FULL at dispatch, and the
-      // branch above deliberately skips invoicing at approval. Without this,
-      // goods the customer sent back left revenue and output tax overstated by
-      // the undelivered value forever — the cost side reversed correctly while
-      // the sale side did not. Unreachable until riders could record a partial
-      // delivery, which is why it went unnoticed.
-      //
-      // The memo credits Sales Revenue and Tax Payable against A/R, leaving an
-      // open credit the customer can apply to a later invoice or take as a
-      // refund. Its lines carry no itemId: the units were already restocked
-      // above, and crediting them again would double the stock and drift the
-      // inventory subledger away from account 1200 (invariant I13).
-      //
-      // Guarded on VALUE, not on line count. Returning only zero-priced units
-      // (a free sample on an otherwise paid delivery) yields a zero-total memo,
-      // whose journal line would carry neither a debit nor a credit —
-      // PostingService rejects that, and since this runs inside the approval's
-      // transaction the whole approval would roll back, leaving the admin
-      // unable to approve the delivery at all. Nothing is owed back for goods
-      // that were never charged for, so there is nothing to credit.
-      const creditMemo = await this.creditMemos.createInTransaction(em, companyId, userId, {
-        customerId: delivery.customerId,
-        date: this.today(),
-        originalInvoiceId: delivery.invoiceId ?? undefined,
-        reason: `Undelivered goods returned — delivery ${delivery.referenceNo ?? delivery.id}`,
-        lines: returnedSaleLines,
-      });
-      creditMemoId = creditMemo.id;
-      creditMemoNumber = creditMemo.creditMemoNumber;
-      creditMemoTotal = creditMemo.total;
-    } else if (!delivery.prepaid && invoiceLines.length === 0 && delivery.salesOrderId) {
+    } else if (invoiceLines.length === 0 && delivery.salesOrderId) {
       // Nothing was delivered — cancel the sales order; the stock reversal
       // below returns everything to the shelf.
       const soRepo = em.getRepository(SalesOrder);
@@ -745,8 +754,15 @@ export class DeliveryLedgerService {
       journalEntryId = entry.id;
     }
 
-    // A prepaid delivery was invoiced AND paid at dispatch. Reverse the sale;
-    // the stock has already gone back above.
+    // Legacy prepaid deliveries were invoiced AND paid at dispatch; reverse
+    // that sale, since the stock has already gone back above.
+    //
+    // Prepaid deliveries created under the current flow carry NO dispatch
+    // invoice (revenue is recognised at approval), so this branch does not
+    // fire for them and there is nothing to reverse: their cash sits in
+    // Customer Advances and correctly STAYS there — the customer paid, the
+    // goods came back, so the company still owes them. It is settled by a
+    // refund or applied to another order, neither of which belongs here.
     let creditMemoId: string | null = null;
     let creditMemoNumber: string | null = null;
     if (delivery.prepaid && delivery.invoiceId) {

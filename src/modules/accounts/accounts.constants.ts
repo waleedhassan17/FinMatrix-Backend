@@ -146,6 +146,7 @@ export const ACCT_SALARY_EXPENSE = '6200';
 export const ACCT_GRNI = '2050';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
+export const ACCT_CUSTOMER_ADVANCES = '2400';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
@@ -184,5 +185,12 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
     name: 'Goods in Transit',
     type: 'asset',
     subType: 'Inventory',
+  },
+  // Cash taken before the goods are handed over is not income yet: it is a
+  // contract liability until control transfers on delivery (IFRS 15 / ASC 606).
+  [ACCT_CUSTOMER_ADVANCES]: {
+    name: 'Customer Advances (Unearned Revenue)',
+    type: 'liability',
+    subType: 'Other Liability',
   },
 };
