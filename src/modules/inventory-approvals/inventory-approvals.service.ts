@@ -297,7 +297,16 @@ export class InventoryApprovalsService {
       // STAGE 2 (phase1.md): record the rider's PAID / NOT PAID choice. This
       // posts NOTHING — it rides into the admin approval queue and decides
       // whether Stage 3 debits Cash or Accounts Receivable.
-      delivery.paidStatus = body.paidStatus ?? delivery.paidStatus ?? 'unpaid';
+      // A pre-paid delivery was settled before dispatch and Stage 1 already
+      // recorded paidStatus='paid'. Never let the rider's answer override that:
+      // it would leave the row reading prepaid=true / paidStatus='unpaid',
+      // which contradicts itself anywhere paidStatus is displayed. The app no
+      // longer asks the question on these, but this endpoint is reachable
+      // directly, so the rule belongs here too. Stage 3 already ignores
+      // paidStatus when prepaid, so the ledger was never at risk.
+      delivery.paidStatus = delivery.prepaid
+        ? 'paid'
+        : (body.paidStatus ?? delivery.paidStatus ?? 'unpaid');
       delivery.billPhotoUrl = stored.url;
       delivery.billPhotoStorageKey = stored.key;
       delivery.billPhotoCapturedAt = now;
