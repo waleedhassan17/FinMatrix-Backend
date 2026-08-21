@@ -12,6 +12,7 @@ import {
   Max,
   IsInt,
   IsDecimal,
+  IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -86,6 +87,15 @@ export class AdjustQuantityDto {
   @ApiProperty() @IsUUID() itemId!: string;
   @ApiProperty() @IsNumberString() newQty!: string;
   @ApiProperty() @IsEnum(['physical_count', 'damage', 'theft', 'correction', 'obsolescence', 'other'] as InventoryAdjustmentReason[]) reason!: InventoryAdjustmentReason;
+  /**
+   * The date the adjustment is recorded ON — it sets the GL period, and the
+   * period lock is enforced against it. Defaults to today.
+   *
+   * @IsDateString, not the @IsString() that SetOpeningStockDto.asOfDate uses:
+   * that one is unvalidated, so 'banana' reaches a date column and fails in
+   * Postgres instead of in the pipe.
+   */
+  @ApiPropertyOptional({ example: '2026-08-15' }) @IsOptional() @IsDateString() date?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() referenceNum?: string;
 }

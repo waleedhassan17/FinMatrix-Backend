@@ -26,12 +26,15 @@ import {
 import { toDecimal } from '../../common/utils/money.util';
 import { InventoryAdjustmentReason } from '../../types';
 import { assertNonNegativeQuantity } from '../../common/utils/stock.util';
+import { assertNotFutureDate, todayIso } from '../../common/utils/date.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import {
   ACCT_INVENTORY,
   ACCT_INVENTORY_ADJUSTMENT,
+  ACCT_INVENTORY_COUNT_VARIANCE,
   ACCT_OPENING_BALANCE_EQUITY,
+  ADJUSTMENT_REASON_ACCOUNTS,
 } from '../accounts/accounts.constants';
 
 @Injectable()
@@ -171,7 +174,7 @@ export class InventoryService {
         });
       }
 
-      const date = dto.asOfDate ?? new Date().toISOString().split('T')[0];
+      const date = dto.asOfDate ?? todayIso();
       item.quantityOnHand = qty.toFixed(4);
       await itemRepo.save(item);
 
@@ -196,12 +199,37 @@ export class InventoryService {
   }
 
   // Adjust
+  //
+  // `dto.date` sets the GL/report PERIOD the adjustment lands in. It does NOT
+  // rewind stock: the quantity change always applies to CURRENT on-hand,
+  // because you cannot un-consume stock that has already been sold or
+  // delivered since. Same semantics as QuickBooks' inventory qty adjustment.
+  //
+  // No period check here on purpose — PostingService.createEntry runs
+  // assertPeriodOpen against the JE date for every posted entry, and this whole
+  // method is one transaction, so a PERIOD_LOCKED throw rolls the item,
+  // adjustment and movement back with it.
   async adjust(companyId: string, dto: AdjustQuantityDto, userId: string) {
+    // Resolved once and shared by the adjustment, its movement and the journal
+    // entry. These used to be two independent new Date() calls, so a request
+    // straddling UTC midnight could date the adjustment and its movement a day
+    // apart.
+    const date = dto.date ?? todayIso();
+    assertNotFutureDate(date, 'An inventory adjustment');
+
     return this.dataSource.transaction(async (em) => {
       const itemRepo = em.getRepository(InventoryItem);
       const adjRepo = em.getRepository(InventoryAdjustment);
       const moveRepo = em.getRepository(InventoryMovement);
-      const item = await itemRepo.findOne({ where: { id: dto.itemId, companyId } });
+      // Locked, like setOpeningStock: what follows is a read-modify-write on
+      // quantityOnHand, and two concurrent adjustments reading the same `prev`
+      // would each post a journal entry while only the last write survives —
+      // leaving the subledger adrift from GL 1200 (invariant I13).
+      const item = await itemRepo
+        .createQueryBuilder('i')
+        .setLock('pessimistic_write')
+        .where('i.id = :id AND i.companyId = :cid', { id: dto.itemId, cid: companyId })
+        .getOne();
       if (!item) throw new NotFoundException('Item not found');
 
       const prev = toDecimal(item.quantityOnHand);
@@ -214,15 +242,20 @@ export class InventoryService {
       item.quantityOnHand = next.toFixed(4);
       await itemRepo.save(item);
 
+      // The reason picks the offsetting account, so damage, theft and
+      // obsolescence are separable in the P&L rather than pooled in one line.
+      const offsetAccountNumber = ADJUSTMENT_REASON_ACCOUNTS[dto.reason];
+
       const adj = adjRepo.create({
         companyId,
         itemId: dto.itemId,
-        date: new Date().toISOString().split('T')[0],
+        date,
         previousQty: prev.toFixed(4),
         newQty: next.toFixed(4),
         variance: variance.toFixed(4),
         reason: dto.reason,
         notes: dto.notes ?? null,
+        offsetAccountNumber,
         createdBy: userId,
       });
       await adjRepo.save(adj);
@@ -230,7 +263,7 @@ export class InventoryService {
       const move = moveRepo.create({
         companyId,
         itemId: dto.itemId,
-        date: new Date().toISOString().split('T')[0],
+        date,
         type: 'adjustment',
         quantityChange: variance.toFixed(4),
         balanceAfter: next.toFixed(4),
@@ -253,6 +286,7 @@ export class InventoryService {
         `Inventory adjustment ${item.sku} (${dto.reason})`,
         'inventory_adjustment',
         adj.id,
+        offsetAccountNumber,
       );
       if (je) {
         adj.journalEntryId = je;
@@ -287,7 +321,13 @@ export class InventoryService {
         throw new BadRequestException('That adjustment is itself a reversal');
       }
 
-      const item = await itemRepo.findOne({ where: { id: adj.itemId, companyId } });
+      // Locked for the same reason adjust() is: this recomputes both
+      // quantityOnHand and unitCost from what it reads.
+      const item = await itemRepo
+        .createQueryBuilder('i')
+        .setLock('pessimistic_write')
+        .where('i.id = :id AND i.companyId = :cid', { id: adj.itemId, cid: companyId })
+        .getOne();
       if (!item) throw new NotFoundException('Item not found');
 
       // Value the reversal at the ORIGINAL cost basis, recovered from the
@@ -316,7 +356,11 @@ export class InventoryService {
       item.quantityOnHand = restored.toFixed(4);
       await itemRepo.save(item);
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayIso();
+      // Mirror the account the ORIGINAL used, not whatever today's reason map
+      // would pick. Rows written before that column existed all went to 6400.
+      const offsetAccountNumber = adj.offsetAccountNumber ?? ACCT_INVENTORY_ADJUSTMENT;
+
       const reversal = await adjRepo.save(
         adjRepo.create({
           companyId,
@@ -327,6 +371,9 @@ export class InventoryService {
           variance: variance.negated().toFixed(4),
           reason: 'reversal' as InventoryAdjustmentReason,
           notes: `Reversal of adjustment ${adj.id}`,
+          // Carried onto the reversal too, so it is self-describing rather
+          // than only explicable by loading the row it reverses.
+          offsetAccountNumber,
           createdBy: userId,
         }),
       );
@@ -351,11 +398,12 @@ export class InventoryService {
         const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
           em,
           companyId,
-          ACCT_INVENTORY_ADJUSTMENT,
+          offsetAccountNumber,
         );
         const amount = originalValue.toFixed(4);
         // Mirror of postInventoryAdjustmentJe: the original write-down debited
-        // 6400 and credited 1200, so the reversal does the opposite.
+        // the shrinkage account and credited 1200, so the reversal does the
+        // opposite — against the SAME account, or value is stranded in both.
         const wasIncrease = variance.greaterThan(0);
         const lines = wasIncrease
           ? [
@@ -507,6 +555,7 @@ export class InventoryService {
               variance: variance.toFixed(4),
               reason: 'physical_count',
               notes: `Physical count ${dto.countDate}`,
+              offsetAccountNumber: ACCT_INVENTORY_COUNT_VARIANCE,
               createdBy: userId,
             }),
           );
@@ -534,6 +583,7 @@ export class InventoryService {
             `Physical count ${item.sku}`,
             'physical_count',
             count.id,
+            ACCT_INVENTORY_COUNT_VARIANCE,
           );
           if (je) {
             adj.journalEntryId = je;
@@ -604,8 +654,12 @@ export class InventoryService {
    * Post the balanced inventory-adjustment journal entry for a quantity
    * variance valued at the item's unit cost. Returns the entry id (or null
    * when the value is zero). Shared by adjust() and physical count.
-   *   decrease (variance < 0): DR Inventory Adjustment 6400 / CR Inventory 1200
-   *   increase (variance > 0): DR Inventory 1200 / CR Inventory Adjustment 6400
+   *
+   * `offsetAccountNumber` is the account 1200 is offset against — chosen from
+   * the reason by ADJUSTMENT_REASON_ACCOUNTS, or 5430 for a physical count.
+   * It used to be hardcoded to 6400 for every reason.
+   *   decrease (variance < 0): DR shrinkage account / CR Inventory 1200
+   *   increase (variance > 0): DR Inventory 1200 / CR shrinkage account
    */
   private async postInventoryAdjustmentJe(
     em: import('typeorm').EntityManager,
@@ -617,14 +671,19 @@ export class InventoryService {
     memo: string,
     sourceType: string,
     sourceId: string,
+    offsetAccountNumber: string,
   ): Promise<string | null> {
     const value = variance.abs().times(toDecimal(item.unitCost));
     if (value.lessThanOrEqualTo(0)) return null;
     const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    // getOrCreate, not getByNumberOrFail: the 54xx accounts are new, and a
+    // company whose chart predates them gets the account created on first use
+    // — the same way 6400, GRNI and Goods in Transit already reach older
+    // tenants. That is why no backfill migration is needed.
     const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
       em,
       companyId,
-      ACCT_INVENTORY_ADJUSTMENT,
+      offsetAccountNumber,
     );
     const amount = value.toFixed(4);
     const increase = variance.greaterThan(0);

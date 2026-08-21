@@ -60,6 +60,22 @@ const WITH_OTHER: GlRow[] = [
   gl('8000', 'Interest Expense', 'expense', 'Other Expense', 120, 0),
 ];
 
+/** Same, plus a damage write-off against the 54xx shrinkage account. */
+const WITH_SHRINKAGE: GlRow[] = [
+  ...PLAIN,
+  gl('5400', 'Inventory Shrinkage – Damage', 'expense', 'Cost of Goods', 600, 0),
+];
+
+/**
+ * A pre-existing adjustment, posted before the reason drove the account. 6400
+ * stays an operating expense so historical entries keep reporting where they
+ * were posted.
+ */
+const WITH_LEGACY_SHRINKAGE: GlRow[] = [
+  ...PLAIN,
+  gl('6400', 'Inventory Adjustment / Shrinkage', 'expense', 'Operating', 600, 0),
+];
+
 async function makeService(query: jest.Mock) {
   const repo = {} as never;
   const moduleRef = await Test.createTestingModule({
@@ -96,6 +112,44 @@ describe('ReportsService — profitLoss', () => {
     expect(r.totalExpenses).toBe(r.expenses);
     expect(r.netOperatingIncome).toBe(r.netIncome);
     expect(r.netOtherIncome).toBe(0);
+  });
+
+  it('reports 54xx inventory shrinkage inside COGS, above gross profit', async () => {
+    const svc = await makeService(jest.fn(async () => WITH_SHRINKAGE));
+    const r = await svc.profitLoss('c1', '2026-01-01', '2026-12-31');
+
+    // The whole point of the 54xx accounts: stock bought to sell and then lost
+    // is a cost of goods, so it reduces GROSS profit — which is what makes the
+    // margin comparable to QuickBooks.
+    expect(r.cogs).toBe(4600);
+    expect(r.grossProfit).toBe(5400);
+    expect(r.totalCogs).toBe(4600);
+    expect(r.cogsLines.map((l) => l.accountCode)).toContain('5400');
+
+    // It is NOT an operating expense…
+    expect(r.expenses).toBe(4000);
+    expect(r.totalExpenses).toBe(4000);
+    expect(r.expenseLines.map((l) => l.accountCode)).not.toContain('5400');
+
+    // …and the bottom line is unmoved by where above it the cost sits.
+    expect(r.netIncome).toBe(1400);
+    expect(r.netOperatingIncome).toBe(r.netIncome);
+  });
+
+  it('leaves legacy 6400 shrinkage in operating expenses', async () => {
+    const svc = await makeService(jest.fn(async () => WITH_LEGACY_SHRINKAGE));
+    const r = await svc.profitLoss('c1', '2026-01-01', '2026-12-31');
+
+    // 6400 was deliberately not reclassified: entries posted against it really
+    // were operating-classified at the time, and the mobile client groups by
+    // number range, so moving it would split client from server.
+    expect(r.cogs).toBe(4000);
+    expect(r.grossProfit).toBe(6000);
+    expect(r.expenses).toBe(4600);
+    expect(r.expenseLines.map((l) => l.accountCode)).toContain('6400');
+
+    // Same net income as the 5400 case — only the split moved.
+    expect(r.netIncome).toBe(1400);
   });
 
   it('reconciles the line detail against the totals', async () => {

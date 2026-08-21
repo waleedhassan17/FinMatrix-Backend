@@ -1,4 +1,4 @@
-import { AccountType } from '../../types';
+import { AccountType, InventoryAdjustmentReason } from '../../types';
 
 export const ACCOUNT_SUB_TYPES: Record<AccountType, readonly string[]> = {
   asset: [
@@ -111,6 +111,35 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'expense',
     subType: 'Cost of Goods',
   },
+  // Inventory shrinkage, split by cause. Deliberately 54xx / 'Cost of Goods':
+  // stock that was bought to sell and then lost is a cost of goods, so it
+  // belongs above the Gross Profit line — which is where QuickBooks puts it,
+  // and what makes our margins comparable to theirs. See
+  // ADJUSTMENT_REASON_ACCOUNTS below for which reason lands where.
+  {
+    accountNumber: '5400',
+    name: 'Inventory Shrinkage – Damage',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  {
+    accountNumber: '5410',
+    name: 'Inventory Shrinkage – Theft',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  {
+    accountNumber: '5420',
+    name: 'Inventory Shrinkage – Obsolescence',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  {
+    accountNumber: '5430',
+    name: 'Inventory Count Variance',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
   { accountNumber: '6000', name: 'Rent Expense', type: 'expense', subType: 'Operating' },
   {
     accountNumber: '6100',
@@ -150,7 +179,43 @@ export const ACCT_CUSTOMER_ADVANCES = '2400';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
+export const ACCT_SHRINKAGE_DAMAGE = '5400';
+export const ACCT_SHRINKAGE_THEFT = '5410';
+export const ACCT_SHRINKAGE_OBSOLESCENCE = '5420';
+export const ACCT_INVENTORY_COUNT_VARIANCE = '5430';
+/**
+ * Legacy. Every adjustment posted here before the reason drove the account,
+ * and it stays in the chart — as an OPERATING expense — so historical entries
+ * keep reporting where they were posted. New adjustments use the 54xx
+ * accounts above. Also the fallback for reversing an adjustment written
+ * before offset_account_number existed.
+ */
 export const ACCT_INVENTORY_ADJUSTMENT = '6400';
+
+/**
+ * Which account an inventory adjustment offsets against, by reason.
+ *
+ * The reason used to be decorative — it reached the journal memo and nothing
+ * else, so damage, theft and obsolescence were indistinguishable in the P&L.
+ * This map is the single source of truth; postInventoryAdjustmentJe() reads
+ * it, and the chosen account is persisted on the adjustment row so a reversal
+ * can mirror it exactly.
+ *
+ * 'reversal' never selects from here: reverseAdjustment() reads the ORIGINAL
+ * adjustment's offset_account_number. It is mapped only to keep the Record
+ * total, and points at the legacy account as an inert fallback.
+ */
+export const ADJUSTMENT_REASON_ACCOUNTS: Record<InventoryAdjustmentReason, string> = {
+  damage: ACCT_SHRINKAGE_DAMAGE,
+  theft: ACCT_SHRINKAGE_THEFT,
+  obsolescence: ACCT_SHRINKAGE_OBSOLESCENCE,
+  // A count variance and a data-entry correction are the same event
+  // accounting-wise: the books said one thing, the shelf said another.
+  physical_count: ACCT_INVENTORY_COUNT_VARIANCE,
+  correction: ACCT_INVENTORY_COUNT_VARIANCE,
+  other: ACCT_INVENTORY_COUNT_VARIANCE,
+  reversal: ACCT_INVENTORY_ADJUSTMENT,
+};
 
 /**
  * System accounts that auto-posting depends on. Resolved by number and
@@ -175,6 +240,30 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
     name: 'Inventory Adjustment / Shrinkage',
     type: 'expense',
     subType: 'Operating',
+  },
+  // Must mirror DEFAULT_CHART_OF_ACCOUNTS exactly: that list seeds new
+  // companies, this one lazily creates the account for companies whose chart
+  // predates it. Divergence would give two different subTypes for the same
+  // number across tenants, and the P&L would classify them differently.
+  [ACCT_SHRINKAGE_DAMAGE]: {
+    name: 'Inventory Shrinkage – Damage',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  [ACCT_SHRINKAGE_THEFT]: {
+    name: 'Inventory Shrinkage – Theft',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  [ACCT_SHRINKAGE_OBSOLESCENCE]: {
+    name: 'Inventory Shrinkage – Obsolescence',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  [ACCT_INVENTORY_COUNT_VARIANCE]: {
+    name: 'Inventory Count Variance',
+    type: 'expense',
+    subType: 'Cost of Goods',
   },
   [ACCT_INPUT_TAX]: {
     name: 'Sales Tax Recoverable (Input Tax)',

@@ -24,9 +24,13 @@ import {
   ACCT_INVENTORY,
   ACCT_INPUT_TAX,
   ACCT_INVENTORY_ADJUSTMENT,
+  ACCT_INVENTORY_COUNT_VARIANCE,
   ACCT_OPENING_BALANCE_EQUITY,
   ACCT_SALARY_EXPENSE,
   ACCT_SALES_REVENUE,
+  ACCT_SHRINKAGE_DAMAGE,
+  ACCT_SHRINKAGE_OBSOLESCENCE,
+  ACCT_SHRINKAGE_THEFT,
   ACCT_TAX_PAYABLE,
   isValidSubType,
   SYSTEM_ACCOUNT_DEFS,
@@ -58,6 +62,13 @@ const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
   ACCT_INPUT_TAX,
   ACCT_SALARY_EXPENSE,
   ACCT_CUSTOMER_ADVANCES,
+  // Every inventory adjustment offsets against one of these, chosen by the
+  // reason the user picked — switching one off would fail the adjustment with
+  // an error naming an account they never chose directly.
+  ACCT_SHRINKAGE_DAMAGE,
+  ACCT_SHRINKAGE_THEFT,
+  ACCT_SHRINKAGE_OBSOLESCENCE,
+  ACCT_INVENTORY_COUNT_VARIANCE,
 ]);
 
 /** Shared by delete() and the deactivation guard. */

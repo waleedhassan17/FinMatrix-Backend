@@ -16,8 +16,10 @@
  *      cancel the original exactly (the bug this gap found)
  *   C. Vendor credit: Dr AP (gross) / Cr Expense (net) / Cr Input Tax 1300
  *      (the leg that did not exist before this gap)
- *   D. Inventory adjustment: write-down Dr 6400 / Cr 1200, write-up reversed,
- *      and quantity never moves without a journal entry
+ *   D. Inventory adjustment: write-down Dr shrinkage / Cr 1200, write-up
+ *      reversed, quantity never moves without a journal entry, the REASON
+ *      picks the shrinkage account, back-dating obeys the period lock, and a
+ *      reversal mirrors whichever account the original used
  *   E. Tax payment: Dr Sales Tax Payable / Cr Cash, liability drops
  *   F. Weighted-average costing behaves as labelled, and fifo/lifo are now
  *      rejected rather than silently stored and ignored (gap G6)
@@ -420,7 +422,9 @@ async function main() {
   const shrinkValue = shrinkBy * unitCostNow;
 
   const invBeforeAdj = await acctBalance('1200');
-  const adjExpBefore = await acctBalance('6400');
+  // 5400, not 6400: the reason now picks the account, and this is a 'damage'
+  // write-down. 6400 keeps only the entries posted before that was true.
+  const adjExpBefore = await acctBalance('5400');
   const { rows: jeCountBefore } = await db.query(
     `SELECT count(*)::int AS c FROM journal_entries WHERE company_id = $1`,
     [COMPANY],
@@ -435,12 +439,12 @@ async function main() {
   ok('D write-down accepted', adjRes.status === 200 || adjRes.status === 201, adjRes.body);
 
   const invAfterAdj = await acctBalance('1200');
-  const adjExpAfter = await acctBalance('6400');
+  const adjExpAfter = await acctBalance('5400');
   ok('D Cr Inventory 1200 by the shrinkage value',
     near(invBeforeAdj - invAfterAdj, shrinkValue), {
       before: invBeforeAdj, after: invAfterAdj, expected: shrinkValue,
     });
-  ok('D Dr Inventory Adjustment 6400 by the same',
+  ok('D Dr Inventory Shrinkage – Damage 5400 by the same',
     near(adjExpAfter - adjExpBefore, shrinkValue));
 
   const { rows: jeCountAfter } = await db.query(
@@ -474,6 +478,161 @@ async function main() {
     near(invAfterUp - invBeforeUp, shrinkValue), {
       delta: invAfterUp - invBeforeUp, expected: shrinkValue,
     });
+
+  // ── D2. The reason picks the offsetting account ────────────────
+  //
+  // It used to reach the journal memo and nothing else, so damage, theft and
+  // obsolescence were pooled in one 6400 line and none of them could be told
+  // apart in the P&L.
+  console.log('\n— D2: reason drives the shrinkage account');
+  const legacy6400Before = await acctBalance('6400');
+  const REASON_ACCOUNTS: Array<[string, string]> = [
+    ['damage', '5400'],
+    ['theft', '5410'],
+    ['obsolescence', '5420'],
+    ['physical_count', '5430'],
+    ['correction', '5430'],
+    ['other', '5430'],
+  ];
+
+  for (const [reason, acct] of REASON_ACCOUNTS) {
+    const before = await acctBalance(acct);
+    const cur = data(await req('GET', `/inventory/items/${item.id}`)) as any;
+    const curQty = n(cur.quantityOnHand);
+    const curCost = n(cur.unitCost);
+    const value = curCost; // one unit
+
+    const res = await req('POST', `/inventory/items/${item.id}/adjust`, {
+      itemId: item.id,
+      newQty: String(curQty - 1),
+      reason,
+      notes: `reason-account mapping — ${reason}`,
+    });
+    ok(`D2 ${reason} accepted`, res.status === 200 || res.status === 201, res.body);
+
+    const after = await acctBalance(acct);
+    ok(`D2 ${reason} debits ${acct} by the value`,
+      near(after - before, value), { before, after, expected: value });
+
+    const adj = (data(res) as any)?.adjustment;
+    ok(`D2 ${reason} records the account it used`,
+      adj?.offsetAccountNumber === acct, adj?.offsetAccountNumber);
+
+    // Put the unit back so the next reason starts from the same place. Uses
+    // 'correction', which is the honest reason for undoing a test fixture.
+    await req('POST', `/inventory/items/${item.id}/adjust`, {
+      itemId: item.id,
+      newQty: String(curQty),
+      reason: 'correction',
+      notes: `restore after ${reason}`,
+    });
+  }
+
+  // No reason maps to 6400 any more, so the legacy account must be untouched
+  // by everything above — it only holds entries posted before this change.
+  const legacy6400After = await acctBalance('6400');
+  ok('D2 legacy 6400 is never written to again',
+    near(legacy6400After, legacy6400Before),
+    { before: legacy6400Before, after: legacy6400After });
+
+  // ── D3. Dating ─────────────────────────────────────────────────
+  console.log('\n— D3: adjustment dating');
+  const itemD3 = data(await req('GET', `/inventory/items/${item.id}`)) as any;
+  const qtyD3 = n(itemD3.quantityOnHand);
+
+  const future = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const futureRes = await req('POST', `/inventory/items/${item.id}/adjust`, {
+    itemId: item.id,
+    newQty: String(qtyD3 - 1),
+    reason: 'damage',
+    date: future,
+  });
+  ok('D3 a future-dated adjustment is rejected',
+    futureRes.status === 400 &&
+      (futureRes.body?.error?.code ?? futureRes.body?.code) === 'FUTURE_DATE',
+    { status: futureRes.status, body: futureRes.body });
+
+  const qtyAfterFuture = n((data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand);
+  ok('D3 the rejected future adjustment moved no stock',
+    near(qtyAfterFuture, qtyD3), { before: qtyD3, after: qtyAfterFuture });
+
+  // Back-dating into an OPEN prior period is legitimate and must land there.
+  const backDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  const backRes = await req('POST', `/inventory/items/${item.id}/adjust`, {
+    itemId: item.id,
+    newQty: String(qtyD3 - 1),
+    reason: 'damage',
+    date: backDate,
+    notes: 'back-dated into an open period',
+  });
+  ok('D3 back-dating into an open period is accepted',
+    backRes.status === 200 || backRes.status === 201, backRes.body);
+
+  const backAdj = (data(backRes) as any)?.adjustment;
+  ok('D3 the adjustment carries the back-date', backAdj?.date === backDate, backAdj?.date);
+
+  const { rows: backJe } = await db.query(
+    `SELECT date::text AS date FROM journal_entries WHERE id = $1`,
+    [backAdj?.journalEntryId],
+  );
+  ok('D3 the journal entry lands in the back-dated period',
+    backJe[0]?.date === backDate, backJe[0]?.date);
+
+  const { rows: backMove } = await db.query(
+    `SELECT date::text AS date FROM inventory_movements
+      WHERE company_id = $1 AND source_id = $2`,
+    [COMPANY, backAdj?.id],
+  );
+  ok('D3 the movement shares that date',
+    backMove[0]?.date === backDate, backMove[0]?.date);
+
+  await req('POST', `/inventory/items/${item.id}/adjust`, {
+    itemId: item.id,
+    newQty: String(qtyD3),
+    reason: 'correction',
+    notes: 'restore after back-date test',
+  });
+
+  // ── D4. Reversal follows the account the original used ─────────
+  //
+  // reverseAdjustment() used to reverse against 6400 whatever the original
+  // did, which after D2 would strand value in two accounts and eventually
+  // show up as I13 inventory-vs-GL drift.
+  console.log('\n— D4: reversal mirrors the original account');
+  const itemD4 = data(await req('GET', `/inventory/items/${item.id}`)) as any;
+  const qtyD4 = n(itemD4.quantityOnHand);
+  const costD4 = n(itemD4.unitCost);
+
+  const theftBefore = await acctBalance('5410');
+  const invBeforeTheft = await acctBalance('1200');
+  const theftRes = await req('POST', `/inventory/items/${item.id}/adjust`, {
+    itemId: item.id,
+    newQty: String(qtyD4 - 2),
+    reason: 'theft',
+    notes: 'to be reversed',
+  });
+  ok('D4 theft write-down accepted',
+    theftRes.status === 200 || theftRes.status === 201, theftRes.body);
+  const theftAdj = (data(theftRes) as any)?.adjustment;
+
+  const revRes = await req('POST', `/inventory/adjustments/${theftAdj?.id}/reverse`, {});
+  ok('D4 reversal accepted', revRes.status === 200 || revRes.status === 201, revRes.body);
+
+  const theftAfter = await acctBalance('5410');
+  const invAfterTheft = await acctBalance('1200');
+  ok('D4 5410 nets back to where it started',
+    near(theftAfter, theftBefore), { before: theftBefore, after: theftAfter });
+  ok('D4 Inventory 1200 nets back to where it started',
+    near(invAfterTheft, invBeforeTheft), { before: invBeforeTheft, after: invAfterTheft });
+
+  const revLines = await linesFor('inventory_adjustment_void', (data(revRes) as any)?.adjustment?.id);
+  ok('D4 the reversal credits 5410, not the legacy 6400',
+    hasLine(revLines, '5410', 'credit', 2 * costD4), revLines);
+  ok('D4 the reversal touches no other shrinkage account',
+    !revLines.some((l) => l.acct === '6400'), revLines);
+
+  const qtyAfterRev = n((data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand);
+  ok('D4 the quantity is restored', near(qtyAfterRev, qtyD4), { before: qtyD4, after: qtyAfterRev });
 
   await invariants('after inventory adjustments');
 

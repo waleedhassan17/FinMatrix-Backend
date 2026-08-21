@@ -253,6 +253,55 @@ async function main() {
     });
     ok('C inventory movement dated today (after the lock) → posts',
       adj.status === 200 || adj.status === 201, adj.status);
+
+    // An adjustment can now carry its own date, so it can be aimed INTO the
+    // closed period. There is no period check in adjust() — createEntry does
+    // it — and because the whole method is one transaction, the refusal has to
+    // take the quantity, the adjustment row and the movement with it. If it
+    // ever half-applied, stock would move with no journal entry behind it.
+    const beforeQty = n(
+      (data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand,
+    );
+    const { rows: adjCountBefore } = await db.query(
+      `SELECT count(*)::int AS c FROM inventory_adjustments WHERE company_id = $1`,
+      [COMPANY],
+    );
+    const { rows: moveCountBefore } = await db.query(
+      `SELECT count(*)::int AS c FROM inventory_movements WHERE company_id = $1`,
+      [COMPANY],
+    );
+
+    const lockedAdj = await req('POST', `/inventory/items/${item.id}/adjust`, {
+      itemId: item.id,
+      newQty: String(beforeQty - 1),
+      reason: 'damage',
+      date: BEFORE,
+      notes: 'G4 back-date into a closed period',
+    });
+    ok('B inventory adjustment back-dated INTO the closed period → PERIOD_LOCKED',
+      errCode(lockedAdj) === 'PERIOD_LOCKED',
+      { status: lockedAdj.status, body: lockedAdj.body });
+
+    const afterQty = n(
+      (data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand,
+    );
+    const { rows: adjCountAfter } = await db.query(
+      `SELECT count(*)::int AS c FROM inventory_adjustments WHERE company_id = $1`,
+      [COMPANY],
+    );
+    const { rows: moveCountAfter } = await db.query(
+      `SELECT count(*)::int AS c FROM inventory_movements WHERE company_id = $1`,
+      [COMPANY],
+    );
+
+    ok('B the refused adjustment left the quantity untouched',
+      afterQty === beforeQty, { before: beforeQty, after: afterQty });
+    ok('B the refused adjustment wrote no adjustment row',
+      adjCountAfter[0].c === adjCountBefore[0].c,
+      { before: adjCountBefore[0].c, after: adjCountAfter[0].c });
+    ok('B the refused adjustment wrote no movement row',
+      moveCountAfter[0].c === moveCountBefore[0].c,
+      { before: moveCountBefore[0].c, after: moveCountAfter[0].c });
   }
 
   // ══ D. Drafts ══════════════════════════════════════════════════
