@@ -10,6 +10,7 @@ import { Bill } from './entities/bill.entity';
 import { BillLineItem } from './entities/bill-line-item.entity';
 import { BillPayment } from './entities/bill-payment.entity';
 import { BillPaymentApplication } from './entities/bill-payment-application.entity';
+import { BillPaymentProof } from './entities/bill-payment-proof.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
@@ -30,6 +31,7 @@ import {
   toDecimal,
 } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { BillStatus } from '../../types';
@@ -64,6 +66,9 @@ export class BillsService {
     @InjectRepository(BillPaymentApplication)
     private readonly appRepo: Repository<BillPaymentApplication>,
     @InjectRepository(Vendor) private readonly vendorRepo: Repository<Vendor>,
+    @InjectRepository(BillPaymentProof)
+    private readonly proofRepo: Repository<BillPaymentProof>,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -374,6 +379,32 @@ export class BillsService {
         total = total.plus(toDecimal(app.amount));
       }
 
+      // Resolve the proof BEFORE anything is written. The surrounding
+      // transaction would roll a bad one back anyway, but failing here means a
+      // rejected payment never touches a row.
+      //
+      // Scoped by companyId, not just id: bill_payment_proofs carries a tenant
+      // so a guessed or replayed id from another company cannot be attached.
+      // (stored_files has no company_id, which is why the proof is its own
+      // record rather than a bare storage key.)
+      const proof = await manager.findOne(BillPaymentProof, {
+        where: { id: dto.proofId, companyId },
+      });
+      if (!proof) {
+        throw new BadRequestException({
+          code: 'PAYMENT_PROOF_NOT_FOUND',
+          message:
+            'A payment proof (receipt or screenshot) is required to record a bill payment.',
+        });
+      }
+      if (proof.consumedByPaymentId) {
+        throw new BadRequestException({
+          code: 'PAYMENT_PROOF_ALREADY_USED',
+          message:
+            'That payment proof has already been attached to another payment. Upload it again for this one.',
+        });
+      }
+
       const payment = manager.create(BillPayment, {
         companyId,
         vendorId: vendor.id,
@@ -383,8 +414,14 @@ export class BillsService {
         reference: dto.reference ?? null,
         totalAmount: total.toFixed(4),
         journalEntryId: null,
+        proofStorageKey: proof.storageKey,
+        proofUrl: proof.url,
       });
       await manager.save(payment);
+
+      // Claim it, so one upload cannot back two payments.
+      proof.consumedByPaymentId = payment.id;
+      await manager.save(proof);
 
       const apps: BillPaymentApplication[] = [];
       for (const app of dto.applications) {
@@ -633,6 +670,77 @@ export class BillsService {
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
     return { data, total, page, limit };
+  }
+
+  /**
+   * Store a payment proof and return a handle the pay request can quote.
+   *
+   * Two steps rather than a file on the pay endpoint itself: the financial
+   * endpoint stays JSON, and the file is durable before any money moves.
+   *
+   * The row is created FIRST so its id exists — StorageService bakes a
+   * publicPath into the URL it returns, pointing at the route that streams the
+   * file back, and there is nothing else stable to build that path from.
+   */
+  async createPaymentProof(
+    companyId: string,
+    userId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+  ) {
+    const proof = await this.proofRepo.save(
+      this.proofRepo.create({
+        companyId,
+        uploadedBy: userId,
+        // Filled in immediately below, once the id exists to address it by.
+        storageKey: '',
+        url: '',
+        mimeType: file.mimetype,
+        originalName: file.originalname,
+        size: file.size,
+        consumedByPaymentId: null,
+      }),
+    );
+
+    const stored = await this.storage.putBuffer({
+      bucket: 'bill-payment-proofs',
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      originalName: file.originalname,
+      publicPath: `/bill-payments/proofs/${proof.id}/file`,
+    });
+
+    proof.storageKey = stored.key;
+    proof.url = stored.url;
+    await this.proofRepo.save(proof);
+
+    return {
+      id: proof.id,
+      url: proof.url,
+      mimeType: proof.mimeType,
+      originalName: proof.originalName,
+      size: proof.size,
+    };
+  }
+
+  /** Stream a proof back, scoped to the company that uploaded it. */
+  async readPaymentProof(companyId: string, proofId: string) {
+    const proof = await this.proofRepo.findOne({
+      where: { id: proofId, companyId },
+    });
+    if (!proof) {
+      throw new NotFoundException({
+        code: 'PAYMENT_PROOF_NOT_FOUND',
+        message: 'Payment proof not found',
+      });
+    }
+    const file = await this.storage.read(proof.storageKey);
+    if (!file) {
+      throw new NotFoundException({
+        code: 'PAYMENT_PROOF_MISSING',
+        message: 'Payment proof missing on storage',
+      });
+    }
+    return { file, proof };
   }
 
   /**

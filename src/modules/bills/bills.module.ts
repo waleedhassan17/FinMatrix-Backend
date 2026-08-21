@@ -4,6 +4,7 @@ import { Bill } from './entities/bill.entity';
 import { BillLineItem } from './entities/bill-line-item.entity';
 import { BillPayment } from './entities/bill-payment.entity';
 import { BillPaymentApplication } from './entities/bill-payment-application.entity';
+import { BillPaymentProof } from './entities/bill-payment-proof.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { BillsService } from './bills.service';
 import { BillsController } from './bills.controller';
@@ -18,6 +19,7 @@ import { AccountsModule } from '../accounts/accounts.module';
       BillLineItem,
       BillPayment,
       BillPaymentApplication,
+      BillPaymentProof,
       Vendor,
     ]),
     JournalEntriesModule,

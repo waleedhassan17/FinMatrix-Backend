@@ -5,6 +5,7 @@ import {
   IsArray,
   IsDateString,
   IsIn,
+  IsNotEmpty,
   IsNumberString,
   IsOptional,
   IsString,
@@ -77,6 +78,22 @@ export class PayBillsDto {
   @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
   @ApiProperty() @IsUUID() bankAccountId!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
+
+  /**
+   * A bill_payment_proofs row, uploaded through POST /bill-payments/proofs
+   * before the payment is recorded. Required: money leaving the bank account
+   * has to be evidenced.
+   */
+  @ApiProperty({ description: 'Id returned by POST /bill-payments/proofs' })
+  @IsNotEmpty({
+    message:
+      'A payment proof (receipt or screenshot) is required to record a bill payment.',
+  })
+  @IsUUID(undefined, {
+    message:
+      'A payment proof (receipt or screenshot) is required to record a bill payment.',
+  })
+  proofId!: string;
 
   @ApiProperty({ type: [BillPaymentApplicationDto] })
   @IsArray()

@@ -28,6 +28,21 @@ export class BillPayment extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
+  /**
+   * The payment proof, copied off BillPaymentProof when the payment claims it.
+   * Both nullable because payments recorded before proof was mandatory have
+   * none, and those rows must keep loading.
+   *
+   * The key is what survives — it is what StorageService.read() takes. The URL
+   * is a convenience for the client and is composed from APP_URL at upload
+   * time, so it can drift if that setting changes.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'proof_storage_key' })
+  proofStorageKey!: string | null;
+
+  @Column({ type: 'varchar', length: 512, nullable: true, name: 'proof_url' })
+  proofUrl!: string | null;
+
   @OneToMany(() => BillPaymentApplication, (a) => a.billPayment, { cascade: true })
   applications!: BillPaymentApplication[];
 }

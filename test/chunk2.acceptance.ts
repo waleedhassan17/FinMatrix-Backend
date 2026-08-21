@@ -226,17 +226,93 @@ async function main() {
   const { bs: bsExp } = await assertBooksBalanced('after expense bill');
   check('input tax parked on Sales Tax Recoverable 1300 (20)', close(bsLine(bsExp, '1300'), 20), bsLine(bsExp, '1300'));
 
-  // ── 8. Pay a bill ────────────────────────────────────────────────────────
+  // ── 8. Pay a bill (proof is mandatory) ───────────────────────────────────
   const cashForPay = (data(await req('GET', '/accounts?search=1000', A))?.accounts ?? []).find((a: any) => a.accountNumber === '1000');
-  const payBills = await req('POST', '/bills/pay', {
-    ...A,
-    json: {
-      vendorId: vendor.id, paymentDate: TODAY, paymentMethod: 'cash', bankAccountId: cashForPay?.id,
-      applications: [{ billId: bill1Id, amount: '900.00' }],
-    },
+
+  /** Upload a payment proof; returns the whole response so status can be checked. */
+  const uploadProof = async (
+    bytes: Uint8Array,
+    mime: string,
+    filename: string,
+    auth: { token: string; companyId: string } = A as any,
+  ) => {
+    const fd = new FormData();
+    // Cast: a Buffer passed through a parameter widens to ArrayBufferLike,
+    // which BlobPart does not accept, though the bytes are fine.
+    fd.append('proof', new Blob([bytes as unknown as BlobPart], { type: mime }), filename);
+    const r = await fetch(`${BASE}/bill-payments/proofs`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${auth.token}`, 'x-company-id': auth.companyId },
+      body: fd as any,
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  };
+
+  const payPayload = (proofId: string | undefined, amount = '900.00') => ({
+    vendorId: vendor.id, paymentDate: TODAY, paymentMethod: 'cash',
+    bankAccountId: cashForPay?.id, proofId,
+    applications: [{ billId: bill1Id, amount }],
   });
+
+  const countPayments = async (): Promise<number> =>
+    Number((await pg.query('SELECT count(*)::int AS c FROM bill_payments WHERE company_id = $1', [cid])).rows[0].c);
+  const billBalance = async (): Promise<number> =>
+    Number((await pg.query('SELECT balance FROM bills WHERE id = $1', [bill1Id])).rows[0].balance);
+
+  // 8a. No proof → refused, and NOTHING is written.
+  const paymentsBefore = await countPayments();
+  const balanceBefore = await billBalance();
+  const noProof = await req('POST', '/bills/pay', { ...A, json: payPayload(undefined) });
+  check('pay without a proof is refused (400)', noProof.status === 400, noProof.body);
+  check('refused payment wrote no bill_payments row', (await countPayments()) === paymentsBefore);
+  check('refused payment left the bill balance alone', close(await billBalance(), balanceBefore, 0.001));
+
+  // 8b. A proof id this company does not own must not be usable. A well-formed
+  // uuid that resolves to nothing is exactly what a guessed or replayed id from
+  // another tenant looks like from here.
+  const foreignPay = await req('POST', '/bills/pay', {
+    ...A, json: payPayload('00000000-0000-4000-8000-000000000000'),
+  });
+  check('a proof id this company does not own is refused', foreignPay.status === 400, foreignPay.body);
+  check('and still nothing was written', (await countPayments()) === paymentsBefore);
+
+  // 8c. Bad content type is refused at upload, before any payment exists.
+  const badType = await uploadProof(Buffer.from('not an image'), 'text/plain', 'notes.txt');
+  check('a text/plain proof is refused at upload (415)', badType.status === 415, badType.body);
+
+  // 8d. PDF is accepted — a bank transfer confirmation usually is one.
+  const pdfProof = await uploadProof(Buffer.from('%PDF-1.4\n%%EOF\n'), 'application/pdf', 'confirmation.pdf');
+  check('a PDF proof uploads', pdfProof.status === 201 && !!pdfProof.body?.data?.id, pdfProof.body);
+
+  // 8e. The real payment, with an image proof.
+  const proofRes = await uploadProof(PNG, 'image/png', 'receipt.png');
+  const proofId = proofRes.body?.data?.id;
+  check('an image proof uploads and returns an id', proofRes.status === 201 && !!proofId, proofRes.body);
+
+  const payBills = await req('POST', '/bills/pay', { ...A, json: payPayload(proofId) });
   check('bill payment posted', payBills.status === 201 || payBills.status === 200, payBills.body);
   await assertBooksBalanced('after bill payment');
+
+  // 8f. The proof is recorded on the payment and cannot back a second one.
+  const stored = await pg.query(
+    'SELECT proof_storage_key, proof_url FROM bill_payments WHERE company_id = $1 ORDER BY created_at DESC LIMIT 1', [cid],
+  );
+  check('the payment stored its proof key and url',
+    !!stored.rows[0]?.proof_storage_key && !!stored.rows[0]?.proof_url, stored.rows[0]);
+
+  const reuse = await req('POST', '/bills/pay', { ...A, json: payPayload(proofId, '10.00') });
+  check('a consumed proof cannot be reused', reuse.status === 400, reuse.body);
+
+  // 8g. The history exposes the proof, and the file streams back.
+  const history = data(await req('GET', `/bills/${bill1Id}/payments`, A)) as any;
+  check('payment history carries the proof url',
+    (history?.payments ?? []).some((p: any) => !!p.proofUrl), history?.payments?.[0]);
+
+  const fileRes = await fetch(`${BASE}/bill-payments/proofs/${proofId}/file`, {
+    headers: { Authorization: `Bearer ${A.token}`, 'x-company-id': cid },
+  });
+  check('the proof file streams back', fileRes.status === 200 && (fileRes.headers.get('content-type') ?? '').includes('image/png'),
+    { status: fileRes.status, type: fileRes.headers.get('content-type') });
 
   // ── 9. Inventory adjustment (−2) ─────────────────────────────────────────
   console.log('\n— Inventory adjustment');

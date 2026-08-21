@@ -52,6 +52,34 @@ async function req(method: string, path: string, body?: unknown) {
 }
 const data = (r: { body: any }) => r.body?.data ?? r.body;
 
+/** Smallest valid PNG — enough to satisfy the proof upload's type check. */
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** Upload a payment proof and return the { id, url } handle pay() requires. */
+async function uploadProof(filename: string) {
+  const form = new FormData();
+  form.append('proof', new Blob([PNG_1X1], { type: 'image/png' }), filename);
+  const headers: Record<string, string> = {};
+  if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+  if (COMPANY) headers['x-company-id'] = COMPANY;
+  // No Content-Type — fetch sets the multipart boundary itself.
+  const res = await fetch(`${API}/bill-payments/proofs`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  let parsed: any = null;
+  try {
+    parsed = await res.json();
+  } catch {
+    /* empty */
+  }
+  return { status: res.status, body: parsed };
+}
+
 function step(label: string, res: { status: number; body: any }) {
   const okish = res.status >= 200 && res.status < 300;
   steps++;
@@ -122,6 +150,9 @@ async function main() {
     ?? (data(await req('GET', '/accounts?limit=200')) as any)?.data ?? []) as any[];
   const bankAccount = accountsForPay.find((a: any) => a.accountNumber === '1010')
     ?? accountsForPay.find((a: any) => a.accountNumber === '1000');
+  // A payment now needs evidence behind it, so the scenario uploads one first
+  // — the same two steps the app takes.
+  const proof = data(await uploadProof('seed-bank-confirmation.png')) as any;
   step(
     'bill payment',
     await req('POST', '/bills/pay', {
@@ -129,6 +160,7 @@ async function main() {
       paymentDate: TODAY,
       paymentMethod: 'bank_transfer',
       bankAccountId: bankAccount.id,
+      proofId: proof?.id,
       applications: [{ billId: bill.billId, amount: '4000' }],
     }),
   );
