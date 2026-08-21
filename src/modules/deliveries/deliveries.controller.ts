@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body, Controller, Delete, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -118,6 +118,21 @@ export class DeliveriesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.svc.update(companyId, id, dto, user.id);
+  }
+
+  /**
+   * Discard a delivery that was created but never dispatched. Admin-only, and
+   * refused once anything has been committed to the books — a dispatched
+   * delivery is cancelled (which restocks and reverses Goods in Transit),
+   * never deleted.
+   */
+  @Delete(':id')
+  @Roles('admin')
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.svc.remove(companyId, id);
   }
 
   @Post(':id/auto-assign')

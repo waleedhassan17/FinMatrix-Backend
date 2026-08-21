@@ -3,9 +3,10 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull } from 'typeorm';
+import { Repository, DataSource, EntityManager, IsNull } from 'typeorm';
 import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
 import { DeliveryStatusHistory } from './entities/delivery-status-history.entity';
@@ -181,6 +182,11 @@ export class DeliveriesService {
     if (dto.destAddress && !dest.address) dest.address = dto.destAddress;
 
     return this.dataSource.transaction(async (em) => {
+      // Before anything is written: a delivery that cannot be fulfilled should
+      // never exist. Inside the transaction so a concurrent create cannot slip
+      // between the check and the insert.
+      await this.assertStockAvailable(em, companyId, dto.items ?? []);
+
       const repo = em.getRepository(Delivery);
       const itemRepo = em.getRepository(DeliveryItem);
       const d = repo.create({
@@ -239,6 +245,169 @@ export class DeliveriesService {
         ledger: ledgerResult,
       };
     });
+  }
+
+  /**
+   * Hard-delete a delivery that never got off the ground.
+   *
+   * Safe ONLY while nothing has been committed. A created-but-unassigned
+   * delivery has touched nothing — no stock movement, no journal entry, no
+   * documents — so removing it leaves the books exactly as they were. Once
+   * commitStockOnAssign has run there IS something to unwind, and the honest
+   * way to do that is cancel (releaseOnReject restocks and reverses Goods in
+   * Transit, keeping an auditable record) rather than erasing history.
+   */
+  async remove(companyId: string, id: string) {
+    return this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(Delivery);
+      const d = await repo.findOne({ where: { id, companyId } });
+      if (!d) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Delivery not found',
+        });
+      }
+
+      const committed =
+        !!d.stockCommittedAt ||
+        !!d.salesOrderId ||
+        !!d.invoiceId ||
+        !!d.gitJournalEntryId ||
+        !['unassigned', 'cancelled'].includes(d.status);
+
+      if (committed) {
+        throw new UnprocessableEntityException({
+          code: 'DELIVERY_COMMITTED',
+          message:
+            'This delivery has already been dispatched. Cancel it instead — that restocks the units and reverses Goods in Transit.',
+        });
+      }
+
+      // delivery_items is the only real FK and cascades. The rest reference
+      // delivery_id without one, so clear them explicitly: an unassigned
+      // delivery should have none, but an orphan row is worse than a no-op.
+      for (const table of [
+        'inventory_update_requests',
+        'delivery_location_logs',
+        'delivery_signatures',
+        'delivery_issues',
+        'delivery_status_history',
+      ]) {
+        await em.query(`DELETE FROM ${table} WHERE delivery_id = $1`, [id]);
+      }
+      await repo.remove(d);
+
+      return { id, deleted: true };
+    });
+  }
+
+  /**
+   * How many units of each item a NEW delivery may still promise.
+   *
+   *   available = quantity_on_hand − units already on other OPEN deliveries
+   *
+   * "Open" means created but not yet dispatched (unassigned/pending with no
+   * stock_committed_at). Once a delivery is dispatched its units have already
+   * left quantity_on_hand, so counting them again would double-subtract.
+   *
+   * Nothing is reserved anywhere — quantity_committed is dead in this codebase
+   * — so without the second term three deliveries could each pass validation
+   * against the same 22 units and only the first assign would succeed. This is
+   * a pure read: creating a delivery still changes no inventory.
+   */
+  private async availableByItem(
+    em: EntityManager,
+    companyId: string,
+    itemIds: string[],
+    excludeDeliveryId?: string,
+  ): Promise<Map<string, { name: string; onHand: number; promised: number; available: number }>> {
+    const ids = [...new Set(itemIds.filter(Boolean))];
+    const out = new Map<string, { name: string; onHand: number; promised: number; available: number }>();
+    if (ids.length === 0) return out;
+
+    const rows: Array<{
+      id: string;
+      name: string;
+      on_hand: string;
+      promised: string;
+    }> = await em.query(
+      `SELECT i.id,
+              i.name,
+              i.quantity_on_hand AS on_hand,
+              COALESCE((
+                SELECT SUM(di.quantity::numeric)
+                  FROM delivery_items di
+                  JOIN deliveries d ON d.id = di.delivery_id
+                 WHERE di.item_id = i.id
+                   AND d.company_id = i.company_id
+                   AND d.status IN ('unassigned', 'pending')
+                   AND d.stock_committed_at IS NULL
+                   AND ($3::uuid IS NULL OR d.id <> $3::uuid)
+              ), 0) AS promised
+         FROM inventory_items i
+        WHERE i.company_id = $1 AND i.id = ANY($2::uuid[])`,
+      [companyId, ids, excludeDeliveryId ?? null],
+    );
+
+    for (const r of rows) {
+      const onHand = parseFloat(r.on_hand) || 0;
+      const promised = parseFloat(r.promised) || 0;
+      out.set(r.id, { name: r.name, onHand, promised, available: onHand - promised });
+    }
+    return out;
+  }
+
+  /**
+   * Reject a delivery whose lines ask for more than is available, BEFORE
+   * anything is written. Previously the only stock guard lived in
+   * commitStockOnAssign, so a short delivery was created happily and only
+   * failed later at assignment — leaving a dead record the dispatcher had no
+   * way to remove.
+   *
+   * Reports every offending line at once: fixing a five-line delivery one
+   * rejection at a time is its own kind of broken.
+   */
+  private async assertStockAvailable(
+    em: EntityManager,
+    companyId: string,
+    lines: Array<{ itemId?: string; itemName?: string; quantity?: any; orderedQty?: any }>,
+    excludeDeliveryId?: string,
+  ): Promise<void> {
+    const wanted = new Map<string, number>();
+    for (const l of lines) {
+      if (!l.itemId) continue; // non-stock line (ad-hoc description)
+      const q = Number(l.quantity ?? l.orderedQty ?? 0) || 0;
+      wanted.set(l.itemId, (wanted.get(l.itemId) ?? 0) + q);
+    }
+    if (wanted.size === 0) return;
+
+    const avail = await this.availableByItem(em, companyId, [...wanted.keys()], excludeDeliveryId);
+    const problems: string[] = [];
+
+    for (const [itemId, qty] of wanted) {
+      const a = avail.get(itemId);
+      if (!a) {
+        problems.push(`Inventory item ${itemId} was not found.`);
+        continue;
+      }
+      if (qty > a.available) {
+        const detail =
+          a.promised > 0
+            ? `${a.onHand} on hand, ${a.promised} on other open deliveries`
+            : `${a.onHand} on hand`;
+        problems.push(
+          `Cannot add ${qty} x ${a.name}: only ${Math.max(0, a.available)} available (${detail}).`,
+        );
+      }
+    }
+
+    if (problems.length > 0) {
+      throw new UnprocessableEntityException({
+        code: 'INSUFFICIENT_STOCK',
+        message: problems.join(' '),
+        details: { lines: problems },
+      });
+    }
   }
 
   async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string, userId: string) {
