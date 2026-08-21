@@ -7,6 +7,13 @@ import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { TaxPayment } from '../tax/entities/tax-payment.entity';
+import type {
+  CashFlowLine,
+  CashFlowReport,
+  OperatingIndirect,
+  PnlLine,
+  ProfitLossReport,
+} from './reports.types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: any) => parseFloat(v ?? '0') || 0;
@@ -72,35 +79,167 @@ export class ReportsService {
     return row.subType === 'Cost of Goods' || row.accountNumber.startsWith('5');
   }
 
-  // ── Profit & Loss (ledger-derived) ───────────────────────────────
-  async profitLoss(companyId: string, startDate: string, endDate: string) {
-    const s = startDate || '1970-01-01';
-    const e = endDate || '2999-12-31';
-    const rows = await this.glByAccount(companyId, s, e);
+  /**
+   * NON-operating income or expense — interest, FX, disposals, one-offs.
+   * Kept out of the operating subtotal so `netOperatingIncome` reflects the
+   * trade the business actually runs. Mirrors isCogs: number prefix first,
+   * explicit subType as the escape hatch for a custom chart.
+   */
+  private isOther(row: { accountNumber: string; subType: string }): boolean {
+    return (
+      row.accountNumber.startsWith('7') ||
+      row.accountNumber.startsWith('8') ||
+      row.subType === 'Other Income' ||
+      row.subType === 'Other Expense'
+    );
+  }
 
+  /**
+   * Sort by account code and drop untouched accounts, which would otherwise
+   * pad the statement with a row of zeros for every account in the chart.
+   */
+  private toLines(
+    rows: Array<{ accountNumber: string; accountName: string; amount: number }>,
+  ): PnlLine[] {
+    return rows
+      .filter((r) => Math.abs(r.amount) > 0.005)
+      .sort((a, b) => a.accountNumber.localeCompare(b.accountNumber))
+      .map((r) => ({
+        accountCode: r.accountNumber,
+        accountName: r.accountName,
+        amount: r2(r.amount),
+      }));
+  }
+
+  /**
+   * Period net income from GL rows, using the SAME revenue/expense rules as
+   * profitLoss(). Shared so the two statements cannot drift apart.
+   */
+  private netIncomeFrom(
+    rows: Array<{
+      type: string;
+      dr: string;
+      cr: string;
+      accountNumber: string;
+      subType: string;
+    }>,
+  ): number {
     let revenue = 0;
-    let cogs = 0;
-    let expenses = 0;
+    let expense = 0;
     for (const row of rows) {
       const dr = num(row.dr);
       const cr = num(row.cr);
       if (row.type === 'revenue') revenue += cr - dr;
-      else if (row.type === 'expense') {
+      else if (row.type === 'expense') expense += dr - cr;
+    }
+    return r2(revenue - expense);
+  }
+
+  /**
+   * Closing balance per account code as of a date, normal-balance aware:
+   * positive means a debit balance for assets/expenses and a credit balance
+   * for liabilities/equity/revenue.
+   */
+  private async balancesAsOf(
+    companyId: string,
+    asOf: string,
+  ): Promise<Map<string, { type: string; subType: string; balance: number }>> {
+    const rows = await this.glByAccount(companyId, '1970-01-01', asOf);
+    const out = new Map<
+      string,
+      { type: string; subType: string; balance: number }
+    >();
+    for (const r of rows) {
+      const dr = num(r.dr);
+      const cr = num(r.cr);
+      const balance =
+        r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
+      out.set(r.accountNumber, { type: r.type, subType: r.subType, balance });
+    }
+    return out;
+  }
+
+  // ── Profit & Loss (ledger-derived) ───────────────────────────────
+  async profitLoss(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<ProfitLossReport> {
+    const s = startDate || '1970-01-01';
+    const e = endDate || '2999-12-31';
+    const rows = await this.glByAccount(companyId, s, e);
+
+    // The existing five totals, computed exactly as before so their values do
+    // not move. `revenue` and `expenses` stay all-inclusive; the operating-only
+    // figures live in the new totals below.
+    let revenue = 0;
+    let cogs = 0;
+    let expenses = 0;
+
+    // The same pass now also keeps the per-account detail glByAccount already
+    // returned and profitLoss used to discard.
+    type Row = { accountNumber: string; accountName: string; amount: number };
+    const income: Row[] = [];
+    const cogsRows: Row[] = [];
+    const expenseRows: Row[] = [];
+    const otherIncomeRows: Row[] = [];
+    const otherExpenseRows: Row[] = [];
+
+    for (const row of rows) {
+      const dr = num(row.dr);
+      const cr = num(row.cr);
+      const line = (amount: number): Row => ({
+        accountNumber: row.accountNumber,
+        accountName: row.accountName,
+        amount,
+      });
+
+      if (row.type === 'revenue') {
+        const amt = cr - dr;
+        revenue += amt;
+        (this.isOther(row) ? otherIncomeRows : income).push(line(amt));
+      } else if (row.type === 'expense') {
         const amt = dr - cr;
-        if (this.isCogs(row)) cogs += amt;
-        else expenses += amt;
+        if (this.isCogs(row)) {
+          cogs += amt;
+          cogsRows.push(line(amt));
+        } else {
+          expenses += amt;
+          (this.isOther(row) ? otherExpenseRows : expenseRows).push(line(amt));
+        }
       }
     }
+
     const grossProfit = r2(revenue - cogs);
     const netIncome = r2(grossProfit - expenses);
+
+    const sum = (rs: Row[]) => rs.reduce((t, r) => t + r.amount, 0);
+    const totalIncome = r2(sum(income));
+    const totalCogs = r2(sum(cogsRows));
+    const totalExpenses = r2(sum(expenseRows));
+    const netOperatingIncome = r2(grossProfit - totalExpenses);
+    const netOtherIncome = r2(sum(otherIncomeRows) - sum(otherExpenseRows));
+
     return {
       range: { startDate: s, endDate: e },
       comparisonRange: null,
+      // ── existing fields, unchanged ──
       revenue: r2(revenue),
       cogs: r2(cogs),
       grossProfit,
       expenses: r2(expenses),
       netIncome,
+      // ── added: per-account detail + operating / non-operating split ──
+      income: this.toLines(income),
+      cogsLines: this.toLines(cogsRows),
+      expenseLines: this.toLines(expenseRows),
+      otherIncome: this.toLines(otherIncomeRows),
+      otherExpense: this.toLines(otherExpenseRows),
+      totalIncome,
+      totalCogs,
+      totalExpenses,
+      netOperatingIncome,
+      netOtherIncome,
     };
   }
 
@@ -474,7 +613,11 @@ export class ReportsService {
   // the QuickBooks "direct method" and ties exactly to the Balance Sheet cash
   // (FinMatrixGuide §5.4): ending cash == Σ(debit − credit) on cash accounts
   // through endDate.
-  async cashFlow(companyId: string, startDate: string, endDate: string) {
+  async cashFlow(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<CashFlowReport> {
     const s = startDate || '1970-01-01';
     const e = endDate || new Date().toISOString().slice(0, 10);
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -491,8 +634,10 @@ export class ReportsService {
     );
     const beginningCash = r2(num(beginRows[0]?.v));
 
-    // In-period cash movement grouped by the source document type, so the
-    // statement shows meaningful lines (receipts, supplier payments, tax, …).
+    // In-period cash movement grouped by the source document type. This is the
+    // DIRECT method: useful internally because every line traces to a document
+    // type. It is NOT what QuickBooks Online publishes — QBO's built-in
+    // Statement of Cash Flows is the INDIRECT one, built below.
     const srcRows = await this.dataSource.query(
       `SELECT g.source_type AS src,
               COALESCE(SUM(g.debit::numeric),0)  AS inflow,
@@ -560,6 +705,13 @@ export class ReportsService {
       value: r2(num(r.v)),
     }));
 
+    const operatingIndirect = await this.buildOperatingIndirect(
+      companyId,
+      s,
+      e,
+      operating.total,
+    );
+
     return {
       range: { startDate: s, endDate: e },
       operating,
@@ -569,7 +721,119 @@ export class ReportsService {
       beginningCash,
       endingCash,
       monthlyTrend,
+      operatingIndirect,
     };
+  }
+
+  /**
+   * Indirect operating reconciliation — the presentation QuickBooks Online
+   * publishes: start at net income, add back non-cash charges, then adjust for
+   * the working capital that moved without cash following it.
+   *
+   * The two methods are the same number by construction: direct operating is
+   * total cash movement less investing and financing, and the indirect walk
+   * reaches the same place from the accrual side. Rather than trust that, the
+   * residual against the direct total is measured and, if anything is left,
+   * carried on an explicit "Other operating adjustments" line — the statement
+   * always ties AND always shows what could not be attributed.
+   *
+   * Reads only; nothing here posts.
+   */
+  private async buildOperatingIndirect(
+    companyId: string,
+    s: string,
+    e: string,
+    directOperatingTotal: number,
+  ): Promise<OperatingIndirect> {
+    // The opening side is the day BEFORE the period starts, so the first day's
+    // activity counts as movement.
+    const dayBefore = new Date(`${s}T00:00:00Z`);
+    dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
+    const [openingBal, closingBal, periodRows] = await Promise.all([
+      this.balancesAsOf(companyId, dayBefore.toISOString().slice(0, 10)),
+      this.balancesAsOf(companyId, e),
+      this.glByAccount(companyId, s, e),
+    ]);
+
+    const netIncome = this.netIncomeFrom(periodRows);
+
+    const delta = (
+      pick: (code: string, meta: { type: string; subType: string }) => boolean,
+    ): number => {
+      let d = 0;
+      for (const [code, meta] of closingBal) {
+        if (pick(code, meta))
+          d += meta.balance - (openingBal.get(code)?.balance ?? 0);
+      }
+      return d;
+    };
+
+    const isCashLike = (m: { subType: string }) =>
+      m.subType === 'Cash' || m.subType === 'Bank';
+    const inRange = (code: string, lo: number, hi: number) => {
+      const n = parseInt(code, 10);
+      return Number.isFinite(n) && n >= lo && n <= hi;
+    };
+
+    // 1250 sits INSIDE 1200–1299, so Inventory excludes it explicitly —
+    // counting Goods in Transit in both would double the adjustment. Same for
+    // GRNI 2050, excluded from other liabilities.
+    const dAR = delta(
+      (_c, m) => m.type === 'asset' && m.subType === 'Accounts Receivable',
+    );
+    const dInventory = delta(
+      (c, m) => m.type === 'asset' && inRange(c, 1200, 1299) && c !== '1250',
+    );
+    const dGit = delta((c) => c === '1250');
+    const dOtherAssets = delta(
+      (c, m) =>
+        m.type === 'asset' &&
+        !isCashLike(m) &&
+        m.subType !== 'Accounts Receivable' &&
+        !inRange(c, 1200, 1299),
+    );
+    const dAP = delta(
+      (_c, m) => m.type === 'liability' && m.subType === 'Accounts Payable',
+    );
+    const dGrni = delta((c) => c === '2050');
+    const dOtherLiabs = delta(
+      (c, m) =>
+        m.type === 'liability' &&
+        m.subType !== 'Accounts Payable' &&
+        c !== '2050',
+    );
+    const depreciation = delta(
+      (_c, m) => m.type === 'expense' && m.subType === 'Depreciation',
+    );
+
+    // An asset going UP consumes cash; a liability going UP releases it.
+    const candidates: CashFlowLine[] = [
+      { label: 'Depreciation & amortisation', amount: depreciation },
+      { label: 'Accounts Receivable', amount: -dAR },
+      { label: 'Inventory', amount: -dInventory },
+      { label: 'Goods in Transit', amount: -dGit },
+      { label: 'Other current assets', amount: -dOtherAssets },
+      { label: 'Accounts Payable', amount: dAP },
+      { label: 'Goods Received Not Invoiced', amount: dGrni },
+      { label: 'Other current liabilities', amount: dOtherLiabs },
+    ];
+
+    const adjustments = candidates
+      .filter((l) => Math.abs(l.amount) > 0.005)
+      .map((l) => ({ label: l.label, amount: r2(l.amount) }));
+
+    const subtotal = r2(
+      netIncome + adjustments.reduce((t, l) => t + l.amount, 0),
+    );
+    const residual = r2(directOperatingTotal - subtotal);
+    if (Math.abs(residual) > 0.005) {
+      adjustments.push({
+        label: 'Other operating adjustments',
+        amount: residual,
+      });
+    }
+
+    return { netIncome, adjustments, total: r2(directOperatingTotal) };
   }
 
   toCsv(rows: Record<string, unknown>[]): string {
