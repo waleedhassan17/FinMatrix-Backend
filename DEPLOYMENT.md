@@ -24,6 +24,30 @@ Create a `.env` file from `.env.example`. Critical variables:
 | `BCRYPT_COST` | yes | `12` or higher |
 | `THROTTLE_TTL_SECONDS` / `THROTTLE_LIMIT` | yes | Rate limit |
 | `LOG_LEVEL` | yes | `info` in prod |
+| `CREDENTIAL_ENCRYPTION_KEY` | **yes** | Encrypts owner-issued staff/rider passwords. See below. |
+
+### `CREDENTIAL_ENCRYPTION_KEY`
+
+Staff and delivery riders do not sign themselves up: the owner creates the
+account and hands the credentials over, and there is **no self-service reset**
+because the account has no inbox. The owner is therefore the custodian, and the
+password is stored encrypted so it can be shown again from User management.
+
+Generate one — 32 bytes, base64:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+The app **refuses to boot in production without it**, on purpose. Unset, the
+vault reports itself unconfigured and quietly stores nothing: the owner would
+add staff, see the password once, and find "Show login" answering nothing
+months later — with an account nobody can recover. A failed boot is a much
+better outcome than that.
+
+Treat it like `JWT_SECRET`: secrets manager, never committed. **Rotating it
+makes existing stored passwords unreadable** — the accounts still work, but the
+owner has to re-issue passwords to see them again.
 
 ---
 
@@ -121,6 +145,8 @@ GET /api/v1/accounts/:accountId/transactions?page=1&limit=50
 - [ ] `NODE_ENV=production`
 - [ ] `DB_SYNCHRONIZE=false`
 - [ ] `JWT_SECRET` is long & random, stored in secrets manager
+- [ ] `CREDENTIAL_ENCRYPTION_KEY` set (the app will not start without it) and
+      stored in the secrets manager alongside `JWT_SECRET`
 - [ ] HTTPS terminated in front of the app
 - [ ] CORS origin restricted to your frontend host (edit `main.ts`)
 - [ ] Helmet enabled (already default)

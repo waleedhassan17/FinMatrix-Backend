@@ -30,6 +30,28 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
   BCRYPT_ROUNDS: Joi.number().min(10).max(14).default(12),
 
+  /**
+   * Encrypts the custodian's copy of owner-issued staff and rider passwords.
+   *
+   * REQUIRED in production, because without it the failure is silent: the
+   * vault reports itself unconfigured, storeCredential logs a warning and
+   * returns, and the owner discovers months later that "Show login" has been
+   * answering null the whole time. An account with no self-service reset and
+   * no stored credential is an account nobody can recover.
+   *
+   * Optional elsewhere so a dev box without it still boots — the vault warns
+   * loudly enough there, and nothing is at stake.
+   *
+   *   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   */
+  CREDENTIAL_ENCRYPTION_KEY: Joi.string()
+    .min(32)
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+
   CORS_ORIGINS: Joi.string().required(),
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
