@@ -14,6 +14,32 @@ import { ApplyCreditMemoDto, CreateCreditMemoDto, ListCreditMemosQueryDto } from
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
+
+/**
+ * One line describing what approving this credit memo will actually do.
+ *
+ * The distinction that matters is where the money goes: settling an invoice
+ * costs the business nothing it had not already lost, while a refund takes
+ * cash out of the bank. Both arrive here as "a credit memo".
+ */
+const buildCreditMemoSummary = (dto: CreateCreditMemoDto & {
+  refundRemainderToCash?: boolean;
+  reversesDeliveryRequestId?: string;
+}): string => {
+  const total = (dto.lines ?? []).reduce(
+    (sum, l) => sum + Number(l.quantity ?? 0) * Number(l.unitPrice ?? 0),
+    0,
+  );
+  const amount = total > 0 ? ` of ${total.toFixed(2)}` : '';
+  const what = dto.reversesDeliveryRequestId
+    ? 'Reverse a delivery'
+    : 'Credit memo';
+  const effect = dto.refundRemainderToCash
+    ? ' — refunds the customer in CASH'
+    : ' — settles against their invoice';
+  return `${what}${amount}${effect}. ${dto.reason ?? ''}`.trim();
+};
+
 @ApiTags('credit-memos')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
@@ -61,7 +87,10 @@ export class CreditMemosController {
     return this.approvals.createRequest(
       'credit_memo',
       { action: 'create', ...dto },
-      `Credit memo for a customer return — ${dto.reason ?? `${dto.lines?.length ?? 0} line(s)`}`,
+      // Say what approving will DO, not just what the document is. A refund
+      // moves cash out of the business, and an owner should not have to open
+      // the payload to discover that.
+      buildCreditMemoSummary(dto),
       user,
       companyId,
     );
