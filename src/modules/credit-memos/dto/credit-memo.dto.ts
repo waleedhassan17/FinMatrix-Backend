@@ -18,6 +18,17 @@ export class CreateCreditMemoDto {
   @ApiProperty({ example: '2026-06-22' }) @IsDateString() date!: string;
   @ApiPropertyOptional({ description: 'Original invoice this credit references.' })
   @IsOptional() @IsUUID() originalInvoiceId?: string;
+  /**
+   * Settle the credit against this invoice as part of the same action.
+   *
+   * Set when reversing a delivery: creating the memo posts the reversal, but
+   * without applying it the original invoice still shows a balance beside a
+   * floating credit, so the customer appears to owe money they do not. Only
+   * what the invoice can absorb is applied — a prepaid delivery has nothing
+   * left to settle and the credit stays available.
+   */
+  @ApiPropertyOptional({ description: 'Invoice to settle with this credit, in the same action.' })
+  @IsOptional() @IsUUID() applyToInvoiceId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
 
   @ApiProperty({ type: [CreditMemoLineDto] })

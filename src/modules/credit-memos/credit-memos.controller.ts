@@ -54,7 +54,10 @@ export class CreditMemosController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateCreditMemoDto,
   ) {
-    if (user.role === 'admin') return this.svc.create(companyId, user.id, dto);
+    // createAndApply is a no-op beyond create() unless applyToInvoiceId is
+    // set, so this one call covers both an ordinary credit memo and a delivery
+    // reversal — and staff's approved request runs the very same method.
+    if (user.role === 'admin') return this.svc.createAndApply(companyId, user.id, dto);
     return this.approvals.createRequest(
       'credit_memo',
       { action: 'create', ...dto },

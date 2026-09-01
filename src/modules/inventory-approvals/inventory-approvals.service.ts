@@ -14,6 +14,8 @@ import { InventoryApprovalAuditEntry } from './entities/inventory-approval-audit
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import { DeliveryItem } from '../deliveries/entities/delivery-item.entity';
 import { DeliveryLedgerService } from '../deliveries/delivery-ledger.service';
 import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inventory-snapshot.entity';
@@ -814,6 +816,106 @@ export class InventoryApprovalsService {
    * discover the request cannot be approved), and again inside undoApproval
    * when the owner acts on it.
    */
+  /**
+   * Build the credit memo that reverses an approved delivery.
+   *
+   * Once a delivery is ledger-committed there is a posted sale behind it, and
+   * corrections must REVERSE rather than delete — which is exactly what
+   * undoApproval refuses to do and tells the caller to do instead. Rather than
+   * leaving somebody to re-key the customer, the invoice and every line by
+   * hand, this hands back the whole draft.
+   *
+   * Built here rather than in the app on purpose:
+   *   • quantities come from what was actually DELIVERED (the request lines),
+   *     not what was ordered — a short delivery must not be over-credited;
+   *   • prices and tax come from delivery_items, which froze them at dispatch,
+   *     so the credit reverses what was charged rather than today's price list;
+   *   • any client asking gets the same answer.
+   *
+   * Nothing is posted here. This is a draft, and the caller still goes through
+   * the ordinary (gated) credit-memo endpoint with it.
+   */
+  async buildCreditMemoDraft(companyId: string, requestId: string) {
+    const req = await this.reqRepo.findOne({
+      where: { id: requestId, companyId },
+      relations: ['lines'],
+    });
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== 'approved') {
+      throw new ConflictException({
+        code: 'NOT_CREDITABLE',
+        message: `Only an approved delivery can be reversed (this one is ${req.status}).`,
+      });
+    }
+
+    const delivery = await this.deliveryRepo.findOne({
+      where: { id: req.deliveryId, companyId },
+    });
+    if (!delivery) throw new NotFoundException('Delivery not found');
+
+    // A legacy delivery never posted a sale, so there is no revenue to credit.
+    // Crediting Sales here would invent a reversal for something that was
+    // never recognised; those rows use undoApproval instead.
+    if (delivery.ledgerStatus !== 'committed') {
+      throw new ConflictException({
+        code: 'NOT_CREDITABLE',
+        message:
+          'This delivery never posted a sale, so there is nothing to credit. Undo the approval instead.',
+      });
+    }
+
+    const deliveryItems = await this.dataSource
+      .getRepository(DeliveryItem)
+      .find({ where: { deliveryId: delivery.id } });
+    const priceByItem = new Map(deliveryItems.map((d) => [d.itemId, d]));
+
+    const lines = req.lines
+      // Only what the customer kept. A line delivered 0 (fully returned at the
+      // door) already went back to stock on approval and must not be credited
+      // a second time.
+      .filter((l) => toDecimal(l.deliveredQty).greaterThan(0))
+      .map((l) => {
+        const priced = priceByItem.get(l.itemId);
+        return {
+          itemId: l.itemId,
+          description: l.itemName ?? priced?.itemName ?? 'Delivered item',
+          quantity: toDecimal(l.deliveredQty).toFixed(4),
+          unitPrice: toDecimal(priced?.unitPrice ?? '0').toFixed(4),
+          taxRate: toDecimal(priced?.taxRate ?? '0').toFixed(4),
+        };
+      });
+
+    const invoice = delivery.invoiceId
+      ? await this.dataSource
+          .getRepository(Invoice)
+          .findOne({ where: { id: delivery.invoiceId, companyId } })
+      : null;
+
+    const customer = delivery.customerId
+      ? await this.dataSource
+          .getRepository(Customer)
+          .findOne({ where: { id: delivery.customerId, companyId } })
+      : null;
+
+    return {
+      deliveryRequestId: req.id,
+      deliveryId: delivery.id,
+      deliveryReference: delivery.referenceNo ?? req.deliveryReference ?? null,
+      customerId: delivery.customerId,
+      customerName: customer?.name ?? null,
+      originalInvoiceId: invoice?.id ?? null,
+      invoiceNumber: invoice?.invoiceNumber ?? null,
+      // Drives whether the credit can be applied to the invoice or has to sit
+      // as an available balance — a prepaid delivery has nothing left to settle.
+      invoiceBalance: toDecimal(invoice?.balance ?? '0').toFixed(4),
+      // The reversal posts TODAY, which is also what puts it under the period
+      // lock rather than back-dating it into the original delivery's period.
+      date: new Date().toISOString().slice(0, 10),
+      reason: `Reversal of delivery ${delivery.referenceNo ?? req.deliveryReference ?? req.deliveryId}`,
+      lines,
+    };
+  }
+
   async assertUndoable(
     companyId: string,
     id: string,
@@ -838,7 +940,7 @@ export class InventoryApprovalsService {
       throw new ConflictException({
         code: 'LEDGER_COMMITTED',
         message:
-          'This delivery was posted to the ledger (invoice/COGS). Undo is not available — void the invoice or issue a credit memo instead.',
+          'This delivery posted a sale to the ledger. Corrections reverse rather than delete, so use "Reverse with credit memo" on the delivery instead of undoing it.',
       });
     }
   }

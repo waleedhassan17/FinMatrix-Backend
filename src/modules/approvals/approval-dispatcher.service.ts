@@ -99,7 +99,15 @@ export class ApprovalDispatcher {
           );
           return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
         }
-        const memo = await this.creditMemos.create(companyId, reviewerId, rest as any);
+        // createAndApply, not create: a delivery reversal carries
+        // applyToInvoiceId so the original invoice is settled in the same
+        // action. Without it the reversal posts but the invoice keeps showing
+        // a balance, which is not what the approver thought they agreed to.
+        const memo = await this.creditMemos.createAndApply(
+          companyId,
+          reviewerId,
+          rest as any,
+        );
         return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
       }
 

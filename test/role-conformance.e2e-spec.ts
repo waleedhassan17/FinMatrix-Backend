@@ -694,6 +694,8 @@ describe('Role conformance (e2e)', () => {
 
   describe('Table B · delivery lifecycle', () => {
     let deliveryId: string;
+    // The approved completion the reversal tests below credit back.
+    let approvedRequestId: string;
 
     it('row 1 — staff create a delivery: non-posting, no request', async () => {
       const requestsBefore = (await approvalRows()).length;
@@ -751,6 +753,7 @@ describe('Role conformance (e2e)', () => {
       // inventory-approvals.e2e-spec.ts; what matters here is who may APPROVE
       // the resulting request, so the request is seeded directly.
       const requestId = randomUUID();
+      approvedRequestId = requestId;
       await ds.query(
         `INSERT INTO inventory_update_requests
            (id, company_id, delivery_id, personnel_id, status, submitted_at)
@@ -814,6 +817,134 @@ describe('Role conformance (e2e)', () => {
       // 403 either way: riders are not in @Roles for this route, and the
       // service refuses a reviewer who is the delivering rider.
       expect(res.status).toBe(403);
+    });
+
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Reversing an approved delivery, via a pre-filled credit memo
+    // ══════════════════════════════════════════════════════════════════════
+
+    it('the draft names the customer, the invoice and the DELIVERED quantities', async () => {
+      const res = await get(
+        `/api/v1/inventory-update-requests/${approvedRequestId}/credit-memo-draft`,
+        staffToken,
+      );
+      if (res.status !== 200) {
+        throw new Error(`draft → ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+      const draft = res.body.data;
+
+      expect(draft.customerId).toBe(customerId);
+      // Approving the delivery raised the invoice this credit reverses.
+      expect(draft.originalInvoiceId).toBeTruthy();
+      expect(draft.reason).toContain('Reversal of delivery');
+      // 2 delivered, and the price frozen at dispatch — not today's list price.
+      expect(draft.lines).toHaveLength(1);
+      expect(Number(draft.lines[0].quantity)).toBe(2);
+      expect(Number(draft.lines[0].unitPrice)).toBeGreaterThan(0);
+      expect(draft.lines[0].itemId).toBe(itemId);
+    });
+
+    it('staff submitting the reversal posts NOTHING and leaves the invoice alone', async () => {
+      const draft = (
+        await get(
+          `/api/v1/inventory-update-requests/${approvedRequestId}/credit-memo-draft`,
+          staffToken,
+        )
+      ).body.data;
+
+      const journalsBefore = await countJournalEntries();
+      const [invBefore] = await ds.query(
+        `SELECT balance FROM invoices WHERE id = $1`,
+        [draft.originalInvoiceId],
+      );
+
+      const res = await post('/api/v1/credit-memos', staffToken, {
+        customerId: draft.customerId,
+        date: draft.date,
+        reason: draft.reason,
+        originalInvoiceId: draft.originalInvoiceId,
+        applyToInvoiceId: draft.originalInvoiceId,
+        lines: draft.lines,
+      });
+      if (![200, 201].includes(res.status)) {
+        throw new Error(`staff reversal → ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+      expect(res.body.data.pending).toBe(true);
+
+      const pending = (await approvalRows()).filter(
+        r => r.type === 'credit_memo' && r.status === 'pending',
+      );
+      expect(pending).toHaveLength(1);
+
+      // The two things that must not have moved.
+      expect(await countJournalEntries()).toBe(journalsBefore);
+      const [invAfter] = await ds.query(
+        `SELECT balance FROM invoices WHERE id = $1`,
+        [draft.originalInvoiceId],
+      );
+      expect(Number(invAfter.balance)).toBe(Number(invBefore.balance));
+    });
+
+    it('the owner approving it reverses the sale AND settles the invoice', async () => {
+      const [pending] = (await approvalRows()).filter(
+        r => r.type === 'credit_memo' && r.status === 'pending',
+      );
+      expect(pending).toBeTruthy();
+
+      const salesBefore = await accountBalance('4000');
+      const arBefore = await accountBalance('1100');
+      const inventoryBefore = await accountBalance('1200');
+      const cogsBefore = await accountBalance('5000');
+
+      await post(`/api/v1/approvals/${pending.id}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+
+      // Dr Sales / Cr A/R — revenue comes back down, the receivable clears.
+      expect(await accountBalance('4000')).toBeGreaterThan(salesBefore);
+      expect(await accountBalance('1100')).toBeLessThan(arBefore);
+      // Dr Inventory / Cr COGS — the goods are back on the shelf at cost.
+      expect(await accountBalance('1200')).toBeGreaterThan(inventoryBefore);
+      expect(await accountBalance('5000')).toBeLessThan(cogsBefore);
+
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
+    it('deciding the reversal twice cannot post it twice', async () => {
+      const [approved] = (await approvalRows()).filter(
+        r => r.type === 'credit_memo' && r.status === 'approved',
+      );
+      const journalsBefore = await countJournalEntries();
+      await post(`/api/v1/approvals/${approved.id}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+      expect(await countJournalEntries()).toBe(journalsBefore);
+    });
+
+    it('a delivery that never posted a sale is not creditable', async () => {
+      // A legacy row: approved, but the ledger was never committed. Crediting
+      // Sales here would reverse revenue that was never recognised.
+      const legacyId = randomUUID();
+      const legacyDeliveryId = randomUUID();
+      await ds.query(
+        `INSERT INTO deliveries (id, company_id, customer_id, status, created_by, ledger_status)
+         VALUES ($1, $2, $3, 'delivered', $4, 'none')`,
+        [legacyDeliveryId, companyId, customerId, ownerId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'approved', now())`,
+        [legacyId, companyId, legacyDeliveryId, riderId],
+      );
+
+      const res = await get(
+        `/api/v1/inventory-update-requests/${legacyId}/credit-memo-draft`,
+        staffToken,
+      );
+      expect(res.status).toBe(409);
+      expect(res.body.error?.code ?? res.body.code).toBe('NOT_CREDITABLE');
     });
 
     it('row 7 — staff cannot undo without a reason, and never directly', async () => {

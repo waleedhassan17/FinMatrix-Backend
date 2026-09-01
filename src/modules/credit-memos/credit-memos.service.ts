@@ -63,6 +63,56 @@ export class CreditMemosService {
   }
 
   /**
+   * Create the memo and settle it against the invoice it reverses, as one act.
+   *
+   * Reversing a delivery is one intention, not two. Creating the memo posts
+   * the reversal (Dr Sales + Dr Tax / Cr A/R, Dr Inventory / Cr COGS), but on
+   * its own it leaves the original invoice still showing a balance with a
+   * floating credit beside it — so the customer's statement reads as though
+   * they owe money they do not. Applying is what closes that.
+   *
+   * Applies only what the invoice can absorb. A prepaid or already-collected
+   * delivery has an invoice balance of zero, so there is nothing to settle:
+   * the credit stays available (and can be refunded, which is its own gated
+   * action). Applying blindly would trip the EXCEEDS_CREDIT guard and fail the
+   * whole reversal for a perfectly ordinary case.
+   *
+   * BOTH roles run this same method — the owner directly, staff via an
+   * approved request — which is what makes their accounting identical.
+   */
+  async createAndApply(
+    companyId: string,
+    userId: string,
+    dto: CreateCreditMemoDto & { applyToInvoiceId?: string },
+  ): Promise<CreditMemo> {
+    const { applyToInvoiceId, ...createDto } = dto;
+    const memo = await this.create(companyId, userId, createDto);
+    if (!applyToInvoiceId) return memo;
+
+    const invoice = await this.dataSource
+      .getRepository(Invoice)
+      .findOne({ where: { id: applyToInvoiceId, companyId } });
+    if (!invoice) {
+      throw new NotFoundException({
+        code: 'INVOICE_NOT_FOUND',
+        message: 'The invoice this credit should settle no longer exists.',
+      });
+    }
+
+    const applicable = Decimal.min(
+      toDecimal(memo.balance),
+      toDecimal(invoice.balance),
+    );
+    // Nothing left to settle — the credit is left available on purpose.
+    if (!applicable.greaterThan(0)) return memo;
+
+    return this.applyToInvoice(companyId, memo.id, {
+      invoiceId: applyToInvoiceId,
+      amount: applicable.toFixed(4),
+    });
+  }
+
+  /**
    * Same as create(), but joins a transaction the caller already owns. Mirrors
    * InvoicesService.createInTransaction. Used by the delivery approval flow,
    * which has to credit a prepaid customer for undelivered goods inside the

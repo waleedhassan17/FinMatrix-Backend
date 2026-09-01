@@ -200,6 +200,28 @@ export class InventoryUpdateRequestsController {
   }
 
   /**
+   * GET /api/v1/inventory-update-requests/:id/credit-memo-draft
+   *
+   * The credit memo that would reverse this delivery, filled in from the
+   * delivery's own figures. Reading a draft posts nothing, so both roles may
+   * ask — what differs is what happens when they submit it, which the ordinary
+   * (gated) credit-memo endpoint decides.
+   */
+  @Get(':id/credit-memo-draft')
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Draft credit memo reversing an approved delivery' })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Draft credit memo' })
+  @ApiResponse({ status: 409, description: 'Not approved, or never posted a sale' })
+  async creditMemoDraft(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.svc.buildCreditMemoDraft(companyId, id);
+    return { success: true, data };
+  }
+
+  /**
    * GET /api/v1/inventory-update-requests/:id/bill-photo
    * Streams the stored bill photo image (auth-gated).
    */
