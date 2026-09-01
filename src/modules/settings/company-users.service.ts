@@ -13,7 +13,6 @@ import { UserCompany } from '../companies/entities/user-company.entity';
 import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
-import { getPlanConfig, teamMemberLimit } from '../billing/plan-config';
 import {
   CompanyRole,
   CreateCompanyUserDto,
@@ -88,8 +87,12 @@ export class CompanyUsersService {
     const email = dto.email?.trim().toLowerCase() ?? null;
 
     const created = await this.dataSource.transaction(async (em) => {
-      await this.assertSeatAvailable(em, companyId);
-
+      // No seat limit. Team size is deliberately NOT priced: an owner needs a
+      // second pair of hands regardless of their plan, and the approval flow
+      // that makes a staff account safe is core accounting behaviour rather
+      // than an upsell. Riders are still capped (deliveryPersonnelLimit) —
+      // that one IS priced, and is a different question from who may sign in.
+      //
       // Usernames are global: two companies cannot both hold 'manager',
       // because sign-in resolves an account from the username alone with no
       // company context to disambiguate.
@@ -337,35 +340,6 @@ export class CompanyUsersService {
       return;
     }
     await repo.save(repo.create({ companyId, userId, secret, issuedBy, issuedAt: new Date() }));
-  }
-
-  private async assertSeatAvailable(em: EntityManager, companyId: string): Promise<void> {
-    const [company] = (await em.query(
-      `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1`,
-      [companyId],
-    )) as Array<{ subscription_plan: string | null }>;
-    const plan = getPlanConfig(company?.subscription_plan);
-    const limit = teamMemberLimit(plan);
-
-    const used = await em
-      .getRepository(UserCompany)
-      .createQueryBuilder('uc')
-      .innerJoin('uc.user', 'u')
-      .where('uc.companyId = :companyId', { companyId })
-      .andWhere('uc.role IN (:...roles)', { roles: ['admin', 'staff'] })
-      .andWhere('u.isActive = true')
-      .getCount();
-
-    if (used >= limit) {
-      throw new BadRequestException({
-        code: 'TEAM_MEMBER_LIMIT_REACHED',
-        message:
-          `Your ${plan.label} plan allows ${limit} team ${limit === 1 ? 'member' : 'members'}. ` +
-          'Deactivate someone or upgrade your plan to add more.',
-        limit,
-        currentCount: used,
-      });
-    }
   }
 
   private async assertNotLastAdmin(

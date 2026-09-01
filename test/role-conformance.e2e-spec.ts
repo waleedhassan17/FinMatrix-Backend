@@ -150,6 +150,15 @@ describe('Role conformance (e2e)', () => {
       { secret: jwtSecret, expiresIn: '1h' },
     );
 
+  /** Current on-hand for the fixture item. */
+  const itemQty = async (): Promise<number> => {
+    const [row] = await ds.query(
+      `SELECT quantity_on_hand FROM inventory_items WHERE id = $1`,
+      [itemId],
+    );
+    return Number(row.quantity_on_hand);
+  };
+
   const signIn = async (identifier: string): Promise<string> => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/auth/signin')
@@ -499,6 +508,25 @@ describe('Role conformance (e2e)', () => {
         [companyId],
       );
       expect(Number(row.n)).toBe(0);
+
+      // …and the other half: approving must actually COMMIT it. Proving only
+      // that nothing exists while pending would pass just as well if approval
+      // were wired to nothing at all.
+      const journalsBefore = await countJournalEntries();
+      await post(`/api/v1/approvals/${res.body.data.requestId}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+
+      const [after] = await ds.query(
+        `SELECT COUNT(*)::int AS n FROM purchase_orders WHERE company_id = $1`,
+        [companyId],
+      );
+      expect(Number(after.n)).toBe(1);
+
+      // A commitment is not a transaction: the PO exists and the ledger has
+      // not moved.
+      expect(await countJournalEntries()).toBe(journalsBefore);
+      expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
     it('an owner posts the same adjustment directly, with no request row', async () => {
@@ -1009,6 +1037,93 @@ describe('Role conformance (e2e)', () => {
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
+
+    it('delivery_undo — staff ask, the owner approves, and the stock comes back', async () => {
+      // The eighth gated type, and the only one that can still reverse stock.
+      // A LEGACY delivery: approved, but the ledger was never committed, so
+      // there is no sale to credit and undo is the correct correction rather
+      // than a credit memo.
+      const undoRequestId = randomUUID();
+      const legacyDeliveryId = randomUUID();
+      await ds.query(
+        `INSERT INTO deliveries (id, company_id, customer_id, status, created_by, ledger_status)
+         VALUES ($1, $2, $3, 'delivered', $4, 'none')`,
+        [legacyDeliveryId, companyId, customerId, ownerId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at, reviewed_by, reviewed_at)
+         VALUES ($1, $2, $3, $4, 'approved', now(), $5, now())`,
+        [undoRequestId, companyId, legacyDeliveryId, riderId, ownerId],
+      );
+      const startQty = await itemQty();
+      await ds.query(
+        `INSERT INTO inventory_update_request_lines
+           (id, request_id, item_id, item_name, before_qty, delivered_qty, returned_qty, after_qty)
+         VALUES ($1, $2, $3, 'Conformance Widget', $4, 5, 0, $5)`,
+        // Legacy: approval DID move stock, so before - delivered is right here.
+        [randomUUID(), undoRequestId, itemId, startQty, startQty - 5],
+      );
+
+      // A legacy approval also POSTED the cost of those units and moved the
+      // shelf, and undo reverses that entry by swapping its lines. Use one
+      // owner adjustment to do BOTH: it writes the stock movement and its own
+      // balanced entry together, so the subledger and GL 1200 stay tied.
+      //
+      // Posting a separate journal AND an adjustment (my first attempt) moved
+      // the GL twice against one shelf movement — invariant I13 caught it, to
+      // the paisa.
+      const legacyAdjustment = await created(
+        'legacy approval movement',
+        post(`/api/v1/inventory/items/${itemId}/adjust`, ownerToken, {
+          itemId,
+          newQty: String(startQty - 5),
+          reason: 'correction',
+        }),
+      );
+      const legacyEntryId =
+        legacyAdjustment.adjustment?.journalEntryId ??
+        legacyAdjustment.journalEntryId;
+      expect(legacyEntryId).toBeTruthy();
+      await ds.query(
+        `UPDATE inventory_update_requests SET journal_entry_id = $1 WHERE id = $2`,
+        [legacyEntryId, undoRequestId],
+      );
+
+      // Staff ask, with a reason.
+      const filed = await post(
+        `/api/v1/inventory-update-requests/${undoRequestId}/undo`,
+        staffToken,
+        { reason: 'Customer never received these — rider logged it wrongly.' },
+      );
+      if (![200, 201].includes(filed.status)) {
+        throw new Error(`undo → ${filed.status}: ${JSON.stringify(filed.body)}`);
+      }
+
+      const pending = (await approvalRows()).filter(
+        r => r.type === 'delivery_undo' && r.status === 'pending',
+      );
+      expect(pending).toHaveLength(1);
+      // Nothing moves while it waits.
+      const qtyBeforeUndo = await itemQty();
+      expect(qtyBeforeUndo).toBe(startQty - 5);
+
+      // The owner approves: the stock comes back and the request returns to
+      // pending for re-review, which is what undo is for.
+      await post(`/api/v1/approvals/${pending[0].id}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+
+      // The five units are back on the shelf.
+      expect(await itemQty()).toBe(qtyBeforeUndo + 5);
+      const [row] = await ds.query(
+        `SELECT status FROM inventory_update_requests WHERE id = $1`,
+        [undoRequestId],
+      );
+      expect(row.status).toBe('pending');
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
     it('a delivery that never posted a sale is not creditable', async () => {
       // A legacy row: approved, but the ledger was never committed. Crediting
       // Sales here would reverse revenue that was never recognised.
@@ -1048,6 +1163,52 @@ describe('Role conformance (e2e)', () => {
   });
 
 
+
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  Team management is not an upsell
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('Adding staff works on every plan', () => {
+    it('works on the tier that used to be refused, and on the free plan', async () => {
+      // Two things used to block this: multiUser was false for small_business,
+      // and a seat cap derived from the delivery-personnel allowance gave a
+      // free-plan company the owner plus exactly ONE staff member. Both were
+      // placeholders, and an owner needs a second pair of hands whatever they
+      // pay for.
+      await ds.query(
+        `UPDATE companies SET company_type = 'small_business', subscription_plan = 'free'
+          WHERE id = $1`,
+        [companyId],
+      );
+      const ownerOnSmallPlan = tokenFor(ownerId, 'admin');
+
+      await get('/api/v1/settings/users', ownerOnSmallPlan).expect(200);
+
+      // Two more members, on the plan that allowed one.
+      for (const n of [1, 2]) {
+        const res = await post('/api/v1/settings/users', ownerOnSmallPlan, {
+          name: `Plan Test ${n}`,
+          username: `plan.${n}.${suffix}`,
+          password: PASSWORD,
+          role: 'staff',
+        });
+        if (res.status !== 201) {
+          throw new Error(`add staff ${n} → ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        // They can actually sign in — the account is real, not just a row.
+        expect(await signIn(`plan.${n}.${suffix}`)).toBeTruthy();
+      }
+
+      // Put the company back for anything that runs after this.
+      await ds.query(
+        `UPDATE companies SET company_type = 'warehouse',
+                subscription_plan = 'warehouse_scale_6mo'
+          WHERE id = $1`,
+        [companyId],
+      );
+    });
+  });
 
   // ══════════════════════════════════════════════════════════════════════════
   //  Every gated type, end to end

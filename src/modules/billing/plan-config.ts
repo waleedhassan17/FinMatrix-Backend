@@ -290,22 +290,6 @@ export function getPlanConfig(raw: string | null | undefined): PlanConfig {
   return PLAN_CONFIG[normalizePlan(raw)];
 }
 
-/**
- * How many company members (owners + staff) a plan may have.
- *
- * Derived rather than stored on each PlanConfig because the pricing sheet does
- * not price seats — it only prices delivery personnel. The rule is that team
- * size tracks plan size, with a floor of two so that EVERY plan can have the
- * owner plus one staff member: a company that cannot add its first staff user
- * cannot use the feature at all, which is not a limit anyone chose.
- *
- * TODO(rbac): replace with an explicit per-plan number once pricing decides
- * what a seat costs.
- */
-export function teamMemberLimit(plan: PlanConfig): number {
-  return Math.max(2, plan.deliveryPersonnelLimit);
-}
-
 /** Rs amount as a display string, e.g. 100000 → "Rs 1,000". */
 export function formatMinorUnits(minor: number, currency = 'PKR'): string {
   const symbol = currency === 'PKR' ? 'Rs' : currency;
