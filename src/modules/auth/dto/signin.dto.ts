@@ -1,11 +1,33 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsString, Length, Matches, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import { PASSWORD_REGEX } from './signup.dto';
 
 export class SigninDto {
-  @ApiProperty({ example: 'admin@finmatrix.pk' })
-  @IsEmail()
-  email!: string;
+  /**
+   * Username OR email. Preferred over `email` below, which is kept only so
+   * already-installed app builds keep signing in — they post `email` and know
+   * nothing about usernames. At least one of the two must be present; the
+   * service enforces that, since class-validator cannot express "either".
+   */
+  @ApiPropertyOptional({ example: 'warehouse.staff' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  identifier?: string;
+
+  // Deliberately NOT @IsEmail anymore: an old client may post a username here.
+  @ApiPropertyOptional({ example: 'admin@finmatrix.pk' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  email?: string;
 
   @ApiProperty({ example: 'Admin123!' })
   @IsString()
@@ -14,8 +36,15 @@ export class SigninDto {
 }
 
 export class ForgotPasswordDto {
+  /**
+   * Email, or a username. Not @IsEmail: a staff member who types their
+   * username here was getting a 400 reading "email must be an email", which
+   * explains nothing. Accepting the string lets the service answer with
+   * something actionable instead — see AuthService.forgotPassword.
+   */
   @ApiProperty({ example: 'admin@finmatrix.pk' })
-  @IsEmail()
+  @IsString()
+  @MinLength(1)
   email!: string;
 }
 

@@ -18,6 +18,21 @@ export class UsersService {
     return this.repo.findOne({ where: { email: email.toLowerCase() } });
   }
 
+  /** Usernames are stored and compared lower-case, like emails. */
+  findByUsername(username: string): Promise<User | null> {
+    return this.repo.findOne({ where: { username: username.toLowerCase() } });
+  }
+
+  /**
+   * Resolve a sign-in handle that may be either form. An '@' is the
+   * discriminator: usernames are validated to exclude it (see CreateUserDto),
+   * so the two namespaces cannot collide.
+   */
+  findByIdentifier(identifier: string): Promise<User | null> {
+    const key = identifier.trim();
+    return key.includes('@') ? this.findByEmail(key) : this.findByUsername(key);
+  }
+
   async getByIdOrFail(id: string): Promise<User> {
     const user = await this.findById(id);
     if (!user) {
