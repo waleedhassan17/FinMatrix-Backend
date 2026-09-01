@@ -52,7 +52,8 @@
     "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
     "qa": "npm run qa:scenario && npm run test:qa",
     "qa:invariants": "node qa/run-qa.js",
-    "qa:flow": "node qa/flow-e2e.js"
+    "qa:flow": "node qa/flow-e2e.js",
+    "test:conformance": "DB_NAME=${DB_NAME:-finmatrix_e2e} DB_SYNCHRONIZE=true jest --config ./test/jest-e2e.json --testPathPattern=role-conformance --runInBand"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
