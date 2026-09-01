@@ -1169,44 +1169,91 @@ describe('Role conformance (e2e)', () => {
   //  Team management is not an upsell
   // ══════════════════════════════════════════════════════════════════════════
 
-  describe('Adding staff works on every plan', () => {
-    it('works on the tier that used to be refused, and on the free plan', async () => {
-      // Two things used to block this: multiUser was false for small_business,
-      // and a seat cap derived from the delivery-personnel allowance gave a
-      // free-plan company the owner plus exactly ONE staff member. Both were
-      // placeholders, and an owner needs a second pair of hands whatever they
-      // pay for.
+  describe('Adding staff works on every plan, one seat only', () => {
+    it('is not gated by tier, and allows exactly one staff member', async () => {
+      // multiUser used to be false for small_business, so this tier 403'd on
+      // team management entirely. It is now on for every tier — an owner needs
+      // a second pair of hands whatever they pay.
       await ds.query(
         `UPDATE companies SET company_type = 'small_business', subscription_plan = 'free'
           WHERE id = $1`,
         [companyId],
       );
       const ownerOnSmallPlan = tokenFor(ownerId, 'admin');
-
       await get('/api/v1/settings/users', ownerOnSmallPlan).expect(200);
 
-      // Two more members, on the plan that allowed one.
-      for (const n of [1, 2]) {
-        const res = await post('/api/v1/settings/users', ownerOnSmallPlan, {
-          name: `Plan Test ${n}`,
-          username: `plan.${n}.${suffix}`,
-          password: PASSWORD,
-          role: 'staff',
-        });
-        if (res.status !== 201) {
-          throw new Error(`add staff ${n} → ${res.status}: ${JSON.stringify(res.body)}`);
-        }
-        // They can actually sign in — the account is real, not just a row.
-        expect(await signIn(`plan.${n}.${suffix}`)).toBeTruthy();
-      }
+      // The existing seeded staff member already holds the one seat, so a
+      // second is refused — on the free plan, on the smallest tier.
+      const second = await post('/api/v1/settings/users', ownerOnSmallPlan, {
+        name: 'Second Staff',
+        username: `plan.second.${suffix}`,
+        password: PASSWORD,
+        role: 'staff',
+      });
+      expect(second.status).toBe(400);
+      expect(second.body.error?.code ?? second.body.code).toBe('STAFF_LIMIT_REACHED');
 
-      // Put the company back for anything that runs after this.
       await ds.query(
         `UPDATE companies SET company_type = 'warehouse',
                 subscription_plan = 'warehouse_scale_6mo'
           WHERE id = $1`,
         [companyId],
       );
+    });
+
+    it('closes the back door: a second owner cannot be demoted into staff', async () => {
+      // Adding an owner and demoting them reaches two staff by a route the
+      // create guard never sees, so the role change is guarded too.
+      const res = await patch(
+        `/api/v1/settings/users/${owner2Id}/role`,
+        ownerToken,
+        { role: 'staff' },
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error?.code ?? res.body.code).toBe('STAFF_LIMIT_REACHED');
+
+      // owner2 is still an owner, which the maker != checker cases depend on.
+      const [row] = await ds.query(
+        `SELECT role FROM user_companies WHERE user_id = $1 AND company_id = $2`,
+        [owner2Id, companyId],
+      );
+      expect(row.role).toBe('admin');
+    });
+
+    it('deactivating the staff member frees the seat', async () => {
+      await patch(`/api/v1/settings/users/${staffId}/deactivate`, ownerToken).expect(200);
+
+      const replacement = await post('/api/v1/settings/users', ownerToken, {
+        name: 'Replacement Staff',
+        username: `plan.replacement.${suffix}`,
+        password: PASSWORD,
+        role: 'staff',
+      });
+      if (replacement.status !== 201) {
+        throw new Error(
+          `replacement → ${replacement.status}: ${JSON.stringify(replacement.body)}`,
+        );
+      }
+
+      // Put the fixture back: later blocks sign in as the original staff user.
+      await ds.query(
+        `UPDATE users SET is_active = false WHERE id = $1`,
+        [replacement.body.data.id],
+      );
+      await patch(`/api/v1/settings/users/${staffId}/activate`, ownerToken).expect(200);
+    });
+
+    it('owners are NOT capped — maker != checker still has somebody to check', async () => {
+      const extraOwner = await post('/api/v1/settings/users', ownerToken, {
+        name: 'Third Owner',
+        username: `plan.owner3.${suffix}`,
+        password: PASSWORD,
+        role: 'admin',
+      });
+      expect(extraOwner.status).toBe(201);
+      await ds.query(`UPDATE users SET is_active = false WHERE id = $1`, [
+        extraOwner.body.data.id,
+      ]);
     });
   });
 

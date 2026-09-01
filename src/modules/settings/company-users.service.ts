@@ -19,6 +19,19 @@ import {
   ResetCompanyUserPasswordDto,
 } from './dto/company-user.dto';
 
+/**
+ * How many staff accounts a company may have.
+ *
+ * A deliberate product limit, NOT a plan lookup — team management is available
+ * on every tier, and this number is the same everywhere. Raising it is a
+ * one-line change here.
+ *
+ * Owners are deliberately NOT capped: two people can co-own a business, and
+ * maker != checker needs a second owner — an owner cannot approve their own
+ * request, so a company with only one could never clear anything they raised.
+ */
+const MAX_STAFF_PER_COMPANY = 1;
+
 export interface CompanyUserView {
   id: string;
   name: string;
@@ -87,12 +100,8 @@ export class CompanyUsersService {
     const email = dto.email?.trim().toLowerCase() ?? null;
 
     const created = await this.dataSource.transaction(async (em) => {
-      // No seat limit. Team size is deliberately NOT priced: an owner needs a
-      // second pair of hands regardless of their plan, and the approval flow
-      // that makes a staff account safe is core accounting behaviour rather
-      // than an upsell. Riders are still capped (deliveryPersonnelLimit) —
-      // that one IS priced, and is a different question from who may sign in.
-      //
+      if (dto.role === 'staff') await this.assertStaffSlotFree(em, companyId);
+
       // Usernames are global: two companies cannot both hold 'manager',
       // because sign-in resolves an account from the username alone with no
       // company context to disambiguate.
@@ -176,6 +185,12 @@ export class CompanyUsersService {
       // state from inside the app.
       if (membership.role === 'admin' && role !== 'admin') {
         await this.assertNotLastAdmin(em, companyId, userId);
+      }
+
+      // The other way in: add a second owner, then demote them to staff. The
+      // create guard never sees that route, so it is checked here too.
+      if (role === 'staff' && membership.role !== 'staff') {
+        await this.assertStaffSlotFree(em, companyId);
       }
 
       membership.role = role;
@@ -340,6 +355,38 @@ export class CompanyUsersService {
       return;
     }
     await repo.save(repo.create({ companyId, userId, secret, issuedBy, issuedAt: new Date() }));
+  }
+
+  /**
+   * Refuse a second staff account.
+   *
+   * Counts ACTIVE memberships only, so deactivating a staff member frees the
+   * slot — the same treatment assertNotLastAdmin gives an inactive owner.
+   */
+  private async assertStaffSlotFree(
+    em: EntityManager,
+    companyId: string,
+  ): Promise<void> {
+    const staff = await em
+      .getRepository(UserCompany)
+      .createQueryBuilder('uc')
+      .innerJoin('uc.user', 'u')
+      .where('uc.companyId = :companyId', { companyId })
+      .andWhere('uc.role = :role', { role: 'staff' })
+      .andWhere('u.isActive = true')
+      .getCount();
+
+    if (staff >= MAX_STAFF_PER_COMPANY) {
+      throw new BadRequestException({
+        code: 'STAFF_LIMIT_REACHED',
+        message:
+          MAX_STAFF_PER_COMPANY === 1
+            ? 'You already have a staff member. Deactivate them first, or change their role, to add someone else.'
+            : `You already have ${MAX_STAFF_PER_COMPANY} staff members. Deactivate one to add another.`,
+        limit: MAX_STAFF_PER_COMPANY,
+        currentCount: staff,
+      });
+    }
   }
 
   private async assertNotLastAdmin(
