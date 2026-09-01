@@ -42,6 +42,13 @@ export class ApprovalDispatcher {
     private readonly deliveryApprovals: InventoryApprovalsService,
   ) {}
 
+  /**
+   * `reviewerId` is who the posting is attributed to, and that is deliberate:
+   * the owner authorised it, so the ledger names them. The staff member who
+   * PREPARED it is preserved on the approval_requests row — but nobody reading
+   * a general ledger or a stock-movement report would know to look there, so
+   * gated payloads also carry a memo suffix naming both (see `attribution`).
+   */
   async dispatch(
     type: ApprovalType,
     payload: Payload,
@@ -51,7 +58,11 @@ export class ApprovalDispatcher {
     switch (type) {
       // ── Dr/Cr Inventory against the reason's offset account ──────────────
       case 'adjustment': {
-        const result = await this.inventory.adjust(
+        // adjustFromApprovedRequest, NOT adjust: the payload named an absolute
+        // target when it was filed, and the shelf may have moved since. It
+        // refuses a stale physical count and re-bases a shrinkage onto today's
+        // stock, so approving posts the quantity that was actually intended.
+        const result = await this.inventory.adjustFromApprovedRequest(
           companyId,
           payload as any,
           reviewerId,

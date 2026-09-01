@@ -37,6 +37,16 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 16, nullable: true, name: 'reviewer_role' })
   reviewerRole!: string | null;
 
+  /**
+   * The credit memo that reversed this delivery, once one has.
+   *
+   * Set the moment the reversal posts, and what makes a SECOND reversal
+   * refusable — two memos for one delivery would debit Sales twice while every
+   * entry still balanced, so nothing else would catch it.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'reversal_credit_memo_id' })
+  reversalCreditMemoId!: string | null;
+
   @Column({ type: 'text', nullable: true, name: 'approval_notes' })
   approvalNotes!: string | null;
 

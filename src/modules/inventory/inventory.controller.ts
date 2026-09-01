@@ -121,17 +121,31 @@ export class InventoryController {
    */
   @Post('items/:id/adjust')
   @Roles('admin', 'staff')
-  adjust(
+  async adjust(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AdjustQuantityDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     if (user.role === 'admin') return this.svc.adjust(companyId, dto, user.id);
+
+    // Capture the stock the requester was looking at. An adjustment names an
+    // ABSOLUTE target, but the owner may approve it days later against a very
+    // different shelf — see InventoryService.adjustFromApprovedRequest, which
+    // uses this to tell "I counted 80" (stale if stock moved) apart from
+    // "20 broke" (still true whatever moved).
+    const item = await this.svc.getItem(companyId, id);
+    const observedQty = String(item.quantityOnHand);
+    const delta = Number(dto.newQty) - Number(observedQty);
+
     return this.approvals.createRequest(
       'adjustment',
-      { ...dto, itemId: id },
-      `Inventory adjustment to ${dto.newQty} — ${dto.reason}`,
+      { ...dto, itemId: id, observedQty },
+      // The summary states the INTENTION, so the owner approves an act rather
+      // than a bare number whose meaning depends on stock they cannot see.
+      dto.reason === 'physical_count'
+        ? `Physical count: ${item.name} counted at ${dto.newQty} (was ${observedQty})`
+        : `${delta < 0 ? 'Write off' : 'Add'} ${Math.abs(delta)} × ${item.name} — ${dto.reason}`,
       user,
       companyId,
     );

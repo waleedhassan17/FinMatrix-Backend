@@ -507,7 +507,7 @@ describe('Role conformance (e2e)', () => {
 
       await post(`/api/v1/inventory/items/${itemId}/adjust`, ownerToken, {
         itemId,
-        newQty: '95',
+        newQty: '495',
         reason: 'correction',
       }).expect(201);
 
@@ -960,8 +960,120 @@ describe('Role conformance (e2e)', () => {
     });
   });
 
+
   // ══════════════════════════════════════════════════════════════════════════
-  //  The golden rule, last
+  //  Deferred execution — a gated payload is a promise made at FILING time and
+  //  cashed at APPROVAL time. These pin down what happens when the world moves
+  //  in between, which is a question the pre-role-split code never had to ask.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('Approval staleness', () => {
+    /**
+     * Move stock the way it really moves — a posted adjustment by the owner,
+     * which is what "a delivery shipped in between" looks like to the item.
+     *
+     * NOT a raw UPDATE: that changes the quantity without a journal entry, so
+     * the subledger stops tying to GL 1200 and invariant I13 fails at the end
+     * of the run. The test would be simulating a state the application cannot
+     * actually produce, and then asserting on it.
+     */
+    const setStock = async (qty: string) => {
+      await post(`/api/v1/inventory/items/${itemId}/adjust`, ownerToken, {
+        itemId,
+        newQty: qty,
+        reason: 'correction',
+      }).expect(201);
+    };
+
+    const onHand = async (): Promise<number> => {
+      const [row] = await ds.query(
+        `SELECT quantity_on_hand FROM inventory_items WHERE id = $1`,
+        [itemId],
+      );
+      return Number(row.quantity_on_hand);
+    };
+
+    it('a SHRINKAGE keeps its meaning when stock moves before approval', async () => {
+      await setStock('100');
+
+      // Staff see 20 damaged: "set to 80".
+      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
+        itemId,
+        newQty: '80',
+        reason: 'damage',
+      });
+      const requestId = filed.body.data.requestId;
+
+      // A delivery ships 30 before the owner gets to it.
+      await setStock('70');
+
+      await post(`/api/v1/approvals/${requestId}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+
+      // The intent was "write off 20", so 70 - 20 = 50.
+      // Resolving the stale ABSOLUTE target instead would compute 80 - 70 = +10
+      // and leave 80 — stock going UP on a damage write-off.
+      expect(await onHand()).toBe(50);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
+    it('a stale PHYSICAL COUNT is refused rather than posted', async () => {
+      await setStock('100');
+
+      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
+        itemId,
+        newQty: '95',
+        reason: 'physical_count',
+      });
+      const requestId = filed.body.data.requestId;
+
+      await setStock('70');
+
+      const res = await post(`/api/v1/approvals/${requestId}/decide`, ownerToken, {
+        decision: 'approve',
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error?.code ?? res.body.code).toBe('STOCK_MOVED_SINCE_COUNT');
+
+      // Nothing posted, and the request is released for another attempt.
+      expect(await onHand()).toBe(70);
+      const [row] = await ds.query(
+        `SELECT status FROM approval_requests WHERE id = $1`,
+        [requestId],
+      );
+      expect(row.status).toBe('pending');
+    });
+
+    it('an UNMOVED physical count still posts normally', async () => {
+      await setStock('100');
+
+      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
+        itemId,
+        newQty: '95',
+        reason: 'physical_count',
+      });
+      await post(`/api/v1/approvals/${filed.body.data.requestId}/decide`, ownerToken, {
+        decision: 'approve',
+      }).expect(200);
+
+      expect(await onHand()).toBe(95);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
+    it('an owner adjusting directly is unaffected by any of this', async () => {
+      await setStock('100');
+      await post(`/api/v1/inventory/items/${itemId}/adjust`, ownerToken, {
+        itemId,
+        newQty: '88',
+        reason: 'correction',
+      }).expect(201);
+      expect(await onHand()).toBe(88);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  Accounting invariants, last
   // ══════════════════════════════════════════════════════════════════════════
 
   describe('Accounting invariants', () => {

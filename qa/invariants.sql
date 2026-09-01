@@ -229,3 +229,40 @@ FROM deliveries d
 WHERE d.status IN ('delivered', 'returned', 'cancelled', 'failed')
   AND d.stock_committed_at IS NOT NULL
   AND d.ledger_status NOT IN ('committed', 'returned');
+
+-- I18. Goods Received Not Invoiced (2050) must clear once the goods are billed.
+--
+-- The supplier-side twin of I15, and it was missing.
+--
+-- Receiving a purchase order accrues Dr Inventory / Cr GRNI: the stock is on
+-- the shelf and we owe the supplier "something", but no bill has arrived. The
+-- bill is what settles it, Dr GRNI / Cr Accounts Payable, so once a PO has
+-- been billed its net effect on 2050 is zero.
+--
+-- A residue means the goods were received and then billed some OTHER way --
+-- most likely a bill raised from the Bills form rather than "Convert to Bill",
+-- which debits the line's own account instead of GRNI. That leaves 2050 as a
+-- liability that never goes away AND, if the line pointed at Inventory, debits
+-- the same stock twice. No other invariant sees it: every entry balances on
+-- its own, and the inventory subledger (I13) ties to a control account that is
+-- itself overstated, so it agrees with the wrong number.
+--
+-- Only fully-received POs are judged. A partially received one is expected to
+-- carry a balance -- that is what the account is for.
+SELECT 'I18 GRNI RESIDUE ON BILLED PO' AS violation,
+       t.company_id, t.po_number, t.residue
+FROM (
+  SELECT po.id, po.company_id, po.po_number,
+         (SELECT COALESCE(SUM(g.debit - g.credit), 0)
+            FROM general_ledger g
+            JOIN accounts a ON a.id = g.account_id
+           WHERE g.source_id = po.id
+             AND g.company_id = po.company_id
+             AND a.account_number = '2050')::numeric(18,4) AS residue
+    FROM purchase_orders po
+   WHERE po.status IN ('fully_received', 'closed')
+     AND EXISTS (SELECT 1 FROM bills b
+                  WHERE b.purchase_order_id = po.id
+                    AND b.status <> 'void')
+) t
+WHERE abs(t.residue) > 0.01;

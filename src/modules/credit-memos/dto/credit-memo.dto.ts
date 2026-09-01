@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsDateString, IsIn, IsNumberString, IsOptional, IsString, IsUUID, ValidateNested,
+  ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumberString, IsOptional, IsString, IsUUID, ValidateNested,
 } from 'class-validator';
 
 export class CreditMemoLineDto {
@@ -29,6 +29,22 @@ export class CreateCreditMemoDto {
    */
   @ApiPropertyOptional({ description: 'Invoice to settle with this credit, in the same action.' })
   @IsOptional() @IsUUID() applyToInvoiceId?: string;
+  /**
+   * Refund whatever the invoice could not absorb, in the same action.
+   *
+   * Set when reversing a PREPAID delivery: its invoice was already settled
+   * from Customer Advances, so there is no receivable to clear and the credit
+   * would otherwise leave A/R negative — a credit balance inside an asset
+   * account — until somebody separately raised and approved a refund.
+   */
+  @ApiPropertyOptional({ description: 'Refund any unapplied remainder to cash.' })
+  @IsOptional() @IsBoolean() refundRemainderToCash?: boolean;
+  /**
+   * The approved delivery this credit reverses. Recorded on that delivery so a
+   * second reversal can be refused, and so the two are linked for audit.
+   */
+  @ApiPropertyOptional({ description: 'Delivery approval request this reverses.' })
+  @IsOptional() @IsUUID() reversesDeliveryRequestId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
 
   @ApiProperty({ type: [CreditMemoLineDto] })

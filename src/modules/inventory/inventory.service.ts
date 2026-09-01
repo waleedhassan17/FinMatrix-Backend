@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   BadRequestException,
@@ -23,7 +24,7 @@ import {
   CreatePhysicalCountDto,
   MovementQueryDto,
 } from './dto/inventory.dto';
-import { toDecimal } from '../../common/utils/money.util';
+import { MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { InventoryAdjustmentReason } from '../../types';
 import { assertNonNegativeQuantity } from '../../common/utils/stock.util';
 import { assertNotFutureDate, todayIso } from '../../common/utils/date.util';
@@ -209,6 +210,98 @@ export class InventoryService {
   // assertPeriodOpen against the JE date for every posted entry, and this whole
   // method is one transaction, so a PERIOD_LOCKED throw rolls the item,
   // adjustment and movement back with it.
+  /**
+   * Resolve an APPROVED adjustment request against today's stock, then post it.
+   *
+   * ── The problem this exists to solve ────────────────────────────────────
+   * `adjust` takes an ABSOLUTE target and computes the variance against
+   * on-hand at execution time. That is correct when filing and posting are the
+   * same instant, which is how it always worked when only owners could adjust.
+   * Under the approval flow they are not: staff file a target, and the owner
+   * approves it minutes or days later.
+   *
+   * On-hand 100, staff find 20 damaged and file "set to 80". A delivery ships
+   * 30 before approval, leaving 70. Plain `adjust` would compute 80 − 70 = +10
+   * and INCREASE stock by 10 — the damaged units still on the books, shrinkage
+   * credited instead of debited. Nothing errors and the trial balance still
+   * balances, because the entry is internally consistent. It is simply not
+   * what anyone asked for.
+   *
+   * ── Why the reason decides ──────────────────────────────────────────────
+   * The reasons already mean different things, and the fix is to read them:
+   *
+   *   physical_count  an ASSERTION about the shelf — "I counted 80". If stock
+   *                   moved since, the count is stale and posting it would
+   *                   post a number nobody verified. Refuse; ask for a recount.
+   *
+   *   everything else a DELTA — "20 broke", "3 were stolen". The intent
+   *                   survives however much stock moved, so apply the delta
+   *                   the requester meant rather than their arithmetic.
+   *
+   * `observedQty` is on-hand as the requester saw it, captured by the gate at
+   * filing time. Absent (a request filed before this shipped) the old
+   * behaviour stands — there is nothing to compare against, and refusing every
+   * historical request would be worse than the risk.
+   */
+  async adjustFromApprovedRequest(
+    companyId: string,
+    payload: AdjustQuantityDto & { observedQty?: string },
+    userId: string,
+  ) {
+    if (payload.observedQty == null) {
+      return this.adjust(companyId, payload, userId);
+    }
+
+    const item = await this.itemRepo.findOne({
+      where: { id: payload.itemId, companyId },
+    });
+    if (!item) throw new NotFoundException('Item not found');
+
+    const observed = toDecimal(payload.observedQty);
+    const current = toDecimal(item.quantityOnHand);
+
+    if (payload.reason === 'physical_count') {
+      if (!current.minus(observed).abs().lessThanOrEqualTo(MONEY_TOLERANCE)) {
+        throw new ConflictException({
+          code: 'STOCK_MOVED_SINCE_COUNT',
+          message:
+            `${item.name} was ${observed.toFixed(0)} when this count was taken and is ` +
+            `${current.toFixed(0)} now. Ask for a fresh count rather than posting the old one.`,
+          observedQty: observed.toFixed(4),
+          currentQty: current.toFixed(4),
+        });
+      }
+      return this.adjust(companyId, payload, userId);
+    }
+
+    // A shrinkage keeps its meaning: re-base the same delta onto today's stock.
+    const delta = toDecimal(payload.newQty).minus(observed);
+    const rebased = current.plus(delta);
+
+    // The delta can outlive the stock it referred to — 420 units written off
+    // against a shelf that has since fallen to 95. Say so, rather than letting
+    // the negative-quantity guard report a bare "quantity cannot be negative"
+    // that gives the owner nothing to act on.
+    if (rebased.lessThan(0)) {
+      throw new ConflictException({
+        code: 'ADJUSTMENT_EXCEEDS_STOCK',
+        message:
+          `This asked to remove ${delta.abs().toFixed(0)} × ${item.name}, but only ` +
+          `${current.toFixed(0)} remain (there were ${observed.toFixed(0)} when it was ` +
+          'requested). Ask for it to be raised again against current stock.',
+        observedQty: observed.toFixed(4),
+        currentQty: current.toFixed(4),
+        requestedDelta: delta.toFixed(4),
+      });
+    }
+
+    return this.adjust(
+      companyId,
+      { ...payload, newQty: rebased.toFixed(4) },
+      userId,
+    );
+  }
+
   async adjust(companyId: string, dto: AdjustQuantityDto, userId: string) {
     // Resolved once and shared by the adjustment, its movement and the journal
     // entry. These used to be two independent new Date() calls, so a request

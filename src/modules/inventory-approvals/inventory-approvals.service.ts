@@ -15,6 +15,7 @@ import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
+import { CreditMemo } from '../credit-memos/entities/credit-memo.entity';
 import { Customer } from '../customers/entities/customer.entity';
 import { DeliveryItem } from '../deliveries/entities/delivery-item.entity';
 import { DeliveryLedgerService } from '../deliveries/delivery-ledger.service';
@@ -848,6 +849,23 @@ export class InventoryApprovalsService {
       });
     }
 
+    // One sale, one reversal. Without this the button stays on the approved
+    // row and a second tap debits Sales again — balanced, invariant-clean, and
+    // completely wrong.
+    if (req.reversalCreditMemoId) {
+      const existing = await this.dataSource
+        .getRepository(CreditMemo)
+        .findOne({ where: { id: req.reversalCreditMemoId, companyId } });
+      throw new ConflictException({
+        code: 'ALREADY_REVERSED',
+        message: existing
+          ? `This delivery was already reversed by credit memo ${existing.creditMemoNumber}.`
+          : 'This delivery has already been reversed.',
+        creditMemoId: req.reversalCreditMemoId,
+        creditMemoNumber: existing?.creditMemoNumber ?? null,
+      });
+    }
+
     const delivery = await this.deliveryRepo.findOne({
       where: { id: req.deliveryId, companyId },
     });
@@ -905,9 +923,24 @@ export class InventoryApprovalsService {
       customerName: customer?.name ?? null,
       originalInvoiceId: invoice?.id ?? null,
       invoiceNumber: invoice?.invoiceNumber ?? null,
-      // Drives whether the credit can be applied to the invoice or has to sit
-      // as an available balance — a prepaid delivery has nothing left to settle.
+      // Drives HOW the credit settles. A credit sale still owes money, so the
+      // credit clears the invoice. A prepaid or doorstep-collected delivery
+      // has nothing left to settle, so the money goes back out as cash —
+      // otherwise the credit would leave A/R negative until somebody raised a
+      // separate refund.
       invoiceBalance: toDecimal(invoice?.balance ?? '0').toFixed(4),
+      settlement: toDecimal(invoice?.balance ?? '0').greaterThan(0)
+        ? ('apply_to_invoice' as const)
+        : ('refund_cash' as const),
+      settlementAmount: toDecimal(invoice?.balance ?? '0').greaterThan(0)
+        ? toDecimal(invoice?.balance ?? '0').toFixed(4)
+        : lines
+            .reduce(
+              (sum, l) =>
+                sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+              toDecimal('0'),
+            )
+            .toFixed(4),
       // The reversal posts TODAY, which is also what puts it under the period
       // lock rather than back-dating it into the original delivery's period.
       date: new Date().toISOString().slice(0, 10),
@@ -1250,6 +1283,7 @@ export class InventoryApprovalsService {
       reviewedAt: r.reviewedAt ?? null,
       reviewedBy: r.reviewedBy ?? null,
       reviewerRole: r.reviewerRole ?? null,
+      reversalCreditMemoId: r.reversalCreditMemoId ?? null,
       reviewerComment: r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
       changes: (r.lines ?? []).map((l) => ({
         itemId: l.itemId,
