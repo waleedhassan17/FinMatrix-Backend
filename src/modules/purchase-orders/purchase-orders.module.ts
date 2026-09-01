@@ -17,5 +17,8 @@ import { JournalEntriesModule } from '../journal-entries/journal-entries.module'
   ],
   controllers: [PurchaseOrdersController],
   providers: [PurchaseOrdersService],
+  // Exported for the approvals dispatcher: a staff PO is committed only when
+  // the owner approves it.
+  exports: [PurchaseOrdersService],
 })
 export class PurchaseOrdersModule {}

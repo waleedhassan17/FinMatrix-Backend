@@ -25,6 +25,8 @@ import { JournalEntriesController } from './journal-entries.controller';
   ],
   controllers: [JournalEntriesController],
   providers: [PostingService, JournalEntriesService],
-  exports: [PostingService, TypeOrmModule],
+  // JournalEntriesService is exported for the approvals dispatcher, which
+  // replays an approved manual journal through the same path a direct one takes.
+  exports: [PostingService, JournalEntriesService, TypeOrmModule],
 })
 export class JournalEntriesModule {}
