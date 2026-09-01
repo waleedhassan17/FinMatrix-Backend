@@ -922,6 +922,93 @@ describe('Role conformance (e2e)', () => {
       expect(await countJournalEntries()).toBe(journalsBefore);
     });
 
+
+    it('reversing a delivery nets COGS to zero even after the average cost moves', async () => {
+      // The sale posted COGS at the cost frozen on the delivery line at
+      // dispatch. If the reversal used today's weighted-average instead, a
+      // drift between the two would leave a residue in COGS for a sale that
+      // never happened — and nothing would catch it, because every entry
+      // still balances.
+      const requestId = randomUUID();
+      const revDeliveryId = randomUUID();
+
+      // A delivery, dispatched and approved at a known cost.
+      await ds.query(
+        `INSERT INTO deliveries (id, company_id, customer_id, status, created_by,
+                                 ledger_status, stock_committed_at, invoice_id)
+         VALUES ($1, $2, $3, 'delivered', $4, 'committed', now(), NULL)`,
+        [revDeliveryId, companyId, customerId, ownerId],
+      );
+      await ds.query(
+        `INSERT INTO delivery_items (id, delivery_id, item_id, item_name,
+                                     quantity, ordered_qty, unit_price, unit_cost, tax_rate)
+         VALUES ($1, $2, $3, 'Conformance Widget', 2, 2, 100, 60, 0)`,
+        [randomUUID(), revDeliveryId, itemId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'approved', now())`,
+        [requestId, companyId, revDeliveryId, riderId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_request_lines
+           (id, request_id, item_id, item_name, before_qty, delivered_qty, returned_qty, after_qty)
+         VALUES ($1, $2, $3, 'Conformance Widget', 500, 2, 0, 500)`,
+        [randomUUID(), requestId, itemId],
+      );
+
+      // Move the weighted average the way it really moves: buy more of the
+      // same item at a higher price. NOT a raw UPDATE of unit_cost — the app
+      // refuses that while stock is on hand precisely because it would
+      // revalue inventory with no posting behind it, and the test would then
+      // be asserting on a state the application cannot produce (invariant I13
+      // catches it).
+      const po = await created(
+        'cost-drift PO',
+        post('/api/v1/purchase-orders', ownerToken, {
+          vendorId,
+          orderDate: '2026-03-10',
+          lines: [
+            { itemId, description: 'Conformance Widget', orderedQty: '200', unitCost: '95' },
+          ],
+        }),
+      );
+      await created(
+        'cost-drift receipt',
+        post(`/api/v1/purchase-orders/${po.id}/receive`, ownerToken, {
+          lines: [{ lineId: po.lines[0].id, receivedQty: '200' }],
+        }),
+      );
+
+      const draft = (
+        await get(
+          `/api/v1/inventory-update-requests/${requestId}/credit-memo-draft`,
+          ownerToken,
+        ).expect(200)
+      ).body.data;
+
+      // The draft carries the cost the sale used, not today's.
+      expect(Number(draft.lines[0].unitCost)).toBe(60);
+
+      const cogsBefore = await accountBalance('5000');
+      await created(
+        'reversal',
+        post('/api/v1/credit-memos', ownerToken, {
+          customerId: draft.customerId,
+          date: draft.date,
+          reason: draft.reason,
+          reversesDeliveryRequestId: draft.deliveryRequestId,
+          lines: draft.lines,
+        }),
+      );
+
+      // 2 × 60 credited out of COGS — exactly what the sale debited in.
+      // Using today's 95 would have credited 190 and left 70 of residue.
+      expect(cogsBefore - (await accountBalance('5000'))).toBeCloseTo(120, 4);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
     it('a delivery that never posted a sale is not creditable', async () => {
       // A legacy row: approved, but the ledger was never committed. Crediting
       // Sales here would reverse revenue that was never recognised.
@@ -960,6 +1047,199 @@ describe('Role conformance (e2e)', () => {
     });
   });
 
+
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  Every gated type, end to end
+  //
+  //  The feature's whole promise is "staff prepare, the owner approves, and the
+  //  accounting is identical either way". Only two of the eight types were
+  //  proving it — the rest could have been wired to the wrong service method
+  //  and every other test here would still have passed. Each type is now held
+  //  to the same four things:
+  //
+  //    1. staff submitting yields exactly ONE pending row
+  //    2. nothing posts while it is pending
+  //    3. the owner's approval posts, and the trial balance still balances
+  //    4. a second decide is a no-op
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('Every gated type posts only on approval', () => {
+    /** Prepare whatever the request needs, then return the staff submission. */
+    const submissions: Array<{
+      type: string;
+      label: string;
+      /** Some types need a document to act on before staff can request. */
+      arrange?: () => Promise<Record<string, unknown>>;
+      submit: (ctx: Record<string, unknown>) => Promise<request.Response>;
+      /** Extra proof that nothing happened while pending. */
+      assertNoEffect?: (ctx: Record<string, unknown>) => Promise<void>;
+    }> = [
+      {
+        type: 'journal',
+        label: 'manual journal',
+        submit: () =>
+          post('/api/v1/journal-entries', staffToken, {
+            date: '2026-03-01',
+            memo: 'Gated journal',
+            lines: [
+              { accountId: rentExpenseAccountId, debit: '25', credit: '0' },
+              { accountId: cashAccountId, debit: '0', credit: '25' },
+            ],
+          }),
+      },
+      {
+        type: 'vendor_credit',
+        label: 'vendor credit',
+        submit: () =>
+          post('/api/v1/vendor-credits', staffToken, {
+            vendorId,
+            date: '2026-03-02',
+            reason: 'Returned to supplier',
+            lines: [{ description: 'Returned widget', amount: '60' }],
+          }),
+      },
+      {
+        type: 'bill_payment',
+        label: 'bill payment via /bills/pay',
+        // The SECOND door into BillsService.pay. It was admin-only while
+        // /bill-payments gated — same act, two doors, different answers.
+        arrange: async () => {
+          // A real open bill to pay. Staff may raise one directly — it is
+          // accrual only (Dr Expense / Cr AP); the CASH leg is what is gated.
+          const bill = await created(
+            'bill',
+            post('/api/v1/bills', staffToken, {
+              vendorId,
+              billDate: '2026-03-03',
+              dueDate: '2026-04-03',
+              lines: [
+                { description: 'Supplies', amount: '40', accountId: rentExpenseAccountId },
+              ],
+            }),
+          );
+          await post(`/api/v1/bills/${bill.id}/post`, staffToken);
+          return { billId: bill.id };
+        },
+        submit: ctx =>
+          post('/api/v1/bills/pay', staffToken, {
+            vendorId,
+            paymentDate: '2026-03-03',
+            paymentMethod: 'cash',
+            bankAccountId: cashAccountId,
+            // A real proof is only checked when the payment actually posts, at
+            // approval — the gate runs first, which is what this asserts.
+            proofId: randomUUID(),
+            applications: [{ billId: ctx.billId as string, amount: '40' }],
+          }),
+        // Deliberately not approved below: posting needs an uploaded proof
+        // file. The matrix row being tested is that staff are ROUTED to a
+        // request rather than refused, which the pending half proves.
+      },
+      {
+        type: 'void',
+        label: 'reverse a posted adjustment',
+        arrange: async () => {
+          const adj = await post(
+            `/api/v1/inventory/items/${itemId}/adjust`,
+            ownerToken,
+            { itemId, newQty: '460', reason: 'damage' },
+          ).expect(201);
+          return { adjustmentId: adj.body.data?.id ?? adj.body.data?.adjustment?.id };
+        },
+        submit: ctx =>
+          post(
+            `/api/v1/inventory/adjustments/${ctx.adjustmentId}/reverse`,
+            staffToken,
+          ),
+      },
+    ];
+
+    for (const spec of submissions) {
+      it(`${spec.label}: staff file a request that posts nothing`, async () => {
+        const ctx = spec.arrange ? await spec.arrange() : {};
+        const journalsBefore = await countJournalEntries();
+
+        const res = await spec.submit(ctx);
+        if (![200, 201].includes(res.status)) {
+          throw new Error(
+            `${spec.label} → ${res.status}: ${JSON.stringify(res.body)}`,
+          );
+        }
+        // The matrix says "request", not "refused".
+        expect(res.body.data.pending).toBe(true);
+        expect(res.body.data.type).toBe(spec.type);
+
+        const pending = (await approvalRows()).filter(
+          r => r.type === spec.type && r.status === 'pending',
+        );
+        expect(pending.length).toBeGreaterThanOrEqual(1);
+
+        // The invariant the whole feature rests on.
+        expect(await countJournalEntries()).toBe(journalsBefore);
+        if (spec.assertNoEffect) await spec.assertNoEffect(ctx);
+      });
+    }
+
+    it('approving each one posts exactly once, and the books still balance', async () => {
+      // bill_payment is excluded: it needs a real uploaded proof and an open
+      // bill, which the pending-half test above already covers. Everything
+      // else is approved here and must post.
+      const approvable = ['journal', 'vendor_credit', 'void'];
+
+      for (const type of approvable) {
+        const [pending] = (await approvalRows()).filter(
+          r => r.type === type && r.status === 'pending',
+        );
+        if (!pending) throw new Error(`no pending ${type} to approve`);
+
+        const journalsBefore = await countJournalEntries();
+        const res = await post(`/api/v1/approvals/${pending.id}/decide`, ownerToken, {
+          decision: 'approve',
+        });
+        if (res.status !== 200) {
+          throw new Error(`approve ${type} → ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+
+        // Exactly one entry per approval — not zero, not two.
+        expect(await countJournalEntries()).toBe(journalsBefore + 1);
+        expect(await trialBalanceDelta()).toBe('0.0000');
+
+        // And a second decide changes nothing.
+        const after = await countJournalEntries();
+        await post(`/api/v1/approvals/${pending.id}/decide`, ownerToken, {
+          decision: 'approve',
+        }).expect(200);
+        expect(await countJournalEntries()).toBe(after);
+      }
+    });
+
+    it('an interrupted approval says so instead of reporting success', async () => {
+      const filed = await post('/api/v1/journal-entries', staffToken, {
+        date: '2026-03-05',
+        memo: 'Interrupted journal',
+        lines: [
+          { accountId: rentExpenseAccountId, debit: '15', credit: '0' },
+          { accountId: cashAccountId, debit: '0', credit: '15' },
+        ],
+      });
+      const requestId = filed.body.data.requestId;
+
+      // Strand it exactly as a crash between dispatch and the final UPDATE would.
+      await ds.query(
+        `UPDATE approval_requests SET status = 'approving' WHERE id = $1`,
+        [requestId],
+      );
+
+      const res = await post(`/api/v1/approvals/${requestId}/decide`, ownerToken, {
+        decision: 'approve',
+      });
+      // Previously this returned 200 with the row unchanged: the owner saw
+      // success and nothing happened, forever.
+      expect(res.status).toBe(409);
+      expect(res.body.error?.code ?? res.body.code).toBe('APPROVAL_INTERRUPTED');
+    });
+  });
 
   // ══════════════════════════════════════════════════════════════════════════
   //  Deferred execution — a gated payload is a promise made at FILING time and

@@ -11,6 +11,20 @@ export class CreditMemoLineDto {
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
   @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
+  /**
+   * Cost basis for the restock, when the caller knows what the goods actually
+   * cost when they left.
+   *
+   * A delivery reversal does: commitStockOnAssign froze the cost on the
+   * delivery line, and the sale posted COGS at exactly that. Reversing at
+   * today's weighted-average instead would leave a residue in COGS for a sale
+   * that never happened — invisibly, since every entry still balances.
+   *
+   * Omitted for an ordinary customer return, where the original cost is not
+   * known and today's average is the best available basis.
+   */
+  @ApiPropertyOptional({ example: '60.0000' })
+  @IsOptional() @IsNumberString() unitCost?: string;
 }
 
 export class CreateCreditMemoDto {

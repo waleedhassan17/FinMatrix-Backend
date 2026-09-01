@@ -422,15 +422,18 @@ export class CreditMemosService {
       if (!item) continue;
       const qty = toDecimal(line.quantity);
 
-      // Value the return at the cost FROZEN when the memo was issued. Re-reading
-      // item.unitCost here would use whatever the weighted-average has drifted
-      // to since — a single purchase at a new price is enough — and the void
-      // would then not cancel the original entry, leaving residue in Inventory
-      // and COGS. Memos issued before this column existed fall back to the
-      // item cost, which is the best available basis for them.
-      const unitCost = reverse
-        ? toDecimal(line.restockUnitCost ?? item.unitCost)
-        : toDecimal(item.unitCost);
+      // Value the return at the cost FROZEN for this line. Re-reading
+      // item.unitCost would use whatever the weighted-average has drifted to
+      // since — a single purchase at a new price is enough — and the entry
+      // would then not cancel what it is reversing, leaving residue in
+      // Inventory and COGS.
+      //
+      // On ISSUE that frozen cost is either one the caller supplied (a
+      // delivery reversal knows what the sale posted COGS at) or today's
+      // average, which is the best basis available for an ordinary return
+      // where the original cost is unknown. On a VOID it is whatever the issue
+      // recorded, so the two cancel exactly.
+      const unitCost = toDecimal(line.restockUnitCost ?? item.unitCost);
       const cost = qty.times(unitCost);
       if (cost.lessThanOrEqualTo(0)) continue;
       total = total.plus(cost);
@@ -511,6 +514,9 @@ export class CreditMemosService {
         itemId: l.itemId ?? null,
         description: l.description, quantity: toDecimal(l.quantity).toFixed(4), unitPrice: toDecimal(l.unitPrice).toFixed(4),
         taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineTotal: base.plus(lineTax).toFixed(4), lineOrder: i,
+        // Seeded when the caller knows the original cost; postCreditMemoInventory
+        // prefers it over today's average so a reversal cancels the sale exactly.
+        restockUnitCost: l.unitCost ? toDecimal(l.unitCost).toFixed(4) : null,
       });
     });
     return { subtotal: subtotal.toFixed(4), taxAmount: tax.toFixed(4), total: subtotal.plus(tax).toFixed(4), lines: calc };

@@ -159,6 +159,19 @@ export class ApprovalDispatcher {
             await this.vendorCredits.void(companyId, id, reviewerId);
             return { id };
           }
+          case 'adjustment': {
+            // Reversing an adjustment posts the mirror entry through the same
+            // method an owner's direct reversal uses.
+            const reversed = await this.inventory.reverseAdjustment(
+              companyId,
+              id,
+              reviewerId,
+            );
+            return {
+              id,
+              journalEntryId: (reversed as any)?.journalEntryId ?? null,
+            };
+          }
           default:
             throw new BadRequestException({
               code: 'UNKNOWN_VOID_TARGET',

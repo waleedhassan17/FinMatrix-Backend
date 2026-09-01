@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -67,7 +68,26 @@ export class ApprovalsService {
       });
     }
 
-    // Idempotent: a decided request is returned as-is rather than re-run.
+    // A row stranded mid-dispatch. The claim was taken and the process died
+    // before the result was written, so the work MAY already have posted —
+    // which is why nothing here releases it automatically: guessing wrong
+    // re-posts a journal entry, the precise failure the claim prevents.
+    //
+    // Returning the row with a 200, as this used to, was the worst answer: the
+    // owner taps Approve, sees success, and nothing happens. Forever.
+    if (request.status === 'approving') {
+      throw new ConflictException({
+        code: 'APPROVAL_INTERRUPTED',
+        message:
+          'This approval was interrupted while it was being posted, so it may have ' +
+          'gone through. Check the ledger for the entry before deciding it again.',
+        type: request.type,
+        summary: request.summary,
+      });
+    }
+
+    // Idempotent: an already-decided request is returned as-is rather than
+    // re-run, so a double-tap or a retried request cannot post twice.
     if (request.status !== 'pending') {
       return request;
     }

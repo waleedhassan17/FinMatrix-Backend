@@ -165,14 +165,28 @@ export class InventoryController {
   // Transfers
   // G7: adjustments previously had no correction path — a mistake could only
   // be papered over with a second adjustment.
+  /**
+   * Reversing a posted adjustment is a correction, so Table A puts it in the
+   * same column as every other void: the owner does it, staff ask. It was
+   * refused outright for staff, which is safe but is not the row as written.
+   */
   @Post('adjustments/:id/reverse')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   reverseAdjustment(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.reverseAdjustment(companyId, id, user.id);
+    if (user.role === 'admin') {
+      return this.svc.reverseAdjustment(companyId, id, user.id);
+    }
+    return this.approvals.createRequest(
+      'void',
+      { entity: 'adjustment', targetId: id },
+      'Reverse a posted inventory adjustment',
+      user,
+      companyId,
+    );
   }
 
   @Post('transfers')

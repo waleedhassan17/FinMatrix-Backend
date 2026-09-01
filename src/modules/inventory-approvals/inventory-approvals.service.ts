@@ -900,6 +900,11 @@ export class InventoryApprovalsService {
           quantity: toDecimal(l.deliveredQty).toFixed(4),
           unitPrice: toDecimal(priced?.unitPrice ?? '0').toFixed(4),
           taxRate: toDecimal(priced?.taxRate ?? '0').toFixed(4),
+          // The cost the sale actually posted COGS at, frozen on the delivery
+          // line at dispatch. Reversing at today's weighted-average instead
+          // would leave a residue in COGS for a sale that never happened —
+          // invisible, because every entry would still balance.
+          unitCost: toDecimal(priced?.unitCost ?? '0').toFixed(4),
         };
       });
 
