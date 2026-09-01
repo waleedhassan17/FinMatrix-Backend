@@ -7,9 +7,11 @@ import { PurchaseOrdersController } from './purchase-orders.controller';
 import { BillsModule } from '../bills/bills.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([PurchaseOrder, PurchaseOrderLine]),
     BillsModule,
     AccountsModule,

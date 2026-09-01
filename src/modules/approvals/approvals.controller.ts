@@ -19,6 +19,7 @@ import {
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ApprovalsService } from './approvals.service';
+import { ApprovalRequestsService } from './approval-requests.service';
 import { DecideApprovalDto, ListApprovalsQueryDto } from './dto/approval.dto';
 
 @ApiTags('Approvals')
@@ -26,7 +27,12 @@ import { DecideApprovalDto, ListApprovalsQueryDto } from './dto/approval.dto';
 @UseGuards(CompanyGuard, RolesGuard)
 @Controller('approvals')
 export class ApprovalsController {
-  constructor(private readonly svc: ApprovalsService) {}
+  constructor(
+    // Reads and cancels come from the core service; only decide needs the
+    // dispatcher, and so the module that can reach every domain service.
+    private readonly requests: ApprovalRequestsService,
+    private readonly svc: ApprovalsService,
+  ) {}
 
   /** Owner sees the whole inbox; staff see only their own requests. */
   @Get()
@@ -37,7 +43,7 @@ export class ApprovalsController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListApprovalsQueryDto,
   ) {
-    const data = await this.svc.list(
+    const data = await this.requests.list(
       companyId,
       query.status ?? 'pending',
       query.type,
@@ -54,7 +60,7 @@ export class ApprovalsController {
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return { count: await this.svc.pendingCount(companyId, user) };
+    return { count: await this.requests.pendingCount(companyId, user) };
   }
 
   @Get(':id')
@@ -65,7 +71,7 @@ export class ApprovalsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.svc.getById(companyId, id, user);
+    return this.requests.getById(companyId, id, user);
   }
 
   /**
@@ -97,6 +103,6 @@ export class ApprovalsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.svc.cancel(id, user, companyId);
+    return this.requests.cancel(id, user, companyId);
   }
 }

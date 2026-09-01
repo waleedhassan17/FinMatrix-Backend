@@ -28,6 +28,7 @@ import {
   MovementQueryDto,
 } from './dto/inventory.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
@@ -35,7 +36,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @RequiresFeature('inventory') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly svc: InventoryService) {}
+  constructor(
+    private readonly svc: InventoryService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   // Items
   @Get('items')
@@ -100,6 +104,16 @@ export class InventoryController {
     return this.svc.setOpeningStock(companyId, id, dto, user.id);
   }
 
+  /**
+   * Adjustments and write-offs correct the ledger, so they are gated: the
+   * owner posts immediately, staff file a request that posts nothing until it
+   * is approved (Table A, "money out & corrections").
+   *
+   * The gate sits HERE, at the controller boundary, and never inside
+   * InventoryService — service-to-service posting (delivery dispatch, the
+   * credit memo a rejected prepaid delivery raises) must keep working
+   * untouched, and would deadlock if the service itself filed requests.
+   */
   @Post('items/:id/adjust')
   @Roles('admin', 'staff')
   adjust(
@@ -108,7 +122,14 @@ export class InventoryController {
     @Body() dto: AdjustQuantityDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.adjust(companyId, dto, user.id);
+    if (user.role === 'admin') return this.svc.adjust(companyId, dto, user.id);
+    return this.approvals.createRequest(
+      'adjustment',
+      { ...dto, itemId: id },
+      `Inventory adjustment to ${dto.newQty} — ${dto.reason}`,
+      user,
+      companyId,
+    );
   }
 
   @Get('items/:id/movements')

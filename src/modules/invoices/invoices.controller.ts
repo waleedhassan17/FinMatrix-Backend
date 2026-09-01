@@ -25,6 +25,7 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { Delete } from '@nestjs/common';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { InvoicesService } from './invoices.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import {
@@ -50,6 +51,7 @@ import { Company } from '../companies/entities/company.entity';
 export class InvoicesController {
   constructor(
     private readonly invoices: InvoicesService,
+    private readonly approvals: ApprovalRequestsService,
     private readonly pdf: InvoicePdfService,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
@@ -106,8 +108,13 @@ export class InvoicesController {
     return this.invoices.send(companyId, invoiceId, user.id);
   }
 
+  /**
+   * Raising and sending an invoice is value IN and stays direct for staff.
+   * VOIDING one reverses a posted sale, so it is gated like every other
+   * correction.
+   */
   @Post(':invoiceId/void')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Void invoice (fails if amountPaid > 0).' })
   void(
@@ -116,7 +123,16 @@ export class InvoicesController {
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
     @Body() dto: VoidInvoiceDto,
   ) {
-    return this.invoices.void(companyId, invoiceId, user.id, dto);
+    if (user.role === 'admin') {
+      return this.invoices.void(companyId, invoiceId, user.id, dto);
+    }
+    return this.approvals.createRequest(
+      'void',
+      { entity: 'invoice', targetId: invoiceId, ...dto },
+      `Void an invoice — ${dto.reason ?? 'no reason given'}`,
+      user,
+      companyId,
+    );
   }
 
   @Get(':invoiceId/pdf')

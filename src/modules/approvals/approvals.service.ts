@@ -6,25 +6,19 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
-import {
-  ApprovalRequest,
-  ApprovalType,
-} from './entities/approval-request.entity';
+import { ApprovalRequest } from './entities/approval-request.entity';
 import { ApprovalDispatcher } from './approval-dispatcher.service';
-import { ApprovalListFilter, DecideApprovalDto } from './dto/approval.dto';
+import { DecideApprovalDto } from './dto/approval.dto';
 
-/** What a gated controller hands back to a staff member. */
-export interface PendingApprovalResponse {
-  pending: true;
-  requestId: string;
-  type: ApprovalType;
-  summary: string;
-  message: string;
-}
-
+/**
+ * The approve/reject half of the approval engine — the part that needs to
+ * reach every domain service, and so lives in the module that imports them.
+ * Filing and reading requests is ApprovalRequestsService, which has no domain
+ * dependencies and is what the gates in the owning controllers inject.
+ */
 @Injectable()
 export class ApprovalsService {
   private readonly logger = new Logger(ApprovalsService.name);
@@ -37,98 +31,6 @@ export class ApprovalsService {
   ) {}
 
   /**
-   * File a request. Writes ONE row and touches nothing else — no ledger, no
-   * documents, no stock. Everything the action needs is kept in `payload` and
-   * replayed at approval time.
-   */
-  async createRequest(
-    type: ApprovalType,
-    payload: Record<string, unknown>,
-    summary: string,
-    user: AuthenticatedUser,
-    companyId: string,
-    reason?: string,
-  ): Promise<PendingApprovalResponse> {
-    const request = await this.repo.save(
-      this.repo.create({
-        companyId,
-        type,
-        status: 'pending',
-        payload,
-        summary,
-        reason: reason ?? null,
-        requestedBy: user.id,
-      }),
-    );
-
-    await this.audit.record({
-      companyId,
-      actorUserId: user.id,
-      action: 'approval_requested',
-      targetType: 'approval_request',
-      targetId: request.id,
-      details: { type, summary },
-    });
-
-    return {
-      pending: true,
-      requestId: request.id,
-      type,
-      summary,
-      message: 'Sent to the owner for approval.',
-    };
-  }
-
-  async list(
-    companyId: string,
-    filter: ApprovalListFilter | undefined,
-    type: ApprovalType | undefined,
-    viewer: AuthenticatedUser,
-  ): Promise<ApprovalRequest[]> {
-    const qb = this.repo
-      .createQueryBuilder('r')
-      .where('r.companyId = :companyId', { companyId })
-      .orderBy('r.createdAt', 'DESC');
-
-    // Staff see only what they asked for. The owner sees the whole inbox.
-    if (viewer.role !== 'admin') {
-      qb.andWhere('r.requestedBy = :userId', { userId: viewer.id });
-    }
-    if (type) qb.andWhere('r.type = :type', { type });
-
-    if (filter && filter !== 'all') {
-      // 'approving' is a transient claim; surface it under 'pending' so a row
-      // never vanishes from the inbox mid-dispatch.
-      const statuses =
-        filter === 'pending' ? ['pending', 'approving'] : [filter];
-      qb.andWhere('r.status IN (:...statuses)', { statuses });
-    }
-
-    return qb.getMany();
-  }
-
-  async getById(
-    companyId: string,
-    id: string,
-    viewer: AuthenticatedUser,
-  ): Promise<ApprovalRequest> {
-    const request = await this.repo.findOne({ where: { id, companyId } });
-    if (!request) {
-      throw new NotFoundException({
-        code: 'APPROVAL_NOT_FOUND',
-        message: 'Request not found',
-      });
-    }
-    if (viewer.role !== 'admin' && request.requestedBy !== viewer.id) {
-      throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'You can only view your own requests.',
-      });
-    }
-    return request;
-  }
-
-  /**
    * Approve or reject. Owner only — enforced by @Roles('admin') on the route.
    *
    * ── Why this is not one transaction ──────────────────────────────────────
@@ -139,11 +41,11 @@ export class ApprovalsService {
    * EntityManager would be a far riskier change than this one.
    *
    * So instead of a transaction, the row is CLAIMED: a conditional UPDATE
-   * moves it pending → approving, and only one caller can win that race.
-   * The claim is what makes approval idempotent — a second decide finds no
-   * pending row and returns the request unchanged rather than posting twice.
-   * If the dispatch throws, the claim is released back to pending with the
-   * error recorded, so the owner can fix the cause and try again.
+   * moves it pending → approving, and only one caller can win that race. The
+   * claim is what makes approval idempotent — a second decide finds no pending
+   * row and returns the request unchanged rather than posting twice. If the
+   * dispatch throws, the claim is released back to pending with the error
+   * recorded, so the owner can fix the cause and try again.
    *
    * A crash between a successful dispatch and the final UPDATE would strand a
    * row in `approving` with its work already done. That is deliberately the
@@ -180,62 +82,9 @@ export class ApprovalsService {
       });
     }
 
-    if (dto.decision === 'reject') {
-      return this.reject(request, dto, reviewer, companyId);
-    }
-    return this.approve(request, dto, reviewer, companyId);
-  }
-
-  /** Requester withdraws their own pending request. Posts nothing, ever. */
-  async cancel(
-    id: string,
-    user: AuthenticatedUser,
-    companyId: string,
-  ): Promise<ApprovalRequest> {
-    const request = await this.repo.findOne({ where: { id, companyId } });
-    if (!request) {
-      throw new NotFoundException({
-        code: 'APPROVAL_NOT_FOUND',
-        message: 'Request not found',
-      });
-    }
-    if (request.requestedBy !== user.id) {
-      throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'You can only cancel your own requests.',
-      });
-    }
-    if (request.status !== 'pending') {
-      throw new BadRequestException({
-        code: 'NOT_PENDING',
-        message: `This request is already ${request.status}.`,
-      });
-    }
-
-    request.status = 'cancelled';
-    request.reviewedAt = new Date();
-    const saved = await this.repo.save(request);
-
-    await this.audit.record({
-      companyId,
-      actorUserId: user.id,
-      action: 'approval_cancelled',
-      targetType: 'approval_request',
-      targetId: request.id,
-      details: { type: request.type },
-    });
-    return saved;
-  }
-
-  /** Pending count for the owner's inbox badge. */
-  async pendingCount(companyId: string, viewer: AuthenticatedUser): Promise<number> {
-    return this.repo.count({
-      where: {
-        companyId,
-        status: In(['pending', 'approving']),
-        ...(viewer.role === 'admin' ? {} : { requestedBy: viewer.id }),
-      },
-    });
+    return dto.decision === 'reject'
+      ? this.reject(request, dto, reviewer, companyId)
+      : this.approve(request, dto, reviewer, companyId);
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────

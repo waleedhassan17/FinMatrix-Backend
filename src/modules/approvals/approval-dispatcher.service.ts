@@ -62,13 +62,19 @@ export class ApprovalDispatcher {
         };
       }
 
-      // ── A manual journal, created and then posted ────────────────────────
+      // ── A manual journal ─────────────────────────────────────────────────
       case 'journal': {
+        // Two shapes: "post this existing draft", or "create this entry".
+        if (payload.draftEntryId) {
+          const id = this.requireId(payload.draftEntryId, 'draftEntryId');
+          await this.journals.post(companyId, id, reviewerId);
+          return { id, journalEntryId: id };
+        }
         const created = await this.journals.create(
           companyId,
           reviewerId,
-          // Force 'posted': a request to post a journal that approves into a
-          // draft would leave the owner thinking they had posted it.
+          // Force 'posted': approving a request to write the ledger, only to
+          // leave a draft behind, would look to the owner like it had posted.
           { ...(payload as any), status: 'posted' },
         );
         return { id: created.id, journalEntryId: created.id };

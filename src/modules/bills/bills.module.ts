@@ -11,9 +11,11 @@ import { BillsController } from './bills.controller';
 import { BillPaymentsController } from './bill-payments.controller';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([
       Bill,
       BillLineItem,

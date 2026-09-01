@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ApprovalsCoreModule } from './approvals-core.module';
 import { ApprovalRequest } from './entities/approval-request.entity';
 import { ApprovalsService } from './approvals.service';
 import { ApprovalDispatcher } from './approval-dispatcher.service';
@@ -30,6 +31,7 @@ import { InventoryApprovalsModule } from '../inventory-approvals/inventory-appro
 @Module({
   imports: [
     TypeOrmModule.forFeature([ApprovalRequest]),
+    ApprovalsCoreModule,
     InventoryModule,
     JournalEntriesModule,
     CreditMemosModule,
