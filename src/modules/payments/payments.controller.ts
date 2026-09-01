@@ -37,7 +37,7 @@ export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @ApiOperation({
     summary: 'Receive customer payment. Auto-applies if no applications given.',
   })

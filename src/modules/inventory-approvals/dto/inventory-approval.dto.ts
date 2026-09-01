@@ -101,6 +101,21 @@ export class ApproveInventoryUpdateRequestDto {
   reviewerComment?: string;
 }
 
+/**
+ * Undoing an approved delivery reverses recognised revenue, so when staff ask
+ * for one the owner is owed an explanation. Required for staff; ignored when
+ * an owner undoes directly.
+ */
+export class UndoInventoryUpdateRequestDto {
+  @ApiPropertyOptional({
+    description: 'Why the approval should be undone. Required for staff.',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(5, 1000)
+  reason?: string;
+}
+
 export class RejectInventoryUpdateRequestDto {
   @ApiProperty({ description: 'Required reason for rejection (min 5 chars).' })
   @IsString()

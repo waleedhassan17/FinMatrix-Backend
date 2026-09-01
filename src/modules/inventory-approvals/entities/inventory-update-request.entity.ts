@@ -28,6 +28,15 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'reviewed_by' })
   reviewedBy!: string | null;
 
+  /**
+   * The reviewer's role AT THE TIME they signed off — 'admin' or 'staff'.
+   * Snapshotted rather than resolved from their current membership, because
+   * roles change and the badge has to reflect the authority that actually
+   * approved this delivery. Null on rows approved before the column existed.
+   */
+  @Column({ type: 'varchar', length: 16, nullable: true, name: 'reviewer_role' })
+  reviewerRole!: string | null;
+
   @Column({ type: 'text', nullable: true, name: 'approval_notes' })
   approvalNotes!: string | null;
 

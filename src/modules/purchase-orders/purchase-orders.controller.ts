@@ -89,7 +89,7 @@ export class PurchaseOrdersController {
   }
 
   @Post(':poId/receive')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   receive(
     @CurrentCompany() companyId: string,
@@ -101,7 +101,7 @@ export class PurchaseOrdersController {
   }
 
   @Post(':poId/create-bill')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   createBill(
     @CurrentCompany() companyId: string,

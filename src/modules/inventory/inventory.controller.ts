@@ -93,6 +93,11 @@ export class InventoryController {
   // Opening stock is admin-only and one-time: it posts straight to equity, so
   // it is not something staff should be able to do repeatedly. Corrections go
   // through adjust() below, which records a reason and can be reversed.
+  //
+  // Deliberately NOT widened to staff with the other "stock receipts" in
+  // Table A: an opening balance is not a receipt. The receipt staff perform is
+  // POST /purchase-orders/:poId/receive (Dr Inventory / Cr GRNI), which is
+  // widened; this one credits Owner's Equity.
   @Post('items/:id/opening-stock')
   @Roles('admin')
   setOpeningStock(

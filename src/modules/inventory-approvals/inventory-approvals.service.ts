@@ -7,7 +7,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository, EntityManager } from 'typeorm';
 import { InventoryUpdateRequest } from './entities/inventory-update-request.entity';
 import { InventoryUpdateRequestLine } from './entities/inventory-update-request-line.entity';
 import { InventoryApprovalAuditEntry } from './entities/inventory-approval-audit-entry.entity';
@@ -153,10 +153,10 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: ReviewRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
     if (dto.action === 'approved') {
-      return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewerId);
+      return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewer);
     }
 
     // Rejecting reverses stock out of Goods in Transit and is the reason the
@@ -175,7 +175,7 @@ export class InventoryApprovalsService {
       });
     }
 
-    return this.reject(companyId, id, { reviewerComment: reason }, reviewerId);
+    return this.reject(companyId, id, { reviewerComment: reason }, reviewer);
   }
 
   // ==========================================================================
@@ -446,8 +446,9 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: ApproveInventoryUpdateRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
+    const reviewerId = reviewer.id;
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
@@ -462,6 +463,18 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Request is already ${req.status}; cannot approve`,
         );
+      }
+
+      // Maker != checker: the rider who delivered the goods cannot also be the
+      // one who signs the delivery off. This is the second-person check that
+      // makes approval mean something — distinct from the rider-scoping check
+      // in getOneFormatted, which only governs who may LOOK at a request.
+      if (req.personnelId === reviewerId) {
+        throw new ForbiddenException({
+          code: 'CHECKER_IS_RIDER',
+          message:
+            'You cannot review your own delivery. Someone else has to approve it.',
+        });
       }
 
       // STAGE 3 (phase1.md) — deliveries dispatched under the Goods-in-Transit
@@ -526,6 +539,7 @@ export class InventoryApprovalsService {
       req.journalEntryId = journalEntryId;
       req.reviewedAt = now;
       req.reviewedBy = reviewerId;
+      req.reviewerRole = reviewer.role;
       req.reviewerComment = dto.reviewerComment ?? null;
       req.approvalNotes = dto.reviewerComment ?? null;
       await reqRepo.save(req);
@@ -662,8 +676,9 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: RejectInventoryUpdateRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
+    const reviewerId = reviewer.id;
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
@@ -678,6 +693,18 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Request is already ${req.status}; cannot reject`,
         );
+      }
+
+      // Maker != checker: the rider who delivered the goods cannot also be the
+      // one who signs the delivery off. This is the second-person check that
+      // makes approval mean something — distinct from the rider-scoping check
+      // in getOneFormatted, which only governs who may LOOK at a request.
+      if (req.personnelId === reviewerId) {
+        throw new ForbiddenException({
+          code: 'CHECKER_IS_RIDER',
+          message:
+            'You cannot review your own delivery. Someone else has to approve it.',
+        });
       }
 
       // Reject/return path (phase1.md Stage 3): for a delivery dispatched
@@ -719,6 +746,7 @@ export class InventoryApprovalsService {
       req.shadowStatus = 'rejected';
       req.reviewedAt = now;
       req.reviewedBy = reviewerId;
+      req.reviewerRole = reviewer.role;
       req.reviewerComment = dto.reviewerComment;
       req.rejectReason = dto.reviewerComment;
       await reqRepo.save(req);
@@ -771,6 +799,50 @@ export class InventoryApprovalsService {
    *  - Sets status to 'rejected'
    *  - Creates an audit entry
    */
+  /**
+   * Can this approved delivery still be undone?
+   *
+   * Undo exists for the legacy path, where approval only moved stock. Once a
+   * delivery has posted under the Goods-in-Transit flow it has produced an
+   * invoice (and possibly a payment), and deleting that would leave revenue
+   * and cash dangling — corrections must REVERSE, never delete. The honest
+   * answer at that point is a credit memo or an invoice void, both of which
+   * staff can request in their own right.
+   *
+   * Extracted so it can run at two moments: when a staff member FILES an undo
+   * request (so they are told now, rather than waiting for an owner to
+   * discover the request cannot be approved), and again inside undoApproval
+   * when the owner acts on it.
+   */
+  async assertUndoable(
+    companyId: string,
+    id: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const em = manager ?? this.dataSource.manager;
+
+    const req = await em.getRepository(InventoryUpdateRequest).findOne({
+      where: { id, companyId },
+    });
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== 'approved') {
+      throw new ConflictException(
+        `Only approved requests can be undone (current status: ${req.status})`,
+      );
+    }
+
+    const delivery = await em.getRepository(Delivery).findOne({
+      where: { id: req.deliveryId, companyId },
+    });
+    if (delivery?.ledgerStatus === 'committed') {
+      throw new ConflictException({
+        code: 'LEDGER_COMMITTED',
+        message:
+          'This delivery was posted to the ledger (invoice/COGS). Undo is not available — void the invoice or issue a credit memo instead.',
+      });
+    }
+  }
+
   async undoApproval(companyId: string, id: string, reviewerId: string) {
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
@@ -784,26 +856,10 @@ export class InventoryApprovalsService {
         relations: ['lines'],
       });
       if (!req) throw new NotFoundException('Request not found');
-      if (req.status !== 'approved') {
-        throw new ConflictException(
-          `Only approved requests can be undone (current status: ${req.status})`,
-        );
-      }
-
-      // Approvals posted under the Goods-in-Transit flow produced an invoice
-      // (and possibly a payment) — a blanket undo would leave revenue and cash
-      // dangling. Voids/returns must reverse, never delete: use the invoice
-      // void / credit-memo flows instead.
-      const undoDelivery = await em.getRepository(Delivery).findOne({
-        where: { id: req.deliveryId, companyId },
-      });
-      if (undoDelivery?.ledgerStatus === 'committed') {
-        throw new ConflictException({
-          code: 'LEDGER_COMMITTED',
-          message:
-            'This delivery was posted to the ledger (invoice/COGS). Undo is not available — void the invoice or issue a credit memo instead.',
-        });
-      }
+      // Re-checked here even though the caller may have checked already: a
+      // staff undo REQUEST is validated when it is filed, and the delivery can
+      // change between then and the owner approving it.
+      await this.assertUndoable(companyId, id, em);
 
       // Reverse inventory changes with row-locking
       for (const line of req.lines) {
@@ -904,6 +960,7 @@ export class InventoryApprovalsService {
       req.shadowStatus = 'pending';
       req.reviewedAt = null;
       req.reviewedBy = null;
+      req.reviewerRole = null;
       req.reviewerComment = null;
       req.rejectReason = null;
       await reqRepo.save(req);
@@ -1090,6 +1147,7 @@ export class InventoryApprovalsService {
       shadowStatus: r.shadowStatus,
       reviewedAt: r.reviewedAt ?? null,
       reviewedBy: r.reviewedBy ?? null,
+      reviewerRole: r.reviewerRole ?? null,
       reviewerComment: r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
       changes: (r.lines ?? []).map((l) => ({
         itemId: l.itemId,

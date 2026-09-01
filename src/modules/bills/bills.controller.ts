@@ -73,7 +73,7 @@ export class BillsController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -83,7 +83,7 @@ export class BillsController {
   }
 
   @Patch(':billId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('billId', ParseUUIDPipe) billId: string,
@@ -104,7 +104,7 @@ export class BillsController {
   }
 
   @Post(':billId/post')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   post(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -28,7 +29,9 @@ import {
   ApproveInventoryUpdateRequestDto,
   ListInventoryUpdateRequestsQueryDto,
   RejectInventoryUpdateRequestDto,
+  UndoInventoryUpdateRequestDto,
 } from './dto/inventory-approval.dto';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Inventory Update Requests')
@@ -37,7 +40,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('inventory-update-requests')
 export class InventoryUpdateRequestsController {
-  constructor(private readonly svc: InventoryApprovalsService) {}
+  constructor(
+    private readonly svc: InventoryApprovalsService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   /**
    * GET /api/v1/inventory-update-requests
@@ -86,9 +92,15 @@ export class InventoryUpdateRequestsController {
    * POST /api/v1/inventory-update-requests/:id/approve
    * Admin approves → mutates real inventory.
    */
+  /**
+   * The posting moment: revenue and COGS post here (Table B row 4). Staff may
+   * sign this off as well as the owner — it is the day-to-day close of a
+   * delivery, not a correction — and whichever role approved is recorded on
+   * the request so the screen can show which authority signed it.
+   */
   @Post(':id/approve')
-  @Roles('admin')
-  @ApiOperation({ summary: 'Approve inventory update request (admin)' })
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Approve inventory update request (owner or staff)' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Request approved and inventory synced' })
   @ApiResponse({ status: 409, description: 'Request is not pending' })
@@ -99,7 +111,10 @@ export class InventoryUpdateRequestsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApproveInventoryUpdateRequestDto,
   ) {
-    const data = await this.svc.approve(companyId, id, dto, user.id);
+    const data = await this.svc.approve(companyId, id, dto, {
+      id: user.id,
+      role: user.role,
+    });
     return { success: true, data };
   }
 
@@ -107,9 +122,14 @@ export class InventoryUpdateRequestsController {
    * POST /api/v1/inventory-update-requests/:id/reject
    * Admin rejects → no inventory mutation.
    */
+  /**
+   * Rider failed — stock goes back on the shelf and no sale is recognised
+   * (Table B row 6). Staff may do this directly: nothing is being corrected,
+   * because nothing was ever sold.
+   */
   @Post(':id/reject')
-  @Roles('admin')
-  @ApiOperation({ summary: 'Reject inventory update request (admin)' })
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Reject inventory update request (owner or staff)' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Request rejected' })
   @ApiResponse({ status: 409, description: 'Request is not pending' })
@@ -119,7 +139,10 @@ export class InventoryUpdateRequestsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectInventoryUpdateRequestDto,
   ) {
-    const data = await this.svc.reject(companyId, id, dto, user.id);
+    const data = await this.svc.reject(companyId, id, dto, {
+      id: user.id,
+      role: user.role,
+    });
     return { success: true, data };
   }
 
@@ -128,18 +151,51 @@ export class InventoryUpdateRequestsController {
    * Admin undoes a previously approved request — reverses inventory changes
    * and sets the request status back to 'rejected'.
    */
+  /**
+   * Undo reverses recognised revenue, so it is the owner's call. Staff are not
+   * refused outright — they file a request carrying a REASON, and the owner
+   * decides (Table B row 7, as amended).
+   *
+   * The precondition is checked twice on purpose. assertUndoable runs here, at
+   * request time, because undoApproval refuses outright once a delivery is
+   * ledger-committed — and filing a request that can never be approved would
+   * strand it in the inbox forever. It runs again inside undoApproval at
+   * approval time, because the delivery can change in between.
+   */
   @Post(':id/undo')
-  @Roles('admin')
-  @ApiOperation({ summary: 'Undo an approved inventory update request (admin)' })
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Undo an approved delivery (owner direct, staff by request)' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Approval undone and inventory changes reversed' })
-  @ApiResponse({ status: 409, description: 'Request is not approved' })
+  @ApiResponse({ status: 200, description: 'Approval undone, or a request filed' })
+  @ApiResponse({ status: 409, description: 'Request is not approved, or already committed' })
   async undoApproval(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UndoInventoryUpdateRequestDto,
   ) {
-    const data = await this.svc.undoApproval(companyId, id, user.id);
+    if (user.role === 'admin') {
+      const data = await this.svc.undoApproval(companyId, id, user.id);
+      return { success: true, data };
+    }
+
+    if (!dto?.reason?.trim()) {
+      throw new BadRequestException({
+        code: 'REASON_REQUIRED',
+        message:
+          'Say why this delivery should be undone — the owner needs the reason to decide.',
+      });
+    }
+    await this.svc.assertUndoable(companyId, id);
+
+    const data = await this.approvals.createRequest(
+      'delivery_undo',
+      { requestId: id },
+      'Undo an approved delivery',
+      user,
+      companyId,
+      dto.reason.trim(),
+    );
     return { success: true, data };
   }
 

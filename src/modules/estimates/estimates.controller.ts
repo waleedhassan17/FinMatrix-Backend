@@ -41,7 +41,7 @@ export class EstimatesController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -51,7 +51,7 @@ export class EstimatesController {
   }
 
   @Patch(':estimateId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('estimateId', ParseUUIDPipe) id: string,
@@ -61,7 +61,7 @@ export class EstimatesController {
   }
 
   @Patch(':estimateId/status')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Update estimate status (sent / accepted / declined).' })
   setStatus(
     @CurrentCompany() companyId: string,
@@ -72,7 +72,7 @@ export class EstimatesController {
   }
 
   @Post(':estimateId/convert-to-invoice')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(201)
   @ApiOperation({ summary: 'Convert an accepted estimate into an invoice.' })
   convertToInvoice(
@@ -85,7 +85,7 @@ export class EstimatesController {
   }
 
   @Post(':estimateId/convert-to-sales-order')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(201)
   @ApiOperation({ summary: 'Convert an accepted estimate into a sales order.' })
   convertToSalesOrder(

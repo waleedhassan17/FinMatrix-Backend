@@ -634,7 +634,7 @@ async function run() {
     const req1 = await submitPod((d1 as any).id, riderIds[0], 'paid', [
       { itemId: items[0].id, itemName: items[0].name, beforeQty: 0, deliveredQty: 3, returnedQty: 0 },
     ]);
-    await approvals.approve(cid, req1, {} as any, uid);
+    await approvals.approve(cid, req1, {} as any, { id: uid, role: 'admin' });
 
     // 2) delivered + UNPAID → open invoice in A/R aging
     const d2 = await mkDelivery(1, items[1], 4, riderIds[1]);
@@ -642,7 +642,7 @@ async function run() {
     const req2 = await submitPod((d2 as any).id, riderIds[1], 'unpaid', [
       { itemId: items[1].id, itemName: items[1].name, beforeQty: 0, deliveredQty: 4, returnedQty: 0 },
     ]);
-    await approvals.approve(cid, req2, {} as any, uid);
+    await approvals.approve(cid, req2, {} as any, { id: uid, role: 'admin' });
 
     // 3) returned → Dr Inventory / Cr GIT, restocked, NO revenue
     const d3 = await mkDelivery(2, items[2], 2, riderIds[0]);

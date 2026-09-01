@@ -77,7 +77,7 @@ export class InvoicesController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -87,7 +87,7 @@ export class InvoicesController {
   }
 
   @Patch(':invoiceId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
@@ -97,7 +97,7 @@ export class InvoicesController {
   }
 
   @Post(':invoiceId/send')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Send invoice: status->sent, auto journal entry.' })
   send(

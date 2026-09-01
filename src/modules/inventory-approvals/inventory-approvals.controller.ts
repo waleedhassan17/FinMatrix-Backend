@@ -47,19 +47,23 @@ export class InventoryApprovalsController {
     return this.svc.getById(companyId, id);
   }
 
-  // Admin only, matching /inventory-update-requests/:id/approve which reaches
-  // the identical code. Reviewing a delivery posts revenue, COGS and relieves
-  // Goods in Transit — leaving this open to staff meant the stricter guard on
-  // the other route could simply be walked around.
+  // A second door into the same code as /inventory-update-requests/:id/approve,
+  // so its roles must stay in step with that route or the stricter guard can
+  // simply be walked around. Both now allow staff: signing off a delivery is
+  // the day-to-day close of one, not a correction (Table B row 4). The
+  // reviewer's role travels through so it is recorded on the request either way.
   @Patch(':id/review')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   async review(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewRequestDto,
   ) {
-    const result = await this.svc.review(companyId, id, dto, user.id);
+    const result = await this.svc.review(companyId, id, dto, {
+      id: user.id,
+      role: user.role,
+    });
     return { success: true, data: { request: result } };
   }
 }

@@ -55,7 +55,7 @@ export class CustomersController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateCustomerDto,
@@ -64,7 +64,7 @@ export class CustomersController {
   }
 
   @Patch(':customerId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,

@@ -46,7 +46,13 @@ function revokedRepoMock() {
 
 describe('AuthService', () => {
   let service: AuthService;
-  let users: { findByEmail: jest.Mock; getByIdOrFail: jest.Mock; save: jest.Mock };
+  let users: {
+    findByEmail: jest.Mock;
+    findByUsername: jest.Mock;
+    findByIdentifier: jest.Mock;
+    getByIdOrFail: jest.Mock;
+    save: jest.Mock;
+  };
   let verificationRepo: ReturnType<typeof repoMock>;
   let otpRepo: ReturnType<typeof repoMock>;
   let refreshRepo: ReturnType<typeof repoMock>;
@@ -61,6 +67,15 @@ describe('AuthService', () => {
   beforeEach(async () => {
     users = {
       findByEmail: jest.fn(),
+      findByUsername: jest.fn(),
+      // Mirrors the real UsersService: '@' selects the email lookup, anything
+      // else is a username. Delegating keeps every existing test working by
+      // stubbing findByEmail alone.
+      findByIdentifier: jest.fn(async (identifier: string) =>
+        identifier.includes('@')
+          ? users.findByEmail(identifier)
+          : users.findByUsername(identifier),
+      ),
       getByIdOrFail: jest.fn(),
       save: jest.fn(async (u) => u),
     };
