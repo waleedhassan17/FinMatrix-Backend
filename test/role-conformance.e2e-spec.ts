@@ -60,13 +60,19 @@ describe('Role conformance (e2e)', () => {
   });
 
   const post = (url: string, token: string, body?: unknown) =>
-    request(app.getHttpServer()).post(url).set(as(token)).send(body ?? {});
+    request(app.getHttpServer())
+      .post(url)
+      .set(as(token))
+      .send(body ?? {});
 
   const get = (url: string, token: string) =>
     request(app.getHttpServer()).get(url).set(as(token));
 
   const patch = (url: string, token: string, body?: unknown) =>
-    request(app.getHttpServer()).patch(url).set(as(token)).send(body ?? {});
+    request(app.getHttpServer())
+      .patch(url)
+      .set(as(token))
+      .send(body ?? {});
 
   /** Rows in approval_requests for this company, newest first. */
   const approvalRows = async (): Promise<
@@ -177,12 +183,16 @@ describe('Role conformance (e2e)', () => {
         transformOptions: { enableImplicitConversion: true },
       }),
     );
-    app.useGlobalInterceptors(new ResponseEnvelopeInterceptor(app.get(Reflector)));
+    app.useGlobalInterceptors(
+      new ResponseEnvelopeInterceptor(app.get(Reflector)),
+    );
     await app.init();
 
     ds = moduleFixture.get(DataSource);
     jwt = moduleFixture.get(JwtService);
-    jwtSecret = moduleFixture.get(ConfigService).getOrThrow<string>('jwt.secret');
+    jwtSecret = moduleFixture
+      .get(ConfigService)
+      .getOrThrow<string>('jwt.secret');
     http = request(app.getHttpServer());
 
     await seed();
@@ -236,10 +246,10 @@ describe('Role conformance (e2e)', () => {
         WHERE id = $1`,
       [companyId],
     );
-    await ds.query(
-      `UPDATE users SET default_company_id = $1 WHERE id = $2`,
-      [companyId, ownerId],
-    );
+    await ds.query(`UPDATE users SET default_company_id = $1 WHERE id = $2`, [
+      companyId,
+      ownerId,
+    ]);
     ownerToken = tokenFor(ownerId, 'admin');
 
     // A second owner, so "maker != checker" can be tested: approving needs a
@@ -276,7 +286,9 @@ describe('Role conformance (e2e)', () => {
       role: 'staff',
     });
     if (staff.status !== 201) {
-      throw new Error(`staff create failed ${staff.status}: ${JSON.stringify(staff.body)}`);
+      throw new Error(
+        `staff create failed ${staff.status}: ${JSON.stringify(staff.body)}`,
+      );
     }
     staffId = staff.body.data.id;
     staffToken = await signIn(`staff.${suffix}`);
@@ -290,7 +302,9 @@ describe('Role conformance (e2e)', () => {
       vehicleType: 'motorcycle',
     });
     if (rider.status !== 201) {
-      throw new Error(`rider create failed ${rider.status}: ${JSON.stringify(rider.body)}`);
+      throw new Error(
+        `rider create failed ${rider.status}: ${JSON.stringify(rider.body)}`,
+      );
     }
     riderId = rider.body.data.userId;
     riderToken = tokenFor(riderId, 'delivery');
@@ -306,7 +320,9 @@ describe('Role conformance (e2e)', () => {
     vendorId = (
       await created(
         'vendor',
-        post('/api/v1/vendors', ownerToken, { companyName: 'Conformance Vendor' }),
+        post('/api/v1/vendors', ownerToken, {
+          companyName: 'Conformance Vendor',
+        }),
       )
     ).id;
 
@@ -356,9 +372,15 @@ describe('Role conformance (e2e)', () => {
 
   async function cleanup() {
     try {
-      await ds.query(`DELETE FROM approval_requests WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM managed_credentials WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM user_companies WHERE company_id = $1`, [companyId]);
+      await ds.query(`DELETE FROM approval_requests WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM managed_credentials WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM user_companies WHERE company_id = $1`, [
+        companyId,
+      ]);
       await ds.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [
         [ownerId, owner2Id, staffId, riderId].filter(Boolean),
       ]);
@@ -395,7 +417,9 @@ describe('Role conformance (e2e)', () => {
         customerId,
         invoiceDate: '2026-01-16',
         dueDate: '2026-02-16',
-        lines: [{ description: 'Widget', quantity: '1', unitPrice: '100', itemId }],
+        lines: [
+          { description: 'Widget', quantity: '1', unitPrice: '100', itemId },
+        ],
       });
       const invoiceId = invoice.body.data.id;
       const sent = await post(`/api/v1/invoices/${invoiceId}/send`, staffToken);
@@ -418,8 +442,12 @@ describe('Role conformance (e2e)', () => {
 
     it('staff create a customer and a vendor directly', async () => {
       const before = (await approvalRows()).length;
-      await post('/api/v1/customers', staffToken, { name: 'Walk-in' }).expect(201);
-      await post('/api/v1/vendors', staffToken, { companyName: 'Local supplier' }).expect(201);
+      await post('/api/v1/customers', staffToken, { name: 'Walk-in' }).expect(
+        201,
+      );
+      await post('/api/v1/vendors', staffToken, {
+        companyName: 'Local supplier',
+      }).expect(201);
       expect((await approvalRows()).length).toBe(before);
     });
   });
@@ -432,15 +460,21 @@ describe('Role conformance (e2e)', () => {
     it('an inventory adjustment by staff creates ONE pending request and posts nothing', async () => {
       const journalsBefore = await countJournalEntries();
 
-      const res = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
-        itemId,
-        newQty: '80',
-        reason: 'damage',
-      });
+      const res = await post(
+        `/api/v1/inventory/items/${itemId}/adjust`,
+        staffToken,
+        {
+          itemId,
+          newQty: '80',
+          reason: 'damage',
+        },
+      );
       expect([200, 201]).toContain(res.status);
       expect(res.body.data.pending).toBe(true);
 
-      const rows = (await approvalRows()).filter((r) => r.type === 'adjustment');
+      const rows = (await approvalRows()).filter(
+        (r) => r.type === 'adjustment',
+      );
       expect(rows).toHaveLength(1);
       expect(rows[0].status).toBe('pending');
 
@@ -452,7 +486,9 @@ describe('Role conformance (e2e)', () => {
       const res = await post('/api/v1/purchase-orders', staffToken, {
         vendorId,
         orderDate: '2026-01-10',
-        lines: [{ itemId, description: 'Widget', orderedQty: '10', unitCost: '60' }],
+        lines: [
+          { itemId, description: 'Widget', orderedQty: '10', unitCost: '60' },
+        ],
       });
       if (![200, 201].includes(res.status))
         throw new Error(`po → ${res.status}: ${JSON.stringify(res.body)}`);
@@ -507,9 +543,13 @@ describe('Role conformance (e2e)', () => {
       expect(approved).toBeTruthy();
 
       const journalsBefore = await countJournalEntries();
-      const res = await post(`/api/v1/approvals/${approved.id}/decide`, ownerToken, {
-        decision: 'approve',
-      }).expect(200);
+      const res = await post(
+        `/api/v1/approvals/${approved.id}/decide`,
+        ownerToken,
+        {
+          decision: 'approve',
+        },
+      ).expect(200);
 
       expect(res.body.data.status).toBe('approved');
       expect(await countJournalEntries()).toBe(journalsBefore);
@@ -555,11 +595,15 @@ describe('Role conformance (e2e)', () => {
     });
 
     it('a rejection requires a reason, and posts nothing', async () => {
-      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
-        itemId,
-        newQty: '70',
-        reason: 'theft',
-      });
+      const filed = await post(
+        `/api/v1/inventory/items/${itemId}/adjust`,
+        staffToken,
+        {
+          itemId,
+          newQty: '70',
+          reason: 'theft',
+        },
+      );
       const requestId = filed.body.data.requestId;
       const journalsBefore = await countJournalEntries();
 
@@ -576,8 +620,14 @@ describe('Role conformance (e2e)', () => {
     });
 
     it('staff see only their own requests; the owner sees the whole inbox', async () => {
-      const staffView = await get('/api/v1/approvals?status=all', staffToken).expect(200);
-      const ownerView = await get('/api/v1/approvals?status=all', ownerToken).expect(200);
+      const staffView = await get(
+        '/api/v1/approvals?status=all',
+        staffToken,
+      ).expect(200);
+      const ownerView = await get(
+        '/api/v1/approvals?status=all',
+        ownerToken,
+      ).expect(200);
 
       expect(
         staffView.body.data.every(
@@ -606,11 +656,16 @@ describe('Role conformance (e2e)', () => {
       await patch(`/api/v1/settings/users/${staffId}/role`, staffToken, {
         role: 'admin',
       }).expect(403);
-      await patch(`/api/v1/settings/users/${staffId}/deactivate`, staffToken).expect(403);
+      await patch(
+        `/api/v1/settings/users/${staffId}/deactivate`,
+        staffToken,
+      ).expect(403);
     });
 
     it('settings writes are closed to staff', async () => {
-      await patch('/api/v1/settings', staffToken, { preferences: {} }).expect(403);
+      await patch('/api/v1/settings', staffToken, { preferences: {} }).expect(
+        403,
+      );
     });
 
     it('chart-of-accounts writes are closed to staff', async () => {
@@ -626,7 +681,10 @@ describe('Role conformance (e2e)', () => {
       await post(`/api/v1/companies/${companyId}/period-close`, staffToken, {
         lockDate: '2026-01-31',
       }).expect(403);
-      await post(`/api/v1/companies/${companyId}/period-reopen`, staffToken).expect(403);
+      await post(
+        `/api/v1/companies/${companyId}/period-reopen`,
+        staffToken,
+      ).expect(403);
     });
   });
 
@@ -645,11 +703,18 @@ describe('Role conformance (e2e)', () => {
         customerId,
         scheduledDate: '2026-02-01',
         items: [
-          { itemId, itemName: 'Conformance Widget', orderedQty: 2, unitPrice: 100 },
+          {
+            itemId,
+            itemName: 'Conformance Widget',
+            orderedQty: 2,
+            unitPrice: 100,
+          },
         ],
       });
       if (![200, 201].includes(res.status))
-        throw new Error(`delivery → ${res.status}: ${JSON.stringify(res.body)}`);
+        throw new Error(
+          `delivery → ${res.status}: ${JSON.stringify(res.body)}`,
+        );
       deliveryId = res.body.data.id;
 
       expect((await approvalRows()).length).toBe(requestsBefore);
@@ -681,6 +746,76 @@ describe('Role conformance (e2e)', () => {
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
+    it('rows 3-4 — a rider delivers, and STAFF sign it off with their role recorded', async () => {
+      // The rider's proof upload is multipart and covered by
+      // inventory-approvals.e2e-spec.ts; what matters here is who may APPROVE
+      // the resulting request, so the request is seeded directly.
+      const requestId = randomUUID();
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'pending', now())`,
+        [requestId, companyId, deliveryId, riderId],
+      );
+      // after_qty is `before + returned`, NOT `before - delivered`: this
+      // delivery was assigned, so the dispatched units already left on-hand at
+      // that point. Subtracting them again removes the same goods twice, which
+      // is precisely what invariant I16 exists to catch.
+      await ds.query(
+        `INSERT INTO inventory_update_request_lines
+           (id, request_id, item_id, item_name, before_qty, delivered_qty, returned_qty, after_qty)
+         VALUES ($1, $2, $3, 'Conformance Widget', 500, 2, 0, 500)`,
+        [randomUUID(), requestId, itemId],
+      );
+
+      const gitBefore = await accountBalance('1250');
+      const revenueBefore = await accountBalance('4000');
+
+      const res = await post(
+        `/api/v1/inventory-update-requests/${requestId}/approve`,
+        staffToken,
+        { reviewerComment: 'Delivered in full.' },
+      );
+      if (res.status !== 200 && res.status !== 201) {
+        throw new Error(`approve → ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+
+      // Revenue posts here and nowhere earlier (revenue accounts carry a
+      // credit balance, so the signed balance moves DOWN).
+      expect(await accountBalance('4000')).toBeLessThan(revenueBefore);
+      // Goods in Transit is relieved.
+      expect(await accountBalance('1250')).toBeLessThan(gitBefore);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+
+      // And the authority that signed it is recorded as staff.
+      const [row] = await ds.query(
+        `SELECT reviewed_by, reviewer_role, status FROM inventory_update_requests WHERE id = $1`,
+        [requestId],
+      );
+      expect(row.status).toBe('approved');
+      expect(row.reviewer_role).toBe('staff');
+      expect(row.reviewed_by).toBe(staffId);
+    });
+
+    it('a rider cannot approve their own delivery (checker != rider)', async () => {
+      const requestId = randomUUID();
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'pending', now())`,
+        [requestId, companyId, deliveryId, riderId],
+      );
+
+      const res = await post(
+        `/api/v1/inventory-update-requests/${requestId}/approve`,
+        riderToken,
+        {},
+      );
+      // 403 either way: riders are not in @Roles for this route, and the
+      // service refuses a reviewer who is the delivering rider.
+      expect(res.status).toBe(403);
+    });
+
     it('row 7 — staff cannot undo without a reason, and never directly', async () => {
       // Undo needs an approved request; this one is not approved yet, but the
       // reason check runs first and is what we are asserting here.
@@ -709,7 +844,11 @@ describe('Role conformance (e2e)', () => {
         [companyId],
       );
       for (const r of rows) {
-        if (r.status === 'pending' || r.status === 'rejected' || r.status === 'cancelled') {
+        if (
+          r.status === 'pending' ||
+          r.status === 'rejected' ||
+          r.status === 'cancelled'
+        ) {
           // The invariant the whole feature rests on.
           expect(r.journal_entry_id).toBeNull();
         }
