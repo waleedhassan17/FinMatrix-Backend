@@ -30,6 +30,14 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 
 @ApiTags('Bank Reconciliation')
 @ApiBearerAuth()
+// Owner-only, every endpoint.
+//
+// Bank reconciliation is the control that checks the value-in work staff
+// record themselves -- receipts, bills, payments. A role that both records
+// transactions and reconciles the bank against them can conceal an error in
+// the first with a judgement in the second, which is the segregation of duties
+// this exists to keep. These read 'admin', 'staff' until now; the frontend
+// hid the screen, so the exposure was via the API rather than the UI.
 @UseGuards(CompanyGuard, RolesGuard)
 @RequiresFeature('bankReconciliation') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('reconciliations')
@@ -38,13 +46,13 @@ export class ReconciliationsController {
 
   // Static routes are declared before `:id` so they are matched first.
   @Get('accounts')
-  @Roles('admin', 'staff')
+  @Roles('admin')
   listAccounts(@CurrentCompany() companyId: string) {
     return this.svc.listAccounts(companyId);
   }
 
   @Get('unreconciled')
-  @Roles('admin', 'staff')
+  @Roles('admin')
   getUnreconciled(
     @CurrentCompany() companyId: string,
     @Query() query: UnreconciledQueryDto,
@@ -58,7 +66,7 @@ export class ReconciliationsController {
    * impact, and finalized (reconciled) rows are never touched.
    */
   @Patch('mark')
-  @Roles('admin', 'staff')
+  @Roles('admin')
   markCleared(
     @CurrentCompany() companyId: string,
     @Body() dto: MarkClearedDto,
@@ -67,7 +75,7 @@ export class ReconciliationsController {
   }
 
   @Get()
-  @Roles('admin', 'staff')
+  @Roles('admin')
   list(
     @CurrentCompany() companyId: string,
     @Query() query: ListReconciliationsQueryDto,
@@ -76,7 +84,7 @@ export class ReconciliationsController {
   }
 
   @Get(':id')
-  @Roles('admin', 'staff')
+  @Roles('admin')
   getById(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -85,7 +93,7 @@ export class ReconciliationsController {
   }
 
   @Post()
-  @Roles('admin', 'staff')
+  @Roles('admin')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
