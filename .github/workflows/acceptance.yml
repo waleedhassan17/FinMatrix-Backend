@@ -103,5 +103,24 @@ jobs:
       - name: Ledger invariants
         run: npm run test:qa
 
+      # The two role matrices are the product's authorisation model -- who may
+      # act directly, who must raise a request, and that a pending request
+      # writes no ledger rows. `test:conformance` has existed since the staff
+      # feature landed and was wired into no workflow, so 43 cases proving it
+      # ran only when somebody remembered to.
+      #
+      # Its own database: the suite builds a schema with synchronize=true,
+      # which must not touch the migration-built one the suites above use.
+      # DATABASE_URL is set at job level and takes precedence over the discrete
+      # DB_* vars, so it is overridden here rather than set through DB_NAME.
+      - name: Role conformance (owner/staff matrices)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/finmatrix_e2e
+          DB_SYNCHRONIZE: 'true'
+          CREDENTIAL_ENCRYPTION_KEY: ci_credential_encryption_key_at_least_32_chars
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c 'CREATE DATABASE finmatrix_e2e'
+          npx jest --config ./test/jest-e2e.json --testPathPattern=role-conformance --runInBand
+
       - name: Run unit tests
         run: npm test
