@@ -249,6 +249,14 @@ WHERE d.status IN ('delivered', 'returned', 'cancelled', 'failed')
 --
 -- Only fully-received POs are judged. A partially received one is expected to
 -- carry a balance -- that is what the account is for.
+--
+-- Both legs must be counted, and they are tagged differently: the receipt's
+-- credit carries the PO's id, the bill's clearing debit carries the BILL's.
+-- Matching only on source_id = po.id sees the credit and never the debit, so
+-- it reported a full-value residue on every PO that reached it -- which it did
+-- against production, on books where 2050 nets to exactly zero. A check that
+-- cannot pass is worse than no check: it trains you to ignore the one thing
+-- that would tell you the ledger is wrong.
 SELECT 'I18 GRNI RESIDUE ON BILLED PO' AS violation,
        t.company_id, t.po_number, t.residue
 FROM (
@@ -256,9 +264,13 @@ FROM (
          (SELECT COALESCE(SUM(g.debit - g.credit), 0)
             FROM general_ledger g
             JOIN accounts a ON a.id = g.account_id
-           WHERE g.source_id = po.id
-             AND g.company_id = po.company_id
-             AND a.account_number = '2050')::numeric(18,4) AS residue
+           WHERE g.company_id = po.company_id
+             AND a.account_number = '2050'
+             AND (g.source_id = po.id
+                  OR g.source_id IN (SELECT b2.id FROM bills b2
+                                      WHERE b2.purchase_order_id = po.id
+                                        AND b2.status <> 'void'))
+         )::numeric(18,4) AS residue
     FROM purchase_orders po
    WHERE po.status IN ('fully_received', 'closed')
      AND EXISTS (SELECT 1 FROM bills b
