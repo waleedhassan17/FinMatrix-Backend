@@ -20,6 +20,7 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { JournalEntriesService } from './journal-entries.service';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import {
   CreateJournalEntryDto,
   ListJournalEntriesQueryDto,
@@ -33,7 +34,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @RequiresFeature('journalEntries') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('journal-entries')
 export class JournalEntriesController {
-  constructor(private readonly svc: JournalEntriesService) {}
+  constructor(
+    private readonly svc: JournalEntriesService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   @Roles('admin', 'staff')
@@ -55,19 +59,30 @@ export class JournalEntriesController {
     return this.svc.getById(companyId, id);
   }
 
+  /**
+   * A manual journal writes the ledger directly, so staff may draft one only
+   * as a request (Table A). Approving replays it here as a POSTED entry.
+   */
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Create a manual journal entry (draft or posted).' })
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateJournalEntryDto,
   ) {
-    return this.svc.create(companyId, user.id, dto);
+    if (user.role === 'admin') return this.svc.create(companyId, user.id, dto);
+    return this.approvals.createRequest(
+      'journal',
+      dto as unknown as Record<string, unknown>,
+      `Manual journal ${dto.date}: ${dto.memo ?? `${dto.lines?.length ?? 0} lines`}`,
+      user,
+      companyId,
+    );
   }
 
   @Post(':id/post')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Post a draft journal entry to the ledger.' })
   post(
@@ -75,11 +90,18 @@ export class JournalEntriesController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.svc.post(companyId, id, user.id);
+    if (user.role === 'admin') return this.svc.post(companyId, id, user.id);
+    return this.approvals.createRequest(
+      'journal',
+      { draftEntryId: id },
+      'Post a draft journal entry',
+      user,
+      companyId,
+    );
   }
 
   @Post(':id/void')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Void an entry (reverses it if already posted).' })
   void(
@@ -88,6 +110,13 @@ export class JournalEntriesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: VoidJournalEntryDto,
   ) {
-    return this.svc.void(companyId, id, user.id, dto);
+    if (user.role === 'admin') return this.svc.void(companyId, id, user.id, dto);
+    return this.approvals.createRequest(
+      'void',
+      { entity: 'journal', targetId: id, ...dto },
+      `Void journal entry — ${dto.reason ?? 'no reason given'}`,
+      user,
+      companyId,
+    );
   }
 }

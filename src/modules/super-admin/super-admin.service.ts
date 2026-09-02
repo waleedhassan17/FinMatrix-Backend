@@ -307,7 +307,8 @@ export class SuperAdminService {
 
     // Notify the company owner (best-effort).
     const owner = await this.userRepo.findOneBy({ id: company.createdBy });
-    if (owner) {
+    // An owner-created (username-only) account has no address to notify.
+    if (owner?.email) {
       if (isCompanyApproved(newStatus) && !wasApproved) {
         await this.mail.sendApprovalEmail(owner.email, owner.displayName, company.name);
       } else if (newStatus === COMPANY_STATUS.REJECTED) {

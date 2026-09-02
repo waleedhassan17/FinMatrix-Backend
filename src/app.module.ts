@@ -46,6 +46,7 @@ import { InventoryModule } from './modules/inventory/inventory.module';
 import { DeliveryPersonnelModule } from './modules/delivery-personnel/delivery-personnel.module';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { InventoryApprovalsModule } from './modules/inventory-approvals/inventory-approvals.module';
+import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { ShadowInventoryModule } from './modules/shadow-inventory/shadow-inventory.module';
 import { TaxModule } from './modules/tax/tax.module';
 import { ReconciliationsModule } from './modules/reconciliations/reconciliations.module';
@@ -118,6 +119,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     DeliveryPersonnelModule,
     DeliveriesModule,
     InventoryApprovalsModule,
+    ApprovalsModule,
     ShadowInventoryModule,
     TaxModule,
     ReconciliationsModule,

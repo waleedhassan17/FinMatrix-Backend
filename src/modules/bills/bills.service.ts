@@ -33,7 +33,8 @@ import {
 import { PostingService } from '../journal-entries/posting.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
+import { ACCT_AP, ACCT_COGS, ACCT_GRNI, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
+import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
 import { BillStatus } from '../../types';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { formatBillRef } from '../../common/utils/reference-generator.util';
@@ -191,12 +192,70 @@ export class BillsService {
     }
   }
 
+  /**
+   * Stop a PO's received goods being billed the wrong way.
+   *
+   * Receiving accrues Dr Inventory / Cr GRNI. The bill is supposed to clear
+   * that accrual with Dr GRNI / Cr AP, which is what
+   * PurchaseOrdersService.createBill does — it resolves GRNI itself, because
+   * it can see which PO lines carry an inventory item.
+   *
+   * A bill raised from the Bills form cannot: bill lines carry no itemId, so
+   * there is no way to tell an inventory line from a rent bill, and the line
+   * debits whatever account it names. Bill a received PO that way and GRNI is
+   * never cleared — a phantom liability that only grows — while the stock is
+   * debited a SECOND time if the line points at Inventory.
+   *
+   * So this refuses rather than re-routing: guessing which lines are inventory
+   * would be exactly the guesswork that caused the problem, and could debit
+   * GRNI for goods that were never received.
+   *
+   * The test is the ACCOUNTING, not a flag: a bill that already debits GRNI
+   * came through the receipt path and is correct by construction. That keeps
+   * createBill working without having to tell this method who called it.
+   */
+  private async assertPoGoodsBilledThroughReceipt(
+    manager: EntityManager,
+    companyId: string,
+    dto: CreateBillDto,
+  ): Promise<void> {
+    if (!dto.purchaseOrderId) return;
+
+    const po = await manager.findOne(PurchaseOrder, {
+      where: { id: dto.purchaseOrderId, companyId },
+      relations: { lines: true },
+    });
+    const hasReceivedInventory = (po?.lines ?? []).some(
+      (l) => l.itemId && Number(l.receivedQty) > 0,
+    );
+    if (!hasReceivedInventory) return;
+
+    const grni = await this.accounts
+      .getByNumberOrFail(companyId, ACCT_GRNI, manager)
+      .catch(() => null);
+    if (!grni) return;
+
+    const clearsGrni = (dto.lines ?? []).some((l) => l.accountId === grni.id);
+    if (clearsGrni) return;
+
+    throw new BadRequestException({
+      code: 'BILL_PO_VIA_RECEIPT',
+      message:
+        `${po?.poNumber ?? 'This purchase order'} has received goods that are not yet billed. ` +
+        'Use "Convert to Bill" on the purchase order so the receipt accrual (GRNI) is cleared, ' +
+        'instead of debiting inventory a second time.',
+      purchaseOrderId: dto.purchaseOrderId,
+    });
+  }
+
   async create(
     companyId: string,
     userId: string,
     dto: CreateBillDto,
   ): Promise<Bill> {
     return this.dataSource.transaction(async (manager) => {
+      await this.assertPoGoodsBilledThroughReceipt(manager, companyId, dto);
+
       const vendor = await manager.findOne(Vendor, {
         where: { id: dto.vendorId, companyId },
       });

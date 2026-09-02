@@ -45,7 +45,8 @@ export interface TokenPair {
 export interface AuthResult {
   user: {
     id: string;
-    email: string;
+    email: string | null;
+    username: string | null;
     displayName: string;
     role: UserRole;
     phone: string | null;
@@ -182,26 +183,39 @@ export class AuthService {
   }
 
   async signin(dto: SigninDto): Promise<AuthResult> {
-    const user = await this.users.findByEmail(dto.email);
+    // `identifier` is the modern field (username OR email); `email` is the
+    // legacy one still posted by installed app builds. Either is accepted.
+    const identifier = (dto.identifier ?? dto.email ?? '').trim();
+    if (!identifier) {
+      throw new BadRequestException({
+        code: 'MISSING_REQUIRED_FIELD',
+        message: 'A username or email is required',
+      });
+    }
+
+    const user = await this.users.findByIdentifier(identifier);
     if (!user || !user.isActive) {
-      this.logger.warn(`Failed login (no user/inactive): ${dto.email}`);
+      this.logger.warn(`Failed login (no user/inactive): ${identifier}`);
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
-        message: 'Invalid email or password',
+        message: 'Invalid username or password',
       });
     }
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) {
-      this.logger.warn(`Failed login (bad password): ${dto.email}`);
+      this.logger.warn(`Failed login (bad password): ${identifier}`);
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
-        message: 'Invalid email or password',
+        message: 'Invalid username or password',
       });
     }
 
     // Hard gate: company admins cannot sign in until their email is verified.
-    if (user.role === 'admin' && !user.isEmailVerified) {
-      this.logger.warn(`Login blocked (email not verified): ${dto.email}`);
+    // An owner-created account has no email to verify, so the gate cannot
+    // apply to it — without this guard, promoting a username-only user to
+    // admin would lock them out permanently with no way to satisfy the check.
+    if (user.role === 'admin' && user.email && !user.isEmailVerified) {
+      this.logger.warn(`Login blocked (email not verified): ${identifier}`);
       throw new ForbiddenException({
         code: 'EMAIL_NOT_VERIFIED',
         message: 'Please verify your email before signing in.',
@@ -270,7 +284,7 @@ export class AuthService {
           acctStatus === 'rejected'
             ? 'Your company registration was rejected.'
             : 'Your company is awaiting approval. You will be able to sign in once approved.';
-        this.logger.warn(`Login blocked (${acctStatus}): ${dto.email}`);
+        this.logger.warn(`Login blocked (${acctStatus}): ${identifier}`);
         throw new ForbiddenException({
           code,
           message,
@@ -280,7 +294,7 @@ export class AuthService {
         });
       }
       if (acctStatus === 'inactive') {
-        this.logger.warn(`Login → renew-only (inactive): ${dto.email}`);
+        this.logger.warn(`Login → renew-only (inactive): ${identifier}`);
       }
     }
 
@@ -410,7 +424,7 @@ export class AuthService {
     return token;
   }
 
-  async verifyEmail(token: string): Promise<{ verified: true; email: string }> {
+  async verifyEmail(token: string): Promise<{ verified: true; email: string | null }> {
     if (!token) {
       throw new BadRequestException({
         code: 'INVALID_TOKEN',
@@ -441,8 +455,10 @@ export class AuthService {
 
   async resendVerification(email: string): Promise<{ delivered: boolean }> {
     const user = await this.users.findByEmail(email);
-    // Don't leak whether the email exists or is already verified.
-    if (!user || user.isEmailVerified || user.role !== 'admin') {
+    // Don't leak whether the email exists or is already verified. A
+    // username-only account has no address to resend to and never needed
+    // verifying in the first place.
+    if (!user || !user.email || user.isEmailVerified || user.role !== 'admin') {
       return { delivered: true };
     }
     const token = await this.issueEmailVerification(user.id);
@@ -452,10 +468,37 @@ export class AuthService {
 
   // ── Forgot password (OTP flow) ────────────────────────────────────────────
 
-  async forgotPassword(dto: ForgotPasswordDto): Promise<{ delivered: boolean }> {
-    const user = await this.users.findByEmail(dto.email);
+  async forgotPassword(
+    dto: ForgotPasswordDto,
+  ): Promise<{ delivered: boolean; ownerManaged?: boolean; message?: string }> {
+    const identifier = dto.email.trim();
+    const user = await this.users.findByIdentifier(identifier);
+
+    // A username can only belong to an owner-created account, so saying so
+    // leaks nothing a sign-in attempt would not already reveal — and it is the
+    // difference between a dead end and knowing who to ask. An EMAIL that
+    // happens to belong to a staff account still gets the generic answer
+    // below, so email addresses stay un-enumerable.
+    if (!identifier.includes('@')) {
+      return {
+        delivered: false,
+        ownerManaged: true,
+        message:
+          'This account is managed by your company owner. Ask them to reset your password from User management.',
+      };
+    }
+
     // Always respond positively to avoid user enumeration.
     if (!user) return { delivered: true };
+
+    // Owner-created accounts have no self-service recovery: no inbox to send
+    // an OTP to, and recovery is deliberately the owner's job.
+    if (user.role === 'staff' || !user.email) {
+      this.logger.warn(
+        `Password reset refused (owner-managed account): ${user.username ?? user.id}`,
+      );
+      return { delivered: true };
+    }
 
     // Invalidate previous outstanding OTPs.
     await this.otpRepo.update(
@@ -673,6 +716,7 @@ export class AuthService {
     return {
       id: user.id,
       email: user.email,
+      username: user.username,
       displayName: user.displayName,
       role: user.role,
       phone: user.phone,

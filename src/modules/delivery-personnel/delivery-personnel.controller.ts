@@ -30,13 +30,17 @@ export class DeliveryPersonnelController {
     return this.svc.list(companyId, page, limit, status);
   }
 
+  // Staff run day-to-day warehouse operations, and onboarding a rider is one
+  // of them: the owner should not be the bottleneck for putting someone on a
+  // route. Both roles are custodians of the credentials they issue.
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePersonnelDto,
   ) {
-    return this.svc.create(companyId, dto);
+    return this.svc.create(companyId, dto, user.id);
   }
 
   @Patch('location')
@@ -68,7 +72,7 @@ export class DeliveryPersonnelController {
   }
 
   @Patch(':userId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -79,7 +83,7 @@ export class DeliveryPersonnelController {
   }
 
   @Patch(':userId/availability')
-  @Roles('admin', 'delivery')
+  @Roles('admin', 'staff', 'delivery')
   toggle(
     @CurrentCompany() companyId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -87,13 +91,29 @@ export class DeliveryPersonnelController {
     return this.svc.toggleAvailability(companyId, userId);
   }
 
+  /**
+   * Re-issue the rider's password and return it once, to be passed on. The
+   * only recovery path for a rider: the account has no inbox, so there is no
+   * self-service reset.
+   */
   @Post(':userId/reset-password')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   resetPassword(
     @CurrentCompany() companyId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.svc.resetPassword(companyId, userId, user.id);
+  }
+
+  /** Show the stored credentials again. Audited on every read. */
+  @Get(':userId/credential')
+  @Roles('admin', 'staff')
+  revealCredential(
+    @CurrentCompany() companyId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.revealCredential(companyId, userId, user.id);
   }
 }

@@ -8,9 +8,11 @@ import { CreditMemosController } from './credit-memos.controller';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([CreditMemo, CreditMemoLine, Customer]),
     JournalEntriesModule,
     AccountsModule,

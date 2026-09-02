@@ -21,6 +21,7 @@ import {
   AuthenticatedUser,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import {
   CreateBillFromPoDto,
@@ -43,7 +44,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @Roles('admin', 'staff')
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
-  constructor(private readonly service: PurchaseOrdersService) {}
+  constructor(
+    private readonly service: PurchaseOrdersService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   list(
@@ -62,17 +66,30 @@ export class PurchaseOrdersController {
     return this.service.getById(companyId, poId);
   }
 
+  /**
+   * A purchase order posts nothing — it is a commitment, not a transaction —
+   * which is exactly why a pending PO request is safe: no PO exists at all
+   * until the owner approves, so there is nothing to unwind if they decline.
+   */
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePurchaseOrderDto,
   ) {
-    return this.service.create(companyId, dto);
+    if (user.role === 'admin') return this.service.create(companyId, dto);
+    return this.approvals.createRequest(
+      'po',
+      dto as unknown as Record<string, unknown>,
+      `Purchase order: ${dto.lines?.length ?? 0} line(s) for a supplier`,
+      user,
+      companyId,
+    );
   }
 
   @Post(':poId/receive')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   receive(
     @CurrentCompany() companyId: string,
@@ -84,7 +101,7 @@ export class PurchaseOrdersController {
   }
 
   @Post(':poId/create-bill')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   createBill(
     @CurrentCompany() companyId: string,

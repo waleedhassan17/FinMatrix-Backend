@@ -3,7 +3,9 @@ import { Request } from 'express';
 
 export interface AuthenticatedUser {
   id: string;
-  email: string;
+  /** Null for owner-created accounts, which sign in by username. */
+  email: string | null;
+  username: string | null;
   role: 'admin' | 'delivery' | 'staff' | 'super_admin';
   companyId: string | null;
 }

@@ -1,21 +1,27 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource, EntityManager, In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { DeliveryPersonnelProfile } from './entities/delivery-personnel-profile.entity';
 import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
+import { User } from '../users/entities/user.entity';
+import { ManagedCredential } from '../users/entities/managed-credential.entity';
+import { CredentialVaultService } from '../users/credential-vault.service';
 import { getPlanConfig } from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 
 @Injectable()
 export class DeliveryPersonnelService {
+  private readonly logger = new Logger(DeliveryPersonnelService.name);
+
   constructor(
     @InjectRepository(DeliveryPersonnelProfile)
     private readonly repo: Repository<DeliveryPersonnelProfile>,
     private readonly dataSource: DataSource,
     private readonly audit: OperationalAuditService,
+    private readonly vault: CredentialVaultService,
   ) {}
 
   async list(companyId: string, page: number, limit: number, status?: string) {
@@ -24,6 +30,7 @@ export class DeliveryPersonnelService {
       .leftJoin('users', 'u', 'u.id = p.user_id')
       .addSelect('u.display_name', 'u_name')
       .addSelect('u.email', 'u_email')
+      .addSelect('u.username', 'u_username')
       .addSelect('u.phone', 'u_phone')
       .where('p.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('p.status = :s', { s: status });
@@ -37,6 +44,7 @@ export class DeliveryPersonnelService {
       ...p,
       name: raw[i]?.u_name ?? null,
       email: raw[i]?.u_email ?? null,
+      username: raw[i]?.u_username ?? null,
       phone: raw[i]?.u_phone ?? null,
     }));
 
@@ -49,6 +57,7 @@ export class DeliveryPersonnelService {
       .leftJoin('users', 'u', 'u.id = p.user_id')
       .addSelect('u.display_name', 'u_name')
       .addSelect('u.email', 'u_email')
+      .addSelect('u.username', 'u_username')
       .addSelect('u.phone', 'u_phone')
       .where('p.userId = :uid AND p.companyId = :cid', { uid: userId, cid: companyId })
       .getRawAndEntities();
@@ -60,11 +69,12 @@ export class DeliveryPersonnelService {
       ...p,
       name: result.raw[0]?.u_name ?? null,
       email: result.raw[0]?.u_email ?? null,
+      username: result.raw[0]?.u_username ?? null,
       phone: result.raw[0]?.u_phone ?? null,
     };
   }
 
-  async create(companyId: string, dto: CreatePersonnelDto) {
+  async create(companyId: string, dto: CreatePersonnelDto, actorUserId?: string) {
     return this.dataSource.transaction(async (em) => {
       // phase2.md — plan-based limit (authoritative, server-side). Free = 1,
       // paid = 3 active personnel. A downgrade never deletes extras; it only
@@ -94,22 +104,42 @@ export class DeliveryPersonnelService {
 
       let userId = dto.userId;
 
-      // If email+password provided, create a new user first
-      if (!userId && dto.email && dto.password) {
-        const userRepo = em.getRepository('users');
-        const existing = await userRepo.findOne({ where: { email: dto.email } });
-        if (existing) throw new BadRequestException('A user with this email already exists');
+      // Riders never sign themselves up: the owner or a staff member creates
+      // the account here and hands the credentials over in person. The login
+      // handle is the USERNAME — email is an optional contact detail, where
+      // this once demanded an email and silently created no account at all
+      // when only a username was supplied.
+      const username = dto.username?.trim().toLowerCase() || null;
+      const email = dto.email?.trim().toLowerCase() || null;
+      if (!userId && username && dto.password) {
+        const userRepo = em.getRepository(User);
+        if (await userRepo.findOne({ where: { username } })) {
+          throw new BadRequestException({
+            code: 'USERNAME_TAKEN',
+            message: `The username "${username}" is already in use. Choose another.`,
+          });
+        }
+        if (email && (await userRepo.findOne({ where: { email } }))) {
+          throw new BadRequestException('A user with this email already exists');
+        }
 
         const hash = await bcrypt.hash(dto.password, 12);
-        const user = await userRepo.save(userRepo.create({
-          email: dto.email,
-          passwordHash: hash,
-          displayName: dto.name ?? dto.username ?? dto.email,
-          phone: dto.phone ?? null,
-          role: 'delivery',
-          isActive: true,
-          defaultCompanyId: companyId,
-        }));
+        const user = await userRepo.save(
+          userRepo.create({
+            email,
+            username,
+            passwordHash: hash,
+            displayName: dto.name ?? username,
+            phone: dto.phone ?? null,
+            role: 'delivery',
+            isActive: true,
+            // Nothing to verify: the company vouched for this account by
+            // creating it, and there may be no inbox to send to.
+            isEmailVerified: true,
+            emailVerifiedAt: new Date(),
+            defaultCompanyId: companyId,
+          }),
+        );
         userId = user.id;
 
         // Create user_company membership
@@ -120,9 +150,18 @@ export class DeliveryPersonnelService {
             role: 'delivery',
           }),
         );
+
+        // The creator is the custodian of this password: riders have no
+        // self-service reset, so the encrypted copy is what lets the personnel
+        // screen show the credentials again when the rider forgets them.
+        await this.storeCredential(em, companyId, userId, dto.password, actorUserId);
       }
 
-      if (!userId) throw new BadRequestException('Either userId or email+password must be provided');
+      if (!userId) {
+        throw new BadRequestException(
+          'Either userId, or a username plus a password, must be provided',
+        );
+      }
 
       const profileRepo = em.getRepository(DeliveryPersonnelProfile);
       const exists = await profileRepo.findOne({ where: { userId, companyId } });
@@ -147,6 +186,12 @@ export class DeliveryPersonnelService {
       return {
         userId,
         email: dto.email,
+        username,
+        // Returned once so the creator can pass them on; also stored
+        // encrypted, so the screen can show them again later.
+        credentials: username
+          ? { username, password: dto.password }
+          : undefined,
         name: dto.name ?? dto.username,
         phone: dto.phone,
         vehicleType: profile.vehicleType,
@@ -244,30 +289,106 @@ export class DeliveryPersonnelService {
     };
   }
 
+  /**
+   * Re-issue the rider's password and hand it back once, for the creator to
+   * pass on. This is the only recovery path: a rider account has no inbox and
+   * no self-service reset (see AuthService.forgotPassword).
+   */
   async resetPassword(companyId: string, userId: string, actorUserId?: string) {
     const p = await this.getById(companyId, userId);
-    const tempPassword = `Del@${Math.floor(1000 + Math.random() * 9000)}`;
-    const hash = await bcrypt.hash(tempPassword, 10);
-    await this.dataSource
-      .createQueryBuilder()
-      .update('users')
-      .set({ passwordHash: hash })
-      .where('id = :id', { id: p.userId })
-      .execute();
+    const password = this.vault.generatePassword();
+    const hash = await bcrypt.hash(password, 12);
+
+    await this.dataSource.transaction(async (em) => {
+      await em.getRepository(User).update(p.userId, { passwordHash: hash });
+      await this.storeCredential(em, companyId, p.userId, password, actorUserId);
+    });
+
     await this.audit.record({
       companyId,
       actorUserId: actorUserId ?? null,
       action: 'personnel_password_reset',
       targetType: 'delivery_personnel',
       targetId: p.userId,
-      details: { email: p.email ?? null },
+      // Never the password itself.
+      details: { username: p.username ?? null },
     });
     return {
       userId: p.userId,
-      // p.email is the joined users.email (getById adds it) — the previous
-      // code leaked the userId here instead of the login email.
-      credentials: { email: p.email ?? '', temporaryPassword: tempPassword },
-      message: 'Password reset. Share credentials securely.',
+      credentials: { username: p.username ?? '', password },
+      message: 'Password reset. Share the credentials with the rider.',
     };
+  }
+
+  /**
+   * Show the stored credentials again. Audited on every read: the vault exists
+   * so a locked-out rider can be helped, and the audit row is what makes that
+   * help traceable.
+   */
+  async revealCredential(companyId: string, userId: string, actorUserId?: string) {
+    const p = await this.getById(companyId, userId);
+    const record = await this.dataSource
+      .getRepository(ManagedCredential)
+      .findOne({ where: { companyId, userId: p.userId } });
+
+    await this.audit.record({
+      companyId,
+      actorUserId: actorUserId ?? null,
+      action: 'personnel_credential_viewed',
+      targetType: 'delivery_personnel',
+      targetId: p.userId,
+      details: { username: p.username ?? null },
+    });
+
+    return {
+      userId: p.userId,
+      username: p.username ?? null,
+      // Null when nothing was stored, or the encryption key has rotated. The
+      // screen offers "reset password" then, rather than showing a stale value.
+      password: record ? this.vault.decrypt(record.secret) : null,
+    };
+  }
+
+  /**
+   * Upsert: re-issuing replaces the custodian's copy rather than accumulating
+   * a history of passwords nobody should still be able to use.
+   */
+  private async storeCredential(
+    em: EntityManager,
+    companyId: string,
+    userId: string,
+    password: string,
+    issuedBy?: string,
+  ): Promise<void> {
+    if (!this.vault.isConfigured) {
+      // Encryption unavailable — do NOT fall back to clear text. The account
+      // still works; only the convenience copy is skipped.
+      this.logger.warn(
+        'CREDENTIAL_ENCRYPTION_KEY is not set — the shareable password was not stored.',
+      );
+      return;
+    }
+    const repo = em.getRepository(ManagedCredential);
+    const existing = await repo.findOne({ where: { userId } });
+    const secret = this.vault.encrypt(password);
+    if (existing) {
+      Object.assign(existing, {
+        secret,
+        companyId,
+        issuedBy: issuedBy ?? existing.issuedBy,
+        issuedAt: new Date(),
+      });
+      await repo.save(existing);
+      return;
+    }
+    await repo.save(
+      repo.create({
+        companyId,
+        userId,
+        secret,
+        issuedBy: issuedBy ?? userId,
+        issuedAt: new Date(),
+      }),
+    );
   }
 }

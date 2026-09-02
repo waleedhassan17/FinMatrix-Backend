@@ -34,6 +34,7 @@ import {
   AuthenticatedUser,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { BillsService } from './bills.service';
 import { PayBillsDto } from './dto/bill.dto';
 
@@ -59,7 +60,10 @@ const MAX_FILE_SIZE =
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
 @Controller('bill-payments')
 export class BillPaymentsController {
-  constructor(private readonly bills: BillsService) {}
+  constructor(
+    private readonly bills: BillsService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   @Roles('admin', 'staff')
@@ -147,8 +151,14 @@ export class BillPaymentsController {
     return new StreamableFile(file.stream);
   }
 
+  /**
+   * Dr Accounts Payable / Cr Bank — money actually leaving the business, so
+   * this is the gated step of the procurement chain. Receiving stock and
+   * raising the bill stay direct for staff: those are accrual-only and
+   * leaving GRNI stranded would be worse than letting them through.
+   */
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Pay bills via Accounts Payable.' })
   createBillPayment(
@@ -156,6 +166,15 @@ export class BillPaymentsController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: PayBillsDto,
   ) {
+    if (user.role !== 'admin') {
+      return this.approvals.createRequest(
+        'bill_payment',
+        dto as unknown as Record<string, unknown>,
+        `Bill payment by ${dto.paymentMethod} dated ${dto.paymentDate}`,
+        user,
+        companyId,
+      );
+    }
     // Reusing the bills pay logic as it matches exactly the requested domain.
     // The proof requirement lives in the service, not here — POST /bills/pay
     // is a second door into the same method and must be covered too.

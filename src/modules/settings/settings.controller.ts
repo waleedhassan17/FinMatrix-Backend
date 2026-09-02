@@ -17,8 +17,18 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { SettingsService } from './settings.service';
+import { CompanyUsersService } from './company-users.service';
 import { UpdateSettingsDto } from './dto/settings.dto';
+import {
+  CreateCompanyUserDto,
+  ResetCompanyUserPasswordDto,
+  UpdateCompanyUserRoleDto,
+} from './dto/company-user.dto';
 import { CompaniesService } from '../companies/companies.service';
 import { UsersService } from '../users/users.service';
 
@@ -31,6 +41,7 @@ export class SettingsController {
     private readonly svc: SettingsService,
     private readonly companies: CompaniesService,
     private readonly users: UsersService,
+    private readonly companyUsers: CompanyUsersService,
   ) {}
 
   @Get()
@@ -94,60 +105,158 @@ export class SettingsController {
     return { id: 'new-company-id', ...dto };
   }
 
-  // Users management
+  // ── Team management ───────────────────────────────────────────────────────
+  // Every route here is @Roles('admin'): staff must get a 403 at the server,
+  // not merely a hidden button. @RequiresFeature('multiUser') is the tier gate
+  // on top of that.
+
   @Get('users')
-  @RequiresFeature('multiUser') // tier gate — team management is large_org+
+  @RequiresFeature('multiUser')
   @Roles('admin')
-  async listUsers(
+  async listUsers(@CurrentCompany() companyId: string) {
+    const data = await this.companyUsers.list(companyId);
+    return { data, total: data.length };
+  }
+
+  @Post('users')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  @HttpCode(201)
+  async createUser(
     @CurrentCompany() companyId: string,
-    @Query('role') role: string,
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateCompanyUserDto,
   ) {
-    return { data: [], total: 0, page, limit };
-  }
-
-  @Patch('users/:userId')
-  @RequiresFeature('multiUser') // tier gate — team management is large_org+
-  @Roles('admin')
-  async updateUser(
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() dto: any,
-  ) {
-    const user = await this.users.findById(userId);
-    if (!user) return { success: false, message: 'User not found' };
-    Object.assign(user, dto);
-    await this.users.save(user);
-    return user;
-  }
-
-  @Delete('users/:userId')
-  @RequiresFeature('multiUser') // tier gate — team management is large_org+
-  @Roles('admin')
-  async removeUser(@Param('userId', ParseUUIDPipe) userId: string) {
-    return { id: userId, deleted: true };
+    return this.companyUsers.create(companyId, dto, user.id);
   }
 
   @Patch('users/:userId/role')
-  @RequiresFeature('multiUser') // tier gate — team management is large_org+
+  @RequiresFeature('multiUser')
   @Roles('admin')
   async updateUserRole(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Body('role') role: string,
+    @Body() dto: UpdateCompanyUserRoleDto,
   ) {
-    const user = await this.users.findById(userId);
-    if (!user) return { success: false, message: 'User not found' };
-    (user as any).role = role;
-    await this.users.save(user);
-    return user;
+    return this.companyUsers.changeRole(companyId, userId, dto.role, user.id);
   }
 
-  @Post('users/invite')
-  @RequiresFeature('multiUser') // tier gate — team management is large_org+
+  @Patch('users/:userId/deactivate')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  async deactivateUser(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.companyUsers.setActive(companyId, userId, false, user.id);
+  }
+
+  @Patch('users/:userId/activate')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  async activateUser(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.companyUsers.setActive(companyId, userId, true, user.id);
+  }
+
+  /**
+   * Re-issue a password and return it once, for the owner to pass on. This is
+   * the only recovery path for an owner-created account — there is no
+   * self-service reset, because the account has no inbox.
+   */
+  @Post('users/:userId/reset-password')
+  @RequiresFeature('multiUser')
   @Roles('admin')
   @HttpCode(200)
-  async inviteUser(@Body() dto: { email: string; role: string; displayName: string }) {
-    return { inviteId: 'invite-id', inviteUrl: 'https://app.example.com/invite/invite-id', ...dto };
+  async resetUserPassword(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: ResetCompanyUserPasswordDto,
+  ) {
+    return this.companyUsers.resetPassword(companyId, userId, dto, user.id);
+  }
+
+  /** Show the stored password again. Audited on every read. */
+  @Get('users/:userId/credential')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  async revealUserCredential(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.companyUsers.revealCredential(companyId, userId, user.id);
+  }
+
+  /**
+   * @deprecated Team members get a username and a password now, not an emailed
+   * invite link. Kept so older app builds keep working: the email's local part
+   * becomes the username and a password is generated, so the call still
+   * produces a usable account — the caller just gets credentials back instead
+   * of an invite URL.
+   */
+  @Post('users/invite')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  @HttpCode(200)
+  async inviteUser(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: { email: string; role?: string; displayName?: string },
+  ) {
+    const local = (dto.email ?? '').split('@')[0]?.toLowerCase() ?? '';
+    // Strip anything the username rule rejects, then pad a too-short handle.
+    const username = (local.replace(/[^a-z0-9._-]/g, '') || 'member').padEnd(3, '0');
+    return this.companyUsers.create(
+      companyId,
+      {
+        name: dto.displayName?.trim() || local || dto.email,
+        username,
+        password: this.companyUsers.generatePassword(),
+        // Anything that isn't 'admin' becomes staff: the old endpoint accepted
+        // free-form roles like 'member' that have no meaning here.
+        role: dto.role === 'admin' ? 'admin' : 'staff',
+        email: dto.email,
+      },
+      user.id,
+    );
+  }
+
+  /**
+   * @deprecated Kept so older app builds keep working. Team members are
+   * created with a username and a password now, not emailed an invite link.
+   */
+  @Patch('users/:userId')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  async updateUser(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: UpdateCompanyUserRoleDto,
+  ) {
+    return this.companyUsers.changeRole(companyId, userId, dto.role, user.id);
+  }
+
+  /**
+   * @deprecated Accounts are deactivated, never deleted — the ledger
+   * references them. Forwards to deactivate so old clients do no harm.
+   */
+  @Delete('users/:userId')
+  @RequiresFeature('multiUser')
+  @Roles('admin')
+  async removeUser(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.companyUsers.setActive(companyId, userId, false, user.id);
   }
 
   // Export / Import stubs

@@ -5,9 +5,16 @@ import { UserCompany } from '../../companies/entities/user-company.entity';
 
 @Entity('users')
 export class User extends BaseEntity {
+  // Nullable since staff accounts: the owner creates those from User
+  // management with a username, and a warehouse hand may have no work email.
   @Index({ unique: true })
-  @Column({ type: 'varchar', length: 255 })
-  email!: string;
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  email!: string | null;
+
+  /** Sign-in handle for owner-created accounts. Null for self-signup users. */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  username!: string | null;
 
   @Column({ type: 'varchar', length: 255, name: 'password_hash' })
   passwordHash!: string;

@@ -23,7 +23,12 @@ export type FeatureKey =
   | 'journalEntries'
   | 'creditMemos' // customer credit memos + vendor credits (accounting corrections)
   | 'bankReconciliation'
-  | 'multiUser' // team management / invites / roles
+  // Team management (owners + staff). Deliberately TRUE on every tier: an
+  // owner needs a second pair of hands regardless of what they pay, and the
+  // approval flow — which is what makes a staff account safe — is core
+  // accounting behaviour, not an upsell. The key is kept so team size could be
+  // priced later without re-plumbing the gate.
+  | 'multiUser'
   | 'auditLog'
   | 'periodClose'
   | 'payroll' // employees + payroll runs
@@ -49,7 +54,8 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     // phase3.md: Chart of Accounts and Bank Reconciliation are CORE features,
     // available to every tier.
     bankReconciliation: true,
-    multiUser: false,
+    // Every tier. See the FeatureKey comment above.
+    multiUser: true,
     auditLog: false,
     periodClose: false,
     payroll: false,

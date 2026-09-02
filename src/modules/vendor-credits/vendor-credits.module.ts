@@ -8,9 +8,11 @@ import { VendorCreditsController } from './vendor-credits.controller';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { BillsModule } from '../bills/bills.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([VendorCredit, VendorCreditLine, Vendor]),
     JournalEntriesModule,
     AccountsModule,

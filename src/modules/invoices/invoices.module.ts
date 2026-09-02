@@ -9,9 +9,11 @@ import { InvoicesController } from './invoices.controller';
 import { InvoicePdfService } from './invoice-pdf.service';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([Invoice, InvoiceLineItem, Customer, Company]),
     JournalEntriesModule,
     AccountsModule,

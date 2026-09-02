@@ -5,13 +5,16 @@ import Decimal from 'decimal.js';
 import { CreditMemo, CreditMemoStatus } from './entities/credit-memo.entity';
 import { CreditMemoLine } from './entities/credit-memo-line.entity';
 import { Customer } from '../customers/entities/customer.entity';
+// Entity only, deliberately: stamping the reversal link needs one UPDATE, and
+// importing InventoryApprovalsService for it would couple these two modules.
+import { InventoryUpdateRequest } from '../inventory-approvals/entities/inventory-update-request.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import {
   ApplyCreditMemoDto, CreateCreditMemoDto, CreditMemoLineDto, ListCreditMemosQueryDto,
 } from './dto/credit-memo.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
-import { addMoney, toDecimal } from '../../common/utils/money.util';
+import { addMoney, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatYearlyRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
@@ -60,6 +63,135 @@ export class CreditMemosService {
     return this.dataSource.transaction(async (manager) =>
       this.createInTransaction(manager, companyId, userId, dto),
     );
+  }
+
+  /**
+   * Create the memo and settle it against the invoice it reverses, as one act.
+   *
+   * Reversing a delivery is one intention, not two. Creating the memo posts
+   * the reversal (Dr Sales + Dr Tax / Cr A/R, Dr Inventory / Cr COGS), but on
+   * its own it leaves the original invoice still showing a balance with a
+   * floating credit beside it — so the customer's statement reads as though
+   * they owe money they do not. Applying is what closes that.
+   *
+   * Applies only what the invoice can absorb. A prepaid or already-collected
+   * delivery has an invoice balance of zero, so there is nothing to settle:
+   * the credit stays available (and can be refunded, which is its own gated
+   * action). Applying blindly would trip the EXCEEDS_CREDIT guard and fail the
+   * whole reversal for a perfectly ordinary case.
+   *
+   * BOTH roles run this same method — the owner directly, staff via an
+   * approved request — which is what makes their accounting identical.
+   */
+  /**
+   * Create the memo, settle it, and record what it reversed — as one act.
+   *
+   * Reversing a delivery is one intention, not three. Creating the memo posts
+   * the reversal (Dr Sales + Dr Output Tax / Cr A/R, Dr Inventory / Cr COGS at
+   * cost), but on its own it leaves loose ends that each look like a mistake
+   * to whoever reads the books next:
+   *
+   *   • a CREDIT SALE keeps its invoice showing a balance beside a floating
+   *     credit, so the customer appears to owe money they do not — hence the
+   *     apply;
+   *   • a PREPAID sale has no receivable to clear, so the credit leaves A/R
+   *     NEGATIVE (a credit balance inside an asset account, on the aging
+   *     report) until somebody separately raises and approves a refund —
+   *     hence refundRemainderToCash, which nets the whole reversal to
+   *     Dr Sales / Cr Cash;
+   *   • nothing linked the memo to the delivery, so a second reversal was one
+   *     tap away — hence the stamp.
+   *
+   * BOTH roles run this same method — the owner directly, staff through an
+   * approved request — which is what makes their accounting identical rather
+   * than merely similar.
+   */
+  async createAndApply(
+    companyId: string,
+    userId: string,
+    dto: CreateCreditMemoDto & {
+      applyToInvoiceId?: string;
+      refundRemainderToCash?: boolean;
+      reversesDeliveryRequestId?: string;
+    },
+  ): Promise<CreditMemo> {
+    const {
+      applyToInvoiceId,
+      refundRemainderToCash,
+      reversesDeliveryRequestId,
+      ...createDto
+    } = dto;
+
+    let memo = await this.create(companyId, userId, createDto);
+
+    if (applyToInvoiceId) {
+      const invoice = await this.dataSource
+        .getRepository(Invoice)
+        .findOne({ where: { id: applyToInvoiceId, companyId } });
+      if (!invoice) {
+        throw new NotFoundException({
+          code: 'INVOICE_NOT_FOUND',
+          message: 'The invoice this credit should settle no longer exists.',
+        });
+      }
+
+      const applicable = Decimal.min(
+        toDecimal(memo.balance),
+        toDecimal(invoice.balance),
+      );
+      if (applicable.greaterThan(0)) {
+        memo = await this.applyToInvoice(companyId, memo.id, {
+          invoiceId: applyToInvoiceId,
+          amount: applicable.toFixed(4),
+        });
+        await this.settleRoundingResidue(companyId, applyToInvoiceId);
+      }
+    }
+
+    // Whatever the invoice could not absorb goes back as cash, so a prepaid
+    // reversal is one approval and never parks a negative receivable.
+    if (refundRemainderToCash && toDecimal(memo.balance).greaterThan(0)) {
+      memo = await this.refund(companyId, memo.id, userId);
+    }
+
+    if (reversesDeliveryRequestId) {
+      await this.dataSource
+        .getRepository(InventoryUpdateRequest)
+        .update(
+          { id: reversesDeliveryRequestId, companyId },
+          { reversalCreditMemoId: memo.id },
+        );
+    }
+
+    return memo;
+  }
+
+  /**
+   * A credit built from the same lines as the invoice it reverses should land
+   * exactly on its balance — but "should" is not a guarantee once a tax rate
+   * and four decimal places are involved, and rounding the other way leaves a
+   * fraction of a paisa behind. That residue keeps the invoice `partial`, so
+   * it sits on the A/R aging as an open invoice forever over a rounding error.
+   *
+   * Settle anything within the tolerance the posting engine already uses,
+   * exactly as commitApproval does for a prepaid delivery. Larger balances are
+   * left alone: those are real money, not rounding.
+   */
+  private async settleRoundingResidue(
+    companyId: string,
+    invoiceId: string,
+  ): Promise<void> {
+    const repo = this.dataSource.getRepository(Invoice);
+    const invoice = await repo.findOne({ where: { id: invoiceId, companyId } });
+    if (!invoice) return;
+
+    const balance = toDecimal(invoice.balance);
+    if (balance.isZero() || balance.greaterThan(MONEY_TOLERANCE)) return;
+
+    invoice.amountPaid = invoice.total;
+    invoice.balance = '0.0000';
+    invoice.status = 'paid';
+    await repo.save(invoice);
   }
 
   /**
@@ -290,15 +422,18 @@ export class CreditMemosService {
       if (!item) continue;
       const qty = toDecimal(line.quantity);
 
-      // Value the return at the cost FROZEN when the memo was issued. Re-reading
-      // item.unitCost here would use whatever the weighted-average has drifted
-      // to since — a single purchase at a new price is enough — and the void
-      // would then not cancel the original entry, leaving residue in Inventory
-      // and COGS. Memos issued before this column existed fall back to the
-      // item cost, which is the best available basis for them.
-      const unitCost = reverse
-        ? toDecimal(line.restockUnitCost ?? item.unitCost)
-        : toDecimal(item.unitCost);
+      // Value the return at the cost FROZEN for this line. Re-reading
+      // item.unitCost would use whatever the weighted-average has drifted to
+      // since — a single purchase at a new price is enough — and the entry
+      // would then not cancel what it is reversing, leaving residue in
+      // Inventory and COGS.
+      //
+      // On ISSUE that frozen cost is either one the caller supplied (a
+      // delivery reversal knows what the sale posted COGS at) or today's
+      // average, which is the best basis available for an ordinary return
+      // where the original cost is unknown. On a VOID it is whatever the issue
+      // recorded, so the two cancel exactly.
+      const unitCost = toDecimal(line.restockUnitCost ?? item.unitCost);
       const cost = qty.times(unitCost);
       if (cost.lessThanOrEqualTo(0)) continue;
       total = total.plus(cost);
@@ -379,6 +514,9 @@ export class CreditMemosService {
         itemId: l.itemId ?? null,
         description: l.description, quantity: toDecimal(l.quantity).toFixed(4), unitPrice: toDecimal(l.unitPrice).toFixed(4),
         taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineTotal: base.plus(lineTax).toFixed(4), lineOrder: i,
+        // Seeded when the caller knows the original cost; postCreditMemoInventory
+        // prefers it over today's average so a reversal cancels the sale exactly.
+        restockUnitCost: l.unitCost ? toDecimal(l.unitCost).toFixed(4) : null,
       });
     });
     return { subtotal: subtotal.toFixed(4), taxAmount: tax.toFixed(4), total: subtotal.plus(tax).toFixed(4), lines: calc };

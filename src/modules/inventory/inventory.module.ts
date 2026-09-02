@@ -12,9 +12,13 @@ import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
+  // ApprovalsCoreModule (not ApprovalsModule) so no cycle: the gate only
+  // needs to FILE a request, which touches no domain service.
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([
       InventoryItem,
       InventoryMovement,

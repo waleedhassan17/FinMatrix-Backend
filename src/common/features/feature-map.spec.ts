@@ -3,7 +3,7 @@ import { computeFeatures, FEATURE_KEYS } from './feature-map';
 describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
   const base = { inventoryEnabled: false, allFeaturesUnlocked: false };
 
-  it('small_business: accounting extras only — no inventory/delivery/payroll/budgets/multiUser', () => {
+  it('small_business: accounting extras only — no inventory/delivery/payroll/budgets', () => {
     const f = computeFeatures({ ...base, companyType: 'small_business' });
     expect(f.estimates).toBe(true);
     expect(f.journalEntries).toBe(true);
@@ -11,9 +11,19 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     expect(f.bankReconciliation).toBe(true); // core feature, all tiers (phase3.md)
     for (const k of [
       'inventory', 'purchaseOrders', 'salesOrders', 'agencies', 'delivery',
-      'payroll', 'budgets', 'multiUser', 'auditLog', 'periodClose',
+      'payroll', 'budgets', 'auditLog', 'periodClose',
     ] as const) {
       expect(f[k]).toBe(false);
+    }
+  });
+
+  it('multiUser is on for EVERY tier — team management is not an upsell', () => {
+    // An owner needs a second pair of hands regardless of what they pay, and
+    // the approval flow that makes a staff account safe is core accounting
+    // behaviour. Asserted across all three types so re-gating one by accident
+    // fails here rather than in production.
+    for (const companyType of ['small_business', 'large_org', 'warehouse'] as const) {
+      expect(computeFeatures({ ...base, companyType }).multiUser).toBe(true);
     }
   });
 

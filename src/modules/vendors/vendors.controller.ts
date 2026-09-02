@@ -53,13 +53,13 @@ export class VendorsController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(@CurrentCompany() companyId: string, @Body() dto: CreateVendorDto) {
     return this.vendors.create(companyId, dto);
   }
 
   @Patch(':vendorId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,

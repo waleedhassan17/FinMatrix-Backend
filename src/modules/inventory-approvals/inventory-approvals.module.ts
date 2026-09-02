@@ -18,9 +18,11 @@ import { InventoryApprovalsService } from './inventory-approvals.service';
 import { InventoryApprovalsController } from './inventory-approvals.controller';
 import { BillPhotoController } from './bill-photo.controller';
 import { InventoryUpdateRequestsController } from './inventory-update-requests.controller';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([
       InventoryUpdateRequest,
       InventoryUpdateRequestLine,

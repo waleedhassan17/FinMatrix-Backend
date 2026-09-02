@@ -21,6 +21,7 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { Delete } from '@nestjs/common';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { BillsService } from './bills.service';
 import {
   CreateBillDto,
@@ -43,7 +44,10 @@ import {
 @Roles('admin', 'staff')
 @Controller(['bills', 'bill'])
 export class BillsController {
-  constructor(private readonly bills: BillsService) {}
+  constructor(
+    private readonly bills: BillsService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   list(
@@ -73,7 +77,7 @@ export class BillsController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -83,7 +87,7 @@ export class BillsController {
   }
 
   @Patch(':billId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('billId', ParseUUIDPipe) billId: string,
@@ -92,19 +96,31 @@ export class BillsController {
     return this.bills.update(companyId, billId, dto);
   }
 
+  /**
+   * A second door into BillsService.pay — POST /bill-payments is the other.
+   * Both must gate the same way or the stricter one is just a detour: money
+   * leaving the bank is money leaving the bank whichever route recorded it.
+   */
   @Post('pay')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   pay(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: PayBillsDto,
   ) {
-    return this.bills.pay(companyId, user.id, dto);
+    if (user.role === 'admin') return this.bills.pay(companyId, user.id, dto);
+    return this.approvals.createRequest(
+      'bill_payment',
+      dto as unknown as Record<string, unknown>,
+      `Bill payment by ${dto.paymentMethod} dated ${dto.paymentDate}`,
+      user,
+      companyId,
+    );
   }
 
   @Post(':billId/post')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   post(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,

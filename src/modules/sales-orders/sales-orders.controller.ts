@@ -41,7 +41,7 @@ export class SalesOrdersController {
   }
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'staff')
   create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -51,7 +51,7 @@ export class SalesOrdersController {
   }
 
   @Patch(':orderId')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   update(
     @CurrentCompany() companyId: string,
     @Param('orderId', ParseUUIDPipe) id: string,
@@ -61,7 +61,7 @@ export class SalesOrdersController {
   }
 
   @Post(':orderId/fulfill')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Record fulfillment quantities; recomputes open/partial/fulfilled.' })
   fulfill(
@@ -73,7 +73,7 @@ export class SalesOrdersController {
   }
 
   @Post(':orderId/convert-to-invoice')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(201)
   @ApiOperation({ summary: 'Invoice a fulfilled sales order.' })
   convertToInvoice(
@@ -86,7 +86,7 @@ export class SalesOrdersController {
   }
 
   @Post(':orderId/cancel')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   cancel(@CurrentCompany() companyId: string, @Param('orderId', ParseUUIDPipe) id: string) {
     return this.salesOrders.cancel(companyId, id);

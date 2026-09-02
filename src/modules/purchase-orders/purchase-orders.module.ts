@@ -7,9 +7,11 @@ import { PurchaseOrdersController } from './purchase-orders.controller';
 import { BillsModule } from '../bills/bills.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([PurchaseOrder, PurchaseOrderLine]),
     BillsModule,
     AccountsModule,
@@ -17,5 +19,8 @@ import { JournalEntriesModule } from '../journal-entries/journal-entries.module'
   ],
   controllers: [PurchaseOrdersController],
   providers: [PurchaseOrdersService],
+  // Exported for the approvals dispatcher: a staff PO is committed only when
+  // the owner approves it.
+  exports: [PurchaseOrdersService],
 })
 export class PurchaseOrdersModule {}

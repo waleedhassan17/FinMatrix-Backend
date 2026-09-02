@@ -7,13 +7,16 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository, EntityManager } from 'typeorm';
 import { InventoryUpdateRequest } from './entities/inventory-update-request.entity';
 import { InventoryUpdateRequestLine } from './entities/inventory-update-request-line.entity';
 import { InventoryApprovalAuditEntry } from './entities/inventory-approval-audit-entry.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
+import { CreditMemo } from '../credit-memos/entities/credit-memo.entity';
+import { Customer } from '../customers/entities/customer.entity';
 import { DeliveryItem } from '../deliveries/entities/delivery-item.entity';
 import { DeliveryLedgerService } from '../deliveries/delivery-ledger.service';
 import { ShadowInventorySnapshot } from '../shadow-inventory/entities/shadow-inventory-snapshot.entity';
@@ -153,10 +156,10 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: ReviewRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
     if (dto.action === 'approved') {
-      return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewerId);
+      return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewer);
     }
 
     // Rejecting reverses stock out of Goods in Transit and is the reason the
@@ -175,7 +178,7 @@ export class InventoryApprovalsService {
       });
     }
 
-    return this.reject(companyId, id, { reviewerComment: reason }, reviewerId);
+    return this.reject(companyId, id, { reviewerComment: reason }, reviewer);
   }
 
   // ==========================================================================
@@ -446,8 +449,9 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: ApproveInventoryUpdateRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
+    const reviewerId = reviewer.id;
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
@@ -462,6 +466,18 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Request is already ${req.status}; cannot approve`,
         );
+      }
+
+      // Maker != checker: the rider who delivered the goods cannot also be the
+      // one who signs the delivery off. This is the second-person check that
+      // makes approval mean something — distinct from the rider-scoping check
+      // in getOneFormatted, which only governs who may LOOK at a request.
+      if (req.personnelId === reviewerId) {
+        throw new ForbiddenException({
+          code: 'CHECKER_IS_RIDER',
+          message:
+            'You cannot review your own delivery. Someone else has to approve it.',
+        });
       }
 
       // STAGE 3 (phase1.md) — deliveries dispatched under the Goods-in-Transit
@@ -526,6 +542,7 @@ export class InventoryApprovalsService {
       req.journalEntryId = journalEntryId;
       req.reviewedAt = now;
       req.reviewedBy = reviewerId;
+      req.reviewerRole = reviewer.role;
       req.reviewerComment = dto.reviewerComment ?? null;
       req.approvalNotes = dto.reviewerComment ?? null;
       await reqRepo.save(req);
@@ -662,8 +679,9 @@ export class InventoryApprovalsService {
     companyId: string,
     id: string,
     dto: RejectInventoryUpdateRequestDto,
-    reviewerId: string,
+    reviewer: { id: string; role: string },
   ) {
+    const reviewerId = reviewer.id;
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
@@ -678,6 +696,18 @@ export class InventoryApprovalsService {
         throw new ConflictException(
           `Request is already ${req.status}; cannot reject`,
         );
+      }
+
+      // Maker != checker: the rider who delivered the goods cannot also be the
+      // one who signs the delivery off. This is the second-person check that
+      // makes approval mean something — distinct from the rider-scoping check
+      // in getOneFormatted, which only governs who may LOOK at a request.
+      if (req.personnelId === reviewerId) {
+        throw new ForbiddenException({
+          code: 'CHECKER_IS_RIDER',
+          message:
+            'You cannot review your own delivery. Someone else has to approve it.',
+        });
       }
 
       // Reject/return path (phase1.md Stage 3): for a delivery dispatched
@@ -719,6 +749,7 @@ export class InventoryApprovalsService {
       req.shadowStatus = 'rejected';
       req.reviewedAt = now;
       req.reviewedBy = reviewerId;
+      req.reviewerRole = reviewer.role;
       req.reviewerComment = dto.reviewerComment;
       req.rejectReason = dto.reviewerComment;
       await reqRepo.save(req);
@@ -771,6 +802,187 @@ export class InventoryApprovalsService {
    *  - Sets status to 'rejected'
    *  - Creates an audit entry
    */
+  /**
+   * Can this approved delivery still be undone?
+   *
+   * Undo exists for the legacy path, where approval only moved stock. Once a
+   * delivery has posted under the Goods-in-Transit flow it has produced an
+   * invoice (and possibly a payment), and deleting that would leave revenue
+   * and cash dangling — corrections must REVERSE, never delete. The honest
+   * answer at that point is a credit memo or an invoice void, both of which
+   * staff can request in their own right.
+   *
+   * Extracted so it can run at two moments: when a staff member FILES an undo
+   * request (so they are told now, rather than waiting for an owner to
+   * discover the request cannot be approved), and again inside undoApproval
+   * when the owner acts on it.
+   */
+  /**
+   * Build the credit memo that reverses an approved delivery.
+   *
+   * Once a delivery is ledger-committed there is a posted sale behind it, and
+   * corrections must REVERSE rather than delete — which is exactly what
+   * undoApproval refuses to do and tells the caller to do instead. Rather than
+   * leaving somebody to re-key the customer, the invoice and every line by
+   * hand, this hands back the whole draft.
+   *
+   * Built here rather than in the app on purpose:
+   *   • quantities come from what was actually DELIVERED (the request lines),
+   *     not what was ordered — a short delivery must not be over-credited;
+   *   • prices and tax come from delivery_items, which froze them at dispatch,
+   *     so the credit reverses what was charged rather than today's price list;
+   *   • any client asking gets the same answer.
+   *
+   * Nothing is posted here. This is a draft, and the caller still goes through
+   * the ordinary (gated) credit-memo endpoint with it.
+   */
+  async buildCreditMemoDraft(companyId: string, requestId: string) {
+    const req = await this.reqRepo.findOne({
+      where: { id: requestId, companyId },
+      relations: ['lines'],
+    });
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== 'approved') {
+      throw new ConflictException({
+        code: 'NOT_CREDITABLE',
+        message: `Only an approved delivery can be reversed (this one is ${req.status}).`,
+      });
+    }
+
+    // One sale, one reversal. Without this the button stays on the approved
+    // row and a second tap debits Sales again — balanced, invariant-clean, and
+    // completely wrong.
+    if (req.reversalCreditMemoId) {
+      const existing = await this.dataSource
+        .getRepository(CreditMemo)
+        .findOne({ where: { id: req.reversalCreditMemoId, companyId } });
+      throw new ConflictException({
+        code: 'ALREADY_REVERSED',
+        message: existing
+          ? `This delivery was already reversed by credit memo ${existing.creditMemoNumber}.`
+          : 'This delivery has already been reversed.',
+        creditMemoId: req.reversalCreditMemoId,
+        creditMemoNumber: existing?.creditMemoNumber ?? null,
+      });
+    }
+
+    const delivery = await this.deliveryRepo.findOne({
+      where: { id: req.deliveryId, companyId },
+    });
+    if (!delivery) throw new NotFoundException('Delivery not found');
+
+    // A legacy delivery never posted a sale, so there is no revenue to credit.
+    // Crediting Sales here would invent a reversal for something that was
+    // never recognised; those rows use undoApproval instead.
+    if (delivery.ledgerStatus !== 'committed') {
+      throw new ConflictException({
+        code: 'NOT_CREDITABLE',
+        message:
+          'This delivery never posted a sale, so there is nothing to credit. Undo the approval instead.',
+      });
+    }
+
+    const deliveryItems = await this.dataSource
+      .getRepository(DeliveryItem)
+      .find({ where: { deliveryId: delivery.id } });
+    const priceByItem = new Map(deliveryItems.map((d) => [d.itemId, d]));
+
+    const lines = req.lines
+      // Only what the customer kept. A line delivered 0 (fully returned at the
+      // door) already went back to stock on approval and must not be credited
+      // a second time.
+      .filter((l) => toDecimal(l.deliveredQty).greaterThan(0))
+      .map((l) => {
+        const priced = priceByItem.get(l.itemId);
+        return {
+          itemId: l.itemId,
+          description: l.itemName ?? priced?.itemName ?? 'Delivered item',
+          quantity: toDecimal(l.deliveredQty).toFixed(4),
+          unitPrice: toDecimal(priced?.unitPrice ?? '0').toFixed(4),
+          taxRate: toDecimal(priced?.taxRate ?? '0').toFixed(4),
+          // The cost the sale actually posted COGS at, frozen on the delivery
+          // line at dispatch. Reversing at today's weighted-average instead
+          // would leave a residue in COGS for a sale that never happened —
+          // invisible, because every entry would still balance.
+          unitCost: toDecimal(priced?.unitCost ?? '0').toFixed(4),
+        };
+      });
+
+    const invoice = delivery.invoiceId
+      ? await this.dataSource
+          .getRepository(Invoice)
+          .findOne({ where: { id: delivery.invoiceId, companyId } })
+      : null;
+
+    const customer = delivery.customerId
+      ? await this.dataSource
+          .getRepository(Customer)
+          .findOne({ where: { id: delivery.customerId, companyId } })
+      : null;
+
+    return {
+      deliveryRequestId: req.id,
+      deliveryId: delivery.id,
+      deliveryReference: delivery.referenceNo ?? req.deliveryReference ?? null,
+      customerId: delivery.customerId,
+      customerName: customer?.name ?? null,
+      originalInvoiceId: invoice?.id ?? null,
+      invoiceNumber: invoice?.invoiceNumber ?? null,
+      // Drives HOW the credit settles. A credit sale still owes money, so the
+      // credit clears the invoice. A prepaid or doorstep-collected delivery
+      // has nothing left to settle, so the money goes back out as cash —
+      // otherwise the credit would leave A/R negative until somebody raised a
+      // separate refund.
+      invoiceBalance: toDecimal(invoice?.balance ?? '0').toFixed(4),
+      settlement: toDecimal(invoice?.balance ?? '0').greaterThan(0)
+        ? ('apply_to_invoice' as const)
+        : ('refund_cash' as const),
+      settlementAmount: toDecimal(invoice?.balance ?? '0').greaterThan(0)
+        ? toDecimal(invoice?.balance ?? '0').toFixed(4)
+        : lines
+            .reduce(
+              (sum, l) =>
+                sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+              toDecimal('0'),
+            )
+            .toFixed(4),
+      // The reversal posts TODAY, which is also what puts it under the period
+      // lock rather than back-dating it into the original delivery's period.
+      date: new Date().toISOString().slice(0, 10),
+      reason: `Reversal of delivery ${delivery.referenceNo ?? req.deliveryReference ?? req.deliveryId}`,
+      lines,
+    };
+  }
+
+  async assertUndoable(
+    companyId: string,
+    id: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const em = manager ?? this.dataSource.manager;
+
+    const req = await em.getRepository(InventoryUpdateRequest).findOne({
+      where: { id, companyId },
+    });
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== 'approved') {
+      throw new ConflictException(
+        `Only approved requests can be undone (current status: ${req.status})`,
+      );
+    }
+
+    const delivery = await em.getRepository(Delivery).findOne({
+      where: { id: req.deliveryId, companyId },
+    });
+    if (delivery?.ledgerStatus === 'committed') {
+      throw new ConflictException({
+        code: 'LEDGER_COMMITTED',
+        message:
+          'This delivery posted a sale to the ledger. Corrections reverse rather than delete, so use "Reverse with credit memo" on the delivery instead of undoing it.',
+      });
+    }
+  }
+
   async undoApproval(companyId: string, id: string, reviewerId: string) {
     return this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
@@ -784,26 +996,10 @@ export class InventoryApprovalsService {
         relations: ['lines'],
       });
       if (!req) throw new NotFoundException('Request not found');
-      if (req.status !== 'approved') {
-        throw new ConflictException(
-          `Only approved requests can be undone (current status: ${req.status})`,
-        );
-      }
-
-      // Approvals posted under the Goods-in-Transit flow produced an invoice
-      // (and possibly a payment) — a blanket undo would leave revenue and cash
-      // dangling. Voids/returns must reverse, never delete: use the invoice
-      // void / credit-memo flows instead.
-      const undoDelivery = await em.getRepository(Delivery).findOne({
-        where: { id: req.deliveryId, companyId },
-      });
-      if (undoDelivery?.ledgerStatus === 'committed') {
-        throw new ConflictException({
-          code: 'LEDGER_COMMITTED',
-          message:
-            'This delivery was posted to the ledger (invoice/COGS). Undo is not available — void the invoice or issue a credit memo instead.',
-        });
-      }
+      // Re-checked here even though the caller may have checked already: a
+      // staff undo REQUEST is validated when it is filed, and the delivery can
+      // change between then and the owner approving it.
+      await this.assertUndoable(companyId, id, em);
 
       // Reverse inventory changes with row-locking
       for (const line of req.lines) {
@@ -904,6 +1100,7 @@ export class InventoryApprovalsService {
       req.shadowStatus = 'pending';
       req.reviewedAt = null;
       req.reviewedBy = null;
+      req.reviewerRole = null;
       req.reviewerComment = null;
       req.rejectReason = null;
       await reqRepo.save(req);
@@ -1090,6 +1287,8 @@ export class InventoryApprovalsService {
       shadowStatus: r.shadowStatus,
       reviewedAt: r.reviewedAt ?? null,
       reviewedBy: r.reviewedBy ?? null,
+      reviewerRole: r.reviewerRole ?? null,
+      reversalCreditMemoId: r.reversalCreditMemoId ?? null,
       reviewerComment: r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
       changes: (r.lines ?? []).map((l) => ({
         itemId: l.itemId,

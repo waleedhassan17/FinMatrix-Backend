@@ -129,7 +129,10 @@ export class BillPhotoController {
       companyId,
       deliveryId,
       user.id,
-      user.email, // fallback; displayName isn't on JWT payload
+      // Fallback label; displayName isn't on the JWT payload. Riders are
+      // created by the company and sign in by username, so email is usually
+      // null for them — prefer the username and keep the id as a last resort.
+      user.username ?? user.email ?? user.id,
       file,
       body,
     );

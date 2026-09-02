@@ -7,6 +7,7 @@ import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { PostingService } from './posting.service';
 import { JournalEntriesService } from './journal-entries.service';
 import { JournalEntriesController } from './journal-entries.controller';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 /**
  * Manual General Journal module. PostingService is the shared posting engine
@@ -16,6 +17,7 @@ import { JournalEntriesController } from './journal-entries.controller';
  */
 @Module({
   imports: [
+    ApprovalsCoreModule,
     TypeOrmModule.forFeature([
       JournalEntry,
       JournalEntryLine,
@@ -25,6 +27,8 @@ import { JournalEntriesController } from './journal-entries.controller';
   ],
   controllers: [JournalEntriesController],
   providers: [PostingService, JournalEntriesService],
-  exports: [PostingService, TypeOrmModule],
+  // JournalEntriesService is exported for the approvals dispatcher, which
+  // replays an approved manual journal through the same path a direct one takes.
+  exports: [PostingService, JournalEntriesService, TypeOrmModule],
 })
 export class JournalEntriesModule {}
