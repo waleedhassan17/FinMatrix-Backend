@@ -83,7 +83,7 @@
     "helmet": "^8.1.0",
     "joi": "^17.13.3",
     "nestjs-pino": "^4.6.1",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^9.1.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdfkit": "^0.18.0",
@@ -143,5 +143,13 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "lodash": "^4.18.1",
+    "js-yaml": "^4.3.1",
+    "multer": "^2.2.0",
+    "picomatch": "^4.0.4",
+    "tmp": "^0.2.7",
+    "glob": "^10.5.0"
   }
 }
