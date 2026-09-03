@@ -35,6 +35,7 @@ import { DeliveryItem } from '../../modules/deliveries/entities/delivery-item.en
 import { InvoicesService } from '../../modules/invoices/invoices.service';
 import { PostingService } from '../../modules/journal-entries/posting.service';
 import { BillsService } from '../../modules/bills/bills.service';
+import { seedPaymentVoucher } from './payment-voucher';
 import { PaymentsService } from '../../modules/payments/payments.service';
 import { PurchaseOrdersService } from '../../modules/purchase-orders/purchase-orders.service';
 import {
@@ -257,6 +258,7 @@ async function run() {
         await bills.pay(cid, uid, {
           vendorId: bill.vendorId, paymentDate: day(20), paymentMethod: 'bank_transfer',
           bankAccountId: bankId, applications: [{ billId, amount: bill.balance }],
+          proofId: await seedPaymentVoucher(bills, cid, uid, `MM-PO-${m}`),
         } as any);
         payCount++;
       }
@@ -305,6 +307,7 @@ async function run() {
           await bills.pay(cid, uid, {
             vendorId: ebFull.vendorId, paymentDate: day(15), paymentMethod: 'bank_transfer',
             bankAccountId: bankId, applications: [{ billId: eb.id, amount: ebFull.balance }],
+            proofId: await seedPaymentVoucher(bills, cid, uid, `EXP-${mlabel}`),
           } as any);
           payCount++;
         }

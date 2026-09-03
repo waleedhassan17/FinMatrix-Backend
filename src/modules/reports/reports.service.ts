@@ -253,6 +253,10 @@ export class ReportsService {
     const equity: { accountCode: string; accountName: string; amount: number }[] = [];
     let revenue = 0;
     let expense = 0;
+    // Footed from the UNROUNDED figures — see the note above the totals.
+    let rawAssets = 0;
+    let rawLiabilities = 0;
+    let rawEquity = 0;
 
     for (const row of rows) {
       const dr = num(row.dr);
@@ -264,31 +268,50 @@ export class ReportsService {
       });
       if (row.type === 'asset') {
         const amt = dr - cr;
-        if (Math.abs(amt) > 0.0001) assets.push(line(amt));
+        if (Math.abs(amt) > 0.0001) {
+          assets.push(line(amt));
+          rawAssets += amt;
+        }
       } else if (row.type === 'liability') {
         const amt = cr - dr;
-        if (Math.abs(amt) > 0.0001) liabilities.push(line(amt));
+        if (Math.abs(amt) > 0.0001) {
+          liabilities.push(line(amt));
+          rawLiabilities += amt;
+        }
       } else if (row.type === 'equity') {
         const amt = cr - dr;
-        if (Math.abs(amt) > 0.0001) equity.push(line(amt));
+        if (Math.abs(amt) > 0.0001) {
+          equity.push(line(amt));
+          rawEquity += amt;
+        }
       } else if (row.type === 'revenue') revenue += cr - dr;
       else if (row.type === 'expense') expense += dr - cr;
     }
 
     // Current-period earnings (revenue − expense) roll into equity so the sheet
     // balances (FinMatrixGuide §5.3); shown as a Retained Earnings line.
-    const netIncome = r2(revenue - expense);
+    const rawNetIncome = revenue - expense;
+    const netIncome = r2(rawNetIncome);
     if (Math.abs(netIncome) > 0.0001) {
       equity.push({
         accountCode: '3100',
         accountName: 'Net Income (current period)',
         amount: netIncome,
       });
+      rawEquity += rawNetIncome;
     }
 
-    const totalAssets = r2(assets.reduce((a, x) => a + x.amount, 0));
-    const totalLiabilities = r2(liabilities.reduce((a, x) => a + x.amount, 0));
-    const totalEquity = r2(equity.reduce((a, x) => a + x.amount, 0));
+    // Foot the sections from the UNROUNDED amounts, then round once.
+    //
+    // Adding up the rounded line items instead lets the statement fail to
+    // balance: Σ round(x) is not round(Σ x), and the ledger carries four
+    // decimals, so each line can hide up to half a paisa that compounds across
+    // thirty-odd accounts. The lines stay rounded for presentation — only the
+    // arithmetic that has to tie is done at full precision. Every posted entry
+    // balances, so A = L + E holds exactly on the raw figures.
+    const totalAssets = r2(rawAssets);
+    const totalLiabilities = r2(rawLiabilities);
+    const totalEquity = r2(rawEquity);
     return {
       asOfDate: asOf,
       assets,
@@ -582,20 +605,32 @@ export class ReportsService {
     // Each account's net (debits − credits) lands in its natural column. Since
     // every posted entry is balanced, Σ net across accounts is 0, so the column
     // totals are equal — the trial balance always balances to the paisa.
-    const rows = glRows
-      .map((row) => {
-        const net = num(row.dr) - num(row.cr);
-        return {
-          accountCode: row.accountNumber,
-          accountName: row.accountName,
-          debit: net >= 0 ? r2(net) : 0,
-          credit: net < 0 ? r2(-net) : 0,
-        };
-      })
+    const nets = glRows.map((row) => ({
+      accountCode: row.accountNumber,
+      accountName: row.accountName,
+      net: num(row.dr) - num(row.cr),
+    }));
+
+    const rows = nets
+      .map((a) => ({
+        accountCode: a.accountCode,
+        accountName: a.accountName,
+        debit: a.net >= 0 ? r2(a.net) : 0,
+        credit: a.net < 0 ? r2(-a.net) : 0,
+      }))
       .filter((row) => row.debit > 0 || row.credit > 0);
 
-    const totalDebits = r2(rows.reduce((a, x) => a + x.debit, 0));
-    const totalCredits = r2(rows.reduce((a, x) => a + x.credit, 0));
+    // Foot the columns from the UNROUNDED nets, then round once.
+    //
+    // That claim above only holds at full precision. Summing the ROUNDED
+    // column values instead — which is what this did — breaks it, because
+    // Σ round(x) is not round(Σ x): the ledger carries four decimals, so every
+    // account can hide up to half a paisa, and across thirty-odd accounts the
+    // two columns drift apart. A trial balance whose columns do not foot is
+    // not a trial balance, however small the gap. The rows keep their rounded
+    // figures for presentation; only the totals are computed at full precision.
+    const totalDebits = r2(nets.reduce((a, x) => (x.net > 0 ? a + x.net : a), 0));
+    const totalCredits = r2(nets.reduce((a, x) => (x.net < 0 ? a - x.net : a), 0));
     return {
       range: { startDate: s, endDate: e },
       rows,

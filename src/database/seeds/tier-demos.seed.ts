@@ -45,6 +45,7 @@ import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { CompaniesService } from '../../modules/companies/companies.service';
 import { InvoicesService } from '../../modules/invoices/invoices.service';
 import { BillsService } from '../../modules/bills/bills.service';
+import { seedPaymentVoucher } from './payment-voucher';
 import { PaymentsService } from '../../modules/payments/payments.service';
 import { PurchaseOrdersService } from '../../modules/purchase-orders/purchase-orders.service';
 import { PostingService } from '../../modules/journal-entries/posting.service';
@@ -179,7 +180,9 @@ async function run() {
     await del(`DELETE FROM invoices WHERE company_id=$1`);
     await del(`DELETE FROM bill_line_items WHERE bill_id IN (SELECT id FROM bills WHERE company_id=$1)`);
     await del(`DELETE FROM bills WHERE company_id=$1`);
-    await del(`DELETE FROM sales_order_line_items WHERE order_id IN (SELECT id FROM sales_orders WHERE company_id=$1)`);
+    // sales_order_id, not order_id — same swallowed-DELETE class of bug as the
+    // payroll_items one below.
+    await del(`DELETE FROM sales_order_line_items WHERE sales_order_id IN (SELECT id FROM sales_orders WHERE company_id=$1)`);
     await del(`DELETE FROM sales_orders WHERE company_id=$1`);
     await del(`DELETE FROM purchase_order_lines WHERE order_id IN (SELECT id FROM purchase_orders WHERE company_id=$1)`);
     await del(`DELETE FROM purchase_orders WHERE company_id=$1`);
@@ -189,7 +192,10 @@ async function run() {
     await del(`DELETE FROM inventory_movements WHERE company_id=$1`);
     await del(`DELETE FROM inventory_adjustments WHERE company_id=$1`);
     await del(`DELETE FROM tax_payments WHERE company_id=$1`);
-    await del(`DELETE FROM payroll_items WHERE run_id IN (SELECT id FROM payroll_runs WHERE company_id=$1)`);
+    // payroll_run_id, not run_id. The wrong name meant this DELETE threw on
+    // every run and was swallowed by del()'s catch, printing "(skip)" — the
+    // rows only ever went away via the FK cascade from payroll_runs below.
+    await del(`DELETE FROM payroll_items WHERE payroll_run_id IN (SELECT id FROM payroll_runs WHERE company_id=$1)`);
     await del(`DELETE FROM payroll_runs WHERE company_id=$1`);
     await del(`DELETE FROM employees WHERE company_id=$1`);
     await del(`DELETE FROM budget_lines WHERE budget_id IN (SELECT id FROM budgets WHERE company_id=$1)`);
@@ -373,6 +379,7 @@ async function run() {
           await bills.pay(cid, uid, {
             vendorId: full.vendorId, paymentDate: day(m, 16), paymentMethod: 'cash',
             bankAccountId: cashId, applications: [{ billId: eb.id, amount: full.balance }],
+            proofId: await seedPaymentVoucher(bills, cid, uid, `SUK-EXP-${m}`),
           } as any);
           pay++;
         }
@@ -443,6 +450,7 @@ async function run() {
           await bills.pay(cid, uid, {
             vendorId: full.vendorId, paymentDate: day(m, 18), paymentMethod: 'cash',
             bankAccountId: cashId, applications: [{ billId: eb.id, amount: full.balance }],
+            proofId: await seedPaymentVoucher(bills, cid, uid, `MM-EXP-${m}`),
           } as any);
           pay++;
         }
@@ -501,9 +509,19 @@ async function run() {
     // TWO riders with credentials (through the real service: user + profile).
     // resetCompanyData wiped the previous roster, so these are created fresh;
     // the `existing` branch only covers a login that survived the wipe.
+    // A rider's sign-in handle is a USERNAME, never an email: CreatePersonnelDto
+    // rejects '@' in it, because '@' is exactly what UsersService.findByIdentifier
+    // uses to decide whether a handle is an email or a username. Passing the
+    // email as the whole identity — as this did — left the service with no
+    // username to create an account from, so it threw "Either userId, or a
+    // username plus a password, must be provided" and killed the seed.
+    //
+    // The email stays on the row as a contact detail. It is also what the
+    // acceptance suites sign in with (RIDER_EMAIL), and that keeps working
+    // because findByIdentifier routes anything containing '@' to findByEmail.
     const riderDefs = [
-      { email: 'rider1@warehouseco.com', name: 'Saim Raza' },
-      { email: 'rider2@warehouseco.com', name: 'Haseeb Ali' },
+      { username: 'rider1', email: 'rider1@warehouseco.com', name: 'Saim Raza' },
+      { username: 'rider2', email: 'rider2@warehouseco.com', name: 'Haseeb Ali' },
     ];
     const riderIds: string[] = [];
     for (const r of riderDefs) {
@@ -530,7 +548,9 @@ async function run() {
         }
         riderIds.push(existing.id);
       } else {
-        const created = await personnel.create(cid, { email: r.email, password: PASSWORD, name: r.name } as any);
+        const created = await personnel.create(cid, {
+          username: r.username, email: r.email, password: PASSWORD, name: r.name,
+        } as any);
         riderIds.push((created as any).userId ?? (created as any).user?.id);
       }
     }
@@ -574,6 +594,7 @@ async function run() {
         await bills.pay(cid, uid, {
           vendorId: b.vendorId, paymentDate: day(m, 20), paymentMethod: 'cash',
           bankAccountId: cashId, applications: [{ billId, amount: b.balance }],
+          proofId: await seedPaymentVoucher(bills, cid, uid, `WC-PB-${m}`),
         } as any);
         pay++;
       }
