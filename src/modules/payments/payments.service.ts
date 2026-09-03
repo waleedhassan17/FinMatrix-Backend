@@ -27,6 +27,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { ACCT_AR, ACCT_BANK, ACCT_CASH } from '../accounts/accounts.constants';
 import { Account } from '../accounts/entities/account.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
+import { Delivery } from '../deliveries/entities/delivery.entity';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 
 @Injectable()
@@ -201,7 +202,15 @@ export class PaymentsService {
       // Apply to invoices
       const appEntities: PaymentApplication[] = [];
       for (const app of applications) {
-        await this.invoices.applyPayment(manager, companyId, app.invoiceId, app.amount);
+        const invoice = await this.invoices.applyPayment(
+          manager,
+          companyId,
+          app.invoiceId,
+          app.amount,
+        );
+        // A credit sale that came from a delivery: tell the delivery it has
+        // been settled, or its row reads NOT PAID forever.
+        await this.syncDeliveryPaidStatus(manager, companyId, invoice);
         appEntities.push(
           manager.create(PaymentApplication, {
             paymentId: payment.id,
@@ -249,6 +258,81 @@ export class PaymentsService {
 
       return payment;
     }
+  }
+
+  /**
+   * Keep a delivery's PAID / NOT PAID flag honest once its invoice is settled.
+   *
+   * A "NOT PAID" delivery approval raises an ordinary A/R invoice (Stage 3) and
+   * leaves the delivery at paidStatus='unpaid'. Nothing used to tell the
+   * delivery when the customer finally paid, so the approvals list showed a
+   * settled sale as NOT PAID indefinitely — it reads delivery.paidStatus live.
+   *
+   * This posts NOTHING. Revenue and A/R were recognised at delivery approval,
+   * and the payment itself posts Dr Bank / Cr A/R above. This is display state.
+   *
+   * Two constraints worth stating, because both are easy to break later:
+   *
+   *  - Only for a COMMITTED delivery. paidStatus is overloaded: it is also an
+   *    INPUT to posting. DeliveryLedgerService.commitApproval reads it to
+   *    decide whether approval books a cash receipt or leaves the invoice on
+   *    A/R. Writing it before the ledger has committed could turn a credit sale
+   *    into a phantom cash sale. Once committed the decision is frozen, so this
+   *    can only ever be cosmetic. (commitApproval also calls us on the
+   *    rider-collected-cash path — but that runs BEFORE it sets
+   *    delivery.invoiceId, so the lookup finds nothing and we no-op. Keep that
+   *    ordering if you touch either file.)
+   *
+   *  - There is no partial state. delivery.paid_status is varchar(8) holding
+   *    'paid' | 'unpaid' | null. A partial payment writes nothing.
+   */
+  private async syncDeliveryPaidStatus(
+    manager: EntityManager,
+    companyId: string,
+    invoice: Invoice,
+  ): Promise<void> {
+    const settled =
+      invoice.status === 'paid' ||
+      !isPositive(toDecimal(invoice.balance));
+    if (!settled) return;
+
+    const delivery = await manager.findOne(Delivery, {
+      where: { invoiceId: invoice.id, companyId },
+    });
+    if (!delivery) return;
+    if (delivery.ledgerStatus !== 'committed') return;
+    if (delivery.paidStatus === 'paid') return;
+
+    delivery.paidStatus = 'paid';
+    await manager.save(delivery);
+  }
+
+  /**
+   * The mirror, for a deleted payment: the invoice is open again, so the
+   * delivery goes back to NOT PAID.
+   *
+   * Prepaid deliveries are excluded. Their 'paid' came from cash taken before
+   * dispatch and released from Customer Advances at approval, not from this
+   * payment — reverting it would contradict the advance still sitting in the
+   * ledger, and leave the row reading prepaid=true / paidStatus='unpaid'.
+   */
+  private async revertDeliveryPaidStatus(
+    manager: EntityManager,
+    companyId: string,
+    invoice: Invoice,
+  ): Promise<void> {
+    if (invoice.status === 'paid') return;
+
+    const delivery = await manager.findOne(Delivery, {
+      where: { invoiceId: invoice.id, companyId },
+    });
+    if (!delivery) return;
+    if (delivery.ledgerStatus !== 'committed') return;
+    if (delivery.prepaid) return;
+    if (delivery.paidStatus === 'unpaid') return;
+
+    delivery.paidStatus = 'unpaid';
+    await manager.save(delivery);
   }
 
   /**
@@ -300,6 +384,9 @@ export class PaymentsService {
           invoice.status = 'sent';
         }
         await manager.save(invoice);
+        // Mirror of syncDeliveryPaidStatus: the invoice is open again, so a
+        // delivery that was settled by this payment goes back to NOT PAID.
+        await this.revertDeliveryPaidStatus(manager, companyId, invoice);
       }
 
       // Restore the customer's AR balance (receive() decremented it).

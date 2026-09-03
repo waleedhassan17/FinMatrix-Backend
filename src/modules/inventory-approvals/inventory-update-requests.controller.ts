@@ -93,14 +93,21 @@ export class InventoryUpdateRequestsController {
    * Admin approves → mutates real inventory.
    */
   /**
-   * The posting moment: revenue and COGS post here (Table B row 4). Staff may
-   * sign this off as well as the owner — it is the day-to-day close of a
-   * delivery, not a correction — and whichever role approved is recorded on
-   * the request so the screen can show which authority signed it.
+   * The posting moment: revenue and COGS post here — Dr A/R / Cr Sales / Cr
+   * Tax, then Dr COGS / Cr Goods in Transit. That is the largest ledger event
+   * in the product, so signing it is the OWNER'S alone. Staff prepare and
+   * watch; they see the pending request and a "Waiting for Admin Approval"
+   * badge where the Approve button used to be.
+   *
+   * PATCH /inventory-approvals/:id/review is the other door into this same
+   * method and gates identically (it branches on action, because rejecting
+   * stays with staff). Widen one without the other and the gate is decorative.
+   *
+   * The reviewer's role is recorded on the request either way.
    */
   @Post(':id/approve')
-  @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Approve inventory update request (owner or staff)' })
+  @Roles('admin')
+  @ApiOperation({ summary: 'Approve inventory update request (owner only)' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Request approved and inventory synced' })
   @ApiResponse({ status: 409, description: 'Request is not pending' })
@@ -126,6 +133,11 @@ export class InventoryUpdateRequestsController {
    * Rider failed — stock goes back on the shelf and no sale is recognised
    * (Table B row 6). Staff may do this directly: nothing is being corrected,
    * because nothing was ever sold.
+   *
+   * Deliberately NOT gated alongside approve. Rejecting posts no revenue, and
+   * making it owner-only would strand a failed delivery's stock in Goods in
+   * Transit until the owner next logs in — a real operational cost for no
+   * control gained.
    */
   @Post(':id/reject')
   @Roles('admin', 'staff')

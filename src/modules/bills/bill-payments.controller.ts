@@ -81,9 +81,17 @@ export class BillPaymentsController {
    *
    * Kept off the pay endpoint deliberately — that one stays JSON, so the
    * financial path is not also a multipart parser.
+   *
+   * Staff upload too, and must: proofId is REQUIRED on PayBillsDto, so while
+   * this route was owner-only a staff member could never assemble a payable
+   * request at all — the gated `bill_payment` approval below was unreachable.
+   * Widening it moves no money. This stores a file and returns an id; the
+   * cash-out gate is POST / and POST /bills/pay, both of which still route a
+   * non-admin to an approval request. GET proofs/:id/file is already
+   * ('admin','staff'), so this only removes the inconsistency between them.
    */
   @Post('proofs')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Upload a payment proof; returns an id for POST /bill-payments.' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({

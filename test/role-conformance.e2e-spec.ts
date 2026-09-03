@@ -47,6 +47,11 @@ describe('Role conformance (e2e)', () => {
   let riderToken = '';
 
   let itemId: string;
+  // A second item for the delivery tests that dispatch and restock. Sharing
+  // one item across every suite compounds weighted-average re-rounding on it
+  // (unit_cost is stored to 4dp, and I13 tolerates roughly one half-ULP per
+  // unit on hand), so the extra deliveries below get their own.
+  let deliveryItemId: string;
   let customerId: string;
   let vendorId: string;
   let rentExpenseAccountId: string;
@@ -353,6 +358,26 @@ describe('Role conformance (e2e)', () => {
       'opening stock',
       post(`/api/v1/inventory/items/${itemId}/adjust`, ownerToken, {
         itemId,
+        newQty: '500',
+        reason: 'physical_count',
+      }),
+    );
+
+    deliveryItemId = (
+      await created(
+        'delivery item',
+        post('/api/v1/inventory/items', ownerToken, {
+          sku: `SKU-DEL-${suffix}`,
+          name: 'Conformance Delivery Widget',
+          unitCost: '60',
+          sellingPrice: '100',
+        }),
+      )
+    ).id;
+    await created(
+      'delivery opening stock',
+      post(`/api/v1/inventory/items/${deliveryItemId}/adjust`, ownerToken, {
+        itemId: deliveryItemId,
         newQty: '500',
         reason: 'physical_count',
       }),
@@ -776,7 +801,7 @@ describe('Role conformance (e2e)', () => {
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
-    it('rows 3-4 — a rider delivers, and STAFF sign it off with their role recorded', async () => {
+    it('rows 3-4 — a rider delivers, and only the OWNER may sign it off', async () => {
       // The rider's proof upload is multipart and covered by
       // inventory-approvals.e2e-spec.ts; what matters here is who may APPROVE
       // the resulting request, so the request is seeded directly.
@@ -801,10 +826,36 @@ describe('Role conformance (e2e)', () => {
 
       const gitBefore = await accountBalance('1250');
       const revenueBefore = await accountBalance('4000');
+      const journalsBefore = await countJournalEntries();
+
+      // Staff are refused at BOTH doors into the same service method. Widening
+      // one without the other makes the gate decorative, so both are asserted
+      // here rather than trusting the @Roles on one of them.
+      const staffDirect = await post(
+        `/api/v1/inventory-update-requests/${requestId}/approve`,
+        staffToken,
+        { reviewerComment: 'Delivered in full.' },
+      );
+      expect(staffDirect.status).toBe(403);
+
+      const staffViaReview = await patch(
+        `/api/v1/inventory-approvals/${requestId}/review`,
+        staffToken,
+        { action: 'approved', notes: 'Delivered in full.' },
+      );
+      expect(staffViaReview.status).toBe(403);
+
+      // Refused means refused: no revenue, no entries, still pending.
+      expect(await countJournalEntries()).toBe(journalsBefore);
+      const [stillPending] = await ds.query(
+        `SELECT status FROM inventory_update_requests WHERE id = $1`,
+        [requestId],
+      );
+      expect(stillPending.status).toBe('pending');
 
       const res = await post(
         `/api/v1/inventory-update-requests/${requestId}/approve`,
-        staffToken,
+        ownerToken,
         { reviewerComment: 'Delivered in full.' },
       );
       if (res.status !== 200 && res.status !== 201) {
@@ -818,14 +869,223 @@ describe('Role conformance (e2e)', () => {
       expect(await accountBalance('1250')).toBeLessThan(gitBefore);
       expect(await trialBalanceDelta()).toBe('0.0000');
 
-      // And the authority that signed it is recorded as staff.
+      // And the authority that signed it is recorded as the owner.
       const [row] = await ds.query(
         `SELECT reviewed_by, reviewer_role, status FROM inventory_update_requests WHERE id = $1`,
         [requestId],
       );
       expect(row.status).toBe('approved');
+      expect(row.reviewer_role).toBe('admin');
+      expect(row.reviewed_by).toBe(ownerId);
+    });
+
+    it('row 6 — staff DO reject a failed delivery, and no sale is recognised', async () => {
+      // Rejecting is deliberately not gated alongside approving: it posts no
+      // revenue, it restocks and reverses Goods in Transit. Gating it would
+      // strand a failed delivery's stock in transit until the owner logged in.
+      //
+      // Its own delivery, dispatched to put stock in transit — the one above
+      // is already committed and cannot be rejected.
+      const failed = await post('/api/v1/deliveries', staffToken, {
+        customerId,
+        scheduledDate: '2026-02-02',
+        items: [
+          { itemId: deliveryItemId, itemName: 'Conformance Delivery Widget', orderedQty: 1, unitPrice: 100 },
+        ],
+      });
+      if (![200, 201].includes(failed.status)) {
+        throw new Error(`delivery → ${failed.status}: ${JSON.stringify(failed.body)}`);
+      }
+      const failedDeliveryId = failed.body.data.id;
+      await post('/api/v1/deliveries/assign', staffToken, {
+        deliveryIds: [failedDeliveryId],
+        personnelId: riderId,
+      }).expect(201);
+
+      const requestId = randomUUID();
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'pending', now())`,
+        [requestId, companyId, failedDeliveryId, riderId],
+      );
+      // Nothing delivered, everything comes back. after_qty is `before` for a
+      // request that is not approved — the shelf is where it was, because the
+      // restock happens in the ledger, not in this column (invariant I16).
+      const [{ quantity_on_hand: onHand }] = await ds.query(
+        `SELECT quantity_on_hand FROM inventory_items WHERE id = $1`,
+        [deliveryItemId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_request_lines
+           (id, request_id, item_id, item_name, before_qty, delivered_qty, returned_qty, after_qty)
+         VALUES ($1, $2, $3, 'Conformance Delivery Widget', $4, 0, 1, $4)`,
+        [randomUUID(), requestId, deliveryItemId, onHand],
+      );
+
+      const revenueBefore = await accountBalance('4000');
+      const gitBefore = await accountBalance('1250');
+
+      const res = await post(
+        `/api/v1/inventory-update-requests/${requestId}/reject`,
+        staffToken,
+        { reviewerComment: 'Customer refused the delivery.' },
+      );
+      if (![200, 201].includes(res.status)) {
+        throw new Error(`staff reject → ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+
+      const [row] = await ds.query(
+        `SELECT reviewer_role, status FROM inventory_update_requests WHERE id = $1`,
+        [requestId],
+      );
+      expect(row.status).toBe('rejected');
       expect(row.reviewer_role).toBe('staff');
-      expect(row.reviewed_by).toBe(staffId);
+
+      // Nothing was ever sold, so nothing reverses out of revenue — the only
+      // movement is Goods in Transit going back to Inventory.
+      expect(await accountBalance('4000')).toBe(revenueBefore);
+      expect(await accountBalance('1250')).toBeLessThan(gitBefore);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
+    it('a NOT PAID delivery flips to PAID when its invoice is settled', async () => {
+      // Stage 4, which used to go nowhere. Approving a "NOT PAID" delivery
+      // raises an ordinary A/R invoice and leaves the delivery at
+      // paidStatus='unpaid'. Nothing told the delivery when the customer
+      // finally paid, so the approvals list showed a settled sale as NOT PAID
+      // forever — it reads delivery.paid_status live.
+      const sale = await post('/api/v1/deliveries', staffToken, {
+        customerId,
+        scheduledDate: '2026-02-03',
+        items: [
+          { itemId: deliveryItemId, itemName: 'Conformance Delivery Widget', orderedQty: 1, unitPrice: 100 },
+        ],
+      });
+      if (![200, 201].includes(sale.status)) {
+        throw new Error(`delivery → ${sale.status}: ${JSON.stringify(sale.body)}`);
+      }
+      const saleDeliveryId = sale.body.data.id;
+      await post('/api/v1/deliveries/assign', staffToken, {
+        deliveryIds: [saleDeliveryId],
+        personnelId: riderId,
+      }).expect(201);
+
+      const requestId = randomUUID();
+      await ds.query(
+        `INSERT INTO inventory_update_requests
+           (id, company_id, delivery_id, personnel_id, status, submitted_at)
+         VALUES ($1, $2, $3, $4, 'pending', now())`,
+        [requestId, companyId, saleDeliveryId, riderId],
+      );
+      const [{ quantity_on_hand: onHand }] = await ds.query(
+        `SELECT quantity_on_hand FROM inventory_items WHERE id = $1`,
+        [deliveryItemId],
+      );
+      await ds.query(
+        `INSERT INTO inventory_update_request_lines
+           (id, request_id, item_id, item_name, before_qty, delivered_qty, returned_qty, after_qty)
+         VALUES ($1, $2, $3, 'Conformance Delivery Widget', $4, 1, 0, $4)`,
+        [randomUUID(), requestId, deliveryItemId, onHand],
+      );
+
+      // The rider says NOT PAID, so approval books it to A/R, not to cash.
+      await ds.query(
+        `UPDATE deliveries SET paid_status = 'unpaid' WHERE id = $1`,
+        [saleDeliveryId],
+      );
+
+      const approved = await post(
+        `/api/v1/inventory-update-requests/${requestId}/approve`,
+        ownerToken,
+        { reviewerComment: 'Delivered, payment to follow.' },
+      );
+      if (![200, 201].includes(approved.status)) {
+        throw new Error(`approve → ${approved.status}: ${JSON.stringify(approved.body)}`);
+      }
+
+      const [afterApproval] = await ds.query(
+        `SELECT paid_status, ledger_status, invoice_id FROM deliveries WHERE id = $1`,
+        [saleDeliveryId],
+      );
+      expect(afterApproval.paid_status).toBe('unpaid');
+      expect(afterApproval.ledger_status).toBe('committed');
+      expect(afterApproval.invoice_id).toBeTruthy();
+
+      const [invoice] = await ds.query(
+        `SELECT total, balance FROM invoices WHERE id = $1`,
+        [afterApproval.invoice_id],
+      );
+      expect(Number(invoice.balance)).toBeGreaterThan(0);
+
+      // A PARTIAL payment must not flip it: paid_status is varchar(8) holding
+      // 'paid' | 'unpaid' | null, so there is no half-way value to write.
+      const part = (Number(invoice.total) / 2).toFixed(2);
+      await post('/api/v1/payments', ownerToken, {
+        customerId,
+        amount: part,
+        paymentDate: '2026-02-04',
+        paymentMethod: 'cash',
+        bankAccountId: cashAccountId,
+        applications: [{ invoiceId: afterApproval.invoice_id, amount: part }],
+      }).expect(201);
+
+      const [afterPartial] = await ds.query(
+        `SELECT paid_status FROM deliveries WHERE id = $1`,
+        [saleDeliveryId],
+      );
+      expect(afterPartial.paid_status).toBe('unpaid');
+
+      // Settling the rest does. The propagation itself posts nothing — the
+      // payment's own Dr Bank / Cr A/R is the only new entry.
+      const [mid] = await ds.query(`SELECT balance FROM invoices WHERE id = $1`, [
+        afterApproval.invoice_id,
+      ]);
+      const rest = Number(mid.balance).toFixed(2);
+      const journalsBefore = await countJournalEntries();
+
+      await post('/api/v1/payments', ownerToken, {
+        customerId,
+        amount: rest,
+        paymentDate: '2026-02-05',
+        paymentMethod: 'cash',
+        bankAccountId: cashAccountId,
+        applications: [{ invoiceId: afterApproval.invoice_id, amount: rest }],
+      }).expect(201);
+
+      const [afterFull] = await ds.query(
+        `SELECT paid_status FROM deliveries WHERE id = $1`,
+        [saleDeliveryId],
+      );
+      expect(afterFull.paid_status).toBe('paid');
+
+      // One entry for the payment, and not a second for the status change.
+      expect(await countJournalEntries()).toBe(journalsBefore + 1);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+
+      // And it goes back. Deleting the settling payment re-opens the invoice,
+      // so a delivery still reading PAID would be claiming money that is no
+      // longer in the books.
+      const [settling] = await ds.query(
+        `SELECT p.id FROM payments p
+           JOIN payment_applications pa ON pa.payment_id = p.id
+          WHERE pa.invoice_id = $1 AND p.company_id = $2
+          ORDER BY p.payment_date DESC LIMIT 1`,
+        [afterApproval.invoice_id, companyId],
+      );
+      const del = await request(app.getHttpServer())
+        .delete(`/api/v1/payments/${settling.id}`)
+        .set(as(ownerToken));
+      if (![200, 204].includes(del.status)) {
+        throw new Error(`delete payment → ${del.status}: ${JSON.stringify(del.body)}`);
+      }
+
+      const [afterDelete] = await ds.query(
+        `SELECT paid_status FROM deliveries WHERE id = $1`,
+        [saleDeliveryId],
+      );
+      expect(afterDelete.paid_status).toBe('unpaid');
+      expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
     it('a rider cannot approve their own delivery (checker != rider)', async () => {
@@ -1327,7 +1587,29 @@ describe('Role conformance (e2e)', () => {
             }),
           );
           await post(`/api/v1/bills/${bill.id}/post`, staffToken);
-          return { billId: bill.id };
+
+          // A REAL proof, uploaded by the staff member. proofId is required on
+          // PayBillsDto and BillsService.pay resolves it at approval, so while
+          // POST /bill-payments/proofs was owner-only a staff member could
+          // never assemble a payable request at all — this whole matrix row
+          // was unreachable in practice. Uploading stores a file and returns
+          // an id; it moves no money.
+          const proofRes = await request(app.getHttpServer())
+            .post('/api/v1/bill-payments/proofs')
+            .set(as(staffToken))
+            .attach('proof', Buffer.from('conformance receipt'), {
+              filename: 'receipt.png',
+              contentType: 'image/png',
+            });
+          if (![200, 201].includes(proofRes.status)) {
+            throw new Error(
+              `staff proof upload → ${proofRes.status}: ${JSON.stringify(proofRes.body)}`,
+            );
+          }
+          const proofId = proofRes.body.data?.id ?? proofRes.body.id;
+          expect(proofId).toBeTruthy();
+
+          return { billId: bill.id, proofId };
         },
         submit: ctx =>
           post('/api/v1/bills/pay', staffToken, {
@@ -1335,14 +1617,9 @@ describe('Role conformance (e2e)', () => {
             paymentDate: '2026-03-03',
             paymentMethod: 'cash',
             bankAccountId: cashAccountId,
-            // A real proof is only checked when the payment actually posts, at
-            // approval — the gate runs first, which is what this asserts.
-            proofId: randomUUID(),
+            proofId: ctx.proofId as string,
             applications: [{ billId: ctx.billId as string, amount: '40' }],
           }),
-        // Deliberately not approved below: posting needs an uploaded proof
-        // file. The matrix row being tested is that staff are ROUTED to a
-        // request rather than refused, which the pending half proves.
       },
       {
         type: 'void',
@@ -1386,14 +1663,19 @@ describe('Role conformance (e2e)', () => {
         // The invariant the whole feature rests on.
         expect(await countJournalEntries()).toBe(journalsBefore);
         if (spec.assertNoEffect) await spec.assertNoEffect(ctx);
-      });
+        // bill_payment's arrange uploads a real file. StorageService writes it
+        // to Postgres in CI, but to Cloudinary wherever those credentials are
+        // set — a network round-trip that will not fit in the 5s default.
+      }, 30_000);
     }
 
     it('approving each one posts exactly once, and the books still balance', async () => {
-      // bill_payment is excluded: it needs a real uploaded proof and an open
-      // bill, which the pending-half test above already covers. Everything
-      // else is approved here and must post.
-      const approvable = ['journal', 'vendor_credit', 'void'];
+      // bill_payment is included now that staff can upload their own proof:
+      // the owner's approval replays BillsService.pay, which resolves that
+      // proof by { id, companyId }, claims it against the payment and posts
+      // Dr AP / Cr Bank once. That end-to-end replay is the whole point of the
+      // proof-permission fix, so it is asserted rather than assumed.
+      const approvable = ['journal', 'vendor_credit', 'void', 'bill_payment'];
 
       for (const type of approvable) {
         const [pending] = (await approvalRows()).filter(
