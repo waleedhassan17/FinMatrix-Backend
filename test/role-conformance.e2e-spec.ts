@@ -554,6 +554,54 @@ describe('Role conformance (e2e)', () => {
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
 
+    it('staff send their approved PO to the vendor, but may not rewrite it', async () => {
+      // The PO the approval above committed: a staff member's own request,
+      // now a real draft. This is exactly what they open in the app.
+      const [po] = await ds.query(
+        `SELECT id, status FROM purchase_orders
+          WHERE company_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [companyId],
+      );
+      expect(po.status).toBe('draft');
+
+      // Sending posts nothing — a PO is a commitment, not a transaction — so
+      // it is not the owner's signature. Withholding it stranded an approved
+      // PO in draft, because receiving requires 'sent'.
+      const journalsBefore = await countJournalEntries();
+      await patch(`/api/v1/purchase-orders/${po.id}/status`, staffToken, {
+        status: 'sent',
+      }).expect(200);
+
+      const [sent] = await ds.query(
+        `SELECT status FROM purchase_orders WHERE id = $1`,
+        [po.id],
+      );
+      expect(sent.status).toBe('sent');
+      expect(await countJournalEntries()).toBe(journalsBefore);
+
+      // A status the column cannot hold is a 400. The column is varchar(16),
+      // so an unvalidated string would be a Postgres 22001 — a 500.
+      await patch(`/api/v1/purchase-orders/${po.id}/status`, staffToken, {
+        status: 'partially_received',
+      }).expect(400);
+
+      // Editing the order itself stays with the owner: it would rewrite the
+      // vendor, quantities and costs the approval signed off.
+      await patch(`/api/v1/purchase-orders/${po.id}`, staffToken, {
+        vendorId,
+        orderDate: '2026-01-11',
+        lines: [
+          { itemId, description: 'Widget', orderedQty: '999', unitCost: '1' },
+        ],
+      }).expect(403);
+
+      const [line] = await ds.query(
+        `SELECT ordered_qty FROM purchase_order_lines WHERE order_id = $1`,
+        [po.id],
+      );
+      expect(Number(line.ordered_qty)).toBe(10);
+    });
+
     it('an owner posts the same adjustment directly, with no request row', async () => {
       const before = (await approvalRows()).length;
       const journalsBefore = await countJournalEntries();

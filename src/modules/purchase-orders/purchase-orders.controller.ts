@@ -28,6 +28,7 @@ import {
   CreatePurchaseOrderDto,
   ListPurchaseOrdersQueryDto,
   ReceivePurchaseOrderDto,
+  UpdatePurchaseOrderStatusDto,
 } from './dto/purchase-order.dto';
 import {
   ParsePaginationPipe,
@@ -131,14 +132,25 @@ export class PurchaseOrdersController {
     return this.service.delete(companyId, poId);
   }
 
+  /**
+   * Staff too: moving a PO between draft / sent / closed posts nothing — the
+   * order is a commitment, not a transaction. The owner's control point is
+   * approving the PO into existence (see create above), and staff already hold
+   * receive and create-bill on this same controller, both of which DO post.
+   * Withholding this one only stranded an approved PO in draft, since
+   * receiving requires it to be sent.
+   *
+   * Editing the PO itself (@Patch(':poId')) stays with the owner: that would
+   * rewrite the vendor, quantities and costs they approved.
+   */
   @Patch(':poId/status')
-  @Roles('admin')
+  @Roles('admin', 'staff')
   @HttpCode(200)
   status(
     @CurrentCompany() companyId: string,
     @Param('poId', ParseUUIDPipe) poId: string,
-    @Body('status') status: string,
+    @Body() dto: UpdatePurchaseOrderStatusDto,
   ) {
-    return this.service.updateStatus(companyId, poId, status as any);
+    return this.service.updateStatus(companyId, poId, dto.status);
   }
 }

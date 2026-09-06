@@ -58,12 +58,27 @@ export class CreateBillFromPoDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() defaultAccountId?: string;
 }
 
+/** The status column is varchar(16) — an unvalidated string is a Postgres
+ *  22001 (a 500) rather than a 400, so every route taking one validates
+ *  against this list. */
+const PURCHASE_ORDER_STATUSES: PurchaseOrderStatus[] = [
+  'draft',
+  'sent',
+  'partial',
+  'received',
+  'closed',
+];
+
+export class UpdatePurchaseOrderStatusDto {
+  @ApiProperty({ enum: PURCHASE_ORDER_STATUSES })
+  @IsIn(PURCHASE_ORDER_STATUSES)
+  status!: PurchaseOrderStatus;
+}
+
 export class ListPurchaseOrdersQueryDto {
-  @ApiPropertyOptional({
-    enum: ['draft', 'sent', 'partial', 'received', 'closed'],
-  })
+  @ApiPropertyOptional({ enum: PURCHASE_ORDER_STATUSES })
   @IsOptional()
-  @IsIn(['draft', 'sent', 'partial', 'received', 'closed'])
+  @IsIn(PURCHASE_ORDER_STATUSES)
   status?: PurchaseOrderStatus;
 
   @ApiPropertyOptional() @IsOptional() @IsUUID() vendorId?: string;
