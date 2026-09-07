@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { SalesOrder, DiscountType, SalesOrderStatus } from './entities/sales-order.entity';
 import { SalesOrderLineItem } from './entities/sales-order-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import {
   ConvertSalesOrderDto, CreateSalesOrderDto, FulfillSalesOrderDto, ListSalesOrdersQueryDto,
   SalesOrderLineDto, UpdateSalesOrderDto,
@@ -17,7 +18,8 @@ import { InvoicesService } from '../invoices/invoices.service';
 
 interface LineCalc {
   description: string; quantity: string; unitPrice: string; taxRate: string;
-  taxAmount: string; lineTotal: string; accountId: string | null; lineOrder: number;
+  taxAmount: string; lineTotal: string; accountId: string | null;
+  itemId: string | null; lineOrder: number;
 }
 
 @Injectable()
@@ -101,6 +103,7 @@ export class SalesOrdersService {
     {
       const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
 
       const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
       const year = parseInt(dto.orderDate.slice(0, 4), 10);
@@ -149,9 +152,11 @@ export class SalesOrdersService {
       if (dto.notes !== undefined) order.notes = dto.notes;
 
       if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
+        if (dto.lines) await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
         const nextLines = dto.lines ?? order.lines.map<SalesOrderLineDto>((l) => ({
           description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
           taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+          itemId: l.itemId ?? undefined,
         }));
         const dType = dto.discountType ?? order.discountType;
         const dValue = dto.discountValue ?? order.discountValue;
@@ -164,9 +169,14 @@ export class SalesOrdersService {
         order.total = totals.total;
         if (dto.lines) {
           await manager.delete(SalesOrderLineItem, { salesOrderId: order.id });
-          await manager.save(totals.lines.map((l) => manager.create(SalesOrderLineItem, {
+          const newLines = totals.lines.map((l) => manager.create(SalesOrderLineItem, {
             salesOrderId: order.id, quantityFulfilled: '0', ...l,
-          })));
+          }));
+          await manager.save(newLines);
+          // See the same line in EstimatesService.update: the cascade on
+          // `manager.save(order)` below would otherwise walk the rows just
+          // deleted and null their FK, which is a 500.
+          order.lines = newLines;
         }
       }
       await manager.save(order);
@@ -222,9 +232,15 @@ export class SalesOrdersService {
       discountValue: order.discountValue,
       status: 'sent',
       notes: `Converted from sales order ${order.orderNumber}`,
+      // itemId rides along: the invoice is created as 'sent', so it posts, and
+      // posting is where the ordered item finally means something -- Dr COGS /
+      // Cr Inventory and a stock movement per line. Note this makes conversion
+      // refusable (INSUFFICIENT_STOCK) where it used to always succeed, which
+      // is the same rule a directly-raised invoice has always followed.
       lines: order.lines.map((l) => ({
         description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
         taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+        itemId: l.itemId ?? undefined,
       })),
     });
     order.status = 'invoiced';
@@ -252,6 +268,33 @@ export class SalesOrdersService {
     return { id, deleted: true };
   }
 
+  /**
+   * Refuse a line pointing at an item that is not this company's.
+   *
+   * Mirrors EstimatesService.assertItemsBelongToCompany -- see the reasoning
+   * there. Short version: the invoice can skip this because it spends its
+   * itemId in the same request, while an order's sits inert until conversion
+   * and would otherwise fail as an invoice that quietly posts no COGS.
+   */
+  private async assertItemsBelongToCompany(
+    manager: EntityManager,
+    companyId: string,
+    lines: { itemId?: string }[],
+  ): Promise<void> {
+    const ids = [...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    if (ids.length === 0) return;
+    const found = await manager.getRepository(InventoryItem).find({
+      where: { id: In(ids), companyId },
+      select: ['id'],
+    });
+    if (found.length !== ids.length) {
+      throw new BadRequestException({
+        code: 'ITEM_NOT_FOUND',
+        message: 'One or more line items reference an inventory item that does not exist',
+      });
+    }
+  }
+
   private computeTotals(
     lines: SalesOrderLineDto[],
     discountType: 'percent' | 'amount' | 'none' | undefined,
@@ -271,7 +314,7 @@ export class SalesOrdersService {
       calc.push({
         description: l.description, quantity: qty.toFixed(4), unitPrice: price.toFixed(4),
         taxRate: taxRate.toFixed(4), taxAmount: tax.toFixed(4), lineTotal: base.plus(tax).toFixed(4),
-        accountId: l.accountId ?? null, lineOrder: i,
+        accountId: l.accountId ?? null, itemId: l.itemId ?? null, lineOrder: i,
       });
     });
     let discountAmount = new Decimal(0);

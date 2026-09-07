@@ -18,6 +18,15 @@ export class EstimateLineDto {
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
   @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Inventory item id. A quote posts nothing, so this drives no COGS here — ' +
+      'it is carried to the sales order or invoice this becomes, where it does.',
+  })
+  @IsOptional()
+  @IsUUID()
+  itemId?: string;
 }
 
 export class CreateEstimateDto {

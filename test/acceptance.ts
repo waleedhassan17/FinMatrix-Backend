@@ -652,6 +652,106 @@ async function run() {
   // ── phase2.md: delivery module end-to-end (assign → rider → approve → books) ──
   await deliveryE2E();
 
+  // ── #2b Item link survives quote → order → invoice, and posts there ──
+  // An estimate and a sales order post nothing, so the itemId they carry is
+  // inert until conversion — which is precisely why it used to be dropped and
+  // nobody noticed: an invoice converted from an estimate posted no COGS and
+  // moved no stock, while the same invoice raised directly did both.
+  //
+  // Guarded on a FRESH quantity read, not `hasInventory`: #2 above has already
+  // sold 3 of the item this block would sell 2 more of, and a re-run against
+  // the same database depletes it further. Skipping is honest; an
+  // INSUFFICIENT_STOCK failure here would look like a regression in code that
+  // is fine.
+  const stockNow = hasInventory
+    ? await (async () => {
+        const b = (await api('GET', `/inventory/items/${item.id}`)).body;
+        return n(b?.item?.quantityOnHand ?? b?.quantityOnHand);
+      })()
+    : 0;
+  if (hasInventory && stockNow >= 4) {
+    const lineOf = (o: any) => (o?.estimate ?? o?.salesOrder ?? o?.invoice ?? o)?.lines?.[0];
+    const estLine = { description: item.name, quantity: '1', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id };
+
+    // Create → read back. Covers the migration, the entity column and the
+    // spread that persists computeTotals' output.
+    const est = await api('POST', '/estimates', {
+      customerId, estimateDate: '2026-06-24', status: 'sent', lines: [estLine],
+    });
+    ok('#2b create estimate with an item', est.status < 300 && !!est.body?.id, `status=${est.status}`);
+    const estRead = (await api('GET', `/estimates/${est.body.id}`)).body;
+    ok('#2b estimate line keeps its itemId', lineOf(estRead)?.itemId === item.id, `got=${lineOf(estRead)?.itemId}`);
+
+    // Edit → read back. The update path DELETES and recreates every line, so
+    // this is a separate risk from create.
+    const estPatch = await api('PATCH', `/estimates/${est.body.id}`, {
+      lines: [{ ...estLine, quantity: '1' }],
+    });
+    ok('#2b edit estimate', estPatch.status < 300, `status=${estPatch.status}`);
+    const estEdited = (await api('GET', `/estimates/${est.body.id}`)).body;
+    ok('#2b itemId survives a line rewrite', lineOf(estEdited)?.itemId === item.id, `got=${lineOf(estEdited)?.itemId}`);
+
+    // Estimate → sales order. The third conversion path, and the one with no
+    // ledger effect of its own — it just has to carry the link one hop.
+    const so = await api('POST', `/estimates/${est.body.id}/convert-to-sales-order`);
+    ok('#2b convert estimate → sales order', so.status < 300, `status=${so.status}`);
+    const soId = (so.body?.salesOrder ?? so.body)?.id;
+    const soRead = (await api('GET', `/sales-orders/${soId}`)).body;
+    ok('#2b sales order line carries the itemId', lineOf(soRead)?.itemId === item.id, `got=${lineOf(soRead)?.itemId}`);
+
+    // Same delete-and-recreate hazard as the estimate PATCH above.
+    const soPatch = await api('PATCH', `/sales-orders/${soId}`, { lines: [{ ...estLine, quantity: '1' }] });
+    ok('#2b edit sales order', soPatch.status < 300, `status=${soPatch.status}`);
+    ok('#2b itemId survives a sales-order line rewrite',
+      lineOf((await api('GET', `/sales-orders/${soId}`)).body)?.itemId === item.id);
+
+    // Sales order → invoice. This one POSTS: the whole feature in one step.
+    const cogsBeforeConv = await acctBalance('5000');
+    const qtyBeforeConv = stockNow;
+    const convInv = await api('POST', `/sales-orders/${soId}/convert-to-invoice`);
+    ok('#2b convert sales order → invoice', convInv.status < 300, `status=${convInv.status}`);
+    const convInvId = (convInv.body?.invoice ?? convInv.body)?.id;
+    const convInvRead = (await api('GET', `/invoices/${convInvId}`)).body;
+    ok('#2b converted invoice line carries the itemId',
+      lineOf(convInvRead)?.itemId === item.id, `got=${lineOf(convInvRead)?.itemId}`);
+    ok('#2b conversion posted COGS at qty×cost',
+      approx((await acctBalance('5000')) - cogsBeforeConv, n(item.unitCost)),
+      `Δ=${(await acctBalance('5000')) - cogsBeforeConv}`);
+    const qtyAfterConv = n((await api('GET', `/inventory/items/${item.id}`)).body?.quantityOnHand);
+    ok('#2b conversion moved stock by 1', approx(qtyBeforeConv - qtyAfterConv, 1),
+      `before=${qtyBeforeConv} after=${qtyAfterConv}`);
+
+    // Estimate → invoice directly, the remaining conversion path.
+    const est2 = await api('POST', '/estimates', {
+      customerId, estimateDate: '2026-06-24', status: 'sent', lines: [estLine],
+    });
+    const conv2 = await api('POST', `/estimates/${est2.body.id}/convert-to-invoice`);
+    ok('#2b convert estimate → invoice', conv2.status < 300, `status=${conv2.status}`);
+    const conv2Read = (await api('GET', `/invoices/${(conv2.body?.invoice ?? conv2.body)?.id}`)).body;
+    ok('#2b that invoice carries the itemId too',
+      lineOf(conv2Read)?.itemId === item.id, `got=${lineOf(conv2Read)?.itemId}`);
+
+    // A quote must not warehouse an id that is not this company's — it would
+    // resurface weeks later as an invoice that silently posts no COGS.
+    const foreign = await api('POST', '/estimates', {
+      customerId, estimateDate: '2026-06-24', status: 'sent',
+      lines: [{ ...estLine, itemId: '00000000-0000-0000-0000-000000000000' }],
+    });
+    ok('#2b unknown itemId is refused', foreign.status === 400,
+      `status=${foreign.status} body=${JSON.stringify(foreign.body)}`);
+
+    // A free-text line still works, and still posts nothing against stock.
+    const svc = await api('POST', '/estimates', {
+      customerId, estimateDate: '2026-06-24', status: 'sent',
+      lines: [{ description: 'Acceptance consulting', quantity: '1', unitPrice: '250', taxRate: '0' }],
+    });
+    ok('#2b estimate with no item still saves', svc.status < 300, `status=${svc.status}`);
+
+    await invariants('after estimate/sales-order conversion');
+  } else {
+    console.log(`  · skipping #2b item-link block (stock ${stockNow}, needs 4)`);
+  }
+
   await invariants('final');
 
   console.log(`\n${pass} passed, ${fail} failed.`);

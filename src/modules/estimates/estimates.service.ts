@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Estimate, DiscountType, EstimateStatus } from './entities/estimate.entity';
 import { EstimateLineItem } from './entities/estimate-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import {
   ConvertEstimateDto,
   CreateEstimateDto,
@@ -28,6 +29,7 @@ interface LineCalc {
   taxAmount: string;
   lineTotal: string;
   accountId: string | null;
+  itemId: string | null;
   lineOrder: number;
 }
 
@@ -90,6 +92,7 @@ export class EstimatesService {
     return this.dataSource.transaction(async (manager) => {
       const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
 
       const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
       const year = parseInt(dto.estimateDate.slice(0, 4), 10);
@@ -136,9 +139,11 @@ export class EstimatesService {
       if (dto.notes !== undefined) estimate.notes = dto.notes;
 
       if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
+        if (dto.lines) await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
         const nextLines = dto.lines ?? estimate.lines.map<EstimateLineDto>((l) => ({
           description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
           taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+          itemId: l.itemId ?? undefined,
         }));
         const dType = dto.discountType ?? estimate.discountType;
         const dValue = dto.discountValue ?? estimate.discountValue;
@@ -151,7 +156,18 @@ export class EstimatesService {
         estimate.total = totals.total;
         if (dto.lines) {
           await manager.delete(EstimateLineItem, { estimateId: estimate.id });
-          await manager.save(totals.lines.map((l) => manager.create(EstimateLineItem, { estimateId: estimate.id, ...l })));
+          const newLines = totals.lines.map((l) =>
+            manager.create(EstimateLineItem, { estimateId: estimate.id, ...l }),
+          );
+          await manager.save(newLines);
+          // Point the in-memory relation at the rows that now exist. The
+          // estimate was loaded with `relations: { lines: true }` and the
+          // relation is `cascade: true`, so the `manager.save(estimate)` below
+          // walks whatever is in `estimate.lines` -- which was still the rows
+          // just deleted. TypeORM treated them as orphans and issued
+          // `UPDATE estimate_line_items SET estimate_id = NULL`, which the
+          // NOT NULL constraint refused: every PATCH carrying lines was a 500.
+          estimate.lines = newLines;
         }
       }
       await manager.save(estimate);
@@ -182,9 +198,15 @@ export class EstimatesService {
       discountValue: estimate.discountValue,
       status: 'sent',
       notes: `Converted from estimate ${estimate.estimateNumber}`,
+      // itemId rides along: the invoice is created as 'sent', so it posts, and
+      // posting is where the quoted item finally means something -- Dr COGS /
+      // Cr Inventory and a stock movement per line. Note this makes conversion
+      // refusable (INSUFFICIENT_STOCK) where it used to always succeed, which
+      // is the same rule a directly-raised invoice has always followed.
       lines: estimate.lines.map((l) => ({
         description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
         taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+        itemId: l.itemId ?? undefined,
       })),
     });
     await this.markConverted(estimate, 'invoice', invoice.id);
@@ -203,9 +225,12 @@ export class EstimatesService {
         discountType: estimate.discountType,
         discountValue: estimate.discountValue,
         notes: `Converted from estimate ${estimate.estimateNumber}`,
+        // A sales order posts nothing either, so this is still just carrying
+        // the link one hop further along — to the invoice that will post it.
         lines: estimate.lines.map((l) => ({
           description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
           taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+          itemId: l.itemId ?? undefined,
         })),
       },
       estimate.id,
@@ -240,6 +265,39 @@ export class EstimatesService {
     await this.repo.save(estimate);
   }
 
+  /**
+   * Refuse a line pointing at an item that is not this company's.
+   *
+   * The invoice does not do this, and can afford not to: its itemId is spent
+   * in the same request, company-scoped, so a bad one shows up immediately as
+   * a missing COGS figure. An estimate's sits inert for weeks and is only ever
+   * dereferenced at conversion, inside postInvoiceCogs's silent
+   * `if (!item) continue` -- so a wrong id would surface as an invoice that
+   * quietly posts nothing, traceable to nowhere.
+   *
+   * It cannot promise the item still exists when the quote is converted;
+   * nothing can. It catches the wrong id at the one moment the user can still
+   * do something about it.
+   */
+  private async assertItemsBelongToCompany(
+    manager: EntityManager,
+    companyId: string,
+    lines: { itemId?: string }[],
+  ): Promise<void> {
+    const ids = [...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    if (ids.length === 0) return;
+    const found = await manager.getRepository(InventoryItem).find({
+      where: { id: In(ids), companyId },
+      select: ['id'],
+    });
+    if (found.length !== ids.length) {
+      throw new BadRequestException({
+        code: 'ITEM_NOT_FOUND',
+        message: 'One or more line items reference an inventory item that does not exist',
+      });
+    }
+  }
+
   private computeTotals(
     lines: EstimateLineDto[],
     discountType: 'percent' | 'amount' | 'none' | undefined,
@@ -259,7 +317,7 @@ export class EstimatesService {
       calc.push({
         description: l.description, quantity: qty.toFixed(4), unitPrice: price.toFixed(4),
         taxRate: taxRate.toFixed(4), taxAmount: tax.toFixed(4), lineTotal: base.plus(tax).toFixed(4),
-        accountId: l.accountId ?? null, lineOrder: i,
+        accountId: l.accountId ?? null, itemId: l.itemId ?? null, lineOrder: i,
       });
     });
     let discountAmount = new Decimal(0);

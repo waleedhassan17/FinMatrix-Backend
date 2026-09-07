@@ -34,6 +34,12 @@ export class SalesOrderLineItem {
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })
   accountId!: string | null;
 
+  /** The inventory item ordered, when the line is for stock rather than a
+   *  service. Carried to the invoice this order becomes; nothing dereferences
+   *  it here, because an order posts nothing. */
+  @Column({ type: 'uuid', nullable: true, name: 'item_id' })
+  itemId!: string | null;
+
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;
 

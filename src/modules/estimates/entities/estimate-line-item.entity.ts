@@ -31,6 +31,12 @@ export class EstimateLineItem {
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })
   accountId!: string | null;
 
+  /** The inventory item quoted, when the line is for stock rather than a
+   *  service. Carried to the sales order or invoice this estimate becomes;
+   *  nothing dereferences it here, because a quote posts nothing. */
+  @Column({ type: 'uuid', nullable: true, name: 'item_id' })
+  itemId!: string | null;
+
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;
 

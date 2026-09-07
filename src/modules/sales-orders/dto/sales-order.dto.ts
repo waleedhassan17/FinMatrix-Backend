@@ -10,6 +10,15 @@ export class SalesOrderLineDto {
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
   @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Inventory item id. An order is a commitment and posts nothing, so this ' +
+      'drives no COGS here — it is carried to the invoice it becomes, where it does.',
+  })
+  @IsOptional()
+  @IsUUID()
+  itemId?: string;
 }
 
 export class CreateSalesOrderDto {
