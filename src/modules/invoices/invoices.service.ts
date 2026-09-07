@@ -154,7 +154,17 @@ export class InvoicesService {
       });
     }
     inv.lines.sort((a, b) => a.lineOrder - b.lineOrder);
-    return inv;
+
+    // The list endpoint above decorates every row with customerName from its
+    // customerNameMap; this one never did, so the two disagreed about the shape
+    // of an invoice and the app's Bill To read blank on every single one. One
+    // row rather than a batch, but the contract has to match.
+    const customer = inv.customerId
+      ? await this.customerRepo.findOne({
+          where: { id: inv.customerId, companyId },
+        })
+      : null;
+    return { ...inv, customerName: customer?.name ?? '' } as Invoice;
   }
 
   async outstandingForCustomer(
