@@ -12,6 +12,7 @@ import { VendorCreditsModule } from '../vendor-credits/vendor-credits.module';
 import { BillsModule } from '../bills/bills.module';
 import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { InventoryApprovalsModule } from '../inventory-approvals/inventory-approvals.module';
 
 /**
@@ -39,6 +40,7 @@ import { InventoryApprovalsModule } from '../inventory-approvals/inventory-appro
     BillsModule,
     PurchaseOrdersModule,
     InvoicesModule,
+    PaymentsModule,
     InventoryApprovalsModule,
   ],
   controllers: [ApprovalsController],

@@ -2,11 +2,16 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 
 /**
- * The eight actions a staff member may ask for but not perform.
+ * The actions a staff member may ask for but not perform.
  *
- * Seven of them move value out or correct the ledger (§0 Table A). The eighth,
- * `delivery_undo`, reverses an approved delivery — the owner's call because it
+ * Most of them move value out or correct the ledger (§0 Table A).
+ * `delivery_undo` reverses an approved delivery — the owner's call because it
  * unwinds recognised revenue.
+ *
+ * `invoice` and `invoice_payment` were value IN, and direct for staff, until
+ * the owner asked to sign off billing and cash receipts as well. They are the
+ * two that a staff member's day-to-day now waits on, so keep the summary lines
+ * they carry informative: the owner is reading them to decide.
  */
 export type ApprovalType =
   | 'adjustment'
@@ -16,6 +21,8 @@ export type ApprovalType =
   | 'void'
   | 'bill_payment'
   | 'po'
+  | 'invoice'
+  | 'invoice_payment'
   | 'delivery_undo';
 
 export const APPROVAL_TYPES: ApprovalType[] = [
@@ -26,6 +33,8 @@ export const APPROVAL_TYPES: ApprovalType[] = [
   'void',
   'bill_payment',
   'po',
+  'invoice',
+  'invoice_payment',
   'delivery_undo',
 ];
 

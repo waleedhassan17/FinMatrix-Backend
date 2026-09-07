@@ -76,6 +76,17 @@ export class InvoicesController {
     return this.invoices.getById(companyId, invoiceId);
   }
 
+  /**
+   * Raising an invoice was value IN and direct for staff. The owner asked to
+   * sign off billing, so it is gated like the corrections are: a staff member
+   * files a request and the sale posts only when the owner approves it.
+   *
+   * The gate is HERE, in the controller, and that placement is load-bearing.
+   * The delivery flow creates its invoice by calling InvoicesService directly
+   * when the owner signs off a rider's delivery — that call does not pass
+   * through this handler, so it stays direct and the owner is never asked to
+   * approve the same sale twice.
+   */
   @Post()
   @Roles('admin', 'staff')
   create(
@@ -83,7 +94,14 @@ export class InvoicesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateInvoiceDto,
   ) {
-    return this.invoices.create(companyId, user.id, dto);
+    if (user.role === 'admin') return this.invoices.create(companyId, user.id, dto);
+    return this.approvals.createRequest(
+      'invoice',
+      dto as unknown as Record<string, unknown>,
+      `Invoice: ${dto.lines?.length ?? 0} line(s), due ${dto.dueDate}`,
+      user,
+      companyId,
+    );
   }
 
   @Patch(':invoiceId')
@@ -109,9 +127,8 @@ export class InvoicesController {
   }
 
   /**
-   * Raising and sending an invoice is value IN and stays direct for staff.
-   * VOIDING one reverses a posted sale, so it is gated like every other
-   * correction.
+   * Voiding reverses a posted sale, so it is gated — as raising one now is
+   * too, above.
    */
   @Post(':invoiceId/void')
   @Roles('admin', 'staff')

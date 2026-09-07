@@ -89,6 +89,14 @@ describe('Role conformance (e2e)', () => {
       [companyId],
     );
 
+  const countInvoices = async (): Promise<number> => {
+    const [row] = await ds.query(
+      `SELECT COUNT(*)::int AS n FROM invoices WHERE company_id = $1`,
+      [companyId],
+    );
+    return Number(row.n);
+  };
+
   const countJournalEntries = async (): Promise<number> => {
     const [row] = await ds.query(
       `SELECT COUNT(*)::int AS n FROM journal_entries WHERE company_id = $1`,
@@ -429,52 +437,12 @@ describe('Role conformance (e2e)', () => {
   // ══════════════════════════════════════════════════════════════════════════
 
   describe('Table A · value in — staff act directly', () => {
-    it('staff raise an invoice, and no approval request is created', async () => {
-      const before = (await approvalRows()).length;
-
-      const res = await post('/api/v1/invoices', staffToken, {
-        customerId,
-        invoiceDate: '2026-01-15',
-        dueDate: '2026-02-15',
-        lines: [
-          { description: 'Widget', quantity: '2', unitPrice: '100', itemId },
-        ],
-      });
-      if (![200, 201].includes(res.status))
-        throw new Error(`invoice → ${res.status}: ${JSON.stringify(res.body)}`);
-
-      expect((await approvalRows()).length).toBe(before);
-    });
-
-    it('staff receive a customer payment directly', async () => {
-      const invoice = await post('/api/v1/invoices', staffToken, {
-        customerId,
-        invoiceDate: '2026-01-16',
-        dueDate: '2026-02-16',
-        lines: [
-          { description: 'Widget', quantity: '1', unitPrice: '100', itemId },
-        ],
-      });
-      const invoiceId = invoice.body.data.id;
-      const sent = await post(`/api/v1/invoices/${invoiceId}/send`, staffToken);
-      if (sent.status !== 200)
-        throw new Error(`send → ${sent.status}: ${JSON.stringify(sent.body)}`);
-
-      const before = (await approvalRows()).length;
-      const res = await post('/api/v1/payments', staffToken, {
-        customerId,
-        amount: '50',
-        paymentDate: '2026-01-20',
-        paymentMethod: 'cash',
-        bankAccountId: cashAccountId,
-        applications: [{ invoiceId, amount: '50' }],
-      });
-      if (![200, 201].includes(res.status))
-        throw new Error(`payment → ${res.status}: ${JSON.stringify(res.body)}`);
-      expect((await approvalRows()).length).toBe(before);
-    });
-
+    // Raising an invoice and banking a customer payment USED to be here. The
+    // owner asked to sign both off, so they moved to the gated block below —
+    // these two are the only value-in rows that ever changed sides, and this
+    // note is what stops the move looking like a regression.
     it('staff create a customer and a vendor directly', async () => {
+
       const before = (await approvalRows()).length;
       await post('/api/v1/customers', staffToken, { name: 'Walk-in' }).expect(
         201,
@@ -489,6 +457,120 @@ describe('Role conformance (e2e)', () => {
   // ══════════════════════════════════════════════════════════════════════════
   //  TABLE A — money out & corrections: staff file requests with NO effect
   // ══════════════════════════════════════════════════════════════════════════
+
+  describe('Table A · billing and cash in — staff ask, the owner posts', () => {
+    it('a staff invoice files a request and creates no invoice', async () => {
+      const before = (await approvalRows()).length;
+      const invoicesBefore = await countInvoices();
+
+      const res = await post('/api/v1/invoices', staffToken, {
+        customerId,
+        invoiceDate: '2026-01-15',
+        dueDate: '2026-02-15',
+        status: 'sent',
+        lines: [
+          { description: 'Widget', quantity: '2', unitPrice: '100', itemId },
+        ],
+      });
+      if (![200, 201].includes(res.status))
+        throw new Error(`invoice → ${res.status}: ${JSON.stringify(res.body)}`);
+
+      expect(res.body.data.pending).toBe(true);
+      expect(res.body.data.type).toBe('invoice');
+      expect((await approvalRows()).length).toBe(before + 1);
+      // The point of the whole mechanism: nothing exists yet.
+      expect(await countInvoices()).toBe(invoicesBefore);
+    });
+
+    it('the owner approving it posts the sale exactly once', async () => {
+      const filed = await post('/api/v1/invoices', staffToken, {
+        customerId,
+        invoiceDate: '2026-01-17',
+        dueDate: '2026-02-17',
+        status: 'sent',
+        lines: [
+          { description: 'Widget', quantity: '1', unitPrice: '250', itemId },
+        ],
+      });
+      const requestId = filed.body.data.requestId;
+      const journalsBefore = await countJournalEntries();
+
+      const decided = await post(
+        `/api/v1/approvals/${requestId}/decide`,
+        ownerToken,
+        { decision: 'approve' },
+      );
+      if (decided.status !== 200)
+        throw new Error(`decide → ${decided.status}: ${JSON.stringify(decided.body)}`);
+
+      expect(decided.body.data.status).toBe('approved');
+      // resultId is what lets the app open the document the approval created.
+      expect(decided.body.data.resultId).toBeTruthy();
+      expect(await countJournalEntries()).toBe(journalsBefore + 1);
+      expect(await trialBalanceDelta()).toBe('0.0000');
+    });
+
+    it('a staff payment files a request and moves no cash', async () => {
+      // The invoice has to exist first, so the owner raises this one.
+      const invoice = await post('/api/v1/invoices', ownerToken, {
+        customerId,
+        invoiceDate: '2026-01-16',
+        dueDate: '2026-02-16',
+        lines: [
+          { description: 'Widget', quantity: '1', unitPrice: '100', itemId },
+        ],
+      });
+      const invoiceId = invoice.body.data.id;
+      await post(`/api/v1/invoices/${invoiceId}/send`, ownerToken);
+
+      const before = (await approvalRows()).length;
+      const journalsBefore = await countJournalEntries();
+
+      const res = await post('/api/v1/payments', staffToken, {
+        customerId,
+        amount: '50',
+        paymentDate: '2026-01-20',
+        paymentMethod: 'cash',
+        bankAccountId: cashAccountId,
+        applications: [{ invoiceId, amount: '50' }],
+      });
+      if (![200, 201].includes(res.status))
+        throw new Error(`payment → ${res.status}: ${JSON.stringify(res.body)}`);
+
+      expect(res.body.data.pending).toBe(true);
+      expect(res.body.data.type).toBe('invoice_payment');
+      expect((await approvalRows()).length).toBe(before + 1);
+      // No Dr Bank / Cr A/R until the owner says so.
+      expect(await countJournalEntries()).toBe(journalsBefore);
+    });
+
+    it('the owner is unaffected — their own invoice and payment post directly', async () => {
+      const before = (await approvalRows()).length;
+
+      const invoice = await post('/api/v1/invoices', ownerToken, {
+        customerId,
+        invoiceDate: '2026-01-18',
+        dueDate: '2026-02-18',
+        status: 'sent',
+        lines: [
+          { description: 'Widget', quantity: '1', unitPrice: '75', itemId },
+        ],
+      });
+      expect(invoice.body.data.pending).toBeUndefined();
+      const invoiceId = invoice.body.data.id;
+
+      const payment = await post('/api/v1/payments', ownerToken, {
+        customerId,
+        amount: '75',
+        paymentDate: '2026-01-21',
+        paymentMethod: 'cash',
+        bankAccountId: cashAccountId,
+        applications: [{ invoiceId, amount: '75' }],
+      });
+      expect(payment.body.data.pending).toBeUndefined();
+      expect((await approvalRows()).length).toBe(before);
+    });
+  });
 
   describe('Table A · corrections — staff file requests that do nothing yet', () => {
     it('an inventory adjustment by staff creates ONE pending request and posts nothing', async () => {

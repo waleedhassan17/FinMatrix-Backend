@@ -6,6 +6,7 @@ import { VendorCreditsService } from '../vendor-credits/vendor-credits.service';
 import { BillsService } from '../bills/bills.service';
 import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { PaymentsService } from '../payments/payments.service';
 import { InventoryApprovalsService } from '../inventory-approvals/inventory-approvals.service';
 import { ApprovalType } from './entities/approval-request.entity';
 
@@ -39,6 +40,7 @@ export class ApprovalDispatcher {
     private readonly bills: BillsService,
     private readonly purchaseOrders: PurchaseOrdersService,
     private readonly invoices: InvoicesService,
+    private readonly payments: PaymentsService,
     private readonly deliveryApprovals: InventoryApprovalsService,
   ) {}
 
@@ -192,6 +194,41 @@ export class ApprovalDispatcher {
       // ── Non-posting: a commitment, not a transaction ─────────────────────
       // Nothing exists until this runs, which is why a pending PO request has
       // no effect of any kind to unwind.
+      // ── Raising the invoice: Dr Accounts Receivable / Cr Sales ───────────
+      // Not case 'void' → 'invoice' above, which reverses one that already
+      // posted. This one brings it into existence. A draft posts nothing;
+      // anything else posts on creation, exactly as an owner's own POST does.
+      case 'invoice': {
+        const invoice = await this.invoices.create(
+          companyId,
+          reviewerId,
+          payload as any,
+        );
+        return {
+          id: invoice.id,
+          journalEntryId: (invoice as any)?.journalEntryId ?? null,
+        };
+      }
+
+      // ── Cash in: Dr Bank / Cr Accounts Receivable ────────────────────────
+      // The mirror of 'bill_payment'. Replayed late this can fail honestly —
+      // the invoice may have been paid, voided or credited since it was asked
+      // for, leaving the allocations larger than what is still outstanding.
+      // That throw is caught by ApprovalsService.approve, which releases the
+      // claim and records it on lastError for the owner to read, rather than
+      // forcing a payment that no longer fits.
+      case 'invoice_payment': {
+        const payment = await this.payments.receive(
+          companyId,
+          reviewerId,
+          payload as any,
+        );
+        return {
+          id: payment.id,
+          journalEntryId: (payment as any)?.journalEntryId ?? null,
+        };
+      }
+
       case 'po': {
         const po = await this.purchaseOrders.create(companyId, payload as any);
         return { id: po.id, journalEntryId: null };
