@@ -5,7 +5,11 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { ReportsService } from './reports.service';
+import {
+  REPORT_RANGE_DEFAULTS,
+  ReportsService,
+  reportToday,
+} from './reports.service';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -13,6 +17,24 @@ import { ReportsService } from './reports.service';
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly svc: ReportsService) {}
+
+  /**
+   * Resolve a report range at the edge.
+   *
+   * The service already defaults these, and this repeats it on purpose. A
+   * dated report that receives no range filters general_ledger on a NULL
+   * bound, which matches nothing and returns a fully-formed statement of
+   * zeroes — a blank P&L with a 200 and no error to explain it. That failure
+   * is silent, so it is worth being unable to reach from two directions
+   * rather than one. Sharing REPORT_RANGE_DEFAULTS keeps the two in step;
+   * they are not two independent policies.
+   */
+  private range(startDate?: string, endDate?: string) {
+    return {
+      s: startDate || REPORT_RANGE_DEFAULTS.startDate,
+      e: endDate || REPORT_RANGE_DEFAULTS.endDate,
+    };
+  }
 
   @Get('profit-loss')
   @Roles('admin', 'staff')
@@ -23,7 +45,8 @@ export class ReportsController {
     @Query('format') format = 'json',
     @Res() res: Response,
   ) {
-    const data = await this.svc.profitLoss(companyId, startDate, endDate);
+    const { s, e } = this.range(startDate, endDate);
+    const data = await this.svc.profitLoss(companyId, s, e);
     return this.send(data, format, res, 'profit-loss');
   }
 
@@ -35,7 +58,7 @@ export class ReportsController {
     @Query('format') format = 'json',
     @Res() res: Response,
   ) {
-    const data = await this.svc.balanceSheet(companyId, asOfDate);
+    const data = await this.svc.balanceSheet(companyId, asOfDate || reportToday());
     return this.send(data, format, res, 'balance-sheet');
   }
 
@@ -81,7 +104,8 @@ export class ReportsController {
     @Query('format') format = 'json',
     @Res() res: Response,
   ) {
-    const data = await this.svc.trialBalance(companyId, startDate, endDate);
+    const { s, e } = this.range(startDate, endDate);
+    const data = await this.svc.trialBalance(companyId, s, e);
     return this.send(data, format, res, 'trial-balance');
   }
 
@@ -94,7 +118,11 @@ export class ReportsController {
     @Query('format') format = 'json',
     @Res() res: Response,
   ) {
-    const data = await this.svc.cashFlow(companyId, startDate, endDate);
+    const data = await this.svc.cashFlow(
+      companyId,
+      startDate || REPORT_RANGE_DEFAULTS.startDate,
+      endDate || reportToday(),
+    );
     return this.send(data, format, res, 'cash-flow');
   }
 

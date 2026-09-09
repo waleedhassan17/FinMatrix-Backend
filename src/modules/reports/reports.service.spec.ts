@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { ReportsService } from './reports.service';
+import { REPORT_RANGE_DEFAULTS, ReportsService } from './reports.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Bill } from '../bills/entities/bill.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
@@ -343,5 +343,186 @@ describe('ReportsService — cashFlow indirect operating', () => {
     expect(r.netChange).toBe(6000);
     expect(r.beginningCash).toBe(100);
     expect(r.endingCash).toBe(6100);
+  });
+});
+
+/**
+ * A dated statement is computed by filtering general_ledger inside a LEFT
+ * JOIN — `g.date >= $2 AND g.date <= $3`. Hand that an undefined bound and the
+ * join condition is never true, so every account comes back with dr = 0 and
+ * cr = 0: a complete, well-formed, entirely empty set of books, returned with
+ * a 200 and nothing to say why. That is the failure worth a test, because
+ * nothing about it looks like a failure.
+ *
+ * These assert on the ARGUMENTS reaching SQL, not just the totals. A report
+ * that returns numbers for the wrong reason would still pass a totals-only
+ * check.
+ */
+describe('ReportsService — a missing date range never blanks a statement', () => {
+  const undatedCases: Array<[string, (svc: ReportsService) => Promise<unknown>]> = [
+    ['profitLoss', (svc) => svc.profitLoss('c1', undefined as any, undefined as any)],
+    ['trialBalance', (svc) => svc.trialBalance('c1', undefined as any, undefined as any)],
+  ];
+
+  it.each(undatedCases)('%s still passes concrete dates to SQL', async (_name, run) => {
+    const query = jest.fn(async () => PLAIN);
+    await run(await makeService(query));
+
+    const [, params] = query.mock.calls[0] as unknown as [string, unknown[]];
+    const [, startDate, endDate] = params as [string, string, string];
+
+    expect(startDate).toBe(REPORT_RANGE_DEFAULTS.startDate);
+    expect(endDate).toBe(REPORT_RANGE_DEFAULTS.endDate);
+    // The bug this guards against is a NULL/undefined reaching the BETWEEN.
+    expect(startDate).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+    expect(endDate).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+  });
+
+  it('gives an undated P&L the same numbers as an explicit all-time range', async () => {
+    const dated = await (await makeService(jest.fn(async () => PLAIN))).profitLoss(
+      'c1',
+      REPORT_RANGE_DEFAULTS.startDate,
+      REPORT_RANGE_DEFAULTS.endDate,
+    );
+    const undated = await (await makeService(jest.fn(async () => PLAIN))).profitLoss(
+      'c1',
+      undefined as any,
+      undefined as any,
+    );
+
+    expect(undated).toEqual(dated);
+    expect(undated.revenue).toBe(10000);
+    expect(undated.netIncome).toBe(2000);
+  });
+
+  it('gives an undated trial balance real rows that still foot', async () => {
+    // PLAIN nets to 2000 — it is a P&L fixture, not a whole ledger, so it does
+    // NOT foot on its own. Balance it with the equity that a real set of books
+    // would carry, otherwise "isBalanced" here would assert nothing.
+    const BALANCED: GlRow[] = [
+      ...PLAIN,
+      gl('3000', 'Owner Equity', 'equity', 'Equity', 0, 2000),
+    ];
+    const svc = await makeService(jest.fn(async () => BALANCED));
+    const tb = await svc.trialBalance('c1', undefined as any, undefined as any);
+
+    expect(tb.rows.length).toBeGreaterThan(0);
+    expect(tb.totalDebits).toBeGreaterThan(0);
+    expect(tb.totalDebits).toBe(tb.totalCredits);
+    expect(tb.isBalanced).toBe(true);
+    expect(tb.range).toEqual({
+      startDate: REPORT_RANGE_DEFAULTS.startDate,
+      endDate: REPORT_RANGE_DEFAULTS.endDate,
+    });
+  });
+
+  it('closes an undated balance sheet as of today, not on an undefined date', async () => {
+    const query = jest.fn(async () => PLAIN);
+    const svc = await makeService(query);
+    await svc.balanceSheet('c1', undefined as any);
+
+    const [, params] = query.mock.calls[0] as unknown as [string, unknown[]];
+    const [, startDate, asOf] = params as [string, string, string];
+
+    expect(startDate).toBe(REPORT_RANGE_DEFAULTS.startDate);
+    expect(asOf).toBe(new Date().toISOString().slice(0, 10));
+  });
+});
+
+/**
+ * Telling a business its books do not balance when they do is worse than most
+ * genuine defects: it sends someone hunting for an error that was never
+ * posted. Warehouse Co hit this for real — a ledger balanced to the last unit
+ * in the database (1,288,526.5650 on each side) reported Dr …56 against
+ * Cr …57 and isBalanced: false.
+ *
+ * The cause is not the ledger. The two columns are summed from different sets
+ * of floats in different orders, so they carry different accumulated error;
+ * normally far below a paisa, but when the true total sits exactly on a
+ * half-paisa boundary they land on OPPOSITE sides of it and round a full paisa
+ * apart. So the verdict has to be taken before rounding, never after.
+ */
+describe('ReportsService — a balanced ledger never reports as unbalanced', () => {
+  /**
+   * Nets that sum to zero while landing the column totals on x.xx5 exactly.
+   * Split across several accounts so the two reduce() calls really do
+   * accumulate their error differently, which is the whole mechanism.
+   */
+  const ON_THE_BOUNDARY: GlRow[] = [
+    gl('1000', 'Cash', 'asset', 'Cash', 1288526.565, 0),
+    gl('1100', 'Accounts Receivable', 'asset', 'Receivable', 0.1, 0),
+    gl('1200', 'Inventory', 'asset', 'Inventory', 0.2, 0),
+    gl('4000', 'Sales Revenue', 'revenue', 'Sales', 0, 1288526.565),
+    gl('2000', 'Accounts Payable', 'liability', 'Payable', 0, 0.3),
+  ];
+
+  it('foots a trial balance whose columns sit on a half-paisa boundary', async () => {
+    const svc = await makeService(jest.fn(async () => ON_THE_BOUNDARY));
+    const tb = await svc.trialBalance('c1', '2026-01-01', '2026-12-31');
+
+    expect(tb.isBalanced).toBe(true);
+    // And it must not PRINT a paisa of difference either: at the ledger's own
+    // precision these are one number, so showing two is simply false.
+    expect(tb.totalDebits).toBe(tb.totalCredits);
+  });
+
+  it('still reports a REAL imbalance, with both sides intact', async () => {
+    const LOPSIDED: GlRow[] = [
+      gl('1000', 'Cash', 'asset', 'Cash', 500, 0),
+      gl('4000', 'Sales Revenue', 'revenue', 'Sales', 0, 400),
+    ];
+    const svc = await makeService(jest.fn(async () => LOPSIDED));
+    const tb = await svc.trialBalance('c1', '2026-01-01', '2026-12-31');
+
+    expect(tb.isBalanced).toBe(false);
+    expect(tb.totalDebits).toBe(500);
+    expect(tb.totalCredits).toBe(400);
+  });
+
+  /**
+   * The balance sheet carries the period's earnings into equity, so that line
+   * has to equal the P&L's bottom line exactly. profitLoss derives it through a
+   * ROUNDED gross profit; the balance sheet used the shorter
+   * r2(revenue - cogs - expense). Identical in exact arithmetic, a paisa apart
+   * in floating point whenever the value lands on a half-paisa boundary — and a
+   * balance sheet whose net income disagrees with the P&L is a reason to
+   * distrust both statements.
+   */
+  it('carries the SAME net income into equity that the P&L reports', async () => {
+    const rows: GlRow[] = [
+      gl('1000', 'Cash', 'asset', 'Cash', 100000.005, 0),
+      gl('4000', 'Sales Revenue', 'revenue', 'Sales', 0, 60000.005),
+      gl('5000', 'Cost of Goods Sold', 'expense', 'Cost of Goods', 20000.0, 0),
+      gl('6000', 'Rent Expense', 'expense', 'Operating', 10000.005, 0),
+      gl('3000', 'Owner Equity', 'equity', 'Equity', 0, 70000.0),
+    ];
+    const pl = await (await makeService(jest.fn(async () => rows))).profitLoss(
+      'c1',
+      '2026-01-01',
+      '2026-12-31',
+    );
+    const bs = await (await makeService(jest.fn(async () => rows))).balanceSheet(
+      'c1',
+      '2026-12-31',
+    );
+    const equityNetIncome = bs.equity
+      .filter((e) => e.accountName.includes('Net Income'))
+      .reduce((t, e) => t + e.amount, 0);
+
+    expect(equityNetIncome).toBe(pl.netIncome);
+  });
+
+  it('balances a balance sheet whose sections round in different directions', async () => {
+    // A = L + E exactly at full precision, with each section landing on a
+    // boundary of its own.
+    const BS: GlRow[] = [
+      gl('1000', 'Cash', 'asset', 'Cash', 100000.005, 0),
+      gl('2000', 'Accounts Payable', 'liability', 'Payable', 0, 50000.005),
+      gl('3000', 'Owner Equity', 'equity', 'Equity', 0, 50000.0),
+    ];
+    const svc = await makeService(jest.fn(async () => BS));
+    const bs = await svc.balanceSheet('c1', '2026-12-31');
+
+    expect(bs.isBalanced).toBe(true);
   });
 });

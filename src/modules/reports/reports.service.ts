@@ -18,6 +18,29 @@ import type {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
+/**
+ * What a dated report covers when the caller names no range.
+ *
+ * These MUST stay open-ended. Every statement here is computed by filtering
+ * general_ledger on `g.date >= $2 AND g.date <= $3` inside a LEFT JOIN, so a
+ * missing bound makes the join condition NULL for every row — the report comes
+ * back with an entry for each account and zeroes in every column, a blank set
+ * of books with no error to explain it. Defaulting to all-time means a caller
+ * who omits the range sees everything rather than nothing; a caller who wants
+ * a period always passes one (the app always does, from
+ * getDefaultReportRange).
+ *
+ * Exported so ReportsController can apply the same defaults at the edge
+ * without a second copy of the literals to drift out of step.
+ */
+export const REPORT_RANGE_DEFAULTS = {
+  startDate: '1970-01-01',
+  endDate: '2999-12-31',
+} as const;
+
+/** Today, for the reports that close AS OF a date rather than over a range. */
+export const reportToday = () => new Date().toISOString().slice(0, 10);
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -144,7 +167,7 @@ export class ReportsService {
     companyId: string,
     asOf: string,
   ): Promise<Map<string, { type: string; subType: string; balance: number }>> {
-    const rows = await this.glByAccount(companyId, '1970-01-01', asOf);
+    const rows = await this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf);
     const out = new Map<
       string,
       { type: string; subType: string; balance: number }
@@ -165,8 +188,8 @@ export class ReportsService {
     startDate: string,
     endDate: string,
   ): Promise<ProfitLossReport> {
-    const s = startDate || '1970-01-01';
-    const e = endDate || '2999-12-31';
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
     const rows = await this.glByAccount(companyId, s, e);
 
     // The existing five totals, computed exactly as before so their values do
@@ -245,13 +268,14 @@ export class ReportsService {
 
   // ── Balance Sheet (ledger-derived, as of date) ───────────────────
   async balanceSheet(companyId: string, asOfDate: string) {
-    const asOf = asOfDate || new Date().toISOString().slice(0, 10);
-    const rows = await this.glByAccount(companyId, '1970-01-01', asOf);
+    const asOf = asOfDate || reportToday();
+    const rows = await this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf);
 
     const assets: { accountCode: string; accountName: string; amount: number }[] = [];
     const liabilities: { accountCode: string; accountName: string; amount: number }[] = [];
     const equity: { accountCode: string; accountName: string; amount: number }[] = [];
     let revenue = 0;
+    let cogs = 0;
     let expense = 0;
     // Footed from the UNROUNDED figures — see the note above the totals.
     let rawAssets = 0;
@@ -285,13 +309,30 @@ export class ReportsService {
           rawEquity += amt;
         }
       } else if (row.type === 'revenue') revenue += cr - dr;
-      else if (row.type === 'expense') expense += dr - cr;
+      else if (row.type === 'expense') {
+        // Split exactly as profitLoss splits it — see the note below.
+        if (this.isCogs(row)) cogs += dr - cr;
+        else expense += dr - cr;
+      }
     }
 
     // Current-period earnings (revenue − expense) roll into equity so the sheet
     // balances (FinMatrixGuide §5.3); shown as a Retained Earnings line.
-    const rawNetIncome = revenue - expense;
-    const netIncome = r2(rawNetIncome);
+    //
+    // The DISPLAYED figure is derived the way profitLoss derives its
+    // `netIncome` — via a rounded gross profit — and not by the shorter
+    // `r2(revenue - cogs - expense)`. The two are the same number in exact
+    // arithmetic and can differ by a paisa in floating point, because
+    // Σ round(x) is not round(Σ x): profitLoss rounds gross profit before
+    // subtracting expenses, so skipping that intermediate rounding here made
+    // the balance sheet's equity disagree with the P&L's bottom line by 0.01
+    // whenever the value landed on a half-paisa boundary. A balance sheet whose
+    // net income does not match the P&L's is a reason to distrust both.
+    //
+    // rawNetIncome stays at FULL precision, because it is what rolls into
+    // rawEquity and therefore what decides whether A = L + E.
+    const rawNetIncome = revenue - cogs - expense;
+    const netIncome = r2(r2(revenue - cogs) - expense);
     if (Math.abs(netIncome) > 0.0001) {
       equity.push({
         accountCode: '3100',
@@ -312,6 +353,14 @@ export class ReportsService {
     const totalAssets = r2(rawAssets);
     const totalLiabilities = r2(rawLiabilities);
     const totalEquity = r2(rawEquity);
+
+    // The VERDICT is taken on the raw figures too, for the same reason the
+    // totals are. Testing the three rounded ones instead reintroduces the bug
+    // a step later: each can move by up to half a paisa, so a statement that
+    // ties exactly in the ledger can report a gap of a full paisa or more and
+    // announce that the books do not balance. They do; the arithmetic that
+    // said otherwise was the presentation rounding, not the accounts.
+    const isBalanced = Math.abs(rawAssets - (rawLiabilities + rawEquity)) < 0.01;
     return {
       asOfDate: asOf,
       assets,
@@ -320,7 +369,7 @@ export class ReportsService {
       totalAssets,
       totalLiabilities,
       totalEquity,
-      isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+      isBalanced,
     };
   }
 
@@ -598,8 +647,8 @@ export class ReportsService {
   // (opening + net income) equals the Balance Sheet equity.
   // ── Trial Balance (ledger-derived) ───────────────────────────────
   async trialBalance(companyId: string, startDate: string, endDate: string) {
-    const s = startDate || '1970-01-01';
-    const e = endDate || '2999-12-31';
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
     const glRows = await this.glByAccount(companyId, s, e);
 
     // Each account's net (debits − credits) lands in its natural column. Since
@@ -629,14 +678,33 @@ export class ReportsService {
     // two columns drift apart. A trial balance whose columns do not foot is
     // not a trial balance, however small the gap. The rows keep their rounded
     // figures for presentation; only the totals are computed at full precision.
-    const totalDebits = r2(nets.reduce((a, x) => (x.net > 0 ? a + x.net : a), 0));
-    const totalCredits = r2(nets.reduce((a, x) => (x.net < 0 ? a - x.net : a), 0));
+    //
+    // Decide BALANCED before rounding, and round once afterwards.
+    //
+    // Rounding first reintroduces the same class of bug one step later. The two
+    // columns are summed from different sets of floats in different orders, so
+    // they carry different accumulated error — normally far below a paisa, but
+    // when the true total sits exactly on a half-paisa boundary the two land on
+    // OPPOSITE sides of it and round a full paisa apart. Warehouse Co hit this
+    // for real at 1,288,526.5650: a ledger balanced to the last unit in the
+    // database reported Dr …56 against Cr …57 and isBalanced: false.
+    //
+    // Telling a business its books do not balance when they do is worse than
+    // most genuine defects — it sends someone hunting for an error that was
+    // never posted. So the verdict is taken at full precision, and when the
+    // columns agree there they are PRESENTED as the single number they are.
+    // A real imbalance still prints both sides, unrounded-truth intact.
+    const rawDebits = nets.reduce((a, x) => (x.net > 0 ? a + x.net : a), 0);
+    const rawCredits = nets.reduce((a, x) => (x.net < 0 ? a - x.net : a), 0);
+    const isBalanced = Math.abs(rawDebits - rawCredits) < 0.01;
+    const totalDebits = r2(rawDebits);
+    const totalCredits = isBalanced ? totalDebits : r2(rawCredits);
     return {
       range: { startDate: s, endDate: e },
       rows,
       totalDebits,
       totalCredits,
-      isBalanced: Math.abs(totalDebits - totalCredits) < 0.01,
+      isBalanced,
     };
   }
 
@@ -653,8 +721,8 @@ export class ReportsService {
     startDate: string,
     endDate: string,
   ): Promise<CashFlowReport> {
-    const s = startDate || '1970-01-01';
-    const e = endDate || new Date().toISOString().slice(0, 10);
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || reportToday();
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     // Cash/Bank accounts (sub_type), so custom user-added bank accounts count too.
