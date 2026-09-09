@@ -48,11 +48,14 @@
     "test:period-close": "ts-node -r tsconfig-paths/register test/period-close.acceptance.ts",
     "test:voids": "ts-node -r tsconfig-paths/register test/voids.acceptance.ts",
     "test:qa": "bash qa/run-qa.sh",
-    "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close",
+    "test:reports-reflect": "ts-node -r tsconfig-paths/register test/reports-reflect.acceptance.ts",
+    "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close && npm run test:reports-reflect",
     "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
     "qa": "npm run qa:scenario && npm run test:qa",
     "qa:invariants": "node qa/run-qa.js",
+    "qa:provision": "ts-node -r tsconfig-paths/register qa/provision-flow-ctx.ts",
     "qa:flow": "node qa/flow-e2e.js",
+    "qa:gate": "npm run qa:scenario && npm run qa:provision && npm run qa:flow && npm run test:accounting",
     "test:conformance": "DB_NAME=${DB_NAME:-finmatrix_e2e} DB_SYNCHRONIZE=true jest --config ./test/jest-e2e.json --testPathPattern=role-conformance --runInBand"
   },
   "dependencies": {

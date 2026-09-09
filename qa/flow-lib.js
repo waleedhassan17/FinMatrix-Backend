@@ -3,7 +3,18 @@
  * Drives the REAL API (the same endpoints the mobile app calls), so anything
  * that would fail in the app fails here too.
  */
-const BASE = process.env.API_BASE || 'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
+/**
+ * Where the harness points when nobody says.
+ *
+ * This used to default to the PRODUCTION Heroku API. The harness creates
+ * deliveries, invoices, payments and journal entries, so `npm run qa:flow` with
+ * an unset API_BASE — the exact command a release checklist tells someone to
+ * run — wrote test transactions into the real books. A gate must not be able to
+ * damage the thing it is guarding by being run the obvious way.
+ *
+ * Local by default; reaching anything else now takes a deliberate API_BASE.
+ */
+const BASE = process.env.API_BASE || 'http://localhost:3000/api/v1';
 
 async function http(method, path, { token, companyId, body } = {}) {
   const headers = { 'Content-Type': 'application/json' };

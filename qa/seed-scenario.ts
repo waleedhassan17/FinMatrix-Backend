@@ -37,18 +37,33 @@ async function req(method: string, path: string, body?: unknown) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  let parsed: any = null;
-  try {
-    parsed = await res.json();
-  } catch {
-    /* empty */
+  // Back off on 429, the way the acceptance suites already do.
+  //
+  // /auth/signin is capped at 5 per minute by a route-level @Throttle — real
+  // brute-force protection, not something a seed script should switch off.
+  // Running the full gate twice in a row spent that budget and the second run
+  // died on "cannot sign in as warehouse@gmail.com", which reads like bad
+  // credentials and is only rate limiting. A gate has to be runnable twice.
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 429 && attempt < 3) {
+      const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
+      console.log(`  … throttled on ${path}, waiting ${Math.round(wait / 1000)}s`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    let parsed: any = null;
+    try {
+      parsed = await res.json();
+    } catch {
+      /* empty */
+    }
+    return { status: res.status, body: parsed };
   }
-  return { status: res.status, body: parsed };
 }
 const data = (r: { body: any }) => r.body?.data ?? r.body;
 

@@ -25,8 +25,11 @@
  * Run against a throwaway warehouse company — never a real one; it creates
  * deliveries, invoices, payments and journal entries.
  *
- *   FLOW_CTX=qa/.flow-ctx.json DATABASE_URL=postgres://... node qa/flow-e2e.js
- *   npm run qa:flow
+ * Provision the company first — qa/provision-flow-ctx.ts builds one and writes
+ * the context this reads:
+ *
+ *   npm run qa:provision
+ *   DATABASE_URL=postgres://... npm run qa:flow
  *
  * Exit codes: 0 all branches conform, 1 a branch deviates, 2 could not run.
  */
@@ -71,6 +74,45 @@ async function ledgerSince(marker) {
   const out = {};
   for (const row of r) out[row.num] = { dr: money(row.dr), cr: money(row.cr), name: row.name };
   return out;
+}
+
+/**
+ * The item's CURRENT weighted-average cost, straight from the subledger.
+ *
+ * Costing is weighted-average, so this moves whenever stock is received at a
+ * different price. Any assertion that hardcodes a cost is asserting against a
+ * number that was true once — read it at the moment it matters instead.
+ */
+async function liveUnitCost(itemId) {
+  const { rows: r } = await db.query(
+    'SELECT ROUND(unit_cost::numeric, 2) AS cost FROM inventory_items WHERE id = $1',
+    [itemId],
+  );
+  if (!r.length) throw new Error(`liveUnitCost: no inventory item ${itemId}`);
+  return money(r[0].cost);
+}
+
+/**
+ * Sign in, waiting out the rate limiter.
+ *
+ * /auth/signin is capped at 5 per minute by a route-level @Throttle — real
+ * brute-force protection, not something a test should switch off. Provisioning
+ * spends some of that budget immediately before this runs, so an unretried
+ * signin here fails with a 429 that looks like a broken credential.
+ */
+async function signin(credentials, who) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await post('/auth/signin', credentials);
+    if (res.status === 200) return res;
+    if (res.status !== 429) {
+      throw new Error(
+        `${who} signin ${res.status} at ${BASE} — is API_BASE the environment the context was provisioned against?`,
+      );
+    }
+    console.log(`  (${who} signin throttled — waiting 65s for the window to clear)`);
+    await new Promise((r) => setTimeout(r, 65_000));
+  }
+  throw new Error(`${who} signin still throttled after several attempts`);
 }
 
 const mark = () => new Date();
@@ -123,7 +165,55 @@ async function runDelivery({ itemKey, qty, prepaid, paidStatus }) {
   const assigned = await post('/deliveries/assign', { deliveryIds: [deliveryId], personnelId: rider.userId }, o);
   if (assigned.status >= 400) throw new Error(`assign failed ${assigned.status} ${JSON.stringify(assigned.body).slice(0, 200)}`);
 
-  return { deliveryId, item, qty };
+  // Read back the cost the ledger ACTUALLY used, rather than trusting a number
+  // in the context file.
+  //
+  // Costing is weighted-average, so an item's unit cost moves every time stock
+  // is received at a different price — and this harness receives more of item A
+  // partway through, in its own supplier-side branch. A ctx `cost` written at
+  // provisioning time drifts away from the truth the moment that happens, and
+  // the AT-COST assertions then fail against a perfectly correct ledger. That
+  // is exactly the false failure the audit hit.
+  //
+  // delivery_items.unit_cost is the cost FROZEN onto the line at assignment,
+  // which is the same number the Goods-in-Transit entry was posted from, so
+  // comparing against it tests the ledger instead of testing our bookkeeping
+  // about the ledger.
+  const { rows: costRows } = await db.query(
+    `SELECT COALESCE(ROUND(SUM(quantity * unit_cost)::numeric, 2), 0) AS cost
+       FROM delivery_items WHERE delivery_id = $1`,
+    [deliveryId],
+  );
+  const lineCost = money(costRows[0].cost);
+
+  return { deliveryId, item, qty, lineCost };
+}
+
+/**
+ * Upload a bill-payment proof and return its id.
+ *
+ * POST /bills/pay requires a proofId — money leaving the bank has to be
+ * evidenced — so the pay-bill branch cannot post without one. This harness
+ * used to omit it and read the resulting 400 as a ledger deviation.
+ */
+async function uploadPaymentProof(filename) {
+  // Smallest valid PNG; enough to pass the proof upload's type check.
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const form = new FormData();
+  form.append('proof', new Blob([png], { type: 'image/png' }), filename);
+  const res = await fetch(`${BASE}/bill-payments/proofs`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${admin.token}`, 'x-company-id': admin.companyId },
+    body: form,
+  });
+  const body = await res.json().catch(() => null);
+  const proof = (body && (body.data ?? body)) || {};
+  const id = proof.id ?? proof.proofId;
+  if (!id) throw new Error(`proof upload failed ${res.status} ${JSON.stringify(body)?.slice(0, 200)}`);
+  return id;
 }
 
 /** The rider's multipart bill-photo submission (creates the approval request). */
@@ -158,7 +248,8 @@ async function submitBillPhoto({ deliveryId, item, qty, signedBy, returnedQty = 
 
 async function main() {
   if (!fs.existsSync(CTX_PATH)) {
-    console.error(`flow-e2e: no context at ${CTX_PATH}. Provision a throwaway warehouse company first.`);
+    console.error(`flow-e2e: no context at ${CTX_PATH}.`);
+    console.error('Run `npm run qa:provision` to build a throwaway company and write it.');
     process.exit(2);
   }
   if (!process.env.DATABASE_URL) {
@@ -167,15 +258,38 @@ async function main() {
   }
   ctx = JSON.parse(fs.readFileSync(CTX_PATH, 'utf8'));
 
-  db = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  // SSL only where it is actually offered. This forced ssl unconditionally,
+  // which a local Postgres rejects outright ("the server does not support SSL
+  // connections") — so the harness could not reach a development database at
+  // all, only the hosted one. Managed providers advertise sslmode in the URL;
+  // localhost does not.
+  const dbUrl = process.env.DATABASE_URL;
+  const wantsSsl = /sslmode=(require|verify-ca|verify-full)/.test(dbUrl) || /\.(com|net|io|dev)/.test(new URL(dbUrl).hostname);
+  db = new Client({
+    connectionString: dbUrl,
+    ssl: wantsSsl ? { rejectUnauthorized: false } : false,
+  });
   await db.connect();
 
-  const aSi = await post('/auth/signin', ctx.admin);
-  if (aSi.status !== 200) throw new Error(`admin signin ${aSi.status}`);
+  // The assertions read the ledger from DATABASE_URL but drive the API at
+  // API_BASE. If those are two different environments every branch "fails"
+  // with a ledger that never moved, which reads like a posting bug and is not
+  // one. Prove up front that the company in the context actually lives in the
+  // database being read.
+  const { rows: coRows } = await db.query('SELECT name FROM companies WHERE id = $1', [
+    ctx.companyId,
+  ]);
+  if (!coRows.length) {
+    console.error(`flow-e2e: company ${ctx.companyId} is not in DATABASE_URL.`);
+    console.error('The context and the database disagree — API_BASE and DATABASE_URL must be the');
+    console.error('same environment. Re-run `npm run qa:provision` against the one you mean.');
+    process.exit(2);
+  }
+
+  const aSi = await signin(ctx.admin, 'admin');
   admin = { token: data(aSi).tokens.accessToken, companyId: ctx.companyId };
 
-  const rSi = await post('/auth/signin', ctx.rider);
-  if (rSi.status !== 200) throw new Error(`rider signin ${rSi.status}`);
+  const rSi = await signin(ctx.rider, 'rider');
   rider = { token: data(rSi).tokens.accessToken, companyId: ctx.companyId, userId: data(rSi).user.id };
 
   seed = ctx.seed;
@@ -252,10 +366,12 @@ async function branchSupplierSide() {
   ]);
 
   // Pay Bill -> Dr A/P / Cr Bank
+  const proofId = await uploadPaymentProof(`flow-pay-${Date.now()}.png`);
   const mPay = mark();
   const pay = await post('/bills/pay', {
     vendorId: seed.vendorId, paymentDate: today(), paymentMethod: 'bank_transfer',
     bankAccountId: seed.accounts['1010'] ? seed.accounts['1010'].id : seed.accounts['1000'].id,
+    proofId,
     applications: [{ billId: bill.id, amount: String(bill.total) }],
   }, o);
   await new Promise((r) => setTimeout(r, 600));
@@ -294,10 +410,10 @@ async function branchNoEntryOnCreate() {
 // ── Branch: assign to rider -> Dr GIT / Cr Inventory at COST, nothing else ───
 async function branchAssign() {
   const m = mark();
-  const { deliveryId, item, qty } = await runDelivery({ itemKey: 'A', qty: 10 });
+  const { deliveryId, item, qty, lineCost } = await runDelivery({ itemKey: 'A', qty: 10 });
   await new Promise((r) => setTimeout(r, 500));
   const led = await ledgerSince(m);
-  const cost = item.cost * qty;
+  const cost = lineCost;
   record('Assign to Rider -> Dr Goods in Transit / Cr Inventory (AT COST)', [
     movement(led, '1250', 'Goods in Transit', cost, 0),
     movement(led, '1200', 'Inventory', 0, cost),
@@ -307,11 +423,12 @@ async function branchAssign() {
   branchAssign.deliveryId = deliveryId;
   branchAssign.item = item;
   branchAssign.qty = qty;
+  branchAssign.lineCost = lineCost;
 }
 
 // ── Branch: approve PAID ─────────────────────────────────────────────────────
 async function branchApprovePaid() {
-  const { deliveryId, item, qty } = branchAssign;
+  const { deliveryId, item, qty, lineCost } = branchAssign;
   const o = { token: admin.token, companyId: admin.companyId };
 
   await patch(`/deliveries/${deliveryId}/status`, { status: 'in_transit' }, o);
@@ -330,7 +447,7 @@ async function branchApprovePaid() {
   const led = await ledgerSince(m);
 
   const revenue = item.price * qty;
-  const cost = item.cost * qty;
+  const cost = lineCost;
   record('Rider delivers -> no entry; Admin APPROVES (PAID) -> Dr Cash / Cr Sales + Dr COGS / Cr Goods in Transit', [
     { label: `bill photo submit ${sub.status}`, pass: sub.status < 400, expected: '<400', actual: `${sub.status} ${JSON.stringify(sub.body).slice(0, 120)}` },
     nothingPosted(ledSubmit, 'rider submission posts nothing'),
@@ -346,7 +463,7 @@ async function branchApprovePaid() {
 async function branchApproveUnpaid() {
   const o = { token: admin.token, companyId: admin.companyId };
   const mAssign = mark();
-  const { deliveryId, item, qty } = await runDelivery({ itemKey: 'B', qty: 5 });
+  const { deliveryId, item, qty, lineCost } = await runDelivery({ itemKey: 'B', qty: 5 });
   await new Promise((r) => setTimeout(r, 500));
 
   await patch(`/deliveries/${deliveryId}/status`, { status: 'in_transit' }, o);
@@ -360,7 +477,7 @@ async function branchApproveUnpaid() {
   const led = await ledgerSince(m);
 
   const revenue = item.price * qty;
-  const cost = item.cost * qty;
+  const cost = lineCost;
   record('Admin APPROVES (NOT PAID) -> Dr A/R / Cr Sales + Dr COGS / Cr Goods in Transit', [
     { label: `approve ${appr.status}`, pass: appr.status < 400, expected: '<400', actual: `${appr.status} ${JSON.stringify(appr.body).slice(0, 160)}` },
     movement(led, '4000', 'Sales Revenue', 0, revenue),
@@ -375,7 +492,7 @@ async function branchApproveUnpaid() {
 // ── Branch: REJECTED -> Dr Inventory / Cr GIT, no revenue ────────────────────
 async function branchReject() {
   const o = { token: admin.token, companyId: admin.companyId };
-  const { deliveryId, item, qty } = await runDelivery({ itemKey: 'A', qty: 4 });
+  const { deliveryId, item, qty, lineCost } = await runDelivery({ itemKey: 'A', qty: 4 });
   await new Promise((r) => setTimeout(r, 500));
 
   await patch(`/deliveries/${deliveryId}/status`, { status: 'in_transit' }, o);
@@ -390,7 +507,7 @@ async function branchReject() {
 
   const { rows: dRows } = await db.query('SELECT status, ledger_status FROM deliveries WHERE id = $1', [deliveryId]);
   const d = dRows[0] || {};
-  const cost = item.cost * qty;
+  const cost = lineCost;
 
   record('REJECTED -> Dr Inventory / Cr Goods in Transit (back on the shelf, no sale)', [
     { label: `reject ${rej.status}`, pass: rej.status < 400, expected: '<400', actual: `${rej.status} ${JSON.stringify(rej.body).slice(0, 160)}` },
@@ -443,10 +560,10 @@ async function branchLaterPayment() {
 async function branchPrepaid() {
   const o = { token: admin.token, companyId: admin.companyId };
   const m = mark();
-  const { deliveryId, item, qty } = await runDelivery({ itemKey: 'B', qty: 3, prepaid: true });
+  const { deliveryId, item, qty, lineCost } = await runDelivery({ itemKey: 'B', qty: 3, prepaid: true });
   await new Promise((r) => setTimeout(r, 700));
   const led = await ledgerSince(m);
-  const cost = item.cost * qty;
+  const cost = lineCost;
   const revenue = item.price * qty;
   record('Assign to Rider (PREPAID) -> stock to transit + cash to a LIABILITY; NO revenue yet', [
     movement(led, '1250', 'Goods in Transit', cost, 0),
@@ -482,18 +599,21 @@ async function branchCreditMemo() {
   const inv = rows(await get('/invoices?limit=100', o)).find((i) => money(i.total) > 0);
   const item = seed.items.A;
   const qty = 2;
+  const itemCost = await liveUnitCost(item.id);
   const m = mark();
   const cm = await post('/credit-memos', {
     customerId: seed.customerId,
     date: today(),
     originalInvoiceId: inv ? inv.id : undefined,
     reason: 'flow e2e customer return',
-    lines: [{ description: item.name, quantity: String(qty), unitPrice: String(item.price), taxRate: '0', itemId: item.id }],
+    lines: [{ description: item.name, quantity: String(qty), unitPrice: item.price.toFixed(2), taxRate: '0', itemId: item.id }],
   }, o);
   await new Promise((r) => setTimeout(r, 800));
   const led = await ledgerSince(m);
   const revenue = item.price * qty;
-  const cost = item.cost * qty;
+  // An ordinary customer return restocks at the item's CURRENT weighted-average
+  // cost — there is no delivery line here to have frozen one.
+  const cost = itemCost * qty;
   record('AFTER a sale is posted, a return needs a CREDIT MEMO -> Dr Sales / Cr A-R + Dr Inventory / Cr COGS', [
     { label: `credit memo ${cm.status}`, pass: cm.status < 400, expected: '<400', actual: `${cm.status} ${JSON.stringify(cm.body).slice(0, 200)}` },
     movement(led, '4000', 'Sales Revenue', revenue, 0),
@@ -508,16 +628,19 @@ async function branchVendorCredit() {
   const o = { token: admin.token, companyId: admin.companyId };
   const item = seed.items.B;
   const qty = 2;
+  // Credit the vendor what the stock is actually carried at, so the entry can
+  // never relieve Inventory by more than it holds.
+  const itemCost = await liveUnitCost(item.id);
   const m = mark();
   const vc = await post('/vendor-credits', {
     vendorId: seed.vendorId,
     date: today(),
     reason: 'flow e2e purchase return',
-    lines: [{ description: item.name, amount: String(item.cost * qty), itemId: item.id, quantity: String(qty) }],
+    lines: [{ description: item.name, amount: (itemCost * qty).toFixed(2), itemId: item.id, quantity: String(qty) }],
   }, o);
   await new Promise((r) => setTimeout(r, 800));
   const led = await ledgerSince(m);
-  const cost = item.cost * qty;
+  const cost = itemCost * qty;
   record('AFTER a purchase is billed, a return needs a VENDOR CREDIT -> Dr Accounts Payable / Cr Inventory', [
     { label: `vendor credit ${vc.status}`, pass: vc.status < 400, expected: '<400', actual: `${vc.status} ${JSON.stringify(vc.body).slice(0, 200)}` },
     movement(led, '2000', 'Accounts Payable', cost, 0),

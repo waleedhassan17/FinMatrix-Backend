@@ -114,6 +114,45 @@ npm test                          # all unit tests
 npx jest src/modules/auth         # auth unit tests (gate, verify, OTP)
 ```
 
+### The accounting pre-release gate
+
+One command, against a booted server and a database you do not mind writing to
+(it creates companies, deliveries, invoices, payments and journal entries):
+
+```bash
+npm run start:dev                                   # separate shell
+export API_BASE=http://localhost:3000/api/v1
+export DATABASE_URL=postgres://user:pass@localhost:5432/finmatrix
+npm run qa:gate
+```
+
+That runs, in order: `qa:scenario` (drives one company through every document
+type) → `qa:provision` (builds a throwaway company for the flow harness) →
+`qa:flow` (asserts the exact journal lines every delivery branch must post) →
+`test:accounting` (corrections, voids, period close, and reports-reflect).
+
+Two things to know:
+
+- **`API_BASE` and `DATABASE_URL` must be the same environment.** The harness
+  drives the API at one and reads the ledger from the other; a mismatch looks
+  like a ledger that never moved. `qa:flow` checks this before it starts and
+  refuses rather than reporting false deviations.
+- **`qa:provision` is required before `qa:flow`.** The flow harness reads
+  `qa/.flow-ctx.json`, which is generated and git-ignored. It used to be a
+  committed file full of one machine's UUIDs, which is why the harness could
+  not run anywhere else.
+
+`qa/flow-lib.js` defaults `API_BASE` to **localhost**. It used to default to the
+production API, so running the gate the obvious way wrote test transactions into
+the real books.
+
+To work out why one company's reports look empty, use the read-only diagnostic
+and `qa/DIAGNOSIS.md`:
+
+```bash
+psql "$DATABASE_URL" -v companyId="'<uuid>'" -f qa/diagnose-company.sql
+```
+
 ## Testing deep links
 
 The custom scheme is `finmatrix://`. A verification email contains:
