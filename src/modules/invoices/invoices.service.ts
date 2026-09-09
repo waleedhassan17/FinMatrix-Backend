@@ -678,6 +678,19 @@ export class InvoicesService {
     invoice: Invoice,
     userId: string,
   ): Promise<void> {
+    // A zero-total invoice cannot be posted: its A/R line would carry neither a
+    // debit nor a credit, which the posting engine rejects — as does the
+    // chk_line_shape constraint underneath it. Both report the broken LINE,
+    // leaving the caller to work backwards to the empty invoice that caused it.
+    // Say so here instead, while we still know what the real problem is.
+    if (toDecimal(invoice.total).lte(0)) {
+      throw new BadRequestException({
+        code: 'INVOICE_ZERO_TOTAL',
+        message:
+          'Invoice total is zero — add a line with a price before posting it to the books.',
+      });
+    }
+
     const ar = await this.accounts.getByNumberOrFail(invoice.companyId, ACCT_AR, manager);
     const revenue = await this.accounts.getByNumberOrFail(
       invoice.companyId,

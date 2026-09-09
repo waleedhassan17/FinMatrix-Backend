@@ -488,6 +488,37 @@ export class DeliveryLedgerService {
     let creditMemoTotal: string | null = null;
 
     if (invoiceLines.length > 0) {
+      // A delivery line carries the price COPIED from the inventory item when it
+      // was added to the draft — the backend never looks it up again, and
+      // inventory_items.selling_price defaults to 0. So an item created by
+      // import, by the agency add-item form or by the API arrives here priced at
+      // nothing, and the invoice below totals zero. Its A/R line would then be
+      // `debit 0 / credit 0`, which the posting engine rejects (and so does the
+      // chk_line_shape database constraint) with a message about debits and
+      // credits that tells the owner nothing about what to actually fix. The
+      // delivery would look approved in the UI and stick at 'in_transit' forever.
+      //
+      // Checked on the TOTAL, not per line: a zero-price line mixed with a priced
+      // one is a free sample shipping alongside a paid order, which is supported
+      // and must keep working. Only a delivery that moves real stock while
+      // recognising no revenue at all is a defect.
+      const invoiceTotalNet = invoiceLines.reduce(
+        (sum, l) => sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+        new Decimal(0),
+      );
+      if (
+        !invoiceTotalNet.abs().greaterThan(MONEY_TOLERANCE) &&
+        cogsCost.abs().greaterThan(MONEY_TOLERANCE)
+      ) {
+        const unpriced = invoiceLines.map((l) => l.description).join(', ');
+        throw new BadRequestException({
+          code: 'DELIVERY_ITEM_NO_PRICE',
+          message:
+            `Cannot approve: nothing on this delivery has a selling price, so it would ` +
+            `record cost with no sale. Set a selling price on ${unpriced}, then approve.`,
+        });
+      }
+
       const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
         customerId: delivery.customerId,
         invoiceDate: this.today(),

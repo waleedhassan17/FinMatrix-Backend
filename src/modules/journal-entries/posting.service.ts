@@ -121,16 +121,27 @@ export class PostingService {
     let totalDebits = new Decimal(0);
     let totalCredits = new Decimal(0);
 
-    for (const line of input.lines) {
+    for (const [index, line] of input.lines.entries()) {
       const d = toDecimal(line.debit);
       const c = toDecimal(line.credit);
       const debitPositive = d.greaterThan(0);
       const creditPositive = c.greaterThan(0);
       if (debitPositive === creditPositive) {
+        // Naming the line is the whole point of this message. Automatic
+        // postings build their lines from a document, so whoever hits this is
+        // reading it from an API response with no idea which of six lines is
+        // wrong -- and the commonest cause, a document totalling zero, produces
+        // `0 / 0` on a line whose account tells you exactly which document
+        // field was empty. The callers that can predict this (a zero-total
+        // invoice, an all-unpriced delivery) now reject it earlier with a
+        // message about the document; this stays the backstop.
         throw new BadRequestException({
           code: 'VALIDATION_FAILED',
           message:
-            'Each line must have exactly one of debit > 0 or credit > 0 (never both, never neither)',
+            `Each line must have exactly one of debit > 0 or credit > 0 (never both, ` +
+            `never neither). Line ${index + 1} of ${input.lines.length} on account ` +
+            `${line.accountId} has debit ${d.toFixed(4)} and credit ${c.toFixed(4)}` +
+            `${input.sourceType ? ` (posting a ${input.sourceType})` : ''}.`,
         });
       }
       if (d.lessThan(0) || c.lessThan(0)) {
