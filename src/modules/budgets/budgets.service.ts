@@ -161,8 +161,11 @@ export class BudgetsService {
   /**
    * Pre-fill helper (QuickBooks "create budget from previous year's data"):
    * per-account monthly ACTUALS from the ledger for the given fiscal year,
-   * for income/expense accounts with activity. The client uses these as the
+   * for revenue/expense accounts with activity. The client uses these as the
    * starting monthlyAmounts of a new budget. Read-only — posts nothing.
+   *
+   * The account type is 'revenue' (AccountType), never 'income': filtering
+   * on 'income' silently dropped every revenue account from the prefill.
    */
   async prefillFromActuals(companyId: string, fiscalYear: number) {
     const from = `${fiscalYear}-01-01`;
@@ -173,7 +176,7 @@ export class BudgetsService {
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id=$1 AND g.date BETWEEN $2 AND $3
-          AND a.type IN ('income','expense')
+          AND a.type IN ('revenue','expense')
         GROUP BY g.account_id, a.account_number, a.name, a.type
         ORDER BY a.account_number`,
       [companyId, from, to],
@@ -185,7 +188,7 @@ export class BudgetsService {
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id=$1 AND g.date BETWEEN $2 AND $3
-          AND a.type IN ('income','expense')
+          AND a.type IN ('revenue','expense')
         GROUP BY g.account_id, EXTRACT(MONTH FROM g.date)`,
       [companyId, from, to],
     );

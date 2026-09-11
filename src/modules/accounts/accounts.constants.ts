@@ -91,6 +91,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'liability',
     subType: 'Tax Payable',
   },
+  {
+    accountNumber: '2310',
+    name: 'Payroll Liabilities',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
   { accountNumber: '3000', name: 'Owner Equity', type: 'equity', subType: 'Owner Equity' },
   {
     accountNumber: '3100',
@@ -175,6 +181,13 @@ export const ACCT_SALARY_EXPENSE = '6200';
 export const ACCT_GRNI = '2050';
 export const ACCT_AP = '2000';
 export const ACCT_TAX_PAYABLE = '2300';
+/**
+ * Amounts withheld from employees' pay and owed onward (income tax, EOBI,
+ * loans). Deliberately NOT 2300: that account is Sales Tax Payable, and the
+ * tax liability report reads every credit to it as output sales tax — so
+ * payroll withholding posted there inflated the sales-tax owed.
+ */
+export const ACCT_PAYROLL_LIABILITIES = '2310';
 export const ACCT_CUSTOMER_ADVANCES = '2400';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 export const ACCT_SALES_REVENUE = '4000';
@@ -279,6 +292,13 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
   // contract liability until control transfers on delivery (IFRS 15 / ASC 606).
   [ACCT_CUSTOMER_ADVANCES]: {
     name: 'Customer Advances (Unearned Revenue)',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+  // Payroll withholding. Companies created before this account existed get it
+  // on their first processed payroll run.
+  [ACCT_PAYROLL_LIABILITIES]: {
+    name: 'Payroll Liabilities',
     type: 'liability',
     subType: 'Other Liability',
   },

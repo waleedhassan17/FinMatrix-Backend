@@ -35,6 +35,7 @@ import {
   isValidSubType,
   SYSTEM_ACCOUNT_DEFS,
   ACCT_CUSTOMER_ADVANCES,
+  ACCT_PAYROLL_LIABILITIES,
 } from './accounts.constants';
 import { AccountType } from '../../types';
 
@@ -62,6 +63,9 @@ const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
   ACCT_INPUT_TAX,
   ACCT_SALARY_EXPENSE,
   ACCT_CUSTOMER_ADVANCES,
+  // Payroll withholding posts here; switching it off would fail every payroll
+  // run that has a deduction.
+  ACCT_PAYROLL_LIABILITIES,
   // Every inventory adjustment offsets against one of these, chosen by the
   // reason the user picked — switching one off would fail the adjustment with
   // an error naming an account they never chose directly.

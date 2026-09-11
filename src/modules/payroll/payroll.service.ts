@@ -17,8 +17,8 @@ import { AccountsService } from '../accounts/accounts.service';
 // and deactivation.
 import {
   ACCT_CASH,
+  ACCT_PAYROLL_LIABILITIES,
   ACCT_SALARY_EXPENSE,
-  ACCT_TAX_PAYABLE,
 } from '../accounts/accounts.constants';
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
@@ -230,8 +230,15 @@ export class PayrollService {
         { accountId: cash.id, description: 'Net pay', debit: '0', credit: run.totalNet, lineOrder: 1 },
       ];
       if (toDecimal(run.totalDeductions).greaterThan(0)) {
-        const tax = await this.accounts.getByNumberOrFail(companyId, ACCT_TAX_PAYABLE, manager);
-        lines.push({ accountId: tax.id, description: 'Payroll deductions withheld', debit: '0', credit: run.totalDeductions, lineOrder: 2 });
+        // Withholding is owed onward, so it is a payroll liability — never
+        // Sales Tax Payable (2300), which the tax liability report reads as
+        // output sales tax. Created on first use for older charts.
+        const liabilities = await this.accounts.getOrCreateSystemAccount(
+          manager,
+          companyId,
+          ACCT_PAYROLL_LIABILITIES,
+        );
+        lines.push({ accountId: liabilities.id, description: 'Payroll deductions withheld', debit: '0', credit: run.totalDeductions, lineOrder: 2 });
       }
       const entry = await this.posting.createEntry(manager, {
         companyId, createdBy: userId, date: run.payDate, memo: `Payroll ${run.payPeriod}`,
