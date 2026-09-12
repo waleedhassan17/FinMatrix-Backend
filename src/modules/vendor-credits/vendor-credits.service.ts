@@ -12,6 +12,7 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, toDecimal } from '../../common/utils/money.util';
 import { formatYearlyRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
@@ -36,7 +37,10 @@ export class VendorCreditsService {
     const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
     if (query.vendorId) qb.andWhere('c.vendorId = :v', { v: query.vendorId });
-    if (query.search) qb.andWhere('c.vendorCreditNumber ILIKE :q', { q: `%${query.search}%` });
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['c.vendorCreditNumber'],
+      vendorColumn: 'c.vendorId',
+    });
     qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();

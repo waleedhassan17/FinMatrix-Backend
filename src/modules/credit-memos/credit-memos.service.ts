@@ -18,6 +18,7 @@ import { addMoney, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.u
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatYearlyRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
@@ -39,7 +40,10 @@ export class CreditMemosService {
     const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
     if (query.customerId) qb.andWhere('c.customerId = :cust', { cust: query.customerId });
-    if (query.search) qb.andWhere('c.creditMemoNumber ILIKE :q', { q: `%${query.search}%` });
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['c.creditMemoNumber'],
+      customerColumn: 'c.customerId',
+    });
     qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();

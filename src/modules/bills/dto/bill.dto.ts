@@ -65,6 +65,8 @@ export class ListBillsQueryDto {
   @IsIn(['draft', 'open', 'partial', 'paid', 'overdue', 'void'])
   status?: BillStatus;
   @ApiPropertyOptional() @IsOptional() @IsUUID() vendorId?: string;
+  /** Bill number, memo or vendor name. Undeclared, the whitelist stripped it. */
+  @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
 }
 
 export class BillPaymentApplicationDto {

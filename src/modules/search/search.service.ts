@@ -7,6 +7,11 @@ import { Invoice } from '../invoices/entities/invoice.entity';
 import { Bill } from '../bills/entities/bill.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { computeFeatures } from '../../common/features/feature-map';
+import { MIN_SEARCH_LENGTH } from '../../common/utils/like.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
+
+const ALL_ENTITIES = ['customers', 'vendors', 'invoices', 'bills', 'inventory'];
+const PER_BUCKET = 20;
 
 @Injectable()
 export class SearchService {
@@ -19,8 +24,17 @@ export class SearchService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async search(companyId: string, q: string, entities?: string) {
-    let targetEntities = entities ? entities.split(',') : ['customers', 'vendors', 'invoices', 'bills', 'inventory'];
+  async search(companyId: string, q: string | undefined, entities?: string) {
+    const query = (q ?? '').trim();
+    const results: Record<string, any[]> = {};
+
+    // A missing `q` used to become the pattern `%undefined%`, and a one-letter
+    // one matched most of the ledger. Too short to mean anything: no rows.
+    if (query.length < MIN_SEARCH_LENGTH) return { query, results };
+
+    let targetEntities = entities
+      ? entities.split(',').map((e) => e.trim()).filter((e) => ALL_ENTITIES.includes(e))
+      : ALL_ENTITIES;
 
     // Tier enforcement (feature-map): companies without the inventory feature
     // (small business / large org) never get inventory hits back, even when
@@ -41,38 +55,70 @@ export class SearchService {
         allFeaturesUnlocked: row?.all_features_unlocked ?? false,
       });
       if (!features.inventory) {
-        targetEntities = targetEntities.filter(e => e !== 'inventory');
+        targetEntities = targetEntities.filter((e) => e !== 'inventory');
       }
     }
-    const term = `%${q}%`;
-    const results: Record<string, any[]> = {};
 
     if (targetEntities.includes('customers')) {
-      results.customers = await this.customerRepo.createQueryBuilder('c')
-        .where('c.companyId = :cid AND (c.name ILIKE :q OR c.email ILIKE :q)', { cid: companyId, q: term })
-        .take(20).getMany();
-    }
-    if (targetEntities.includes('vendors')) {
-      results.vendors = await this.vendorRepo.createQueryBuilder('v')
-        .where('v.companyId = :cid AND (v.companyName ILIKE :q OR v.contactPerson ILIKE :q)', { cid: companyId, q: term })
-        .take(20).getMany();
-    }
-    if (targetEntities.includes('invoices')) {
-      results.invoices = await this.invoiceRepo.createQueryBuilder('i')
-        .where('i.companyId = :cid AND (i.invoiceNumber ILIKE :q OR i.notes ILIKE :q)', { cid: companyId, q: term })
-        .take(20).getMany();
-    }
-    if (targetEntities.includes('bills')) {
-      results.bills = await this.billRepo.createQueryBuilder('b')
-        .where('b.companyId = :cid AND (b.billNumber ILIKE :q OR b.memo ILIKE :q)', { cid: companyId, q: term })
-        .take(20).getMany();
-    }
-    if (targetEntities.includes('inventory')) {
-      results.inventory = await this.itemRepo.createQueryBuilder('i')
-        .where('i.companyId = :cid AND (i.name ILIKE :q OR i.sku ILIKE :q)', { cid: companyId, q: term })
-        .take(20).getMany();
+      const qb = this.customerRepo.createQueryBuilder('c').where('c.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, { columns: ['c.name', 'c.company', 'c.email', 'c.phone'] });
+      results.customers = await qb.orderBy('c.name', 'ASC').take(PER_BUCKET).getMany();
     }
 
-    return { query: q, results };
+    if (targetEntities.includes('vendors')) {
+      const qb = this.vendorRepo.createQueryBuilder('v').where('v.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, { columns: ['v.companyName', 'v.contactPerson', 'v.email', 'v.phone'] });
+      results.vendors = await qb.orderBy('v.companyName', 'ASC').take(PER_BUCKET).getMany();
+    }
+
+    if (targetEntities.includes('invoices')) {
+      const qb = this.invoiceRepo.createQueryBuilder('i').where('i.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, {
+        columns: ['i.invoiceNumber', 'i.notes'],
+        customerColumn: 'i.customerId',
+      });
+      const invoices = await qb
+        .orderBy('i.invoiceDate', 'DESC')
+        .addOrderBy('i.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
+      // An invoice number alone does not say whose it is; the result row does.
+      const names = await this.nameMap(this.customerRepo, invoices.map((i) => i.customerId), (c) => c.name);
+      results.invoices = invoices.map((i) => ({ ...i, customerName: names[i.customerId] ?? '' }));
+    }
+
+    if (targetEntities.includes('bills')) {
+      const qb = this.billRepo.createQueryBuilder('b').where('b.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, {
+        columns: ['b.billNumber', 'b.memo'],
+        vendorColumn: 'b.vendorId',
+      });
+      const bills = await qb
+        .orderBy('b.billDate', 'DESC')
+        .addOrderBy('b.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
+      const names = await this.nameMap(this.vendorRepo, bills.map((b) => b.vendorId), (v) => v.companyName);
+      results.bills = bills.map((b) => ({ ...b, vendorName: names[b.vendorId] ?? '' }));
+    }
+
+    if (targetEntities.includes('inventory')) {
+      const qb = this.itemRepo.createQueryBuilder('i').where('i.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, { columns: ['i.name', 'i.sku'] });
+      results.inventory = await qb.orderBy('i.name', 'ASC').take(PER_BUCKET).getMany();
+    }
+
+    return { query, results };
+  }
+
+  private async nameMap<T extends { id: string }>(
+    repo: Repository<T>,
+    ids: string[],
+    name: (row: T) => string,
+  ): Promise<Record<string, string>> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return {};
+    const rows = await repo.findByIds(unique);
+    return Object.fromEntries(rows.map((row) => [row.id, name(row)]));
   }
 }

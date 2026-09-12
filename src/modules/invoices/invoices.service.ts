@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Invoice, DiscountType } from './entities/invoice.entity';
 import { InvoiceLineItem } from './entities/invoice-line-item.entity';
@@ -29,6 +29,7 @@ import {
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatInvoiceRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { AccountsService } from '../accounts/accounts.service';
@@ -89,21 +90,16 @@ export class InvoicesService {
     if (query.status) qb.andWhere('i.status = :s', { s: query.status });
     if (query.customerId) qb.andWhere('i.customerId = :c', { c: query.customerId });
     if (query.startDate && query.endDate) {
-      qb.andWhere('i.invoiceDate BETWEEN :s AND :e', {
-        s: query.startDate,
-        e: query.endDate,
+      // Named apart from the status's `:s`: one name holds one value per query.
+      qb.andWhere('i.invoiceDate BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
       });
     }
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('i.invoiceNumber ILIKE :s', { s: `%${query.search}%` }).orWhere(
-            'i.notes ILIKE :s',
-            { s: `%${query.search}%` },
-          );
-        }),
-      );
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['i.invoiceNumber', 'i.notes'],
+      customerColumn: 'i.customerId',
+    });
     qb.orderBy('i.invoiceDate', 'DESC').addOrderBy('i.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 

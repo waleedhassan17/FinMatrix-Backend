@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Estimate, DiscountType, EstimateStatus } from './entities/estimate.entity';
 import { EstimateLineItem } from './entities/estimate-line-item.entity';
@@ -18,6 +18,7 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { formatEstimateRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { InvoicesService } from '../invoices/invoices.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 
@@ -48,14 +49,13 @@ export class EstimatesService {
     if (query.status) qb.andWhere('e.status = :s', { s: query.status });
     if (query.customerId) qb.andWhere('e.customerId = :c', { c: query.customerId });
     if (query.startDate && query.endDate) {
-      qb.andWhere('e.estimateDate BETWEEN :s AND :e', { s: query.startDate, e: query.endDate });
+      // Named apart from the status's `:s`: one name holds one value per query.
+      qb.andWhere('e.estimateDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
     }
-    if (query.search) {
-      qb.andWhere(new Brackets((w) => {
-        w.where('e.estimateNumber ILIKE :s', { s: `%${query.search}%` })
-          .orWhere('e.notes ILIKE :s', { s: `%${query.search}%` });
-      }));
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['e.estimateNumber', 'e.notes'],
+      customerColumn: 'e.customerId',
+    });
     qb.orderBy('e.estimateDate', 'DESC').addOrderBy('e.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 

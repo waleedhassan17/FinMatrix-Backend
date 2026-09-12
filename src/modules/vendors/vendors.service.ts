@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { toDecimal } from '../../common/utils/money.util';
 import { Vendor } from './entities/vendor.entity';
 import { Bill } from '../bills/entities/bill.entity';
@@ -11,6 +11,7 @@ import {
   UpdateVendorDto,
 } from './dto/vendor.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 
 @Injectable()
 export class VendorsService {
@@ -31,15 +32,9 @@ export class VendorsService {
       .where('v.companyId = :companyId', { companyId });
     if (query.isActive !== undefined)
       qb.andWhere('v.isActive = :a', { a: query.isActive });
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('v.companyName ILIKE :s', { s: `%${query.search}%` })
-            .orWhere('v.email ILIKE :s', { s: `%${query.search}%` })
-            .orWhere('v.contactPerson ILIKE :s', { s: `%${query.search}%` });
-        }),
-      );
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['v.companyName', 'v.email', 'v.contactPerson', 'v.phone'],
+    });
     qb.orderBy('v.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();

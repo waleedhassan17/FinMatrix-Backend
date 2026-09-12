@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, EntityManager, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Payment } from '../payments/entities/payment.entity';
@@ -12,6 +12,7 @@ import {
 } from './dto/customer.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, subtractMoney, toDecimal } from '../../common/utils/money.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
 import { Address } from './entities/customer.entity';
 
@@ -52,15 +53,9 @@ export class CustomersService {
     if (query.isActive !== undefined) {
       qb.andWhere('c.isActive = :a', { a: query.isActive });
     }
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('c.name ILIKE :s', { s: `%${query.search}%` })
-            .orWhere('c.email ILIKE :s', { s: `%${query.search}%` })
-            .orWhere('c.company ILIKE :s', { s: `%${query.search}%` });
-        }),
-      );
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['c.name', 'c.email', 'c.company', 'c.phone'],
+    });
     qb.orderBy('c.createdAt', 'DESC')
       .take(pagination.limit)
       .skip(pagination.skip);

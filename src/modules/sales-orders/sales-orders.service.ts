@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
 import { SalesOrder, DiscountType, SalesOrderStatus } from './entities/sales-order.entity';
 import { SalesOrderLineItem } from './entities/sales-order-line-item.entity';
@@ -14,6 +14,7 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { formatSalesOrderRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { InvoicesService } from '../invoices/invoices.service';
 
 interface LineCalc {
@@ -37,14 +38,13 @@ export class SalesOrdersService {
     if (query.status) qb.andWhere('o.status = :s', { s: query.status });
     if (query.customerId) qb.andWhere('o.customerId = :c', { c: query.customerId });
     if (query.startDate && query.endDate) {
-      qb.andWhere('o.orderDate BETWEEN :s AND :e', { s: query.startDate, e: query.endDate });
+      // Named apart from the status's `:s`: one name holds one value per query.
+      qb.andWhere('o.orderDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
     }
-    if (query.search) {
-      qb.andWhere(new Brackets((w) => {
-        w.where('o.orderNumber ILIKE :s', { s: `%${query.search}%` })
-          .orWhere('o.notes ILIKE :s', { s: `%${query.search}%` });
-      }));
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['o.orderNumber', 'o.notes'],
+      customerColumn: 'o.customerId',
+    });
     qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 

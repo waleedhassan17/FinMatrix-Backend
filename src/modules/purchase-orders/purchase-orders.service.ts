@@ -20,6 +20,7 @@ import { toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { formatPurchaseOrderRef } from '../../common/utils/reference-generator.util';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 import { BillsService } from '../bills/bills.service';
 import { Bill } from '../bills/entities/bill.entity';
 import { PostingService } from '../journal-entries/posting.service';
@@ -53,6 +54,10 @@ export class PurchaseOrdersService {
       .where('o.companyId = :companyId', { companyId });
     if (query.status) qb.andWhere('o.status = :s', { s: query.status });
     if (query.vendorId) qb.andWhere('o.vendorId = :v', { v: query.vendorId });
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['o.poNumber', 'o.notes'],
+      vendorColumn: 'o.vendorId',
+    });
     qb.orderBy('o.orderDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();

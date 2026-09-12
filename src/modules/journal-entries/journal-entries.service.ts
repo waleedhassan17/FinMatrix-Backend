@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { JournalEntry } from './entities/journal-entry.entity';
 import { JournalEntryLine } from './entities/journal-entry-line.entity';
 import { Account } from '../accounts/entities/account.entity';
@@ -16,6 +16,7 @@ import {
 } from './dto/journal-entry.dto';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 
 /**
  * HTTP-facing service for the manual General Journal.
@@ -45,16 +46,9 @@ export class JournalEntriesService {
     if (query.status) qb.andWhere('e.status = :status', { status: query.status });
     if (query.startDate) qb.andWhere('e.date >= :startDate', { startDate: query.startDate });
     if (query.endDate) qb.andWhere('e.date <= :endDate', { endDate: query.endDate });
-    if (query.search) {
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where('e.reference ILIKE :s', { s: `%${query.search}%` }).orWhere(
-            'e.memo ILIKE :s',
-            { s: `%${query.search}%` },
-          );
-        }),
-      );
-    }
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['e.reference', 'e.memo'],
+    });
 
     qb.orderBy('e.date', 'DESC').addOrderBy('e.createdAt', 'DESC');
     const entries = await qb.getMany();

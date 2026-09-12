@@ -38,6 +38,7 @@ import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity
 import { BillStatus } from '../../types';
 import { nextYearlySequence } from '../../common/utils/sequence.util';
 import { formatBillRef } from '../../common/utils/reference-generator.util';
+import { applyTextSearch } from '../../common/utils/search-query.util';
 
 interface BillTotals {
   subtotal: string;
@@ -101,6 +102,10 @@ export class BillsService {
       .where('b.companyId = :companyId', { companyId });
     if (query.status) qb.andWhere('b.status = :s', { s: query.status });
     if (query.vendorId) qb.andWhere('b.vendorId = :v', { v: query.vendorId });
+    applyTextSearch(qb, query.search, companyId, {
+      columns: ['b.billNumber', 'b.memo'],
+      vendorColumn: 'b.vendorId',
+    });
     qb.orderBy('b.billDate', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();

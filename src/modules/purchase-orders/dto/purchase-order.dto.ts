@@ -82,4 +82,7 @@ export class ListPurchaseOrdersQueryDto {
   status?: PurchaseOrderStatus;
 
   @ApiPropertyOptional() @IsOptional() @IsUUID() vendorId?: string;
+
+  /** Order number, notes or vendor name. Undeclared, the whitelist stripped it. */
+  @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
 }
