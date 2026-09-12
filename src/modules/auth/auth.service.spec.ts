@@ -194,6 +194,110 @@ describe('AuthService', () => {
       });
     });
 
+    // ── Portal gate ──────────────────────────────────────────────────────
+    // Each sign-in door admits its own kind of account. The owner's email and
+    // password typed into the team member door used to open the owner
+    // dashboard, because the server never knew which door was used.
+    const signInAs = async (
+      role: 'admin' | 'staff' | 'delivery' | 'super_admin',
+      opts: {
+        portal?: 'admin' | 'staff' | 'delivery' | 'team';
+        password?: string;
+        verified?: boolean;
+      } = {},
+    ) => {
+      const passwordHash = await bcrypt.hash('Secret123!', 4);
+      const isOwner = role === 'admin';
+      const identifier = isOwner ? 'owner@x.z' : `${role}.user`;
+      const account = {
+        id: 'u1',
+        email: isOwner ? 'owner@x.z' : null,
+        username: isOwner ? null : identifier,
+        passwordHash,
+        role,
+        isActive: true,
+        isEmailVerified: opts.verified ?? true,
+        defaultCompanyId: role === 'super_admin' ? null : 'c1',
+      };
+      users.findByEmail.mockResolvedValue(account);
+      users.findByUsername.mockResolvedValue(account);
+      userCompanyRepo.findOne.mockResolvedValue(
+        role === 'super_admin'
+          ? null
+          : {
+              userId: 'u1',
+              companyId: 'c1',
+              role,
+              company: { id: 'c1', name: 'Acme', status: 'approved', rejectionReason: null },
+            },
+      );
+      jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
+      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      return service.signin({
+        identifier,
+        password: opts.password ?? 'Secret123!',
+        portal: opts.portal,
+      });
+    };
+
+    it('refuses the owner on the team member portal, before any token is issued', async () => {
+      await expect(signInAs('admin', { portal: 'staff' })).rejects.toMatchObject({
+        response: {
+          code: 'WRONG_PORTAL',
+          details: { accountType: 'admin', portal: 'staff' },
+        },
+      });
+      expect(jwtMock.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('refuses a team member on the owner portal', async () => {
+      await expect(signInAs('staff', { portal: 'admin' })).rejects.toMatchObject({
+        response: { code: 'WRONG_PORTAL', details: { accountType: 'staff' } },
+      });
+      expect(jwtMock.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('refuses an owner on the app user portal', async () => {
+      await expect(signInAs('admin', { portal: 'team' })).rejects.toMatchObject({
+        response: { code: 'WRONG_PORTAL' },
+      });
+    });
+
+    it('keeps a wrong password generic, whatever the portal', async () => {
+      await expect(
+        signInAs('admin', { portal: 'staff', password: 'wrong' }),
+      ).rejects.toMatchObject({ response: { code: 'INVALID_CREDENTIALS' } });
+    });
+
+    it('tells an unverified owner on the wrong door which door is theirs', async () => {
+      await expect(
+        signInAs('admin', { portal: 'staff', verified: false }),
+      ).rejects.toMatchObject({ response: { code: 'WRONG_PORTAL' } });
+    });
+
+    it('still sends an unverified owner on the owner door to verification', async () => {
+      await expect(
+        signInAs('admin', { portal: 'admin', verified: false }),
+      ).rejects.toMatchObject({ response: { code: 'EMAIL_NOT_VERIFIED' } });
+    });
+
+    it.each([
+      ['admin', 'admin'],
+      ['super_admin', 'admin'],
+      ['staff', 'staff'],
+      ['staff', 'team'],
+      ['delivery', 'team'],
+      ['delivery', 'delivery'],
+    ] as const)('admits a %s account on the %s portal', async (role, portal) => {
+      const res = await signInAs(role, { portal });
+      expect(res.tokens.accessToken).toBeTruthy();
+      expect(res.user.role).toBe(role);
+    });
+
+    it('does not gate a client that names no portal (installed app builds)', async () => {
+      const res = await signInAs('staff');
+      expect(res.tokens.accessToken).toBeTruthy();
+    });
   });
 
   describe('verifyEmail', () => {

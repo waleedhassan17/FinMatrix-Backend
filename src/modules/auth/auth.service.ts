@@ -32,6 +32,7 @@ import {
   VerifyOtpDto,
 } from './dto/signin.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
+import { isRoleAllowedOnPortal, wrongPortalMessage } from './signin-portal';
 import { UserRole } from '../../types';
 import { MailService } from '../mail/mail.service';
 import { computeFeatures } from '../../common/features/feature-map';
@@ -210,19 +211,6 @@ export class AuthService {
       });
     }
 
-    // Hard gate: company admins cannot sign in until their email is verified.
-    // An owner-created account has no email to verify, so the gate cannot
-    // apply to it — without this guard, promoting a username-only user to
-    // admin would lock them out permanently with no way to satisfy the check.
-    if (user.role === 'admin' && user.email && !user.isEmailVerified) {
-      this.logger.warn(`Login blocked (email not verified): ${identifier}`);
-      throw new ForbiddenException({
-        code: 'EMAIL_NOT_VERIFIED',
-        message: 'Please verify your email before signing in.',
-        email: user.email,
-      });
-    }
-
     let membership = user.defaultCompanyId
       ? await this.userCompanyRepo.findOne({
           where: { userId: user.id, companyId: user.defaultCompanyId },
@@ -255,6 +243,37 @@ export class AuthService {
     const role: UserRole = isSuperAdmin
       ? 'super_admin'
       : ((membership?.role ?? user.role) as UserRole);
+
+    // Portal gate. Each sign-in door admits its own kind of account: the owner's
+    // email typed into the team member door must not open the owner dashboard.
+    // Checked only once the password has matched, so it never tells a stranger
+    // what kind of account an address belongs to, and before any token exists.
+    // A client that names no portal (installed app builds) is not gated here.
+    if (dto.portal && !isRoleAllowedOnPortal(dto.portal, role)) {
+      this.logger.warn(
+        `Login blocked (wrong portal: ${role} on ${dto.portal}): ${identifier}`,
+      );
+      throw new ForbiddenException({
+        code: 'WRONG_PORTAL',
+        message: wrongPortalMessage(role),
+        details: { accountType: role, portal: dto.portal },
+      });
+    }
+
+    // Hard gate: company admins cannot sign in until their email is verified.
+    // An owner-created account has no email to verify, so the gate cannot
+    // apply to it — without this guard, promoting a username-only user to
+    // admin would lock them out permanently with no way to satisfy the check.
+    // After the portal gate: an unverified owner on the wrong door is told
+    // which door is theirs before being sent off to verify.
+    if (user.role === 'admin' && user.email && !user.isEmailVerified) {
+      this.logger.warn(`Login blocked (email not verified): ${identifier}`);
+      throw new ForbiddenException({
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before signing in.',
+        email: user.email,
+      });
+    }
 
     const company = membership?.company ?? null;
 

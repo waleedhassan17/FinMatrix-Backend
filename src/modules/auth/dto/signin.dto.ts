@@ -1,12 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   Length,
   Matches,
   MinLength,
 } from 'class-validator';
+import { SIGNIN_PORTALS, SigninPortal } from '../signin-portal';
 import { PASSWORD_REGEX } from './signup.dto';
 
 export class SigninDto {
@@ -33,6 +35,17 @@ export class SigninDto {
   @IsString()
   @MinLength(1)
   password!: string;
+
+  /**
+   * The sign-in door this request came from. When present, an account that
+   * belongs on a different door is refused with WRONG_PORTAL — after the
+   * password is checked, before any token is issued. Optional so installed app
+   * builds, which send no portal, keep signing in exactly as before.
+   */
+  @ApiPropertyOptional({ enum: SIGNIN_PORTALS, example: 'admin' })
+  @IsOptional()
+  @IsIn([...SIGNIN_PORTALS])
+  portal?: SigninPortal;
 }
 
 export class ForgotPasswordDto {
