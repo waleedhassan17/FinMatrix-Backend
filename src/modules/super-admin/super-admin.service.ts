@@ -353,17 +353,20 @@ export class SuperAdminService {
         'Customers, vendors & chart of accounts',
         'Tax tracking + core reports (P&L, BS, TB, aging)',
       ],
+      // Each list stands on its own. "Everything in <tier>" pointed buyers at a
+      // tier that is not on sale, so they were told a plan includes something
+      // they could not see. Four lines at most — the app's plan card shows four.
       large_org: [
-        'Everything in Small Business',
+        'Invoices, bills, payments, tax & core reports',
         'Payroll, employees & payslips',
         'Budgets vs actual, team roles & bank reconciliation',
         'Optional inventory (per-company toggle)',
       ],
       warehouse: [
-        'Everything in Large Organization',
+        'Complete accounting: invoices, bills, payments, tax & reports',
+        'Payroll, budgets, bank reconciliation & team roles',
         'Full inventory + purchase orders (GRNI 3-way match)',
-        'Deliveries with rider app & admin approval',
-        'Goods-in-Transit accounting built in',
+        'Deliveries with rider app, admin approval & Goods-in-Transit accounting',
       ],
     };
     return TIER_PLAN_KEYS.map((key, i) => {
