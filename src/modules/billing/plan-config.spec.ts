@@ -2,9 +2,13 @@ import {
   formatMinorUnits,
   getPlanConfig,
   getPlatformBank,
+  isPlanKey,
+  isTrialPlan,
   normalizePlan,
   PLAN_CONFIG,
   plansForType,
+  TRIAL_DURATION_DAYS,
+  TRIAL_PLAN_KEY,
 } from './plan-config';
 
 describe('PLAN_CONFIG (phase2.md contract)', () => {
@@ -156,5 +160,42 @@ describe('Offered tier plans (PKR)', () => {
       expect(p.companyType).toBeNull(); // ⇒ excluded from plansForType
       expect(p.deliveryPersonnelLimit).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('free trial plan', () => {
+  it('resolves to itself, never to free', () => {
+    expect(isPlanKey(TRIAL_PLAN_KEY)).toBe(true);
+    expect(normalizePlan(TRIAL_PLAN_KEY)).toBe('warehouse_trial');
+    expect(getPlanConfig(TRIAL_PLAN_KEY).key).toBe('warehouse_trial');
+  });
+
+  it('is granted, never bought: price 0 and never offered to any type', () => {
+    const trial = PLAN_CONFIG.warehouse_trial;
+    expect(trial.priceMinorUnits).toBe(0);
+    expect(trial.companyType).toBeNull();
+    for (const type of ['small_business', 'large_org', 'warehouse', null]) {
+      expect(plansForType(type).map((p) => p.key)).not.toContain(TRIAL_PLAN_KEY);
+    }
+  });
+
+  it('runs 30 days and allows exactly one delivery rider', () => {
+    expect(TRIAL_DURATION_DAYS).toBe(30);
+    expect(PLAN_CONFIG.warehouse_trial.durationMonths).toBeNull();
+    expect(PLAN_CONFIG.warehouse_trial.deliveryPersonnelLimit).toBe(1);
+  });
+
+  it('every plan on sale allows at least as many riders, so converting never locks one', () => {
+    for (const p of plansForType('warehouse')) {
+      expect(p.deliveryPersonnelLimit).toBeGreaterThanOrEqual(
+        PLAN_CONFIG.warehouse_trial.deliveryPersonnelLimit,
+      );
+    }
+  });
+
+  it('isTrialPlan recognises only the trial key', () => {
+    expect(isTrialPlan('warehouse_trial')).toBe(true);
+    expect(isTrialPlan('warehouse_scale_6mo')).toBe(false);
+    expect(isTrialPlan(null)).toBe(false);
   });
 });

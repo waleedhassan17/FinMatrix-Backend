@@ -29,6 +29,29 @@ function button(href: string, label: string): string {
   return `<a href="${href}" style="display:inline-block;background:${BRAND};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">${label}</a>`;
 }
 
+/**
+ * HTML-escape a value interpolated into a template. Used by the trial templates,
+ * which carry free text a person typed (a rejection reason, a company name).
+ */
+function esc(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** "15 October 2026" — unambiguous in Pakistan, unlike 10/15/2026. */
+function longDate(d: Date): string {
+  return d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Asia/Karachi',
+  });
+}
+
 export interface RenderedEmail {
   subject: string;
   html: string;
@@ -104,6 +127,115 @@ export const emailTemplates = {
          <p>You can update your details and resubmit for review from the app.</p>`,
       ),
       text: `Hi ${displayName},\n\n${companyName} was not approved.\n\nReason: ${reason}\n\nYou can update your details and resubmit from the app.`,
+    };
+  },
+
+  // ── Free trial ──────────────────────────────────────────────────────────
+  // The copy never promises instant access: a trial is activated by a person,
+  // and every line below says so.
+
+  trialRequested(displayName: string, companyName: string): RenderedEmail {
+    return {
+      subject: "We've received your free trial request",
+      html: layout(
+        "We've received your free trial request",
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Thanks for choosing FinMatrix for <strong>${esc(companyName)}</strong>. Our team reviews every trial request and activates it within <strong>24 hours</strong>.</p>
+         <p>Your 30 days start when the trial is activated, so no time is lost while you wait. We'll email you as soon as it's live.</p>`,
+      ),
+      text:
+        `Hi ${displayName},\n\nThanks for choosing FinMatrix for ${companyName}. Our team reviews every trial ` +
+        `request and activates it within 24 hours.\n\nYour 30 days start when the trial is activated, so no ` +
+        `time is lost while you wait. We'll email you as soon as it's live.`,
+    };
+  },
+
+  trialRequestedAdmin(companyName: string, ownerEmail: string, ownerPhone: string | null): RenderedEmail {
+    return {
+      subject: `Free trial request awaiting review: ${companyName}`,
+      html: layout(
+        'A free trial request needs review',
+        `<p>A company has asked for a 30-day free trial. The owner was told it will be activated within 24 hours.</p>
+         <p><strong>Company:</strong> ${esc(companyName)}<br/>
+         <strong>Owner:</strong> ${esc(ownerEmail)}<br/>
+         <strong>Phone:</strong> ${esc(ownerPhone ?? '—')}</p>
+         <p>Open Payment Verification in the FinMatrix admin console and filter by Trials to approve or reject it.</p>`,
+      ),
+      text:
+        `A company has asked for a 30-day free trial (promised within 24 hours).\n\n` +
+        `Company: ${companyName}\nOwner: ${ownerEmail}\nPhone: ${ownerPhone ?? '—'}\n\n` +
+        `Open Payment Verification in the admin console and filter by Trials.`,
+    };
+  },
+
+  trialApproved(displayName: string, companyName: string, trialEndsAt: Date): RenderedEmail {
+    const ends = longDate(trialEndsAt);
+    return {
+      subject: 'Your 30-day FinMatrix trial is active',
+      html: layout(
+        'Your free trial is active',
+        `<p>Hi ${esc(displayName)},</p>
+         <p><strong>${esc(companyName)}</strong> now has full access to FinMatrix — every accounting, inventory and delivery feature, with one delivery rider.</p>
+         <p><strong>Your trial ends on ${ends}.</strong></p>
+         <p>Subscribe any time before then to add more riders and keep going without a break. If the trial ends first, your account pauses until you subscribe — your data is kept safe and nothing is deleted.</p>
+         <p>Sign in to get started.</p>`,
+      ),
+      text:
+        `Hi ${displayName},\n\n${companyName} now has full access to FinMatrix, with one delivery rider.\n\n` +
+        `Your trial ends on ${ends}.\n\nSubscribe any time before then to add more riders and keep going ` +
+        `without a break. If the trial ends first, your account pauses until you subscribe — your data is ` +
+        `kept safe.\n\nSign in to get started.`,
+    };
+  },
+
+  trialRejected(displayName: string, companyName: string, reason: string): RenderedEmail {
+    return {
+      subject: 'Update on your FinMatrix free trial request',
+      html: layout(
+        'We could not activate a free trial',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>We reviewed the free trial request for <strong>${esc(companyName)}</strong> and were not able to activate it this time.</p>
+         <p><strong>Note from our team:</strong><br/>${esc(reason)}</p>
+         <p>Your company setup is saved. You can still start straight away with a paid plan: sign in, choose a plan, and pay by bank transfer — your account is activated once the transfer is verified.</p>`,
+      ),
+      text:
+        `Hi ${displayName},\n\nWe reviewed the free trial request for ${companyName} and were not able to ` +
+        `activate it this time.\n\nNote from our team: ${reason}\n\nYour company setup is saved. You can still ` +
+        `start with a paid plan: sign in, choose a plan, and pay by bank transfer.`,
+    };
+  },
+
+  trialEnding(displayName: string, companyName: string, daysRemaining: number): RenderedEmail {
+    const days = `${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
+    return {
+      subject: `Your FinMatrix trial ends in ${days}`,
+      html: layout(
+        `Your free trial ends in ${days}`,
+        `<p>Hi ${esc(displayName)},</p>
+         <p>The free trial for <strong>${esc(companyName)}</strong> ends in <strong>${days}</strong>.</p>
+         <p>Subscribe now to keep everything running without a break. Choose a plan in the app or on the web, pay by bank transfer, and your subscription starts as soon as the transfer is verified.</p>
+         <p>If the trial ends first, your data is kept safe — you just won't be able to use the books until you subscribe.</p>`,
+      ),
+      text:
+        `Hi ${displayName},\n\nThe free trial for ${companyName} ends in ${days}.\n\nSubscribe now to keep ` +
+        `everything running: choose a plan, pay by bank transfer, and your subscription starts once the ` +
+        `transfer is verified.\n\nIf the trial ends first, your data is kept safe.`,
+    };
+  },
+
+  trialEnded(displayName: string, companyName: string): RenderedEmail {
+    return {
+      subject: 'Your FinMatrix trial has ended',
+      html: layout(
+        'Your trial has ended — subscribe to keep access',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>The free trial for <strong>${esc(companyName)}</strong> has ended, so the account is paused.</p>
+         <p><strong>Your data is safe.</strong> Nothing has been deleted. Sign in, choose a plan and pay by bank transfer — everything switches back on once the transfer is verified.</p>`,
+      ),
+      text:
+        `Hi ${displayName},\n\nThe free trial for ${companyName} has ended, so the account is paused.\n\n` +
+        `Your data is safe. Sign in, choose a plan and pay by bank transfer — everything switches back on ` +
+        `once the transfer is verified.`,
     };
   },
 };

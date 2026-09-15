@@ -11,6 +11,7 @@ import {
   effectiveCompanyStatus,
   normalizeCompanyStatus,
 } from '../utils/company-status.util';
+import { RIDER_SEAT_LOCKED_MESSAGE } from '../../modules/delivery-personnel/rider-seats';
 
 /**
  * Extracts companyId from the authenticated user (JWT), enforces that the
@@ -38,15 +39,31 @@ export class CompanyGuard implements CanActivate {
       });
     }
 
+    // Riders also carry their seat status: a rider the plan no longer covers
+    // (`plan_locked`, see delivery-personnel/rider-seats.ts) is refused on
+    // every request, not only at sign-in. Folded into the same lookup so a
+    // rider request still costs one query.
+    const isRider = req.user?.role === 'delivery';
     const rows: Array<{
       status: string | null;
       subscription_plan: string | null;
       subscription_expiry_date: Date | null;
-    }> = await this.dataSource.query(
-      `SELECT status, subscription_plan, subscription_expiry_date
-         FROM companies WHERE id = $1 LIMIT 1`,
-      [companyId],
-    );
+      rider_status?: string | null;
+    }> = isRider
+      ? await this.dataSource.query(
+          `SELECT c.status, c.subscription_plan, c.subscription_expiry_date,
+                  p.status AS rider_status
+             FROM companies c
+             LEFT JOIN delivery_personnel_profiles p
+               ON p.company_id = c.id AND p.user_id = $2
+            WHERE c.id = $1 LIMIT 1`,
+          [companyId, req.user?.id],
+        )
+      : await this.dataSource.query(
+          `SELECT status, subscription_plan, subscription_expiry_date
+             FROM companies WHERE id = $1 LIMIT 1`,
+          [companyId],
+        );
     // effectiveCompanyStatus applies the LIVE subscription-expiry check, so a
     // paid plan is cut off the moment it lapses — not at the next 1AM billing
     // cron (which persists status='inactive' and sends the notification).
@@ -80,6 +97,13 @@ export class CompanyGuard implements CanActivate {
                 ? 'Finish setting up your company to continue.'
                 : 'Your company is awaiting approval.',
         companyStatus: acctStatus,
+      });
+    }
+
+    if (isRider && row?.rider_status === 'plan_locked') {
+      throw new ForbiddenException({
+        code: 'RIDER_SEAT_LOCKED',
+        message: RIDER_SEAT_LOCKED_MESSAGE,
       });
     }
 

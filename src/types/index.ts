@@ -150,7 +150,11 @@ export type DeliveryStatus =
 
 export type DeliveryPriority = 'low' | 'normal' | 'medium' | 'high' | 'urgent';
 
-export type DeliveryPersonnelStatus = 'active' | 'on_leave' | 'inactive';
+// plan_locked: set by the SYSTEM (never the owner) when the company's plan
+// allows fewer riders than it has active — the rider keeps their data but
+// cannot sign in or be assigned until a seat frees up. Deliberately not in the
+// update DTO's IsEnum.
+export type DeliveryPersonnelStatus = 'active' | 'on_leave' | 'inactive' | 'plan_locked';
 
 export type DeliveryIssueType =
   | 'damaged'

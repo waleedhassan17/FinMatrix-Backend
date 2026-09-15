@@ -22,6 +22,7 @@
     "test:acceptance": "ts-node -r tsconfig-paths/register test/acceptance.ts",
     "test:authgate": "ts-node -r tsconfig-paths/register test/auth-gate.acceptance.ts",
     "test:subscription": "ts-node -r tsconfig-paths/register test/subscription.acceptance.ts",
+    "test:trial": "ts-node -r tsconfig-paths/register test/trial.acceptance.ts",
     "typeorm": "typeorm-ts-node-commonjs -d src/database/data-source.ts",
     "migration:generate": "npm run typeorm -- migration:generate",
     "migration:run": "npm run typeorm -- migration:run",

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -11,7 +12,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { isUUID } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { StartTrialDto } from './dto/start-trial.dto';
 import { CompaniesService } from './companies.service';
 import {
   ClosePeriodDto,
@@ -42,6 +46,47 @@ export class CompaniesController {
   @ApiOperation({ summary: 'Join an existing company via invite code.' })
   join(@CurrentUser() user: AuthenticatedUser, @Body() dto: JoinCompanyDto) {
     return this.companies.join(user.id, dto);
+  }
+
+  /**
+   * Request the admin-approved 30-day free trial. Grants nothing by itself —
+   * the company stays pending until a super-admin approves.
+   *
+   * companyId resolves the way `subscribe` does: body, then x-company-id
+   * header, then the token (a freshly signed-up owner's token has none). The
+   * service verifies the caller is that company's admin, so naming someone
+   * else's company gets a 403.
+   *
+   * Throttled per session: the global throttler runs before authentication,
+   * so the bearer token (not req.user) is the tracker, with the IP as a
+   * fallback. The unique claim indexes are the real abuse control; this only
+   * stops a client hammering the route.
+   */
+  @Post('start-trial')
+  @Throttle({
+    default: {
+      limit: 5,
+      ttl: 900_000,
+      getTracker: (req: Record<string, any>) =>
+        (typeof req.headers?.authorization === 'string' && req.headers.authorization) ||
+        req.ip ||
+        'anonymous',
+    },
+  })
+  @ApiOperation({ summary: 'Request the admin-approved 30-day free trial (owner only).' })
+  startTrial(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: StartTrialDto,
+    @Headers('x-company-id') headerCompanyId?: string,
+  ) {
+    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
+    if (!companyId || !isUUID(companyId)) {
+      throw new BadRequestException({
+        code: 'COMPANY_REQUIRED',
+        message: 'Set up your company before requesting a free trial.',
+      });
+    }
+    return this.companies.requestTrial(user.id, companyId);
   }
 
   @Get(':companyId')

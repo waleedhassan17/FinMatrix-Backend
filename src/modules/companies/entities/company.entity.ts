@@ -146,6 +146,46 @@ export class Company extends BaseEntity {
   @Column({ type: 'date', nullable: true, name: 'subscription_reminder_on' })
   subscriptionReminderOn!: string | null;
 
+  // ── Free trial (admin-approved, 30 days) ──────────────────────────────────
+  // An APPROVED trial is an ordinary subscription: subscriptionPlan is the
+  // trial plan key, subscriptionExpiryDate is the end of the trial, and
+  // CompanyGuard / effectiveCompanyStatus / runExpiryScan treat it like any
+  // other plan. These columns only record trial HISTORY — they are what tells
+  // "never paid" apart from "paid".
+  //
+  //   currently trialing = isTrial && trialConvertedAt IS NULL && not expired
+  //   ever trialed       = isTrial
+  //
+  // A REQUESTED trial is not a trial yet: requesting sets only
+  // trialRequestedAt (plus paymentStatus='submitted', like a payment awaiting
+  // review). Nothing below is set until a super-admin approves.
+
+  // True from APPROVAL onward and NEVER reset — not on expiry, not after a
+  // real payment converts the company. It is permanent trial history, and it
+  // is what stops a company trialing twice.
+  @Column({ type: 'boolean', default: false, name: 'is_trial' })
+  isTrial!: boolean;
+
+  // When the owner asked for the trial. Kept after a rejection; a new request
+  // after a released rejection overwrites it.
+  @Column({ type: 'timestamptz', nullable: true, name: 'trial_requested_at' })
+  trialRequestedAt!: Date | null;
+
+  // When the super-admin approved it. The 30 days run from HERE, not from the
+  // request, so time spent waiting for review costs the owner nothing.
+  @Column({ type: 'timestamptz', nullable: true, name: 'trial_started_at' })
+  trialStartedAt!: Date | null;
+
+  // When a real payment was approved for this company after its trial.
+  @Column({ type: 'timestamptz', nullable: true, name: 'trial_converted_at' })
+  trialConvertedAt!: Date | null;
+
+  // The last trial-ending EMAIL milestone sent (7, 3 or 1 days left). In-app
+  // reminders stay daily via subscriptionReminderOn; emails go out only when a
+  // smaller milestone is crossed, so a missed cron run still sends the next one.
+  @Column({ type: 'smallint', nullable: true, name: 'trial_reminder_milestone' })
+  trialReminderMilestone!: number | null;
+
   // GST/Sales-tax registered: when true, input tax on bills is posted to a
   // recoverable asset (Sales Tax Recoverable 1300) instead of being rolled into
   // the expense/inventory line, so remittance = output tax − input tax

@@ -63,8 +63,11 @@ describe('AuthService', () => {
     sendVerificationEmail: jest.Mock;
     sendOtpEmail: jest.Mock;
   };
+  /** Raw SQL lookups (rider seat, pending-request kind). Empty by default. */
+  let dataSourceQuery: jest.Mock;
 
   beforeEach(async () => {
+    dataSourceQuery = jest.fn().mockResolvedValue([]);
     users = {
       findByEmail: jest.fn(),
       findByUsername: jest.fn(),
@@ -110,7 +113,10 @@ describe('AuthService', () => {
             getOrThrow: jest.fn(() => 'secret'),
           },
         },
-        { provide: DataSource, useValue: { transaction: jest.fn() } },
+        {
+          provide: DataSource,
+          useValue: { transaction: jest.fn(), query: (...args: unknown[]) => dataSourceQuery(...args) },
+        },
         { provide: MailService, useValue: mail },
         { provide: getRepositoryToken(RefreshToken), useValue: refreshRepo },
         { provide: getRepositoryToken(RevokedAccessToken), useValue: revokedRepo },
@@ -297,6 +303,69 @@ describe('AuthService', () => {
     it('does not gate a client that names no portal (installed app builds)', async () => {
       const res = await signInAs('staff');
       expect(res.tokens.accessToken).toBeTruthy();
+    });
+
+    it('refuses a rider whose seat the plan has locked, before any token is issued', async () => {
+      dataSourceQuery.mockResolvedValue([{ status: 'plan_locked' }]);
+      await expect(signInAs('delivery', { portal: 'delivery' })).rejects.toMatchObject({
+        response: { code: 'RIDER_SEAT_LOCKED' },
+      });
+      expect(jwtMock.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('admits an active rider', async () => {
+      dataSourceQuery.mockResolvedValue([{ status: 'active' }]);
+      const res = await signInAs('delivery', { portal: 'delivery' });
+      expect(res.tokens.accessToken).toBeTruthy();
+    });
+  });
+
+  describe('signin while a request is in review', () => {
+    const signInPendingOwner = async (lastSubmission: { kind: string; status: string } | null) => {
+      const passwordHash = await bcrypt.hash('Secret123!', 4);
+      const account = {
+        id: 'u1',
+        email: 'owner@x.z',
+        username: null,
+        passwordHash,
+        role: 'admin',
+        isActive: true,
+        isEmailVerified: true,
+        defaultCompanyId: 'c1',
+      };
+      users.findByEmail.mockResolvedValue(account);
+      userCompanyRepo.findOne.mockResolvedValue({
+        userId: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        // A draft whose request is with an administrator reports `pending`.
+        company: {
+          id: 'c1',
+          name: 'Acme',
+          status: 'email_verified',
+          paymentStatus: 'submitted',
+          lastSubmissionId: lastSubmission ? 's1' : null,
+          rejectionReason: null,
+        },
+      });
+      dataSourceQuery.mockResolvedValue(lastSubmission ? [lastSubmission] : []);
+      return service.signin({ identifier: 'owner@x.z', password: 'Secret123!' });
+    };
+
+    it('tells a trial requester that it is their TRIAL being reviewed', async () => {
+      await expect(
+        signInPendingOwner({ kind: 'TRIAL', status: 'submitted' }),
+      ).rejects.toMatchObject({
+        response: { code: 'COMPANY_PENDING', details: { pendingKind: 'trial' } },
+      });
+    });
+
+    it('reports a payment for an uploaded receipt', async () => {
+      await expect(
+        signInPendingOwner({ kind: 'NEW', status: 'submitted' }),
+      ).rejects.toMatchObject({
+        response: { code: 'COMPANY_PENDING', details: { pendingKind: 'payment' } },
+      });
     });
   });
 

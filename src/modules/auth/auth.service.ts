@@ -36,6 +36,8 @@ import { isRoleAllowedOnPortal, wrongPortalMessage } from './signin-portal';
 import { UserRole } from '../../types';
 import { MailService } from '../mail/mail.service';
 import { computeFeatures } from '../../common/features/feature-map';
+import { getPlanConfig, normalizePlan } from '../billing/plan-config';
+import { RIDER_SEAT_LOCKED_MESSAGE } from '../delivery-personnel/rider-seats';
 
 export interface TokenPair {
   accessToken: string;
@@ -63,6 +65,35 @@ export interface AuthResult {
   companyType: string | null;
   /** Effective feature flags for the company (kill switch already applied). */
   features: Record<string, boolean> | null;
+  /** Plan + trial summary — drives the trial countdown without a billing fetch. */
+  subscription?: SubscriptionSummary | null;
+}
+
+/**
+ * What the app shell needs to know about the subscription, read from the
+ * company row the auth call has already loaded — no extra query.
+ */
+export interface SubscriptionSummary {
+  plan: string;
+  planLabel: string;
+  expiryDate: Date | null;
+  paymentStatus: string;
+  isTrial: boolean;
+  trialStartedAt: Date | null;
+  trialConvertedAt: Date | null;
+}
+
+function subscriptionSummary(company: Company | null | undefined): SubscriptionSummary | null {
+  if (!company) return null;
+  return {
+    plan: normalizePlan(company.subscriptionPlan),
+    planLabel: getPlanConfig(company.subscriptionPlan).label,
+    expiryDate: company.subscriptionExpiryDate ?? null,
+    paymentStatus: company.paymentStatus,
+    isTrial: company.isTrial === true,
+    trialStartedAt: company.trialStartedAt ?? null,
+    trialConvertedAt: company.trialConvertedAt ?? null,
+  };
 }
 
 @Injectable()
@@ -299,10 +330,18 @@ export class AuthService {
       // in buys them exactly the onboarding screens they need and no more.
       if (acctStatus === 'pending' || acctStatus === 'rejected') {
         const code = acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
+        // What is being waited on — a free-trial request or a payment — so a
+        // returning owner sees the right screen. Only `details` survives the
+        // exception filter, hence it lives there. One primary-key lookup, on
+        // this blocked branch only.
+        const pendingKind =
+          acctStatus === 'pending' ? await this.pendingKindOf(company) : null;
         const message =
           acctStatus === 'rejected'
             ? 'Your company registration was rejected.'
-            : 'Your company is awaiting approval. You will be able to sign in once approved.';
+            : pendingKind === 'trial'
+              ? 'Your free trial request is being reviewed — usually within 24 hours. You will be able to sign in once it is activated.'
+              : 'Your company is awaiting approval. You will be able to sign in once approved.';
         this.logger.warn(`Login blocked (${acctStatus}): ${identifier}`);
         throw new ForbiddenException({
           code,
@@ -310,10 +349,30 @@ export class AuthService {
           companyStatus: acctStatus,
           rejectionReason: company.rejectionReason ?? null,
           email: user.email,
+          ...(pendingKind ? { details: { pendingKind } } : {}),
         });
       }
       if (acctStatus === 'inactive') {
         this.logger.warn(`Login → renew-only (inactive): ${identifier}`);
+      }
+    }
+
+    // A rider whose seat the company's plan no longer covers keeps the account
+    // but may not work until a seat frees up (rider-seats.ts). Refused here so
+    // the app shows why at the door, rather than issuing a token every request
+    // of which CompanyGuard would then refuse.
+    if (role === 'delivery' && companyId) {
+      const seat: Array<{ status: string }> = await this.dataSource.query(
+        `SELECT status FROM delivery_personnel_profiles
+          WHERE company_id = $1 AND user_id = $2 LIMIT 1`,
+        [companyId, user.id],
+      );
+      if (seat[0]?.status === 'plan_locked') {
+        this.logger.warn(`Login blocked (rider seat locked): ${identifier}`);
+        throw new ForbiddenException({
+          code: 'RIDER_SEAT_LOCKED',
+          message: RIDER_SEAT_LOCKED_MESSAGE,
+        });
       }
     }
 
@@ -332,7 +391,18 @@ export class AuthService {
             allFeaturesUnlocked: company.allFeaturesUnlocked ?? false,
           })
         : null,
+      subscription: subscriptionSummary(company),
     };
+  }
+
+  /** 'trial' when the item under review is a free-trial request, else 'payment'. */
+  private async pendingKindOf(company: Company): Promise<'trial' | 'payment'> {
+    if (!company.lastSubmissionId) return 'payment';
+    const rows: Array<{ kind: string; status: string }> = await this.dataSource.query(
+      `SELECT kind, status FROM platform_payment_submissions WHERE id = $1 LIMIT 1`,
+      [company.lastSubmissionId],
+    );
+    return rows[0]?.kind === 'TRIAL' && rows[0]?.status === 'submitted' ? 'trial' : 'payment';
   }
 
   async refresh(refreshToken: string): Promise<TokenPair> {
@@ -636,13 +706,22 @@ export class AuthService {
     companyStatus: string | null;
     companyType: string | null;
     features: Record<string, boolean> | null;
+    subscription: SubscriptionSummary | null;
   }> {
     const user = await this.users.getByIdOrFail(userId);
     const memberships = await this.userCompanyRepo.find({
       where: { userId: user.id },
       relations: { company: true },
     });
-    const primary = memberships[0] ?? null;
+    // The company the session is about is the one signin chose: the default
+    // company when the user still belongs to it, otherwise any membership.
+    // Taking memberships[0] alone reported a DIFFERENT company's status and
+    // subscription for an owner with two companies — e.g. an active trial
+    // showing as a brand-new draft on /auth/me.
+    const primary =
+      memberships.find((m) => m.companyId === user.defaultCompanyId) ??
+      memberships[0] ??
+      null;
     const companyId = primary?.companyId ?? user.defaultCompanyId ?? null;
     return {
       user: this.toPublicUser(user, companyId),
@@ -672,6 +751,9 @@ export class AuthService {
             allFeaturesUnlocked: primary.company.allFeaturesUnlocked ?? false,
           })
         : null,
+      // The trial countdown in both clients reads this — the company row is
+      // already loaded, so the shell needs no billing fetch of its own.
+      subscription: subscriptionSummary(primary?.company),
     };
   }
 

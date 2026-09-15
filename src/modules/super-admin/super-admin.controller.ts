@@ -111,9 +111,15 @@ export class SuperAdminController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
+    @Query('isTrial') isTrial?: string,
   ) {
     guardSuperAdmin(user);
-    return this.service.getAllCompanies(page, limit, status);
+    return this.service.getAllCompanies(
+      page,
+      limit,
+      status,
+      SuperAdminService.parseTrialFilter(isTrial),
+    );
   }
 
   @Get('companies/:id')

@@ -39,7 +39,11 @@ export class BillingAdminController {
     @Query() query: ListSubmissionsQueryDto,
   ) {
     guardSuperAdmin(user);
-    return this.billing.listSubmissions(query.status);
+    return this.billing.listSubmissions({
+      status: query.status,
+      kind: query.kind,
+      order: query.order,
+    });
   }
 
   /** Platform revenue collected from approved payment submissions. */
@@ -78,7 +82,9 @@ export class BillingAdminController {
     @Body() dto: RejectSubmissionDto,
   ) {
     guardSuperAdmin(user);
-    return this.billing.rejectSubmission(id, user.id, dto.reason);
+    return this.billing.rejectSubmission(id, user.id, dto.reason, {
+      blockFutureTrials: dto.blockFutureTrials,
+    });
   }
 
   /**

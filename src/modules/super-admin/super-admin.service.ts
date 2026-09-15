@@ -148,7 +148,14 @@ export class SuperAdminService {
 
   // ─── Company Management ─────────────────────────────────────────────────────
 
-  async getAllCompanies(page = 1, limit = 20, status?: string) {
+  /** `?isTrial=true|false` → boolean; anything else (or absent) → no filter. */
+  static parseTrialFilter(raw: string | undefined): boolean | undefined {
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return undefined;
+  }
+
+  async getAllCompanies(page = 1, limit = 20, status?: string, isTrial?: boolean) {
     const qb = this.companyRepo.createQueryBuilder('c').orderBy('c.createdAt', 'DESC');
 
     if (status && status !== 'all') {
@@ -166,6 +173,11 @@ export class SuperAdminService {
       } else {
         qb.where('c.status = :s', { s: status });
       }
+    }
+    // Trial history filter: true = every company that has ever had a trial
+    // (isTrial is never cleared), false = companies that never trialed.
+    if (isTrial !== undefined) {
+      qb.andWhere('c.isTrial = :isTrial', { isTrial });
     }
 
     const total = await qb.getCount();
@@ -195,6 +207,9 @@ export class SuperAdminService {
           planName: subscription?.plan?.name ?? null,
           createdAt: c.createdAt,
           reviewedAt: c.reviewedAt,
+          isTrial: c.isTrial,
+          trialStartedAt: c.trialStartedAt,
+          trialConvertedAt: c.trialConvertedAt,
         };
       }),
     );

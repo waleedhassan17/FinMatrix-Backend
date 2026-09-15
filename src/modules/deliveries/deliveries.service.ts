@@ -14,6 +14,7 @@ import { DeliveryIssue } from './entities/delivery-issue.entity';
 import { DeliverySignature } from './entities/delivery-signature.entity';
 import { DeliveryLocationLog } from './entities/delivery-location-log.entity';
 import { DeliveryPersonnelProfile } from '../delivery-personnel/entities/delivery-personnel-profile.entity';
+import { assertRiderAssignable } from '../delivery-personnel/rider-seats';
 import { Customer } from '../customers/entities/customer.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { GeocodingService } from './geocoding.service';
@@ -182,6 +183,9 @@ export class DeliveriesService {
     if (dto.destAddress && !dest.address) dest.address = dto.destAddress;
 
     return this.dataSource.transaction(async (em) => {
+      // A rider the plan has paused (or the owner deactivated) cannot be
+      // handed work — checked before any stock is touched.
+      if (dto.personnelId) await assertRiderAssignable(em, companyId, dto.personnelId);
       // Before anything is written: a delivery that cannot be fulfilled should
       // never exist. Inside the transaction so a concurrent create cannot slip
       // between the check and the insert.
@@ -415,6 +419,7 @@ export class DeliveriesService {
     // AND its stock committed to Goods in Transit, or none is (e.g. one item
     // short on stock → the admin sees the error and nothing half-happens).
     const { deliveries, ledgerResults } = await this.dataSource.transaction(async (em) => {
+      await assertRiderAssignable(em, companyId, personnelId);
       const repo = em.getRepository(Delivery);
       const rows = await repo.find({
         where: deliveryIds.map((id) => ({ id, companyId })),
@@ -467,6 +472,7 @@ export class DeliveriesService {
       if (!d) throw new NotFoundException('Delivery not found');
       let newlyAssigned = false;
       if (dto.personnelId !== undefined && dto.personnelId !== d.personnelId) {
+        if (dto.personnelId) await assertRiderAssignable(em, companyId, dto.personnelId);
         d.personnelId = dto.personnelId;
         if (dto.personnelId && d.status === 'unassigned') {
           d.status = 'pending';

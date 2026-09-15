@@ -1,7 +1,10 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../../common/base/base.entity';
 
-export type SubmissionKind = 'NEW' | 'RENEWAL' | 'UPGRADE';
+// TRIAL is a free-trial REQUEST riding the same review queue: amount 0, no
+// screenshot, and approval grants a 30-day trial instead of recording revenue.
+// `kind` is a varchar, so adding a value needs no migration.
+export type SubmissionKind = 'NEW' | 'RENEWAL' | 'UPGRADE' | 'TRIAL';
 export type SubmissionStatus = 'submitted' | 'approved' | 'rejected';
 
 /**

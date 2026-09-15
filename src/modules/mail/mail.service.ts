@@ -99,6 +99,57 @@ export class MailService implements OnModuleInit {
     await this.send(to, emailTemplates.rejected(displayName, companyName, reason));
   }
 
+  // ── Free trial ──────────────────────────────────────────────────────────
+
+  async sendTrialRequestedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+    await this.send(to, emailTemplates.trialRequested(displayName, companyName));
+  }
+
+  /** Tells the platform admin a trial is waiting (the user was promised 24 hours). */
+  async sendTrialRequestedAdminNotice(
+    companyName: string,
+    ownerEmail: string,
+    ownerPhone: string | null,
+  ): Promise<void> {
+    const adminEmail = this.config.get<string>('mail.platformAdminEmail');
+    if (!adminEmail) {
+      this.logger.warn('No ADMIN_EMAIL configured — skipping trial request notice.');
+      return;
+    }
+    await this.send(adminEmail, emailTemplates.trialRequestedAdmin(companyName, ownerEmail, ownerPhone));
+  }
+
+  async sendTrialApprovedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    trialEndsAt: Date,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.trialApproved(displayName, companyName, trialEndsAt));
+  }
+
+  async sendTrialRejectedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.trialRejected(displayName, companyName, reason));
+  }
+
+  async sendTrialEndingEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    daysRemaining: number,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.trialEnding(displayName, companyName, daysRemaining));
+  }
+
+  async sendTrialEndedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+    await this.send(to, emailTemplates.trialEnded(displayName, companyName));
+  }
+
   // ── Low-level send ──────────────────────────────────────────────────────
 
   private async send(to: string, email: RenderedEmail): Promise<void> {

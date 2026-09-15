@@ -5,6 +5,7 @@ import { UserCompany } from '../companies/entities/user-company.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentSubmission } from './entities/payment-submission.entity';
 import { PlatformRevenue } from './entities/platform-revenue.entity';
+import { TrialClaim } from './entities/trial-claim.entity';
 import { BillingService } from './billing.service';
 import { BillingCronService } from './billing-cron.service';
 import { BillingController } from './billing.controller';
@@ -21,6 +22,7 @@ import { BillingAdminController } from './billing-admin.controller';
     TypeOrmModule.forFeature([
       PaymentSubmission,
       PlatformRevenue,
+      TrialClaim,
       Company,
       UserCompany,
     ]),

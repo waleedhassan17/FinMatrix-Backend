@@ -37,7 +37,9 @@ export type TierPlanKey =
 
 /** Retired warehouse keys — resolvable for grandfathering, never offered. */
 export type RetiredPlanKey = 'warehouse_3mo' | 'warehouse_6mo';
-export type PlanKey = LegacyPlanKey | TierPlanKey | RetiredPlanKey;
+/** The admin-approved free trial — granted, never bought. */
+export type TrialPlanKey = 'warehouse_trial';
+export type PlanKey = LegacyPlanKey | TierPlanKey | RetiredPlanKey | TrialPlanKey;
 
 export type PlanCompanyType = 'small_business' | 'large_org' | 'warehouse';
 
@@ -50,8 +52,17 @@ export interface PlanConfig {
   priceMinorUnits: number;
   /** Per-month price in minor units (priceMinorUnits = monthly × duration). */
   monthlyMinorUnits: number;
-  /** Subscription length in months; null = never expires (legacy Free only). */
+  /**
+   * Subscription length in months; null = never expires (legacy Free only) —
+   * unless `durationDays` is set.
+   */
   durationMonths: number | null;
+  /**
+   * Length in DAYS for a plan that is not sold by the month (the free trial).
+   * The trial's expiry is set at approval from this; a plan with durationDays
+   * does expire even though durationMonths is null.
+   */
+  durationDays?: number;
   /** Max simultaneously-active delivery personnel allowed on this plan. */
   deliveryPersonnelLimit: number;
   currency: string;
@@ -222,7 +233,34 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
     deliveryPersonnelLimit: 10,
     currency: 'PKR',
   },
+
+  // ── Free trial (admin-approved) ─────────────────────────────────────────
+  // Granted by a super-admin approving a kind='TRIAL' submission, never bought:
+  // price 0 means getBankDetails/createSubmission refuse to take payment for
+  // it, and companyType null means plansForType never offers it. Features come
+  // from the company's type, so the trial runs the whole warehouse system; the
+  // only restriction is ONE active delivery rider. Every plan on sale allows
+  // more, so converting a trial to any paid plan never locks a rider.
+  warehouse_trial: {
+    key: 'warehouse_trial',
+    label: 'Free trial — 30 days',
+    companyType: null,
+    priceMinorUnits: 0,
+    monthlyMinorUnits: 0,
+    durationMonths: null,
+    durationDays: 30,
+    deliveryPersonnelLimit: 1,
+    currency: 'PKR',
+  },
 };
+
+export const TRIAL_PLAN_KEY: TrialPlanKey = 'warehouse_trial';
+/** The trial runs this many days from the moment it is APPROVED. */
+export const TRIAL_DURATION_DAYS = PLAN_CONFIG.warehouse_trial.durationDays as number;
+
+export function isTrialPlan(raw: string | null | undefined): boolean {
+  return raw === TRIAL_PLAN_KEY;
+}
 
 export const PLAN_KEYS: PlanKey[] = [
   'free',
@@ -240,6 +278,7 @@ export const PLAN_KEYS: PlanKey[] = [
   'warehouse_growth_1yr',
   'warehouse_scale_6mo',
   'warehouse_scale_1yr',
+  'warehouse_trial',
 ];
 
 // Order matters: this is the order plans render in. Cheapest first within a

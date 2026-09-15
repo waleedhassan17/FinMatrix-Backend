@@ -9,7 +9,7 @@ import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-lo
 import { User } from '../users/entities/user.entity';
 import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
-import { getPlanConfig } from '../billing/plan-config';
+import { getPlanConfig, isTrialPlan } from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 
 @Injectable()
@@ -76,31 +76,11 @@ export class DeliveryPersonnelService {
 
   async create(companyId: string, dto: CreatePersonnelDto, actorUserId?: string) {
     return this.dataSource.transaction(async (em) => {
-      // phase2.md — plan-based limit (authoritative, server-side). Free = 1,
-      // paid = 3 active personnel. A downgrade never deletes extras; it only
-      // blocks creating new ones until the company is within the limit again.
-      const companyRow: Array<{ subscription_plan: string | null }> = await em.query(
-        `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1`,
-        [companyId],
-      );
-      const planConfig = getPlanConfig(companyRow[0]?.subscription_plan);
-      const activeCountRow: Array<{ count: string }> = await em.query(
-        `SELECT COUNT(*)::int AS count FROM delivery_personnel_profiles
-          WHERE company_id = $1 AND status = 'active'`,
-        [companyId],
-      );
-      const activeCount = Number(activeCountRow[0]?.count ?? 0);
-      if (activeCount >= planConfig.deliveryPersonnelLimit) {
-        throw new BadRequestException({
-          code: 'DELIVERY_PERSONNEL_LIMIT_REACHED',
-          message:
-            `Your ${planConfig.label} plan allows ${planConfig.deliveryPersonnelLimit} ` +
-            `delivery ${planConfig.deliveryPersonnelLimit === 1 ? 'person' : 'people'}. ` +
-            `Upgrade your plan to add more delivery personnel.`,
-          limit: planConfig.deliveryPersonnelLimit,
-          currentCount: activeCount,
-        });
-      }
+      // phase2.md — plan-based limit (authoritative, server-side). A downgrade
+      // never deletes extras: activating a plan moves riders beyond its limit
+      // to `plan_locked` (rider-seats.ts), and creating or reactivating one is
+      // refused until the company is within the limit again.
+      await this.assertSeatAvailable(em, companyId);
 
       let userId = dto.userId;
 
@@ -212,7 +192,17 @@ export class DeliveryPersonnelService {
     const p = await this.getById(companyId, userId);
     const previousStatus = p.status;
     Object.assign(p, dto);
-    const saved = await this.repo.save(p);
+    // Making a rider ACTIVE takes a seat, whatever they were before (inactive,
+    // on leave, or paused by the plan). Without this check, deactivating and
+    // reactivating riders walked straight past the plan's limit. It is also
+    // how an owner swaps seats: deactivate one rider, then activate another.
+    const saved =
+      dto.status === 'active' && previousStatus !== 'active'
+        ? await this.dataSource.transaction(async (em) => {
+            await this.assertSeatAvailable(em, companyId);
+            return em.getRepository(DeliveryPersonnelProfile).save(p);
+          })
+        : await this.repo.save(p);
     if (dto.status && dto.status !== previousStatus) {
       await this.audit.record({
         companyId,
@@ -229,6 +219,39 @@ export class DeliveryPersonnelService {
       });
     }
     return saved;
+  }
+
+  /**
+   * Refuse when every seat the plan allows is already taken by an active
+   * rider. The company row is locked so two concurrent activations (or an
+   * activation racing a plan change) cannot both see a free seat.
+   */
+  private async assertSeatAvailable(em: EntityManager, companyId: string): Promise<void> {
+    const companyRow: Array<{ subscription_plan: string | null }> = await em.query(
+      `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1 FOR UPDATE`,
+      [companyId],
+    );
+    const planConfig = getPlanConfig(companyRow[0]?.subscription_plan);
+    const activeCountRow: Array<{ count: string }> = await em.query(
+      `SELECT COUNT(*)::int AS count FROM delivery_personnel_profiles
+        WHERE company_id = $1 AND status = 'active'`,
+      [companyId],
+    );
+    const activeCount = Number(activeCountRow[0]?.count ?? 0);
+    if (activeCount >= planConfig.deliveryPersonnelLimit) {
+      throw new BadRequestException({
+        code: 'DELIVERY_PERSONNEL_LIMIT_REACHED',
+        message: isTrialPlan(planConfig.key)
+          ? `Your free trial includes ${planConfig.deliveryPersonnelLimit} active delivery ` +
+            `rider${planConfig.deliveryPersonnelLimit === 1 ? '' : 's'}. ` +
+            'Subscribe to a plan to add more.'
+          : `Your ${planConfig.label} plan allows ${planConfig.deliveryPersonnelLimit} ` +
+            `delivery ${planConfig.deliveryPersonnelLimit === 1 ? 'person' : 'people'}. ` +
+            `Upgrade your plan to add more delivery personnel.`,
+        limit: planConfig.deliveryPersonnelLimit,
+        currentCount: activeCount,
+      });
+    }
   }
 
   async toggleAvailability(companyId: string, userId: string) {
