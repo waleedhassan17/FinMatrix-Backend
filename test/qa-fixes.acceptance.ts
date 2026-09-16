@@ -305,6 +305,12 @@ async function main() {
       near(await netOn('1000', [applicationEntry]), 0));
   const invBAfter = data(await req('GET', `/invoices/${invB.id}`));
   ok('C10 invoice now owes only 1,200', near(n(invBAfter?.balance), 1200), invBAfter?.balance);
+  const rcptView = data(await req('GET', `/payments/${rcpt.id}`));
+  const viewB = (rcptView?.applications ?? []).find((x: any) => x.invoiceId === invB.id);
+  const viewA = (rcptView?.applications ?? []).find((x: any) => x.invoiceId === invA.id);
+  ok('C10b receipt shows each invoice total and what is still owing (a part-payment leaves the rest in A/R)',
+    near(n(viewB?.invoiceTotal), 107250) && near(n(viewB?.invoiceBalance), 1200) && near(n(viewA?.invoiceBalance), 0),
+    rcptView?.applications);
 
   const delRcpt = await req('DELETE', `/payments/${rcpt.id}`);
   const allRcptEntries = await entriesFor([rcpt.id]);

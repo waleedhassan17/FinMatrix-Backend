@@ -183,12 +183,12 @@ export class PaymentsService {
       invoiceIds.length
         ? this.dataSource.getRepository(Invoice).find({
             where: { companyId, id: In(invoiceIds) },
-            select: ['id', 'invoiceNumber'],
+            select: ['id', 'invoiceNumber', 'total', 'balance'],
           })
         : Promise.resolve([] as Invoice[]),
     ]);
     const customerName = new Map(customers.map((c) => [c.id, c.name]));
-    const invoiceNumber = new Map(invoices.map((i) => [i.id, i.invoiceNumber]));
+    const invoiceById = new Map(invoices.map((i) => [i.id, i]));
     return payments.map((p) => {
       const applied = (p.applications ?? []).reduce(
         (sum, a) => sum.plus(toDecimal(a.amountApplied)),
@@ -197,7 +197,13 @@ export class PaymentsService {
       return Object.assign(p, {
         customerName: customerName.get(p.customerId) ?? '',
         applications: (p.applications ?? []).map((a) =>
-          Object.assign(a, { invoiceNumber: invoiceNumber.get(a.invoiceId) ?? '' }),
+          // The invoice's total and what is still owing on it now, so a receipt
+          // for part of an invoice says how much remains in receivables.
+          Object.assign(a, {
+            invoiceNumber: invoiceById.get(a.invoiceId)?.invoiceNumber ?? '',
+            invoiceTotal: invoiceById.get(a.invoiceId)?.total ?? null,
+            invoiceBalance: invoiceById.get(a.invoiceId)?.balance ?? null,
+          }),
         ),
         amountApplied: applied.toFixed(4),
         unapplied: Decimal.max(toDecimal(p.amount).minus(applied), 0).toFixed(4),

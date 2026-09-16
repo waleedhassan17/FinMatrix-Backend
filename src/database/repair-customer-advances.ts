@@ -28,6 +28,9 @@
  *   npm run repair:customer-advances -- --company <uuid>     # one company
  *   npm run repair:customer-advances -- --apply              # write
  *   npm run repair:customer-advances:prod -- --apply         # compiled, production
+ *   ... -- --rebuild-ledger-balances   # also rebuild stored general_ledger running
+ *                                      # balances (written from zero before the
+ *                                      # posting fix; display data only)
  */
 import 'reflect-metadata';
 import { config as loadEnv } from 'dotenv';
@@ -37,75 +40,42 @@ import Decimal from 'decimal.js';
 import { AppModule } from '../app.module';
 import { PostingService } from '../modules/journal-entries/posting.service';
 import { AccountsService } from '../modules/accounts/accounts.service';
-import { Payment } from '../modules/payments/entities/payment.entity';
-import { Customer } from '../modules/customers/entities/customer.entity';
 import { Company } from '../modules/companies/entities/company.entity';
-import { ACCT_AR, ACCT_CUSTOMER_ADVANCES } from '../modules/accounts/accounts.constants';
 import { businessToday } from '../common/utils/business-date.util';
+import {
+  TOLERANCE,
+  customerBalanceDrift,
+  ledgerRunningBalanceDrift,
+  money,
+  ownerOf,
+  printCheck,
+  rebuildLedgerRunningBalances,
+  recomputeCustomerBalances,
+  reclassifyLegacyReceipt,
+  subledgerCheck,
+} from './lib/ledger-repair';
 
 loadEnv();
-
-const TOLERANCE = new Decimal('0.0001');
 
 interface Args {
   apply: boolean;
   companyId: string | null;
+  rebuildLedgerBalances: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { apply: false, companyId: null };
+  const args: Args = {
+    apply: false,
+    companyId: null,
+    rebuildLedgerBalances: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--apply') args.apply = true;
     if (argv[i] === '--company') args.companyId = argv[i + 1] ?? null;
+    if (argv[i] === '--rebuild-ledger-balances')
+      args.rebuildLedgerBalances = true;
   }
   return args;
-}
-
-const money = (v: Decimal.Value) => new Decimal(v ?? 0).toFixed(2);
-
-async function subledgerCheck(ds: DataSource, companyId: string) {
-  const [row] = await ds.query(
-    `SELECT
-       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND account_number = $2) AS ar_control,
-       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND account_number = $3) AS advances,
-       (SELECT COALESCE(SUM(balance), 0) FROM invoices
-         WHERE company_id = $1 AND status NOT IN ('draft', 'void')) AS open_invoices,
-       (SELECT COALESCE(SUM(balance), 0) FROM credit_memos
-         WHERE company_id = $1 AND status <> 'void') AS open_credit_memos,
-       (SELECT COALESCE(SUM(p.amount - COALESCE(a.applied, 0)), 0)
-          FROM payments p
-          LEFT JOIN (SELECT payment_id, SUM(amount_applied) AS applied
-                       FROM payment_applications GROUP BY payment_id) a ON a.payment_id = p.id
-         WHERE p.company_id = $1 AND p.advance_posted = false
-           AND p.amount - COALESCE(a.applied, 0) > 0) AS legacy_unapplied`,
-    [companyId, ACCT_AR, ACCT_CUSTOMER_ADVANCES],
-  );
-  const expected = new Decimal(row.open_invoices)
-    .minus(row.open_credit_memos)
-    .minus(row.legacy_unapplied);
-  return {
-    arControl: new Decimal(row.ar_control),
-    advances: new Decimal(row.advances),
-    openInvoices: new Decimal(row.open_invoices),
-    openCreditMemos: new Decimal(row.open_credit_memos),
-    legacyUnapplied: new Decimal(row.legacy_unapplied),
-    expectedArControl: expected,
-    difference: new Decimal(row.ar_control).minus(expected),
-  };
-}
-
-function printCheck(label: string, c: Awaited<ReturnType<typeof subledgerCheck>>) {
-  console.log(`  ${label}`);
-  console.log(`    1100 A/R control ............ ${money(c.arControl)}`);
-  console.log(`    open invoices ............... ${money(c.openInvoices)}`);
-  console.log(`    − open credit memos ......... ${money(c.openCreditMemos)}`);
-  console.log(`    − unapplied (still in A/R) .. ${money(c.legacyUnapplied)}`);
-  console.log(`    = expected A/R control ...... ${money(c.expectedArControl)}`);
-  console.log(`    difference .................. ${money(c.difference)}` +
-    (c.difference.abs().greaterThan('0.01')
-      ? '   <-- A/R has entries no invoice, credit or receipt explains (manual journals, duplicates); review the ledger'
-      : ''));
-  console.log(`    2400 Customer Advances ...... ${money(c.advances)}`);
 }
 
 async function run() {
@@ -117,7 +87,9 @@ async function run() {
   const posting = app.get(PostingService);
   const accounts = app.get(AccountsService);
 
-  console.log(`Customer advances repair — ${args.apply ? 'APPLY' : 'DRY RUN (nothing is written)'}`);
+  console.log(
+    `Customer advances repair — ${args.apply ? 'APPLY' : 'DRY RUN (nothing is written)'}`,
+  );
 
   const companies: Company[] = await ds.getRepository(Company).find({
     where: args.companyId ? { id: args.companyId } : {},
@@ -146,7 +118,9 @@ async function run() {
         ORDER BY p.payment_date, p.created_at`,
       [company.id],
     );
-    const withRemainder = legacy.filter((p) => new Decimal(p.unapplied).greaterThan(TOLERANCE));
+    const withRemainder = legacy.filter((p) =>
+      new Decimal(p.unapplied).greaterThan(TOLERANCE),
+    );
 
     // A later receipt from the same customer whose amount equals an earlier
     // receipt's unapplied remainder, and which was applied to an invoice that
@@ -180,83 +154,89 @@ async function run() {
       [company.id],
     );
 
-    if (withRemainder.length === 0 && suspects.length === 0 && !args.companyId) continue;
+    const drift = await customerBalanceDrift(ds, company.id);
+    const ledgerDrift = args.rebuildLedgerBalances
+      ? await ledgerRunningBalanceDrift(ds, company.id)
+      : 0;
+    if (
+      withRemainder.length === 0 &&
+      suspects.length === 0 &&
+      drift.length === 0 &&
+      ledgerDrift === 0 &&
+      !args.companyId
+    ) {
+      continue;
+    }
 
     console.log(`\n■ ${company.name} (${company.id})`);
     printCheck('Before', await subledgerCheck(ds, company.id));
 
     if (withRemainder.length) {
-      console.log(`  Receipts holding an unapplied remainder inside A/R: ${withRemainder.length}`);
+      console.log(
+        `  Receipts holding an unapplied remainder inside A/R: ${withRemainder.length}`,
+      );
       for (const p of withRemainder) {
         console.log(
           `    ${p.payment_number ?? p.id.slice(0, 8)}  ${p.payment_date}  ${p.customer_name}` +
-          `  amount ${money(p.amount)}  unapplied ${money(p.unapplied)}`,
+            `  amount ${money(p.amount)}  unapplied ${money(p.unapplied)}`,
         );
       }
     }
     if (suspects.length) {
-      console.log('  Receipts to REVIEW as possible duplicates (not changed — delete in the app if confirmed):');
+      console.log(
+        '  Receipts to REVIEW as possible duplicates (not changed — delete in the app if confirmed):',
+      );
       for (const s of suspects) {
         console.log(
           `    ${s.later} (${s.later_date}, ${money(s.later_amount)}, applied to ${s.invoices}) ` +
-          `equals the ${money(s.remainder)} remainder of ${s.earlier} — ${s.customer}`,
+            `equals the ${money(s.remainder)} remainder of ${s.earlier} — ${s.customer}`,
         );
       }
     }
 
+    if (drift.length) {
+      console.log(
+        `  Customer balances that differ from their documents (open invoices − open credit memos): ${drift.length}`,
+      );
+      for (const d of drift) {
+        console.log(
+          `    ${d.name}  stored ${money(d.stored)}  →  ${money(d.expected)}`,
+        );
+      }
+    }
+    if (args.rebuildLedgerBalances) {
+      console.log(
+        `  General ledger rows with a stale running balance: ${ledgerDrift}`,
+      );
+    }
+
     if (!args.apply) continue;
 
-    const [actor]: Array<{ id: string }> = await ds.query(
-      `SELECT uc.user_id AS id FROM user_companies uc
-        WHERE uc.company_id = $1 AND uc.role = 'admin'
-        ORDER BY uc.joined_at ASC LIMIT 1`,
-      [company.id],
-    );
-    if (!actor) {
-      console.log('  ! No owner account to attribute the postings to — skipped.');
+    const actorId = await ownerOf(ds, company.id);
+    if (!actorId) {
+      console.log(
+        '  ! No owner account to attribute the postings to — skipped.',
+      );
       continue;
     }
 
     const today = businessToday();
     for (const p of legacy) {
       try {
-        await ds.transaction(async (manager) => {
-          const payment = await manager
-            .createQueryBuilder(Payment, 'p')
-            .setLock('pessimistic_write')
-            .where('p.id = :id', { id: p.id })
-            .getOne();
-          if (!payment || payment.advancePosted) return;
-
-          const [{ applied }] = await manager.query(
-            `SELECT COALESCE(SUM(amount_applied), 0) AS applied FROM payment_applications WHERE payment_id = $1`,
-            [payment.id],
-          );
-          const unapplied = new Decimal(payment.amount).minus(applied);
-          if (unapplied.greaterThan(TOLERANCE)) {
-            const ar = await accounts.getByNumberOrFail(company.id, ACCT_AR, manager);
-            const advances = await accounts.getOrCreateSystemAccount(manager, company.id, ACCT_CUSTOMER_ADVANCES);
-            const amount = unapplied.toFixed(4);
-            await posting.createEntry(manager, {
-              companyId: company.id,
-              createdBy: actor.id,
-              date: today,
-              memo: `Reclassify unapplied receipt ${payment.paymentNumber ?? payment.id.slice(0, 8)} to Customer Advances — ${p.customer_name}`,
-              status: 'posted',
-              sourceType: 'payment_advance_reclass',
-              sourceId: payment.id,
-              lines: [
-                { accountId: ar.id, description: 'Unapplied receipt removed from A/R', debit: amount, credit: '0', lineOrder: 0 },
-                { accountId: advances.id, description: 'Held as customer advance', debit: '0', credit: amount, lineOrder: 1 },
-              ],
-            });
-            reclassified++;
-          }
-          payment.advancePosted = true;
-          await manager.save(payment);
+        const amount = await reclassifyLegacyReceipt(ds, posting, accounts, {
+          companyId: company.id,
+          paymentId: p.id,
+          actorId,
+          date: today,
+          customerName: p.customer_name,
         });
+        if (amount && new Decimal(amount).greaterThan(TOLERANCE))
+          reclassified++;
       } catch (err) {
-        const e = err as { response?: { code?: string; message?: string }; message?: string };
+        const e = err as {
+          response?: { code?: string; message?: string };
+          message?: string;
+        };
         console.log(
           `  ! ${p.payment_number ?? p.id.slice(0, 8)} not reclassified: ${e.response?.code ?? ''} ${e.response?.message ?? e.message}`,
         );
@@ -264,23 +244,14 @@ async function run() {
     }
 
     // Balance = what each customer owes on invoices, net of open credit memos.
-    await ds.query(
-      `UPDATE customers c
-          SET balance = COALESCE(inv.open, 0) - COALESCE(cm.open, 0)
-         FROM customers c2
-         LEFT JOIN (SELECT customer_id, SUM(balance) AS open FROM invoices
-                     WHERE company_id = $1 AND status NOT IN ('draft', 'void')
-                     GROUP BY customer_id) inv ON inv.customer_id = c2.id
-         LEFT JOIN (SELECT customer_id, SUM(balance) AS open FROM credit_memos
-                     WHERE company_id = $1 AND status <> 'void'
-                     GROUP BY customer_id) cm ON cm.customer_id = c2.id
-        WHERE c.id = c2.id AND c.company_id = $1`,
-      [company.id],
-    );
+    const customersChanged = await recomputeCustomerBalances(ds, company.id);
+    if (args.rebuildLedgerBalances) {
+      const rows = await rebuildLedgerRunningBalances(ds, company.id);
+      console.log(`  General ledger running balances rebuilt: ${rows} row(s)`);
+    }
     const after = await subledgerCheck(ds, company.id);
     printCheck('After', after);
-    const customersTouched = await ds.getRepository(Customer).count({ where: { companyId: company.id } });
-    console.log(`  Customer balances recomputed: ${customersTouched}`);
+    console.log(`  Customer balances corrected: ${customersChanged}`);
   }
 
   console.log(

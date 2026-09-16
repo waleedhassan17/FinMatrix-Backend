@@ -34,6 +34,8 @@
     "seed:metromatrix:ledger:prod": "node dist/database/seeds/metromatrix-ledger.seed.js",
     "repair:customer-advances": "ts-node -r tsconfig-paths/register src/database/repair-customer-advances.ts",
     "repair:customer-advances:prod": "node dist/database/repair-customer-advances.js",
+    "correct:allama-receipts": "ts-node -r tsconfig-paths/register src/database/correct-allama-iqbal-receipts.ts",
+    "correct:allama-receipts:prod": "node dist/database/correct-allama-iqbal-receipts.js",
     "seed:superadmin": "ts-node -r tsconfig-paths/register src/database/seeds/super-admin-seed.ts",
     "seed:superadmin:prod": "node dist/database/seeds/super-admin-seed.js",
     "test:chunk1": "ts-node -r tsconfig-paths/register test/chunk1.acceptance.ts",
