@@ -302,13 +302,17 @@ export class PostingService {
     // computation below stays consistent.
     for (const [accountId, delta] of deltas) {
       const acc = accountMap.get(accountId)!;
-      const rows = await manager.query(
+      const raw = await manager.query(
         `UPDATE accounts
            SET balance = (balance::numeric + $1)::numeric(18,4)
          WHERE id = $2
          RETURNING balance`,
         [delta.toFixed(4), accountId],
       );
+      // Postgres UPDATE … RETURNING comes back from TypeORM as
+      // [rows, rowCount], not rows. Reading raw[0].balance got undefined, so
+      // every general_ledger running balance was written from a zero prior.
+      const rows = Array.isArray(raw?.[0]) ? raw[0] : raw;
       acc.balance = toDecimal(rows[0].balance).toFixed(4);
     }
 

@@ -190,6 +190,7 @@ async function deliveryE2E() {
   const po = (await api('POST', '/purchase-orders', {
     vendorId, orderDate: TODAY, lines: [{ description: 'E2E Crates', orderedQty: '12', unitCost: '100', itemId }],
   })).body;
+  await api('PATCH', `/purchase-orders/${po?.id}/status`, { status: 'sent' });
   await api('POST', `/purchase-orders/${po?.id}/receive`, { lines: [{ lineId: po?.lines?.[0]?.id, receivedQty: '12' }] });
   await api('POST', `/purchase-orders/${po?.id}/create-bill`, { billNumber: `E2E-B-${Date.now()}`, billDate: TODAY, dueDate: TODAY });
   const qtyOnHand = async () => {
@@ -513,7 +514,7 @@ async function run() {
   const qtyBefore = n(item?.quantityOnHand);
   const invoiceLine = hasInventory
     ? { description: item.name, quantity: '3', unitPrice: item.sellingPrice, taxRate: '17', itemId: item.id }
-    : { description: 'Acceptance service line', quantity: '3', unitPrice: '100', taxRate: '17' };
+    : { description: 'Acceptance service line', quantity: '3', unitPrice: '100', taxRate: '17', lineKind: 'service' };
   const inv = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
     lines: [invoiceLine],
@@ -547,7 +548,7 @@ async function run() {
   // ── #10 Void invoice → reversing entry (+ restock when stock is tracked) ──
   const voidLine = hasInventory
     ? { description: item.name, quantity: '2', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id }
-    : { description: 'Acceptance void line', quantity: '2', unitPrice: '100', taxRate: '0' };
+    : { description: 'Acceptance void line', quantity: '2', unitPrice: '100', taxRate: '0', lineKind: 'service' };
   const inv2 = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
     lines: [voidLine],
@@ -594,11 +595,11 @@ async function run() {
   const key = `acc-idem-${Date.now()}`;
   const r1 = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0' }],
+    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
   }, { headers: { 'Idempotency-Key': key } });
   const r2 = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0' }],
+    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
   }, { headers: { 'Idempotency-Key': key } });
   ok('#15 idempotent replay returns same invoice', !!r1.body?.id && r1.body.id === r2.body.id);
 
@@ -613,7 +614,7 @@ async function run() {
   ok('#16 books closed through 2025-12-31', closeRes.status < 300, `status=${closeRes.status}`);
   const locked = await api('POST', '/invoices', {
     customerId, invoiceDate: '2025-06-15', dueDate: '2025-07-15', status: 'sent',
-    lines: [{ description: 'locked', quantity: '1', unitPrice: '100', taxRate: '0' }],
+    lines: [{ description: 'locked', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
   });
   ok('#16 posting in locked period rejected', locked.status >= 400, `status=${locked.status}`);
   await api('POST', `/companies/${companyId}/period-reopen`);
@@ -633,7 +634,7 @@ async function run() {
   // ── #19 Concurrency: two payments on one invoice cannot overpay ──
   const inv3 = await api('POST', '/invoices', {
     customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'conc', quantity: '1', unitPrice: '1000', taxRate: '0' }],
+    lines: [{ description: 'conc', quantity: '1', unitPrice: '1000', taxRate: '0', lineKind: 'service' }],
   });
   const payBody = {
     customerId, paymentDate: '2026-06-24', paymentMethod: 'cash', amount: '1000',
@@ -743,7 +744,7 @@ async function run() {
     // A free-text line still works, and still posts nothing against stock.
     const svc = await api('POST', '/estimates', {
       customerId, estimateDate: '2026-06-24', status: 'sent',
-      lines: [{ description: 'Acceptance consulting', quantity: '1', unitPrice: '250', taxRate: '0' }],
+      lines: [{ description: 'Acceptance consulting', quantity: '1', unitPrice: '250', taxRate: '0', lineKind: 'service' }],
     });
     ok('#2b estimate with no item still saves', svc.status < 300, `status=${svc.status}`);
 

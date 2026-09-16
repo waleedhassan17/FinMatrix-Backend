@@ -14,6 +14,7 @@ import {
 } from 'class-validator';
 import { BillStatus, PaymentMethod } from '../../../types';
 import { PAYMENT_METHODS } from '../../payments/dto/payment.dto';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class BillLineDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
@@ -21,7 +22,10 @@ export class BillLineDto {
   @ApiPropertyOptional() @IsOptional() @IsNumberString() amount?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() quantity?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() unitPrice?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumberString() taxRate?: string;
+  @ApiPropertyOptional({ example: '17', description: 'Tax percent, typed by hand (0–100).' })
+  @IsOptional()
+  @IsTaxRate()
+  taxRate?: string;
 }
 
 export class CreateBillDto {
@@ -35,7 +39,7 @@ export class CreateBillDto {
   @IsIn(['draft', 'open'])
   status?: 'draft' | 'open';
 
-  /** Set by the PO conversion path; a PO can back at most one bill. */
+  /** Set by the PO conversion path. A PO is billed once per receipt. */
   @ApiPropertyOptional() @IsOptional() @IsUUID() purchaseOrderId?: string;
 
   @ApiProperty({ type: [BillLineDto] })

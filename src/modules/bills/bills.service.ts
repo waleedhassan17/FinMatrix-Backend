@@ -35,10 +35,19 @@ import { StorageService } from '../../common/storage/storage.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_AP, ACCT_COGS, ACCT_GRNI, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
+import { PurchaseOrderLine } from '../purchase-orders/entities/purchase-order-line.entity';
 import { BillStatus } from '../../types';
-import { nextYearlySequence } from '../../common/utils/sequence.util';
-import { formatBillRef } from '../../common/utils/reference-generator.util';
+import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
+import { businessToday } from '../../common/utils/business-date.util';
+
+/** What a bill line raised from a purchase order bills (see createInTransaction). */
+export interface PoBillLineLink {
+  purchaseOrderLineId: string;
+  quantity: string;
+  /** GRNI this line clears; null for non-stock (expense) PO lines. */
+  grniAmount: string | null;
+}
 
 interface BillTotals {
   subtotal: string;
@@ -84,7 +93,7 @@ export class BillsService {
    * and no stored state to drift.
    */
   private withDerivedStatus<T extends { status: string; dueDate: string; balance: string }>(bill: T): T {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessToday();
     const owes = toDecimal(bill.balance).greaterThan(0);
     if (owes && bill.dueDate < today && (bill.status === 'open' || bill.status === 'partial')) {
       return { ...bill, status: 'overdue' };
@@ -258,87 +267,108 @@ export class BillsService {
     userId: string,
     dto: CreateBillDto,
   ): Promise<Bill> {
-    return this.dataSource.transaction(async (manager) => {
-      await this.assertPoGoodsBilledThroughReceipt(manager, companyId, dto);
+    return this.dataSource.transaction(async (manager) =>
+      this.createInTransaction(manager, companyId, userId, dto),
+    );
+  }
 
-      const vendor = await manager.findOne(Vendor, {
-        where: { id: dto.vendorId, companyId },
-      });
-      if (!vendor) {
-        throw new NotFoundException({
-          code: 'VENDOR_NOT_FOUND',
-          message: 'Vendor not found',
-        });
-      }
+  /**
+   * Transaction-aware variant of create(), so a purchase order can raise its
+   * bill and record what that bill covered in ONE transaction.
+   *
+   * `poLineLinks` is internal — never read from a request body. Aligned by
+   * index with `dto.lines`, it records which PO line each bill line bills, how
+   * many units, and exactly how much GRNI it clears.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: CreateBillDto,
+    opts: { poLineLinks?: Array<PoBillLineLink | null> } = {},
+  ): Promise<Bill> {
+    await this.assertPoGoodsBilledThroughReceipt(manager, companyId, dto);
 
-      // Auto-generate billNumber if caller omits it (mirrors invoice behaviour).
-      let billNumber = dto.billNumber;
-      if (!billNumber) {
-        const year = new Date(dto.billDate).getFullYear();
-        const seq = await nextYearlySequence(
-          manager, 'bills', companyId, year, 'bill_date', 'BILL', 'bill_number',
-        );
-        billNumber = formatBillRef(year, seq);
-      }
-
-      // Resolve missing accountId on lines → fallback to COGS account.
-      const cogsAccount = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
-      const resolvedLines = dto.lines.map((l) => ({
-        ...l,
-        accountId: l.accountId ?? cogsAccount?.id ?? '',
-        amount: l.amount ?? (
-          l.quantity && l.unitPrice
-            ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
-            : '0'
-        ),
-      }));
-
-      await this.assertLineAccountsValid(
-        manager,
-        companyId,
-        resolvedLines.map((l) => l.accountId),
-      );
-
-      const totals = this.computeTotals(resolvedLines);
-      if (!isPositive(toDecimal(totals.total))) {
-        throw new BadRequestException({
-          code: 'VALIDATION_FAILED',
-          message: 'Bill total must be greater than zero',
-        });
-      }
-      const status: BillStatus = dto.status ?? 'open';
-
-      const bill = manager.create(Bill, {
-        companyId,
-        vendorId: vendor.id,
-        billNumber,
-        billDate: dto.billDate,
-        dueDate: dto.dueDate,
-        subtotal: totals.subtotal,
-        taxAmount: totals.taxAmount,
-        total: totals.total,
-        amountPaid: '0',
-        balance: totals.total,
-        status,
-        memo: dto.memo ?? null,
-        journalEntryId: null,
-        purchaseOrderId: dto.purchaseOrderId ?? null,
-      });
-      await manager.save(bill);
-
-      const lines = totals.lines.map((l) =>
-        manager.create(BillLineItem, { billId: bill.id, ...l }),
-      );
-      await manager.save(lines);
-      bill.lines = lines;
-
-      if (status !== 'draft') {
-        await this.createJournalEntryForBill(manager, bill, userId);
-        vendor.balance = addMoney(vendor.balance, bill.total).toFixed(4);
-        await manager.save(vendor);
-      }
-      return bill;
+    const vendor = await manager.findOne(Vendor, {
+      where: { id: dto.vendorId, companyId },
     });
+    if (!vendor) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+
+    // Auto-generate billNumber if caller omits it (mirrors invoice behaviour).
+    let billNumber = dto.billNumber;
+    if (!billNumber) {
+      billNumber = await nextDocumentNumber(manager, companyId, 'BILL', yearOf(dto.billDate));
+    }
+
+    // Resolve missing accountId on lines → fallback to COGS account.
+    const cogsAccount = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
+    const resolvedLines = dto.lines.map((l) => ({
+      ...l,
+      accountId: l.accountId ?? cogsAccount?.id ?? '',
+      amount: l.amount ?? (
+        l.quantity && l.unitPrice
+          ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
+          : '0'
+      ),
+    }));
+
+    await this.assertLineAccountsValid(
+      manager,
+      companyId,
+      resolvedLines.map((l) => l.accountId),
+    );
+
+    const totals = this.computeTotals(resolvedLines);
+    if (!isPositive(toDecimal(totals.total))) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Bill total must be greater than zero',
+      });
+    }
+    const status: BillStatus = dto.status ?? 'open';
+
+    const bill = manager.create(Bill, {
+      companyId,
+      vendorId: vendor.id,
+      billNumber,
+      billDate: dto.billDate,
+      dueDate: dto.dueDate,
+      subtotal: totals.subtotal,
+      taxAmount: totals.taxAmount,
+      total: totals.total,
+      amountPaid: '0',
+      balance: totals.total,
+      status,
+      memo: dto.memo ?? null,
+      journalEntryId: null,
+      purchaseOrderId: dto.purchaseOrderId ?? null,
+    });
+    await manager.save(bill);
+
+    const lines = totals.lines.map((l, i) => {
+      const link = opts.poLineLinks?.[i] ?? null;
+      return manager.create(BillLineItem, {
+        billId: bill.id,
+        ...l,
+        purchaseOrderLineId: link?.purchaseOrderLineId ?? null,
+        quantity: link?.quantity ?? null,
+        grniAmount: link?.grniAmount ?? null,
+      });
+    });
+    await manager.save(lines);
+    bill.lines = lines;
+
+    if (status !== 'draft') {
+      await this.createJournalEntryForBill(manager, bill, userId);
+      vendor.balance = addMoney(vendor.balance, bill.total).toFixed(4);
+      await manager.save(vendor);
+    }
+    return bill;
   }
 
 
@@ -699,7 +729,7 @@ export class BillsService {
           await this.posting.createEntry(manager, {
             companyId,
             createdBy: userId,
-            date: new Date().toISOString().slice(0, 10),
+            date: businessToday(),
             memo: `Delete bill ${bill.billNumber}`,
             status: 'posted',
             sourceType: 'bill_void',
@@ -722,9 +752,50 @@ export class BillsService {
         }
       }
 
+      // A bill raised from a purchase order gives back what it billed: the
+      // units become billable again and the GRNI it cleared is outstanding
+      // again (the reversal above re-credits it).
+      if (bill.purchaseOrderId) {
+        await this.releasePurchaseOrderBilling(manager, companyId, bill);
+      }
+
       await manager.remove(bill); // hard remove (cascades lines)
       return { id, deleted: true };
     });
+  }
+
+  private async releasePurchaseOrderBilling(
+    manager: EntityManager,
+    companyId: string,
+    bill: Bill,
+  ): Promise<void> {
+    const po = await manager
+      .createQueryBuilder(PurchaseOrder, 'o')
+      .setLock('pessimistic_write')
+      .where('o.id = :id AND o.companyId = :companyId', { id: bill.purchaseOrderId, companyId })
+      .getOne();
+    if (!po) return;
+    const poLines = await manager.find(PurchaseOrderLine, { where: { orderId: po.id } });
+    const byId = new Map(poLines.map((l) => [l.id, l]));
+    for (const bl of bill.lines ?? []) {
+      if (!bl.purchaseOrderLineId) continue;
+      const line = byId.get(bl.purchaseOrderLineId);
+      if (!line) continue;
+      line.billedQty = Decimal.max(
+        toDecimal(line.billedQty).minus(toDecimal(bl.quantity)),
+        0,
+      ).toFixed(4);
+      if (bl.grniAmount !== null && bl.grniAmount !== undefined) {
+        line.grniCleared = toDecimal(line.grniCleared).minus(toDecimal(bl.grniAmount)).toFixed(4);
+      }
+      await manager.save(line);
+    }
+    if (po.status === 'closed') {
+      const all = poLines.every((l) => toDecimal(l.receivedQty).greaterThanOrEqualTo(toDecimal(l.orderedQty)));
+      const any = poLines.some((l) => toDecimal(l.receivedQty).greaterThan(0));
+      po.status = all ? 'received' : any ? 'partial' : 'sent';
+      await manager.save(po);
+    }
   }
 
   async listPayments(companyId: string, billId: string | undefined, page: number, limit: number) {
@@ -887,17 +958,48 @@ export class BillsService {
       debit: string;
       credit: string;
       lineOrder: number;
-    }> = bill.lines.map((l, i) => ({
-      accountId: l.accountId,
-      description: l.description,
+    }> = [];
+    let variance = new Decimal(0);
+    for (const l of bill.lines) {
       // Registered → net amount only (tax broken out below). Otherwise the
-      // tax-inclusive amount is expensed as before.
-      debit: reclaimInputTax
-        ? toDecimal(l.amount).toFixed(4)
-        : toDecimal(l.amount).plus(toDecimal(l.taxAmount)).toFixed(4),
-      credit: '0',
-      lineOrder: i,
-    }));
+      // tax-inclusive amount is the cost, as before.
+      const cost = reclaimInputTax
+        ? toDecimal(l.amount)
+        : toDecimal(l.amount).plus(toDecimal(l.taxAmount));
+      if (l.grniAmount !== null && l.grniAmount !== undefined) {
+        // A line that bills received goods clears EXACTLY what the receipts
+        // accrued to GRNI for it — not its own cost recomputed — so GRNI nets to
+        // zero for the line. Any difference (rounding, or a receipt accrued
+        // before non-recoverable tax was part of landed cost) is a landed-cost
+        // variance, recognised in Cost of Goods Sold below.
+        jLines.push({
+          accountId: l.accountId,
+          description: l.description,
+          debit: toDecimal(l.grniAmount).toFixed(4),
+          credit: '0',
+          lineOrder: jLines.length,
+        });
+        variance = variance.plus(cost.minus(toDecimal(l.grniAmount)));
+      } else {
+        jLines.push({
+          accountId: l.accountId,
+          description: l.description,
+          debit: cost.toFixed(4),
+          credit: '0',
+          lineOrder: jLines.length,
+        });
+      }
+    }
+    if (!variance.isZero()) {
+      const cogs = await this.accounts.getByNumberOrFail(bill.companyId, ACCT_COGS, manager);
+      jLines.push({
+        accountId: cogs.id,
+        description: `Landed cost variance — Bill ${bill.billNumber}`,
+        debit: variance.greaterThan(0) ? variance.toFixed(4) : '0',
+        credit: variance.lessThan(0) ? variance.negated().toFixed(4) : '0',
+        lineOrder: jLines.length,
+      });
+    }
 
     if (reclaimInputTax && totalTax.greaterThan(0)) {
       const inputTaxAcct = await this.accounts.getOrCreateSystemAccount(

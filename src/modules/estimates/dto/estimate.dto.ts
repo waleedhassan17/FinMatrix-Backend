@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNumberString,
@@ -11,6 +12,8 @@ import {
   IsUUID,
   ValidateNested,
 } from 'class-validator';
+import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
+import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
 
 export class EstimateLineDto {
   @ApiProperty() @IsString() description!: string;
@@ -27,6 +30,17 @@ export class EstimateLineDto {
   @IsOptional()
   @IsUUID()
   itemId?: string;
+
+  @ApiPropertyOptional({
+    enum: SALES_LINE_KINDS,
+    description:
+      "'item' sells an inventory item (itemId required); 'service' is a service or " +
+      'charge with no stock. In a company that tracks inventory a line without an ' +
+      "item must say 'service'.",
+  })
+  @IsOptional()
+  @IsIn(SALES_LINE_KINDS)
+  lineKind?: SalesLineKind;
 }
 
 export class CreateEstimateDto {
@@ -81,7 +95,21 @@ export class EstimateStatusDto {
   status!: 'sent' | 'accepted' | 'declined';
 }
 
+export class ConvertEstimateToSalesOrderDto {
+  @ApiPropertyOptional({ description: 'Save even if some items are short (a backorder).' })
+  @IsOptional() @IsBoolean() acceptBackorder?: boolean;
+}
+
 export class ConvertEstimateDto {
   @ApiPropertyOptional({ example: '2026-05-23', description: 'Invoice due date (invoice conversion).' })
   @IsOptional() @IsDateString() dueDate?: string;
+
+  @ApiPropertyOptional({
+    type: CreditOverrideDto,
+    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreditOverrideDto)
+  creditOverride?: CreditOverrideDto;
 }

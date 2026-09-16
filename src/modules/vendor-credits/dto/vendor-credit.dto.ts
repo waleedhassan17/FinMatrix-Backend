@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize, IsArray, IsDateString, IsIn, IsNumberString, IsOptional, IsString, IsUUID, ValidateNested,
 } from 'class-validator';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class VendorCreditLineDto {
   @ApiProperty() @IsString() description!: string;
@@ -14,7 +15,7 @@ export class VendorCreditLineDto {
       'Tax percent to reverse out of Sales Tax Recoverable (1300) — the input ' +
       'tax claimed on the original bill. Omit or 0 for a tax-free credit.',
   })
-  @IsOptional() @IsNumberString() taxRate?: string;
+  @IsOptional() @IsTaxRate() taxRate?: string;
   @ApiPropertyOptional({
     description:
       'Inventory item being returned to the supplier. When set, the credit ' +

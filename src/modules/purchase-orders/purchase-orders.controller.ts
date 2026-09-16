@@ -74,12 +74,14 @@ export class PurchaseOrdersController {
    */
   @Post()
   @Roles('admin', 'staff')
-  create(
+  async create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePurchaseOrderDto,
   ) {
     if (user.role === 'admin') return this.service.create(companyId, dto);
+    // Refuse unclassified lines now, not when the owner tries to approve.
+    await this.service.assertLinesValid(companyId, dto.lines);
     return this.approvals.createRequest(
       'po',
       dto as unknown as Record<string, unknown>,

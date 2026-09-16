@@ -5,6 +5,10 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { SearchService } from './search.service';
 
 @ApiTags('search')
@@ -18,9 +22,10 @@ export class SearchController {
   @Roles('admin', 'staff', 'delivery')
   search(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('q') q: string,
     @Query('entities') entities: string,
   ) {
-    return this.svc.search(companyId, q, entities);
+    return this.svc.search(companyId, q, entities, user.role);
   }
 }

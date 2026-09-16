@@ -8,6 +8,7 @@ import { Customer } from '../customers/entities/customer.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import {
   ConvertEstimateDto,
+  ConvertEstimateToSalesOrderDto,
   CreateEstimateDto,
   EstimateLineDto,
   EstimateStatusDto,
@@ -16,11 +17,13 @@ import {
 } from './dto/estimate.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
-import { formatEstimateRef } from '../../common/utils/reference-generator.util';
-import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { InvoicesService } from '../invoices/invoices.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
+import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
+import { assertSalesLinesClassified, lineKindOf } from '../../common/utils/sales-lines.util';
+import { CreditOverride } from '../../common/utils/credit-control.util';
 
 interface LineCalc {
   description: string;
@@ -93,11 +96,10 @@ export class EstimatesService {
       const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
       await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
+      await assertSalesLinesClassified(manager, companyId, dto.lines);
 
       const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
-      const year = parseInt(dto.estimateDate.slice(0, 4), 10);
-      const seq = await nextYearlySequence(manager, 'estimates', companyId, year, 'estimate_date', 'EST', 'estimate_number');
-      const estimateNumber = formatEstimateRef(year, seq);
+      const estimateNumber = await nextDocumentNumber(manager, companyId, 'EST', yearOf(dto.estimateDate));
 
       const estimate = manager.create(Estimate, {
         companyId,
@@ -139,7 +141,10 @@ export class EstimatesService {
       if (dto.notes !== undefined) estimate.notes = dto.notes;
 
       if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
-        if (dto.lines) await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
+        if (dto.lines) {
+          await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
+          await assertSalesLinesClassified(manager, companyId, dto.lines);
+        }
         const nextLines = dto.lines ?? estimate.lines.map<EstimateLineDto>((l) => ({
           description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
           taxRate: l.taxRate, accountId: l.accountId ?? undefined,
@@ -185,11 +190,39 @@ export class EstimatesService {
     return estimate;
   }
 
-  async convertToInvoice(companyId: string, userId: string, id: string, dto: ConvertEstimateDto) {
+  /** What converting this estimate would invoice — filed for approval when staff convert. */
+  async conversionPayload(companyId: string, id: string, dto: ConvertEstimateDto) {
     const estimate = await this.getById(companyId, id);
     this.assertConvertible(estimate);
-    const today = new Date().toISOString().slice(0, 10);
-    const due = dto.dueDate ?? new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    return {
+      estimateNumber: estimate.estimateNumber,
+      payload: {
+        sourceEstimateId: estimate.id,
+        customerId: estimate.customerId,
+        invoiceDate: businessToday(),
+        dueDate: dto.dueDate ?? addDaysIso(businessToday(), 30),
+        discountType: estimate.discountType,
+        discountValue: estimate.discountValue,
+        notes: `Converted from estimate ${estimate.estimateNumber}`,
+        lines: estimate.lines.map((l) => ({
+          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
+          taxRate: l.taxRate, itemId: l.itemId ?? undefined, lineKind: lineKindOf(l.itemId),
+        })),
+      },
+    };
+  }
+
+  async convertToInvoice(
+    companyId: string,
+    userId: string,
+    id: string,
+    dto: ConvertEstimateDto,
+    creditOverride: CreditOverride | null = null,
+  ) {
+    const estimate = await this.getById(companyId, id);
+    this.assertConvertible(estimate);
+    const today = businessToday();
+    const due = dto.dueDate ?? addDaysIso(businessToday(), 30);
     const invoice = await this.invoices.create(companyId, userId, {
       customerId: estimate.customerId,
       invoiceDate: today,
@@ -207,13 +240,19 @@ export class EstimatesService {
         description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
         taxRate: l.taxRate, accountId: l.accountId ?? undefined,
         itemId: l.itemId ?? undefined,
+        lineKind: lineKindOf(l.itemId),
       })),
-    });
+    }, { credit: { override: creditOverride } });
     await this.markConverted(estimate, 'invoice', invoice.id);
     return { estimate: await this.getById(companyId, id), invoice };
   }
 
-  async convertToSalesOrder(companyId: string, userId: string, id: string) {
+  async convertToSalesOrder(
+    companyId: string,
+    userId: string,
+    id: string,
+    dto: ConvertEstimateToSalesOrderDto = {},
+  ) {
     const estimate = await this.getById(companyId, id);
     this.assertConvertible(estimate);
     const salesOrder = await this.salesOrders.create(
@@ -221,7 +260,7 @@ export class EstimatesService {
       userId,
       {
         customerId: estimate.customerId,
-        orderDate: new Date().toISOString().slice(0, 10),
+        orderDate: businessToday(),
         discountType: estimate.discountType,
         discountValue: estimate.discountValue,
         notes: `Converted from estimate ${estimate.estimateNumber}`,
@@ -231,7 +270,11 @@ export class EstimatesService {
           description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
           taxRate: l.taxRate, accountId: l.accountId ?? undefined,
           itemId: l.itemId ?? undefined,
+          lineKind: lineKindOf(l.itemId),
         })),
+        // The quote was accepted before the stock was checked: a shortfall
+        // still needs the user's say-so before it becomes a promise.
+        acceptBackorder: dto.acceptBackorder,
       },
       estimate.id,
     );

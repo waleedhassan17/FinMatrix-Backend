@@ -1,8 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
+import { businessToday } from './business-date.util';
 
-/** Today in the ISO date form every `date` column and posting path uses. */
+/**
+ * Today in the ISO date form every `date` column and posting path uses — the
+ * BUSINESS calendar day, not the UTC one (see business-date.util.ts). The UTC
+ * day was yesterday until 05:00 in Pakistan, which also made
+ * assertNotFutureDate refuse a count dated with the user's real today.
+ */
 export function todayIso(): string {
-  return new Date().toISOString().split('T')[0];
+  return businessToday();
 }
 
 /**

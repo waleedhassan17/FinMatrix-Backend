@@ -1,7 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNumberString,
@@ -43,13 +45,42 @@ export class ReceivePaymentDto {
 
   @ApiPropertyOptional({
     type: [PaymentApplicationDto],
-    description: 'If omitted, auto-apply to oldest unpaid invoices (FIFO).',
+    description:
+      'Invoices to apply the receipt to. If omitted (and holdAsAdvance is not ' +
+      'true), it is auto-applied to the oldest unpaid invoices (FIFO). Whatever ' +
+      'is not applied is held in 2400 Customer Advances.',
   })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PaymentApplicationDto)
   applications?: PaymentApplicationDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Hold the whole receipt (or everything not in `applications`) as a ' +
+      'customer advance. Without it an empty or missing `applications` means ' +
+      '"apply automatically", which is the opposite of what a "save as credit" ' +
+      'choice asks for.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  holdAsAdvance?: boolean;
+}
+
+/** Apply money a receipt is still holding as an advance to invoices. */
+export class ApplyPaymentDto {
+  @ApiProperty({ type: [PaymentApplicationDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => PaymentApplicationDto)
+  applications!: PaymentApplicationDto[];
+
+  @ApiPropertyOptional({ description: 'Application date; defaults to today.' })
+  @IsOptional()
+  @IsDateString()
+  date?: string;
 }
 
 export class ListPaymentsQueryDto {

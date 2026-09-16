@@ -29,6 +29,22 @@ export class PurchaseOrderLine {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'received_qty' })
   receivedQty!: string;
 
+  /** Quantity already billed. A bill covers received − billed, so a PO can be billed per receipt. */
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'billed_qty' })
+  billedQty!: string;
+
+  /**
+   * GRNI this line's receipts have credited, and how much of it bills have
+   * cleared. A bill debits GRNI with exactly (accrued − cleared), so GRNI nets
+   * to zero once a line is fully billed — whatever rounding or tax treatment
+   * the receipts used.
+   */
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'grni_accrued' })
+  grniAccrued!: string;
+
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'grni_cleared' })
+  grniCleared!: string;
+
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_cost' })
   unitCost!: string;
 

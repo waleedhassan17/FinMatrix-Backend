@@ -182,6 +182,7 @@ async function main() {
   let bs = await assertBooksBalanced('P1.2 after PO');
 
   markStep();
+  await req('PATCH', `/purchase-orders/${po.id}/status`, { ...A, json: { status: 'sent' } });
   const recv = await req('POST', `/purchase-orders/${po.id}/receive`, { ...A, json: { lines: [
     { lineId: po.lines[0].id, receivedQty: '30' },
     { lineId: po.lines[1].id, receivedQty: '50' },

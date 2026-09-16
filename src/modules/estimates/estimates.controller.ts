@@ -10,10 +10,12 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { EstimatesService } from './estimates.service';
 import {
-  ConvertEstimateDto, CreateEstimateDto, EstimateStatusDto, ListEstimatesQueryDto, UpdateEstimateDto,
+  ConvertEstimateDto, ConvertEstimateToSalesOrderDto, CreateEstimateDto, EstimateStatusDto, ListEstimatesQueryDto, UpdateEstimateDto,
 } from './dto/estimate.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
+import { creditOverrideFrom } from '../../common/validation/credit-override.dto';
 
 @ApiTags('estimates')
 @ApiBearerAuth()
@@ -24,7 +26,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @Roles('admin', 'staff')
 @Controller('estimates')
 export class EstimatesController {
-  constructor(private readonly estimates: EstimatesService) {}
+  constructor(
+    private readonly estimates: EstimatesService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   list(
@@ -75,13 +80,24 @@ export class EstimatesController {
   @Roles('admin', 'staff')
   @HttpCode(201)
   @ApiOperation({ summary: 'Convert an accepted estimate into an invoice.' })
-  convertToInvoice(
+  async convertToInvoice(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('estimateId', ParseUUIDPipe) id: string,
     @Body() dto: ConvertEstimateDto,
   ) {
-    return this.estimates.convertToInvoice(companyId, user.id, id, dto);
+    if (user.role === 'admin') {
+      return this.estimates.convertToInvoice(companyId, user.id, id, dto, creditOverrideFrom(dto.creditOverride, user));
+    }
+    // Converting posts an invoice; staff invoices go to the owner.
+    const { estimateNumber, payload } = await this.estimates.conversionPayload(companyId, id, dto);
+    return this.approvals.createRequest(
+      'invoice',
+      payload as unknown as Record<string, unknown>,
+      `Invoice from estimate ${estimateNumber}: ${payload.lines.length} line(s), due ${payload.dueDate}`,
+      user,
+      companyId,
+    );
   }
 
   @Post(':estimateId/convert-to-sales-order')
@@ -92,8 +108,9 @@ export class EstimatesController {
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('estimateId', ParseUUIDPipe) id: string,
+    @Body() dto: ConvertEstimateToSalesOrderDto,
   ) {
-    return this.estimates.convertToSalesOrder(companyId, user.id, id);
+    return this.estimates.convertToSalesOrder(companyId, user.id, id, dto ?? {});
   }
 
   @Delete(':estimateId')

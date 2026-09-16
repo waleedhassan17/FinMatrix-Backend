@@ -25,11 +25,13 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { Delete } from '@nestjs/common';
+import { creditOverrideFrom } from '../../common/validation/credit-override.dto';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { InvoicesService } from './invoices.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import {
   CreateInvoiceDto,
+  SendInvoiceDto,
   ListInvoicesQueryDto,
   UpdateInvoiceDto,
   VoidInvoiceDto,
@@ -89,15 +91,24 @@ export class InvoicesController {
    */
   @Post()
   @Roles('admin', 'staff')
-  create(
+  async create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateInvoiceDto,
   ) {
-    if (user.role === 'admin') return this.invoices.create(companyId, user.id, dto);
+    const { creditOverride, ...invoice } = dto;
+    if (user.role === 'admin') {
+      return this.invoices.create(companyId, user.id, invoice as CreateInvoiceDto, {
+        credit: { override: creditOverrideFrom(creditOverride, user) },
+      });
+    }
+    // Refuse unclassified lines now, not when the owner tries to approve.
+    await this.invoices.assertLinesValid(companyId, dto.lines);
+    // A staff request never carries an override; the owner decides that when
+    // approving it.
     return this.approvals.createRequest(
       'invoice',
-      dto as unknown as Record<string, unknown>,
+      invoice as unknown as Record<string, unknown>,
       `Invoice: ${dto.lines?.length ?? 0} line(s), due ${dto.dueDate}`,
       user,
       companyId,
@@ -122,8 +133,11 @@ export class InvoicesController {
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Body() dto: SendInvoiceDto,
   ) {
-    return this.invoices.send(companyId, invoiceId, user.id);
+    return this.invoices.send(companyId, invoiceId, user.id, {
+      creditOverride: creditOverrideFrom(dto?.creditOverride, user),
+    });
   }
 
   /**

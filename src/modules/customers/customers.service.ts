@@ -15,6 +15,7 @@ import { addMoney, subtractMoney, toDecimal } from '../../common/utils/money.uti
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
 import { Address } from './entities/customer.entity';
+import { assessCredit } from '../../common/utils/credit-control.util';
 
 /**
  * App builds send `zipCode`; the canonical stored field is `postalCode`.
@@ -117,6 +118,7 @@ export class CustomersService {
 
   async detail(companyId: string, id: string) {
     const customer = await this.getById(companyId, id);
+    const credit = await assessCredit(this.repo.manager, companyId, id, 0);
     const [invoices, payments, purchasesRaw] = await Promise.all([
       this.invoiceRepo.find({
         where: { companyId, customerId: id },
@@ -140,10 +142,22 @@ export class CustomersService {
       totalPurchases: toDecimal(purchasesRaw?.total ?? 0).toFixed(4),
       recentInvoices: invoices,
       recentPayments: payments,
+      // Exposure, not the stored balance: unpaid invoices plus goods shipped on
+      // credit and not yet invoiced, less advances and credits — the same
+      // figure a shipment or invoice is checked against.
       credit: {
         limit: customer.creditLimit,
-        used: customer.balance,
-        available: subtractMoney(customer.creditLimit, customer.balance).toFixed(4),
+        used: credit.exposure,
+        exposure: credit.exposure,
+        openInvoices: credit.openInvoices,
+        inTransit: credit.inTransit,
+        shippedNotInvoiced: credit.shippedNotInvoiced,
+        advances: credit.advances,
+        credits: credit.credits,
+        limited: credit.limited,
+        available: credit.limited
+          ? subtractMoney(customer.creditLimit, credit.exposure).toFixed(4)
+          : null,
       },
     };
   }

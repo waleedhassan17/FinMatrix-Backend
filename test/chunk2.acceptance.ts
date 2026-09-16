@@ -155,6 +155,7 @@ async function main() {
       ...A, json: { vendorId: vendor.id, orderDate: TODAY, lines: [{ description: 'Widgets', orderedQty: '10', unitCost, itemId }] },
     }));
     const lineId = po?.lines?.[0]?.id;
+    await req('PATCH', `/purchase-orders/${po.id}/status`, { ...A, json: { status: 'sent' } });
     await req('POST', `/purchase-orders/${po.id}/receive`, { ...A, json: { lines: [{ lineId, receivedQty: '10' }] } });
     return po;
   };

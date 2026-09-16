@@ -27,8 +27,7 @@ import {
   toMoneyString,
 } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
-import { formatInvoiceRef } from '../../common/utils/reference-generator.util';
-import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
@@ -41,6 +40,9 @@ import {
   ACCT_TAX_PAYABLE,
 } from '../accounts/accounts.constants';
 import { InvoiceStatus } from '../../types';
+import { businessToday } from '../../common/utils/business-date.util';
+import { assertSalesLinesClassified } from '../../common/utils/sales-lines.util';
+import { CreditOverride, enforceCreditLimit } from '../../common/utils/credit-control.util';
 
 interface LineCalc {
   description: string;
@@ -53,6 +55,19 @@ interface LineCalc {
   accountId: string | null;
   itemId: string | null;
   lineOrder: number;
+}
+
+/** Options for invoices raised by the system rather than typed by a user. */
+export interface CreateInvoiceOptions {
+  /** Approving a request filed before lines had to be classified. */
+  treatFreeTextAsService?: boolean;
+  credit?: {
+    /** A delivery's invoice: its credit was checked when it was dispatched. */
+    skip?: boolean;
+    /** Converting a sales order: its shipped value is already in exposure. */
+    excludeSalesOrderId?: string | null;
+    override?: CreditOverride | null;
+  };
 }
 
 interface InvoiceTotals {
@@ -163,11 +178,20 @@ export class InvoicesService {
     return { ...inv, customerName: customer?.name ?? '' } as Invoice;
   }
 
+  /** Check an invoice's lines without creating anything (a staff request is filed only if they pass). */
+  async assertLinesValid(companyId: string, lines: InvoiceLineDto[]): Promise<void> {
+    await assertSalesLinesClassified(this.dataSource.manager, companyId, lines);
+  }
+
   async outstandingForCustomer(
     companyId: string,
     customerId: string,
+    manager?: EntityManager,
   ): Promise<Invoice[]> {
-    return this.repo
+    // Read through the caller's transaction when there is one, so an invoice
+    // created earlier in the same transaction is visible to the sweep.
+    const repo = manager ? manager.getRepository(Invoice) : this.repo;
+    return repo
       .createQueryBuilder('i')
       .where('i.companyId = :companyId', { companyId })
       .andWhere('i.customerId = :c', { c: customerId })
@@ -183,9 +207,10 @@ export class InvoicesService {
     companyId: string,
     userId: string,
     dto: CreateInvoiceDto,
+    opts: CreateInvoiceOptions = {},
   ): Promise<Invoice> {
     return this.dataSource.transaction(async (manager) =>
-      this.createInTransaction(manager, companyId, userId, dto),
+      this.createInTransaction(manager, companyId, userId, dto, opts),
     );
   }
 
@@ -199,6 +224,7 @@ export class InvoicesService {
     companyId: string,
     userId: string,
     dto: CreateInvoiceDto,
+    opts: CreateInvoiceOptions = {},
   ): Promise<Invoice> {
     {
       const customer = await manager.findOne(Customer, {
@@ -210,22 +236,30 @@ export class InvoicesService {
           message: 'Customer not found',
         });
       }
+      await assertSalesLinesClassified(manager, companyId, dto.lines, {
+        treatFreeTextAsService: opts.treatFreeTextAsService,
+      });
 
       const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
 
-      const year = parseInt(dto.invoiceDate.slice(0, 4), 10);
-      const seq = await nextYearlySequence(
+      const invoiceNumber = await nextDocumentNumber(
         manager,
-        'invoices',
         companyId,
-        year,
-        'invoice_date',
         'INV',
-        'invoice_number',
+        yearOf(dto.invoiceDate),
       );
-      const invoiceNumber = formatInvoiceRef(year, seq);
 
       const status: InvoiceStatus = dto.status ?? 'draft';
+      // An invoice that posts is where the customer's debt becomes real.
+      if (status !== 'draft' && !opts.credit?.skip) {
+        await enforceCreditLimit(manager, companyId, dto.customerId, totals.total, {
+          action: 'invoice',
+          targetType: 'customer',
+          targetId: dto.customerId,
+          excludeSalesOrderId: opts.credit?.excludeSalesOrderId,
+          override: opts.credit?.override,
+        });
+      }
 
       const invoice = manager.create(Invoice, {
         companyId,
@@ -302,6 +336,8 @@ export class InvoicesService {
       if (dto.dueDate !== undefined) invoice.dueDate = dto.dueDate;
       if (dto.notes !== undefined) invoice.notes = dto.notes;
 
+      if (dto.lines) await assertSalesLinesClassified(manager, companyId, dto.lines);
+
       if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
         const nextLines = dto.lines ?? invoice.lines.map<InvoiceLineDto>((l) => ({
           description: l.description,
@@ -351,7 +387,12 @@ export class InvoicesService {
     });
   }
 
-  async send(companyId: string, id: string, userId: string): Promise<Invoice> {
+  async send(
+    companyId: string,
+    id: string,
+    userId: string,
+    opts: { creditOverride?: CreditOverride | null } = {},
+  ): Promise<Invoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await manager.findOne(Invoice, {
         where: { id, companyId },
@@ -371,6 +412,12 @@ export class InvoicesService {
       }
 
       if (!invoice.journalEntryId) {
+        await enforceCreditLimit(manager, companyId, invoice.customerId, invoice.total, {
+          action: 'invoice_send',
+          targetType: 'invoice',
+          targetId: invoice.id,
+          override: opts.creditOverride,
+        });
         await this.createJournalEntryForInvoice(manager, invoice, userId);
         const customer = await manager.findOneBy(Customer, {
           id: invoice.customerId,
@@ -461,7 +508,7 @@ export class InvoicesService {
         await this.posting.createEntry(manager, {
           companyId,
           createdBy: userId,
-          date: new Date().toISOString().slice(0, 10),
+          date: businessToday(),
           memo: `Void invoice ${invoice.invoiceNumber}: ${dto.reason}`,
           status: 'posted',
           lines: lines.map((l, i) => ({ ...l, lineOrder: i })),
@@ -530,7 +577,7 @@ export class InvoicesService {
           await this.posting.createEntry(manager, {
             companyId,
             createdBy: userId,
-            date: new Date().toISOString().slice(0, 10),
+            date: businessToday(),
             memo: `Delete invoice ${invoice.invoiceNumber}`,
             status: 'posted',
             sourceType: 'invoice_void',
@@ -605,7 +652,7 @@ export class InvoicesService {
     invoice.amountPaid = addMoney(invoice.amountPaid, amt).toFixed(4);
     invoice.balance = subtractMoney(invoice.total, invoice.amountPaid).toFixed(4);
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessToday();
     if (toDecimal(invoice.amountPaid).greaterThanOrEqualTo(toDecimal(invoice.total))) {
       invoice.status = 'paid';
     } else if (invoice.dueDate < today) {
@@ -797,8 +844,20 @@ export class InvoicesService {
       if (!item) continue;
       const qty = toDecimal(line.quantity);
       const cost = qty.times(toDecimal(item.unitCost));
-      if (cost.lessThanOrEqualTo(0)) continue;
-      total = total.plus(cost);
+      if (reverse) {
+        // Only put back what this invoice actually took off the shelf. Items
+        // with no cost used to be skipped entirely when sold (see below), so an
+        // older invoice may have moved nothing to reverse.
+        const moved = await moveRepo.count({
+          where: { companyId: invoice.companyId, itemId: item.id, sourceType: 'invoice', sourceId: invoice.id },
+        });
+        if (moved === 0) continue;
+      }
+      // A zero-cost item still leaves the shelf. It used to `continue` here,
+      // which skipped the stock check and the stock movement as well as the
+      // (zero) COGS — so an item with no recorded cost could be sold without
+      // any stock at all.
+      total = total.plus(Decimal.max(cost, 0));
 
       const onHand = toDecimal(item.quantityOnHand);
       // Selling more than is on the shelf would drive stock negative and trip

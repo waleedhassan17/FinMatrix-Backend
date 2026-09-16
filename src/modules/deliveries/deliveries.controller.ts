@@ -17,6 +17,7 @@ import {
   ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+import { CreditOverrideDto, creditOverrideFrom } from '../../common/validation/credit-override.dto';
 
 @ApiTags('Deliveries')
 @ApiBearerAuth()
@@ -45,7 +46,7 @@ export class DeliveriesController {
     @Body() dto: CreateDeliveryDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.create(companyId, dto, user.id);
+    return this.svc.create(companyId, dto, user.id, creditOverrideFrom(dto.creditOverride, user));
   }
 
   @Get('my/assigned')
@@ -117,7 +118,7 @@ export class DeliveriesController {
     @Body() dto: UpdateDeliveryDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.update(companyId, id, dto, user.id);
+    return this.svc.update(companyId, id, dto, user.id, creditOverrideFrom(dto.creditOverride, user));
   }
 
   /**
@@ -141,8 +142,9 @@ export class DeliveriesController {
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { creditOverride?: CreditOverrideDto } = {},
   ) {
-    return this.svc.autoAssign(companyId, id, user.id);
+    return this.svc.autoAssign(companyId, id, user.id, creditOverrideFrom(body?.creditOverride, user));
   }
 
   @Patch(':id/status')
@@ -193,10 +195,16 @@ export class DeliveriesController {
   @Roles('admin', 'staff')
   assign(
     @CurrentCompany() companyId: string,
-    @Body() dto: { deliveryIds: string[]; personnelId: string },
+    @Body() dto: { deliveryIds: string[]; personnelId: string; creditOverride?: CreditOverrideDto },
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.assignDeliveries(companyId, dto.deliveryIds, dto.personnelId, user.id);
+    return this.svc.assignDeliveries(
+      companyId,
+      dto.deliveryIds,
+      dto.personnelId,
+      user.id,
+      creditOverrideFrom(dto.creditOverride, user),
+    );
   }
 
   @Post(':id/confirm')

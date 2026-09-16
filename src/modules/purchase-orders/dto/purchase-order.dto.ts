@@ -9,15 +9,37 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { PurchaseOrderStatus } from '../../../types';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
+
+export const PURCHASE_LINE_KINDS = ['item', 'expense'] as const;
+export type PurchaseLineKind = (typeof PURCHASE_LINE_KINDS)[number];
 
 export class PurchaseOrderLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty() @IsNumberString() orderedQty!: string;
   @ApiProperty() @IsNumberString() unitCost!: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumberString() taxRate?: string;
+  @ApiPropertyOptional({
+    example: '17',
+    description: 'Tax percent the vendor charges, typed by hand (0–100, up to 4 decimals).',
+  })
+  @IsOptional()
+  @IsTaxRate()
+  taxRate?: string;
+
+  @ApiPropertyOptional({
+    enum: PURCHASE_LINE_KINDS,
+    description:
+      "'item' adds stock on receipt and needs itemId; 'expense' is a non-stock " +
+      'purchase and needs accountId (the expense account it bills to).',
+  })
+  @IsOptional()
+  @IsIn(PURCHASE_LINE_KINDS)
+  lineKind?: PurchaseLineKind;
+
   @ApiPropertyOptional() @IsOptional() @IsUUID() itemId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
 }
@@ -49,12 +71,32 @@ export class ReceivePurchaseOrderDto {
   lines!: ReceiveLineDto[];
 }
 
+/**
+ * Everything is optional: a bill raised from a PO takes the vendor's invoice
+ * number if one is given (otherwise BILL-YYYY-NNNN), is dated today, and falls
+ * due on the vendor's payment terms. The web client used to post no body at
+ * all and got "billNumber must be a string; billDate must be a valid ISO 8601
+ * date string; dueDate …" back.
+ */
 export class CreateBillFromPoDto {
-  @ApiProperty() @IsString() billNumber!: string;
-  @ApiProperty() @IsDateString() billDate!: string;
-  @ApiProperty() @IsDateString() dueDate!: string;
-  // Optional: only needed as a fallback expense account for non-inventory
-  // lines. Pure-inventory PO bills debit GRNI and don't require it.
+  @ApiPropertyOptional({ description: "The vendor's own invoice number." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  billNumber?: string;
+
+  @ApiPropertyOptional({ description: 'Defaults to today.' })
+  @IsOptional()
+  @IsDateString()
+  billDate?: string;
+
+  @ApiPropertyOptional({ description: "Defaults to the bill date plus the vendor's payment terms." })
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
+
+  // Only needed for non-stock lines saved without an expense account (older
+  // POs). Stock lines clear GRNI and never use it.
   @ApiPropertyOptional() @IsOptional() @IsUUID() defaultAccountId?: string;
 }
 

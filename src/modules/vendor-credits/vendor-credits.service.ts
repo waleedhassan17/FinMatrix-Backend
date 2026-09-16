@@ -10,8 +10,7 @@ import {
 } from './dto/vendor-credit.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, toDecimal } from '../../common/utils/money.util';
-import { formatYearlyRef } from '../../common/utils/reference-generator.util';
-import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
@@ -21,6 +20,7 @@ import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { assertSufficientStock } from '../../common/utils/stock.util';
+import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
 export class VendorCreditsService {
@@ -91,9 +91,7 @@ export class VendorCreditsService {
       }
 
       const totals = this.computeTotals(dto.lines);
-      const year = parseInt(dto.date.slice(0, 4), 10);
-      const seq = await nextYearlySequence(manager, 'vendor_credits', companyId, year, 'date', 'VC', 'vendor_credit_number');
-      const number = formatYearlyRef('VC', year, seq);
+      const number = await nextDocumentNumber(manager, companyId, 'VC', yearOf(dto.date));
 
       const vc = manager.create(VendorCredit, {
         companyId, vendorId: dto.vendorId, vendorCreditNumber: number, date: dto.date,
@@ -211,7 +209,7 @@ export class VendorCreditsService {
           });
         }
         await this.posting.createEntry(manager, {
-          companyId, createdBy: userId, date: new Date().toISOString().slice(0, 10),
+          companyId, createdBy: userId, date: businessToday(),
           memo: `Void vendor credit ${vc.vendorCreditNumber}`, status: 'posted', lines: jeLines,
           reversalOfId: vc.journalEntryId, sourceType: 'vendor_credit_void', sourceId: vc.id,
         });

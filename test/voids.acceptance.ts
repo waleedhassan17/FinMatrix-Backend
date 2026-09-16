@@ -249,7 +249,7 @@ async function main() {
         invoiceDate: TODAY,
         dueDate: '2099-12-31',
         status: 'sent',
-        lines: [{ description: 'G7 pay target', quantity: '1', unitPrice: '600', taxRate: '0' }],
+        lines: [{ description: 'G7 pay target', quantity: '1', unitPrice: '600', taxRate: '0', lineKind: 'service' }],
       }),
     ) as any;
 
@@ -296,7 +296,7 @@ async function main() {
         billNumber: `G7-BILL-${Date.now()}`,
         billDate: TODAY,
         dueDate: '2099-12-31',
-        lines: [{ description: 'G7 bill', quantity: '1', unitPrice: '450' }],
+        lines: [{ description: 'G7 bill', quantity: '1', unitPrice: '450', lineKind: 'service' }],
       }),
     ) as any;
     ok('C bill posted', !!bill?.id, bill);

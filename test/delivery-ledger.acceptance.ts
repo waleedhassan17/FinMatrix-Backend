@@ -148,6 +148,7 @@ async function main() {
   const po = data(await req('POST', '/purchase-orders', {
     ...A, json: { vendorId: vendor.id, orderDate: TODAY, lines: [{ description: 'Crates', orderedQty: '20', unitCost: '100', itemId }] },
   }));
+  await req('PATCH', `/purchase-orders/${po.id}/status`, { ...A, json: { status: 'sent' } });
   await req('POST', `/purchase-orders/${po.id}/receive`, { ...A, json: { lines: [{ lineId: po?.lines?.[0]?.id, receivedQty: '20' }] } });
   await req('POST', `/purchase-orders/${po.id}/create-bill`, { ...A, json: { billNumber: `B-${Date.now()}`, billDate: TODAY, dueDate: TODAY } });
   const stocked = data(await req('GET', `/inventory/items/${itemId}`, A));
@@ -336,6 +337,7 @@ async function main() {
       lines: [{ description: 'Crates dearer', orderedQty: '10', unitCost: String(fCostBefore * 2), itemId }],
     },
   }));
+  await req('PATCH', `/purchase-orders/${po2.id}/status`, { ...A, json: { status: 'sent' } });
   await req('POST', `/purchase-orders/${po2.id}/receive`, {
     ...A, json: { lines: [{ lineId: po2?.lines?.[0]?.id, receivedQty: '10' }] },
   });

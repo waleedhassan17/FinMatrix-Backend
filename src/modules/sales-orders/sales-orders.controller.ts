@@ -14,6 +14,8 @@ import {
 } from './dto/sales-order.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
+import { creditOverrideFrom } from '../../common/validation/credit-override.dto';
 
 @ApiTags('sales-orders')
 @ApiBearerAuth()
@@ -24,7 +26,10 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
 @Roles('admin', 'staff')
 @Controller('sales-orders')
 export class SalesOrdersController {
-  constructor(private readonly salesOrders: SalesOrdersService) {}
+  constructor(
+    private readonly salesOrders: SalesOrdersService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   list(
@@ -37,7 +42,7 @@ export class SalesOrdersController {
 
   @Get(':orderId')
   get(@CurrentCompany() companyId: string, @Param('orderId', ParseUUIDPipe) id: string) {
-    return this.salesOrders.getById(companyId, id);
+    return this.salesOrders.getDetail(companyId, id);
   }
 
   @Post()
@@ -66,23 +71,36 @@ export class SalesOrdersController {
   @ApiOperation({ summary: 'Record fulfillment quantities; recomputes open/partial/fulfilled.' })
   fulfill(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', ParseUUIDPipe) id: string,
     @Body() dto: FulfillSalesOrderDto,
   ) {
-    return this.salesOrders.fulfill(companyId, id, dto);
+    return this.salesOrders.fulfill(companyId, id, dto, creditOverrideFrom(dto.creditOverride, user));
   }
 
   @Post(':orderId/convert-to-invoice')
   @Roles('admin', 'staff')
   @HttpCode(201)
   @ApiOperation({ summary: 'Invoice a fulfilled sales order.' })
-  convertToInvoice(
+  async convertToInvoice(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', ParseUUIDPipe) id: string,
     @Body() dto: ConvertSalesOrderDto,
   ) {
-    return this.salesOrders.convertToInvoice(companyId, user.id, id, dto);
+    if (user.role === 'admin') {
+      return this.salesOrders.convertToInvoice(companyId, user.id, id, dto, creditOverrideFrom(dto.creditOverride, user));
+    }
+    // Converting posts an invoice, and staff invoices are signed off by the
+    // owner (invoices.controller). This route used to let staff skip that.
+    const { orderNumber, payload } = await this.salesOrders.conversionPayload(companyId, id, dto);
+    return this.approvals.createRequest(
+      'invoice',
+      payload as unknown as Record<string, unknown>,
+      `Invoice from sales order ${orderNumber}: ${payload.lines.length} line(s), due ${payload.dueDate}`,
+      user,
+      companyId,
+    );
   }
 
   @Post(':orderId/cancel')

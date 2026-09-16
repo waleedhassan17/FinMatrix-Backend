@@ -20,7 +20,11 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { PaymentsService } from './payments.service';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
-import { ListPaymentsQueryDto, ReceivePaymentDto } from './dto/payment.dto';
+import {
+  ApplyPaymentDto,
+  ListPaymentsQueryDto,
+  ReceivePaymentDto,
+} from './dto/payment.dto';
 import { Delete } from '@nestjs/common';
 import {
   ParsePaginationPipe,
@@ -81,6 +85,45 @@ export class PaymentsController {
     @Param('customerId', ParseUUIDPipe) customerId: string,
   ) {
     return this.payments.outstanding(companyId, customerId);
+  }
+
+  @Get('customer/:customerId/advances')
+  @ApiOperation({
+    summary:
+      'Receipts still holding unapplied money for a customer (customer advances).',
+  })
+  advances(
+    @CurrentCompany() companyId: string,
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    return this.payments.availableAdvances(companyId, customerId);
+  }
+
+  /**
+   * Apply money a receipt is holding as an advance to invoices. No cash moves
+   * (Dr Customer Advances / Cr Accounts Receivable), but it settles invoices,
+   * so staff ask and the owner signs off — the same rule as receiving it.
+   */
+  @Post(':paymentId/apply')
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Apply a receipt’s unapplied advance to invoices.' })
+  apply(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', ParseUUIDPipe) paymentId: string,
+    @Body() dto: ApplyPaymentDto,
+  ) {
+    if (user.role === 'admin') {
+      return this.payments.apply(companyId, user.id, paymentId, dto);
+    }
+    const total = dto.applications.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+    return this.approvals.createRequest(
+      'invoice_payment',
+      { action: 'apply', paymentId, ...dto } as unknown as Record<string, unknown>,
+      `Apply ${total.toFixed(2)} of a customer advance to ${dto.applications.length} invoice(s)`,
+      user,
+      companyId,
+    );
   }
 
   @Get()

@@ -27,7 +27,10 @@ import {
   ACCT_CUSTOMER_ADVANCES,
   ACCT_AR,
 } from '../accounts/accounts.constants';
-import { toDecimal, MONEY_TOLERANCE } from '../../common/utils/money.util';
+import { toDecimal, MONEY_TOLERANCE, subtractMoney } from '../../common/utils/money.util';
+import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
+import { Customer } from '../customers/entities/customer.entity';
+import { CreditOverride, enforceCreditLimit, grossValue } from '../../common/utils/credit-control.util';
 
 /**
  * Result of the Stage-1 commit, echoed to the admin UI so the dispatcher sees
@@ -87,8 +90,9 @@ export class DeliveryLedgerService {
     private readonly creditMemos: CreditMemosService,
   ) {}
 
+  /** The business calendar day, not the UTC one (see business-date.util.ts). */
   private today(): string {
-    return new Date().toISOString().slice(0, 10);
+    return businessToday();
   }
 
   /**
@@ -153,6 +157,7 @@ export class DeliveryLedgerService {
     companyId: string,
     userId: string,
     deliveryId: string,
+    opts: { creditOverride?: CreditOverride | null } = {},
   ): Promise<DispatchLedgerResult> {
     const deliveryRepo = em.getRepository(Delivery);
     const itemRepo = em.getRepository(DeliveryItem);
@@ -193,6 +198,21 @@ export class DeliveryLedgerService {
     if (activeItems.length === 0) {
       // Nothing physical to dispatch — no stock movement, no documents.
       return { committed: false };
+    }
+
+    // Dispatch is the shipment. On credit (not prepaid) the goods go out only
+    // within the customer's credit limit, or on the owner's override.
+    if (!delivery.prepaid) {
+      const value = activeItems.reduce(
+        (sum, l) => sum.plus(grossValue(this.lineQty(l), l.unitPrice, l.taxRate ?? '0')),
+        new Decimal(0),
+      );
+      await enforceCreditLimit(em, companyId, delivery.customerId, value, {
+        action: 'delivery_dispatch',
+        targetType: 'delivery',
+        targetId: delivery.id,
+        override: opts.creditOverride,
+      });
     }
 
     // ---- Move the stock off the shelf at frozen weighted-average cost ----
@@ -249,11 +269,16 @@ export class DeliveryLedgerService {
     }
 
     // ---- Sale document: a NON-POSTING sales order, always ----
+    // The order names the items it carries, so it reads as the stock sale it
+    // is. Its stock already left the shelf above, which is why it skips the
+    // backorder check and is excluded from committed stock.
     const soLines = activeItems.map((l) => ({
       description: l.itemName ?? l.itemId,
       quantity: this.lineQty(l).toFixed(4),
       unitPrice: toDecimal(l.unitPrice).toFixed(4),
       taxRate: toDecimal(l.taxRate ?? '0').toFixed(4),
+      itemId: l.itemId,
+      lineKind: 'item' as const,
     }));
 
     let salesOrderId: string | null = null;
@@ -269,12 +294,19 @@ export class DeliveryLedgerService {
     // IFRS 15 / ASC 606, which recognise revenue when control transfers (on
     // delivery). It also split a sale from its own cost across periods, since
     // COGS only posts at approval.
-    const so = await this.salesOrders.createInTransaction(em, companyId, userId, {
-      customerId: delivery.customerId,
-      orderDate: this.today(),
-      notes: `Delivery ${delivery.referenceNo ?? delivery.id}`,
-      lines: soLines,
-    });
+    const so = await this.salesOrders.createInTransaction(
+      em,
+      companyId,
+      userId,
+      {
+        customerId: delivery.customerId,
+        orderDate: this.today(),
+        notes: `Delivery ${delivery.referenceNo ?? delivery.id}`,
+        lines: soLines,
+      },
+      null,
+      { skipStockChecks: true },
+    );
     salesOrderId = so.id;
     salesOrderNumber = so.orderNumber;
 
@@ -401,7 +433,16 @@ export class DeliveryLedgerService {
     const moveRepo = em.getRepository(InventoryMovement);
     let cogsCost = new Decimal(0);
     let restockCost = new Decimal(0);
-    const invoiceLines: { description: string; quantity: string; unitPrice: string; taxRate: string }[] = [];
+    // Invoice lines carry no itemId on purpose: the stock left at dispatch and
+    // its cost is relieved from Goods in Transit below, so the invoice must not
+    // relieve it again. Hence 'service' — no stock movement on this document.
+    const invoiceLines: {
+      description: string;
+      quantity: string;
+      unitPrice: string;
+      taxRate: string;
+      lineKind: 'service';
+    }[] = [];
     // Prepaid only: the undelivered portion, valued at SALE price. A prepaid
     // delivery is invoiced in full at dispatch, so anything the customer sends
     // back has to be credited or revenue and tax stay overstated.
@@ -433,6 +474,7 @@ export class DeliveryLedgerService {
           quantity: delivered.toFixed(4),
           unitPrice: toDecimal(line.unitPrice).toFixed(4),
           taxRate: toDecimal(line.taxRate ?? '0').toFixed(4),
+          lineKind: 'service',
         });
       }
 
@@ -522,13 +564,13 @@ export class DeliveryLedgerService {
       const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
         customerId: delivery.customerId,
         invoiceDate: this.today(),
-        dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+        dueDate: addDaysIso(this.today(), 30),
         status: 'sent',
         notes: `Delivery ${delivery.referenceNo ?? delivery.id} approved${
           delivery.salesOrderId ? ' — converted from sales order' : ''
         }`,
         lines: invoiceLines,
-      });
+      }, { credit: { skip: true } });
       invoiceId = invoice.id;
       invoiceNumber = invoice.invoiceNumber;
       invoiceTotal = invoice.total;
@@ -572,6 +614,16 @@ export class DeliveryLedgerService {
         invoice.balance = '0.0000';
         invoice.status = 'paid';
         await em.getRepository(Invoice).save(invoice);
+        // Creating the invoice raised what the customer owes; the advance just
+        // settled it. Without this the customer's balance kept the whole
+        // prepaid sale as a debt forever.
+        const customer = await em.findOne(Customer, {
+          where: { id: delivery.customerId, companyId },
+        });
+        if (customer) {
+          customer.balance = subtractMoney(customer.balance, settled).toFixed(4);
+          await em.save(customer);
+        }
       } else if (paidStatus === 'paid') {
         // Rider collected cash on the doorstep: clear the invoice now.
         // Net effect of invoice + payment = Dr Cash / Cr Sales / Cr Tax.

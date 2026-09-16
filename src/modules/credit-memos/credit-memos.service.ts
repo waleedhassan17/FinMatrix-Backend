@@ -16,14 +16,14 @@ import {
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
-import { formatYearlyRef } from '../../common/utils/reference-generator.util';
-import { nextYearlySequence } from '../../common/utils/sequence.util';
+import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { ACCT_AR, ACCT_CASH, ACCT_COGS, ACCT_INVENTORY, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
+import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
 export class CreditMemosService {
@@ -219,9 +219,7 @@ export class CreditMemosService {
       if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
 
       const totals = this.computeTotals(dto.lines);
-      const year = parseInt(dto.date.slice(0, 4), 10);
-      const seq = await nextYearlySequence(manager, 'credit_memos', companyId, year, 'date', 'CM', 'credit_memo_number');
-      const number = formatYearlyRef('CM', year, seq);
+      const number = await nextDocumentNumber(manager, companyId, 'CM', yearOf(dto.date));
 
       const cm = manager.create(CreditMemo, {
         companyId, customerId: dto.customerId, creditMemoNumber: number, date: dto.date,
@@ -319,7 +317,7 @@ export class CreditMemosService {
       const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
       const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, manager);
       await this.posting.createEntry(manager, {
-        companyId, createdBy: userId, date: new Date().toISOString().slice(0, 10),
+        companyId, createdBy: userId, date: businessToday(),
         memo: `Refund credit memo ${cm.creditMemoNumber}`, status: 'posted',
         lines: [
           { accountId: ar.id, debit: remaining.toFixed(4), credit: '0', lineOrder: 0 },
@@ -376,7 +374,7 @@ export class CreditMemosService {
           lines.push({ accountId: inventory.id, debit: '0', credit: returnCost.toFixed(4), lineOrder: lines.length });
         }
         await this.posting.createEntry(manager, {
-          companyId, createdBy: userId, date: new Date().toISOString().slice(0, 10),
+          companyId, createdBy: userId, date: businessToday(),
           memo: `Void credit memo ${cm.creditMemoNumber}`, status: 'posted', lines,
           reversalOfId: cm.journalEntryId, sourceType: 'credit_memo_void', sourceId: cm.id,
         });

@@ -29,6 +29,7 @@ import {
   ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 import { DeliveryStatus } from '../../types';
+import { CreditOverride } from '../../common/utils/credit-control.util';
 
 const STATUS_ORDER: Record<string, number> = {
   unassigned: 0,
@@ -167,7 +168,12 @@ export class DeliveriesService {
     return { scanned: pending.length, updated, geocodingConfigured: this.geocoding.isConfigured };
   }
 
-  async create(companyId: string, dto: CreateDeliveryDto, userId: string) {
+  async create(
+    companyId: string,
+    dto: CreateDeliveryDto,
+    userId: string,
+    creditOverride: CreditOverride | null = null,
+  ) {
     // Resolve + geocode the destination before opening the DB transaction
     // (network call must not hold a transaction open). A manual override
     // from the dispatcher wins over automatic geocoding.
@@ -237,7 +243,7 @@ export class DeliveriesService {
       // Cr Inventory, atomically with the delivery itself.
       let ledgerResult = null;
       if (dto.personnelId) {
-        ledgerResult = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+        ledgerResult = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
       }
 
       const fresh = await repo.findOne({ where: { id: d.id, companyId } });
@@ -414,7 +420,13 @@ export class DeliveriesService {
     }
   }
 
-  async assignDeliveries(companyId: string, deliveryIds: string[], personnelId: string, userId: string) {
+  async assignDeliveries(
+    companyId: string,
+    deliveryIds: string[],
+    personnelId: string,
+    userId: string,
+    creditOverride: CreditOverride | null = null,
+  ) {
     // One transaction for the whole batch: either every delivery is assigned
     // AND its stock committed to Goods in Transit, or none is (e.g. one item
     // short on stock → the admin sees the error and nothing half-happens).
@@ -438,7 +450,7 @@ export class DeliveriesService {
       // Inventory and creates the Sales Order — atomic with the assignment.
       const results: Record<string, unknown> = {};
       for (const d of rows) {
-        results[d.id] = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+        results[d.id] = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
       }
       return { deliveries: rows, ledgerResults: results };
     });
@@ -465,7 +477,13 @@ export class DeliveriesService {
     };
   }
 
-  async update(companyId: string, id: string, dto: UpdateDeliveryDto, userId: string) {
+  async update(
+    companyId: string,
+    id: string,
+    dto: UpdateDeliveryDto,
+    userId: string,
+    creditOverride: CreditOverride | null = null,
+  ) {
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
       const d = await repo.findOne({ where: { id, companyId }, relations: ['items'] });
@@ -480,20 +498,25 @@ export class DeliveriesService {
           newlyAssigned = true;
         }
       }
-      const { destAddress, ...rest } = dto;
+      const { destAddress, creditOverride: _override, ...rest } = dto;
       Object.assign(d, rest);
       if (destAddress !== undefined) d.address = destAddress;
       if (dto.destLat != null && dto.destLng != null) d.geocodedAt = new Date();
       const saved = await repo.save(d);
       // STAGE 1 (phase1.md) when the edit is what assigns the rider.
       const ledger = newlyAssigned
-        ? await this.ledger.commitStockOnAssign(em, companyId, userId, d.id)
+        ? await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride })
         : null;
       return { ...saved, ledger };
     });
   }
 
-  async autoAssign(companyId: string, id: string, userId: string) {
+  async autoAssign(
+    companyId: string,
+    id: string,
+    userId: string,
+    creditOverride: CreditOverride | null = null,
+  ) {
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
       const d = await repo.findOne({ where: { id, companyId } });
@@ -510,7 +533,7 @@ export class DeliveriesService {
       d.assignedAt = new Date();
       const saved = await repo.save(d);
       // STAGE 1 (phase1.md): dispatch consequence of the auto-assignment.
-      const ledger = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id);
+      const ledger = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
       return { ...saved, ledger };
     });
   }

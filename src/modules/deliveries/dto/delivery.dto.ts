@@ -12,6 +12,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
@@ -84,6 +85,15 @@ export class CreateDeliveryDto {
   })
   @IsOptional() prePaid?: boolean;
   @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => DeliveryItemDto) items!: DeliveryItemDto[];
+
+  @ApiPropertyOptional({
+    type: CreditOverrideDto,
+    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreditOverrideDto)
+  creditOverride?: CreditOverrideDto;
 }
 
 export class UpdateDeliveryDto {
@@ -95,6 +105,15 @@ export class UpdateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
+
+  @ApiPropertyOptional({
+    type: CreditOverrideDto,
+    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreditOverrideDto)
+  creditOverride?: CreditOverrideDto;
 }
 
 export class DeliveryStatusUpdateDto {

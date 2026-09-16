@@ -147,6 +147,9 @@ async function main() {
       lines: [{ description: 'QA stock', orderedQty: '40', unitCost: '100', itemId: item.id }],
     }),
   );
+  // A PO is a requisition until it is sent to the vendor; only then can goods
+  // be received against it.
+  await req('PATCH', `/purchase-orders/${po.id}/status`, { status: 'sent' });
   step(
     'receipt (Dr Inventory 4000 / Cr GRNI 4000)',
     await req('POST', `/purchase-orders/${po.id}/receive`, {

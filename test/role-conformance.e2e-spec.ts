@@ -1392,6 +1392,9 @@ describe('Role conformance (e2e)', () => {
           ],
         }),
       );
+      await patch(`/api/v1/purchase-orders/${po.id}/status`, ownerToken, {
+        status: 'sent',
+      }).expect(200);
       await created(
         'cost-drift receipt',
         post(`/api/v1/purchase-orders/${po.id}/receive`, ownerToken, {

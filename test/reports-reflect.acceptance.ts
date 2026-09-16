@@ -197,6 +197,7 @@ async function main() {
         lines: [{ description: 'stocking', orderedQty: String(qty), unitCost: String(cost), itemId }],
       }),
     );
+    await req('PATCH', `/purchase-orders/${po.id}/status`, { status: 'sent' });
     await req('POST', `/purchase-orders/${po.id}/receive`, {
       lines: (po.lines || []).map((l: any) => ({ lineId: l.id, receivedQty: String(qty) })),
     });
@@ -223,7 +224,7 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'sent',
-    lines: [{ description: 'Reported sale', quantity: '2', unitPrice: '400', taxRate: '0' }],
+    lines: [{ description: 'Reported sale', quantity: '2', unitPrice: '400', taxRate: '0', lineKind: 'service' }],
   });
   const inv = data(sentInvoice);
   ok('A1 invoice created as sent', sentInvoice.status < 400 && !!inv?.id, sentInvoice.body);
@@ -277,7 +278,7 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'draft',
-    lines: [{ description: 'Drafted sale', quantity: '1', unitPrice: '400', taxRate: '0' }],
+    lines: [{ description: 'Drafted sale', quantity: '1', unitPrice: '400', taxRate: '0', lineKind: 'service' }],
   });
   const draft = data(draftRes);
   ok('B1 draft created', draftRes.status < 400 && !!draft?.id, draftRes.body);
@@ -523,7 +524,7 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'sent',
-    lines: [{ description: 'Free of charge', quantity: '1', unitPrice: '0', taxRate: '0' }],
+    lines: [{ description: 'Free of charge', quantity: '1', unitPrice: '0', taxRate: '0', lineKind: 'service' }],
   });
   ok('E1 a zero-total invoice cannot be posted', zero.status >= 400, zero.status);
   ok('E2 refused with INVOICE_ZERO_TOTAL', codeOf(zero) === 'INVOICE_ZERO_TOTAL', {

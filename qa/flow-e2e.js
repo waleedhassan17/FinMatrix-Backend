@@ -333,6 +333,7 @@ async function branchSupplierSide() {
 
   // Receive Items -> Dr Inventory / Cr GRNI
   const mRec = mark();
+  await patch(`/purchase-orders/${po.id}/status`, { status: 'sent' }, o);
   const rec = await post(`/purchase-orders/${po.id}/receive`,
     { lines: (po.lines || []).map((l) => ({ lineId: l.id, receivedQty: String(qty) })) }, o);
   await new Promise((r) => setTimeout(r, 600));

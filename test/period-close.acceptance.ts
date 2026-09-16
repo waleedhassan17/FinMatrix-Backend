@@ -165,14 +165,14 @@ async function main() {
     invoiceDate: date,
     dueDate: '2099-12-31',
     status: 'sent',
-    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100', taxRate: '0' }],
+    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
   });
   const billPayload = (date: string) => ({
     vendorId: vendor.id,
     billNumber: `G4-${date}-${Date.now()}`,
     billDate: date,
     dueDate: '2099-12-31',
-    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100' }],
+    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100', lineKind: 'service' }],
   });
   const journalPayload = (date: string) => ({
     date,

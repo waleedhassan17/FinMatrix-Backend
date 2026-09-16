@@ -247,8 +247,11 @@ WHERE d.status IN ('delivered', 'returned', 'cancelled', 'failed')
 -- its own, and the inventory subledger (I13) ties to a control account that is
 -- itself overstated, so it agrees with the wrong number.
 --
--- Only fully-received POs are judged. A partially received one is expected to
--- carry a balance -- that is what the account is for.
+-- Only POs whose received goods are ALL billed are judged (a PO is billed per
+-- receipt now, so billed_qty is tracked per line). One with goods still
+-- unbilled is expected to carry a balance -- that is what the account is for.
+-- The status filter used to read 'fully_received', a status that does not
+-- exist ('received' is the real one), so fully received POs were never checked.
 --
 -- Both legs must be counted, and they are tagged differently: the receipt's
 -- credit carries the PO's id, the bill's clearing debit carries the BILL's.
@@ -272,9 +275,12 @@ FROM (
                                         AND b2.status <> 'void'))
          )::numeric(18,4) AS residue
     FROM purchase_orders po
-   WHERE po.status IN ('fully_received', 'closed')
+   WHERE po.status IN ('received', 'closed')
      AND EXISTS (SELECT 1 FROM bills b
                   WHERE b.purchase_order_id = po.id
                     AND b.status <> 'void')
+     AND NOT EXISTS (SELECT 1 FROM purchase_order_lines l
+                      WHERE l.order_id = po.id
+                        AND l.received_qty > l.billed_qty)
 ) t
 WHERE abs(t.residue) > 0.01;

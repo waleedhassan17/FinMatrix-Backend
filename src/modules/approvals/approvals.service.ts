@@ -169,6 +169,11 @@ export class ApprovalsService {
         request.payload,
         companyId,
         reviewer.id,
+        {
+          creditOverride: dto.creditOverrideReason
+            ? { reason: dto.creditOverrideReason, userId: reviewer.id, role: reviewer.role }
+            : null,
+        },
       );
     } catch (err) {
       const message = this.describe(err);

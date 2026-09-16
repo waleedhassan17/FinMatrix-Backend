@@ -320,6 +320,7 @@ async function main() {
       },
     ],
   })) as any;
+  await req('PATCH', `/purchase-orders/${driftPo.id}/status`, { status: 'sent' });
   const recvRes = await req('POST', `/purchase-orders/${driftPo.id}/receive`, {
     lines: [{ lineId: driftPo.lines[0].id, receivedQty: '40' }],
   });
@@ -715,6 +716,7 @@ async function main() {
     orderDate: TODAY,
     lines: [{ description: 'first lot', orderedQty: '10', unitCost: '100', itemId: newItem.id }],
   })) as any;
+  await req('PATCH', `/purchase-orders/${avgPo.id}/status`, { status: 'sent' });
   await req('POST', `/purchase-orders/${avgPo.id}/receive`, {
     lines: [{ lineId: avgPo.lines[0].id, receivedQty: '10' }],
   });
@@ -723,6 +725,7 @@ async function main() {
     orderDate: TODAY,
     lines: [{ description: 'second lot', orderedQty: '10', unitCost: '120', itemId: newItem.id }],
   })) as any;
+  await req('PATCH', `/purchase-orders/${avgPo2.id}/status`, { status: 'sent' });
   await req('POST', `/purchase-orders/${avgPo2.id}/receive`, {
     lines: [{ lineId: avgPo2.lines[0].id, receivedQty: '10' }],
   });
@@ -785,7 +788,7 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: '2099-12-31',
     status: 'sent',
-    lines: [{ description: 'G8 unpaid', quantity: '1', unitPrice: '777', taxRate: '0' }],
+    lines: [{ description: 'G8 unpaid', quantity: '1', unitPrice: '777', taxRate: '0', lineKind: 'service' }],
   });
   ok('G unpaid invoice issued', unpaid.status === 201, unpaid.body);
   const unpaidInv = data(unpaid) as any;

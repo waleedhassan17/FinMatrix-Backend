@@ -295,7 +295,7 @@ async function main() {
     token: sb.token, companyId: sb.companyId,
     json: {
       customerId: custId, invoiceDate: new Date().toISOString().slice(0, 10), dueDate: new Date().toISOString().slice(0, 10),
-      status: 'sent', lines: [{ description: 'Consulting service', quantity: '2', unitPrice: '5000', taxRate: '0' }],
+      status: 'sent', lines: [{ description: 'Consulting service', quantity: '2', unitPrice: '5000', taxRate: '0', lineKind: 'service' }],
     },
   });
   ok('service invoice posts', inv.status < 300, inv.status);

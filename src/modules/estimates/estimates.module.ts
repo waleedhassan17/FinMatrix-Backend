@@ -7,12 +7,14 @@ import { EstimatesService } from './estimates.service';
 import { EstimatesController } from './estimates.controller';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Estimate, EstimateLineItem, Customer]),
     InvoicesModule,
     SalesOrdersModule,
+    ApprovalsCoreModule,
   ],
   controllers: [EstimatesController],
   providers: [EstimatesService],

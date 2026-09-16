@@ -218,7 +218,7 @@ async function main() {
   const inv = data(await req('POST', '/invoices', {
     customerId: cust.id, invoiceDate: '2026-07-14', dueDate: '2026-07-30',
     status: 'sent', discountType: 'none', discountValue: '0',
-    lines: [{ description: 'Consulting', quantity: '1', unitPrice: '2000', taxRate: '0' }],
+    lines: [{ description: 'Consulting', quantity: '1', unitPrice: '2000', taxRate: '0', lineKind: 'service' }],
   }, H));
   const pmt = data(await req('POST', '/payments', {
     customerId: cust.id, paymentDate: '2026-07-14', paymentMethod: 'cash',
@@ -242,7 +242,7 @@ async function main() {
   const inv2 = data(await req('POST', '/invoices', {
     customerId: cust.id, invoiceDate: '2026-07-15', dueDate: '2026-07-30',
     status: 'sent', discountType: 'none', discountValue: '0',
-    lines: [{ description: 'Consulting 2', quantity: '1', unitPrice: '1500', taxRate: '0' }],
+    lines: [{ description: 'Consulting 2', quantity: '1', unitPrice: '1500', taxRate: '0', lineKind: 'service' }],
   }, H));
   const pmt2 = data(await req('POST', '/payments', {
     customerId: cust.id, paymentDate: '2026-07-15', paymentMethod: 'cash',

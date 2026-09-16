@@ -17,6 +17,7 @@ import {
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
+import { businessToday } from '../../common/utils/business-date.util';
 
 /**
  * HTTP-facing service for the manual General Journal.
@@ -142,7 +143,7 @@ export class JournalEntriesService {
         await this.posting.createEntry(manager, {
           companyId,
           createdBy: userId,
-          date: new Date().toISOString().slice(0, 10),
+          date: businessToday(),
           memo: `Void ${entry.reference}: ${dto.reason}`,
           status: 'posted',
           lines: entry.lines

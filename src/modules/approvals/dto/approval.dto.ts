@@ -38,4 +38,16 @@ export class DecideApprovalDto {
   @MinLength(3)
   @MaxLength(1000)
   comment?: string;
+
+  /**
+   * Approve an invoice (or conversion) that takes the customer past their
+   * credit limit. Without it such an approval fails with CREDIT_LIMIT_EXCEEDED
+   * and the request stays pending. Audited with the approver's name.
+   */
+  @ApiPropertyOptional({ example: 'Customer paid by cheque, clearing Friday.' })
+  @IsOptional()
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  creditOverrideReason?: string;
 }

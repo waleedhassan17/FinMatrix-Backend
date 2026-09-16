@@ -8,7 +8,10 @@ import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.servic
 import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
 import { InventoryApprovalsService } from '../inventory-approvals/inventory-approvals.service';
+import { SalesOrdersService } from '../sales-orders/sales-orders.service';
+import { EstimatesService } from '../estimates/estimates.service';
 import { ApprovalType } from './entities/approval-request.entity';
+import { CreditOverride } from '../../common/utils/credit-control.util';
 
 /** What the dispatch produced, recorded on the approval row. */
 export interface DispatchResult {
@@ -42,6 +45,8 @@ export class ApprovalDispatcher {
     private readonly invoices: InvoicesService,
     private readonly payments: PaymentsService,
     private readonly deliveryApprovals: InventoryApprovalsService,
+    private readonly salesOrders: SalesOrdersService,
+    private readonly estimates: EstimatesService,
   ) {}
 
   /**
@@ -56,6 +61,7 @@ export class ApprovalDispatcher {
     payload: Payload,
     companyId: string,
     reviewerId: string,
+    opts: { creditOverride?: CreditOverride | null } = {},
   ): Promise<DispatchResult> {
     switch (type) {
       // ── Dr/Cr Inventory against the reason's offset account ──────────────
@@ -199,10 +205,39 @@ export class ApprovalDispatcher {
       // posted. This one brings it into existence. A draft posts nothing;
       // anything else posts on creation, exactly as an owner's own POST does.
       case 'invoice': {
+        // A staff member's sales-order or estimate conversion: replay the
+        // conversion itself, so the source document is marked invoiced too.
+        if (payload.sourceSalesOrderId) {
+          const { invoice } = await this.salesOrders.convertToInvoice(
+            companyId,
+            reviewerId,
+            this.requireId(payload.sourceSalesOrderId, 'sourceSalesOrderId'),
+            { dueDate: payload.dueDate },
+            opts.creditOverride ?? null,
+          );
+          return { id: invoice.id, journalEntryId: (invoice as any)?.journalEntryId ?? null };
+        }
+        if (payload.sourceEstimateId) {
+          const { invoice } = await this.estimates.convertToInvoice(
+            companyId,
+            reviewerId,
+            this.requireId(payload.sourceEstimateId, 'sourceEstimateId'),
+            { dueDate: payload.dueDate },
+            opts.creditOverride ?? null,
+          );
+          return { id: invoice.id, journalEntryId: (invoice as any)?.journalEntryId ?? null };
+        }
+        // Requests filed before invoice lines had to name an item or say
+        // 'service' carry no lineKind: approve them as they were asked for.
+        const lines: any[] = Array.isArray(payload.lines) ? payload.lines : [];
         const invoice = await this.invoices.create(
           companyId,
           reviewerId,
           payload as any,
+          {
+            treatFreeTextAsService: lines.every((l) => l?.lineKind === undefined),
+            credit: { override: opts.creditOverride ?? null },
+          },
         );
         return {
           id: invoice.id,
@@ -218,6 +253,22 @@ export class ApprovalDispatcher {
       // claim and records it on lastError for the owner to read, rather than
       // forcing a payment that no longer fits.
       case 'invoice_payment': {
+        // Applying an advance a receipt already holds: Dr Customer Advances /
+        // Cr A/R, no cash. Same type as receiving because it is the same
+        // decision for the owner — money settling a customer's invoices.
+        if (payload.action === 'apply') {
+          const { action: _action, paymentId, ...rest } = payload;
+          const applied = await this.payments.apply(
+            companyId,
+            reviewerId,
+            this.requireId(paymentId, 'paymentId'),
+            rest as any,
+          );
+          const entryIds = (applied.applications ?? [])
+            .map((a) => a.journalEntryId)
+            .filter((id): id is string => !!id);
+          return { id: applied.id, journalEntryId: entryIds[entryIds.length - 1] ?? null };
+        }
         const payment = await this.payments.receive(
           companyId,
           reviewerId,
@@ -230,7 +281,14 @@ export class ApprovalDispatcher {
       }
 
       case 'po': {
-        const po = await this.purchaseOrders.create(companyId, payload as any);
+        // A request filed before PO lines had to name an item or an expense
+        // account carries no lineKind at all. It is approved as it was asked
+        // for; its free-text lines get an account when they are billed.
+        const lines: any[] = Array.isArray(payload.lines) ? payload.lines : [];
+        const filedBeforeLineKinds = lines.every((l) => l?.lineKind === undefined);
+        const po = await this.purchaseOrders.create(companyId, payload as any, {
+          allowUnclassifiedLines: filedBeforeLineKinds,
+        });
         return { id: po.id, journalEntryId: null };
       }
 

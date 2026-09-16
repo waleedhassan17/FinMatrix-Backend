@@ -81,6 +81,7 @@ export const isSystemAccountNumber = (accountNumber: string): boolean =>
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
+import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
 export class AccountsService {
@@ -227,7 +228,7 @@ export class AccountsService {
         await this.posting.createEntry(manager, {
           companyId,
           createdBy: userId,
-          date: new Date().toISOString().slice(0, 10),
+          date: businessToday(),
           memo: `Opening balance for ${account.accountNumber} ${account.name}`,
           status: 'posted',
           lines: [accountLine, obeLine].map((l, i) => ({ ...l, lineOrder: i })),

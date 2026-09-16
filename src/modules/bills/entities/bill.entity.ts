@@ -8,6 +8,7 @@ import { BillLineItem } from './bill-line-item.entity';
 @Index(['companyId', 'status'])
 @Index(['companyId', 'vendorId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_bills_purchase_order_id', ['purchaseOrderId'])
 export class Bill extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'vendor_id' })
   vendorId!: string;
@@ -45,10 +46,11 @@ export class Bill extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
-  // The PO this bill was created from, if any. Unique (see the
-  // BillPurchaseOrderLink migration): converting a received PO to a bill posts
-  // DR GRNI / CR AP, and doing that twice would overstate AP and drive GRNI
-  // negative, so a PO can back at most one bill.
+  // The PO this bill was created from, if any. No longer unique (QaFixesSchema):
+  // a PO is billed once per receipt. Double-billing is prevented per line
+  // instead — a bill covers received − billed quantity, and clears exactly the
+  // GRNI still accrued on that line (purchase_order_lines.billed_qty /
+  // grni_cleared), under a row lock on the PO.
   @Column({ type: 'uuid', nullable: true, name: 'purchase_order_id' })
   purchaseOrderId!: string | null;
 

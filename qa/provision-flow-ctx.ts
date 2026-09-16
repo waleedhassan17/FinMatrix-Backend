@@ -242,6 +242,7 @@ async function main() {
       });
       const po = must(`PO for ${key}`, data(poRes)?.id ? data(poRes) : null, poRes);
 
+      await req('PATCH', `/purchase-orders/${po.id}/status`, { ...A, json: { status: 'sent' } });
       const recRes = await req('POST', `/purchase-orders/${po.id}/receive`, {
         ...A,
         json: {
