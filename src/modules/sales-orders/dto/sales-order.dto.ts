@@ -5,12 +5,13 @@ import {
 } from 'class-validator';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
 import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class SalesOrderLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
-  @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
+  @ApiPropertyOptional({ example: '12.5' }) @IsOptional() @IsTaxRate() taxRate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
 
   @ApiPropertyOptional({

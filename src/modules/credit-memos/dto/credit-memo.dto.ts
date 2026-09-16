@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumberString, IsOptional, IsString, IsUUID, ValidateNested,
 } from 'class-validator';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class CreditMemoLineDto {
   @ApiPropertyOptional({ description: 'Inventory item to restock on return.' })
@@ -10,7 +11,7 @@ export class CreditMemoLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
-  @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
+  @ApiPropertyOptional({ example: '12.5' }) @IsOptional() @IsTaxRate() taxRate?: string;
   /**
    * Cost basis for the restock, when the caller knows what the goods actually
    * cost when they left.

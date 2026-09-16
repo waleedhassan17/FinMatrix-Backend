@@ -1,12 +1,13 @@
 import { registerDecorator, ValidationOptions } from 'class-validator';
 
 /**
- * A tax percentage typed by hand on a purchase line: 0, 10, 12.5, 17 …
+ * A tax percentage typed by hand: 0, 10, 12.5, 17 …
  *
- * Purchase tax is whatever the vendor charged, so the clients no longer offer a
- * fixed list. That makes this the only guard on the value. The column is
- * decimal(8,4), so without it a negative rate would post a negative input tax
- * and anything from 10,000 up would fail at Postgres as a 500.
+ * Every document line (sales, purchases, deliveries) and every configured tax
+ * rate takes whatever rate applies, so neither client offers a fixed list. That
+ * makes this the only guard on the value. The columns are decimal(8,4), so
+ * without it a negative rate would post negative tax and anything from 10,000
+ * up would fail at Postgres as a 500.
  */
 export const TAX_RATE_PATTERN = /^\d{1,3}(\.\d{1,4})?$/;
 

@@ -14,6 +14,7 @@ import {
 } from 'class-validator';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
 import { Transform, Type } from 'class-transformer';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
 
@@ -59,8 +60,7 @@ export class DeliveryItemDto {
   @IsOptional()
   @Transform(toNumberOrNaN)
   @IsNumber({}, { message: 'taxRate must be a number' })
-  @Min(0, { message: 'taxRate cannot be negative' })
-  @Max(100, { message: 'taxRate cannot exceed 100%' })
+  @IsTaxRate()
   taxRate?: number;
 }
 

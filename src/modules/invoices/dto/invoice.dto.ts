@@ -16,12 +16,13 @@ import { CreditOverrideDto } from '../../../common/validation/credit-override.dt
 import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
 import { PAYMENT_TERMS } from '../../customers/dto/customer.dto';
+import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class InvoiceLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
-  @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() taxRate?: string;
+  @ApiPropertyOptional({ example: '12.5' }) @IsOptional() @IsTaxRate() taxRate?: string;
   @ApiPropertyOptional({ description: 'Revenue account id' })
   @IsOptional()
   @IsUUID()
