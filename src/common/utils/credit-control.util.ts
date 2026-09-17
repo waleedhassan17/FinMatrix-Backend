@@ -70,7 +70,12 @@ export async function assessCredit(
                       * di.unit_price * (1 + di.tax_rate / 100)), 0)
                FROM deliveries d JOIN delivery_items di ON di.delivery_id = d.id
               WHERE d.company_id = $1 AND d.customer_id = $2
-                AND d.ledger_status = 'in_transit' AND d.prepaid = false) AS in_transit,
+                AND d.ledger_status = 'in_transit'
+                -- A legacy prepaid delivery's advance was a bare journal, not a
+                -- receipt, so it is not in "advances" below: leave it out here
+                -- instead. Every other advance is an unapplied receipt, netted
+                -- off through "advances" like any other.
+                AND NOT (d.prepaid AND d.advance_payment_id IS NULL)) AS in_transit,
             (SELECT COALESCE(SUM(l.quantity_fulfilled * l.unit_price * (1 + l.tax_rate / 100)), 0)
                FROM sales_orders o JOIN sales_order_line_items l ON l.sales_order_id = o.id
               WHERE o.company_id = $1 AND o.customer_id = $2

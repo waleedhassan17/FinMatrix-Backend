@@ -173,6 +173,7 @@ export class ApprovalsService {
           creditOverride: dto.creditOverrideReason
             ? { reason: dto.creditOverrideReason, userId: reviewer.id, role: reviewer.role }
             : null,
+          requestedBy: request.requestedBy,
         },
       );
     } catch (err) {

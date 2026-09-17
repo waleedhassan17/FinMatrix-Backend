@@ -1,5 +1,6 @@
 import {
   IsString,
+  IsBoolean,
   IsOptional,
   IsUUID,
   IsEnum,
@@ -17,6 +18,7 @@ import { Transform, Type } from 'class-transformer';
 import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
+import { DELIVERY_PAID_STATUSES, DeliveryPaidStatus } from '../delivery-collection.util';
 
 // Clients send quantities as numbers or numeric strings; normalise before
 // validating so '12' passes and '', 'abc', {} all become NaN and fail IsInt
@@ -81,9 +83,19 @@ export class CreateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
   @ApiPropertyOptional({
     description:
-      'Sale collected before dispatch. Stage 1 then creates an Invoice + recorded Payment instead of a Sales Order.',
+      'Customer paid the whole order before dispatch. Same as advanceAmount = the order total (tax included). ' +
+      'Staff: the delivery is sent to the owner for approval.',
   })
-  @IsOptional() prePaid?: boolean;
+  @IsOptional() @IsBoolean() prePaid?: boolean;
+
+  @ApiPropertyOptional({
+    example: '3000',
+    description:
+      'Paid before dispatch, fully or in part — recorded now as a cash receipt held in Customer Advances ' +
+      'and applied to the invoice when the delivery is approved. The rider collects only the balance. ' +
+      'Staff: the delivery is sent to the owner for approval.',
+  })
+  @IsOptional() @IsNumberString({}, { message: 'advanceAmount must be a number' }) advanceAmount?: string;
   @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => DeliveryItemDto) items!: DeliveryItemDto[];
 
   @ApiPropertyOptional({
@@ -123,13 +135,15 @@ export class DeliveryStatusUpdateDto {
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() location?: { lat: number; lng: number };
   @ApiPropertyOptional({
-    enum: ['paid', 'unpaid'],
+    enum: DELIVERY_PAID_STATUSES,
     description:
-      "Rider's cash flag, when it is settled at the same moment the delivery " +
+      "Rider's payment answer, when it is settled at the same moment the delivery " +
       'is marked delivered rather than at bill-photo capture. Posts NOTHING — ' +
-      'it decides the debit side (Cash vs A/R) of the Stage-3 revenue entry.',
+      'approval records the cash. Ignored when nothing is due (prepaid).',
   })
-  @IsOptional() @IsEnum(['paid', 'unpaid']) paidStatus?: 'paid' | 'unpaid';
+  @IsOptional() @IsEnum(DELIVERY_PAID_STATUSES) paidStatus?: DeliveryPaidStatus;
+  @ApiPropertyOptional({ example: '500', description: "Cash received, required when paidStatus is 'partial'." })
+  @IsOptional() @IsNumberString() amountCollected?: string;
 }
 
 export class DeliveryQueryDto {
@@ -165,9 +179,11 @@ export class ConfirmDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() verifiedBy?: string;
   @ApiPropertyOptional({
-    enum: ['paid', 'unpaid'],
+    enum: DELIVERY_PAID_STATUSES,
     description:
-      "Rider's cash flag. Posts NOTHING — it rides into the admin approval queue and decides the debit side (Cash vs A/R) of the Stage-3 revenue entry.",
+      "Rider's payment answer. Posts NOTHING — approval records the cash. Ignored when nothing is due (prepaid).",
   })
-  @IsOptional() @IsEnum(['paid', 'unpaid']) paidStatus?: 'paid' | 'unpaid';
+  @IsOptional() @IsEnum(DELIVERY_PAID_STATUSES) paidStatus?: DeliveryPaidStatus;
+  @ApiPropertyOptional({ example: '500', description: "Cash received, required when paidStatus is 'partial'." })
+  @IsOptional() @IsNumberString() amountCollected?: string;
 }

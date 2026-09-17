@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsInt,
   IsNumber,
+  IsNumberString,
   IsOptional,
   IsString,
   IsUUID,
@@ -12,6 +13,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { DELIVERY_PAID_STATUSES, DeliveryPaidStatus } from '../../deliveries/delivery-collection.util';
 
 // ============================================================================
 //  Legacy DTOs (kept so existing /inventory-approvals routes keep working)
@@ -39,6 +41,14 @@ export class ReviewRequestDto {
   action!: 'approved' | 'rejected';
 
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+
+  @ApiPropertyOptional({
+    example: '500',
+    description: "Approve only: the cash the rider handed in, overriding the rider's figure.",
+  })
+  @IsOptional()
+  @IsNumberString()
+  amountCollected?: string;
 }
 
 // ============================================================================
@@ -64,15 +74,23 @@ export class SubmitBillPhotoDto {
   source!: 'camera' | 'gallery';
 
   @ApiPropertyOptional({
-    enum: ['paid', 'unpaid'],
+    enum: DELIVERY_PAID_STATUSES,
     description:
-      "Rider's PAID / NOT PAID choice for the delivery. Posts NOTHING here — " +
-      'it decides the debit side (Cash vs A/R) when the admin approves. ' +
+      "Rider's PAID / PARTIAL / NOT PAID answer. Posts NOTHING here — approval " +
+      'records the cash. Ignored when nothing is due (prepaid). ' +
       "Defaults to 'unpaid' when omitted (older app versions).",
   })
   @IsOptional()
-  @IsEnum(['paid', 'unpaid'])
-  paidStatus?: 'paid' | 'unpaid';
+  @IsEnum(DELIVERY_PAID_STATUSES)
+  paidStatus?: DeliveryPaidStatus;
+
+  @ApiPropertyOptional({
+    example: '500',
+    description: "Cash the customer handed over. Required when paidStatus is 'partial'.",
+  })
+  @IsOptional()
+  @IsNumberString()
+  amountCollected?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
 
@@ -99,6 +117,16 @@ export class ApproveInventoryUpdateRequestDto {
   @IsOptional()
   @IsString()
   reviewerComment?: string;
+
+  @ApiPropertyOptional({
+    example: '500',
+    description:
+      "The cash the rider actually handed in. Overrides the rider's figure (the difference is audited); " +
+      'omit to accept it.',
+  })
+  @IsOptional()
+  @IsNumberString()
+  amountCollected?: string;
 }
 
 /**

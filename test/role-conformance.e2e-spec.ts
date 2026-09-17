@@ -1148,8 +1148,8 @@ describe('Role conformance (e2e)', () => {
       );
       expect(Number(invoice.balance)).toBeGreaterThan(0);
 
-      // A PARTIAL payment must not flip it: paid_status is varchar(8) holding
-      // 'paid' | 'unpaid' | null, so there is no half-way value to write.
+      // A PARTIAL payment moves it to 'partial' — the delivery reads what is
+      // true of its invoice — but not to 'paid'.
       const part = (Number(invoice.total) / 2).toFixed(2);
       await post('/api/v1/payments', ownerToken, {
         customerId,
@@ -1164,7 +1164,7 @@ describe('Role conformance (e2e)', () => {
         `SELECT paid_status FROM deliveries WHERE id = $1`,
         [saleDeliveryId],
       );
-      expect(afterPartial.paid_status).toBe('unpaid');
+      expect(afterPartial.paid_status).toBe('partial');
 
       // Settling the rest does. The propagation itself posts nothing — the
       // payment's own Dr Bank / Cr A/R is the only new entry.
@@ -1195,7 +1195,7 @@ describe('Role conformance (e2e)', () => {
 
       // And it goes back. Deleting the settling payment re-opens the invoice,
       // so a delivery still reading PAID would be claiming money that is no
-      // longer in the books.
+      // longer in the books. The first half is still applied, so PARTIAL.
       const [settling] = await ds.query(
         `SELECT p.id FROM payments p
            JOIN payment_applications pa ON pa.payment_id = p.id
@@ -1214,7 +1214,7 @@ describe('Role conformance (e2e)', () => {
         `SELECT paid_status FROM deliveries WHERE id = $1`,
         [saleDeliveryId],
       );
-      expect(afterDelete.paid_status).toBe('unpaid');
+      expect(afterDelete.paid_status).toBe('partial');
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
 

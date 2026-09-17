@@ -38,7 +38,17 @@ import {
   SubmitBillPhotoDto,
 } from './dto/inventory-approval.dto';
 import { toDecimal, MONEY_TOLERANCE } from '../../common/utils/money.util';
+import {
+  acceptsCollectionAnswer,
+  deliveredGross,
+  deliveryAdvance,
+  grossOf,
+  resolveCollection,
+  type Collection,
+  type DeliveryPaidStatus,
+} from '../deliveries/delivery-collection.util';
 import { validate } from 'class-validator';
+import Decimal from 'decimal.js';
 import { plainToInstance } from 'class-transformer';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'all';
@@ -159,7 +169,12 @@ export class InventoryApprovalsService {
     reviewer: { id: string; role: string },
   ) {
     if (dto.action === 'approved') {
-      return this.approve(companyId, id, { reviewerComment: dto.notes }, reviewer);
+      return this.approve(
+        companyId,
+        id,
+        { reviewerComment: dto.notes, amountCollected: dto.amountCollected },
+        reviewer,
+      );
     }
 
     // Rejecting reverses stock out of Goods in Transit and is the reason the
@@ -266,6 +281,27 @@ export class InventoryApprovalsService {
         }
       }
 
+      // 4b) The rider's payment answer, judged against what the customer kept
+      // and what they paid in advance — BEFORE anything is written, so an
+      // impossible figure is a clean 400 the rider can correct. A delivery
+      // with nothing left to pay reads PAID whatever was sent.
+      let collection: Collection | null = null;
+      if (acceptsCollectionAnswer(delivery)) {
+        const deliveryLines = await em.getRepository(DeliveryItem).find({
+          where: { deliveryId: delivery.id },
+        });
+        const gross = deliveredGross(
+          deliveryLines,
+          new Map(changes.map((c) => [c.itemId, c.deliveredQty])),
+        );
+        collection = resolveCollection({
+          gross,
+          advance: deliveryAdvance(delivery, gross),
+          paidStatus: body.paidStatus,
+          amountCollected: body.amountCollected,
+        });
+      }
+
       const now = new Date();
 
       // 5) Persist the request shell first so we know its id (used in the storage URL)
@@ -284,6 +320,10 @@ export class InventoryApprovalsService {
         proofVerifiedBy: resolvedName,
         proofVerifiedAt: now,
         approvalNotes: body.note ?? null,
+        // What the rider said, verbatim. The delivery carries the normalised
+        // figure, and approval may replace it with the owner's cash count.
+        paidStatus: body.paidStatus ?? null,
+        amountCollected: body.amountCollected ?? null,
       });
       await reqRepo.save(req);
 
@@ -297,19 +337,14 @@ export class InventoryApprovalsService {
       });
 
       // 7) Update delivery columns + request proof block with photo info.
-      // STAGE 2 (phase1.md): record the rider's PAID / NOT PAID choice. This
-      // posts NOTHING — it rides into the admin approval queue and decides
-      // whether Stage 3 debits Cash or Accounts Receivable.
-      // A pre-paid delivery was settled before dispatch and Stage 1 already
-      // recorded paidStatus='paid'. Never let the rider's answer override that:
-      // it would leave the row reading prepaid=true / paidStatus='unpaid',
-      // which contradicts itself anywhere paidStatus is displayed. The app no
-      // longer asks the question on these, but this endpoint is reachable
-      // directly, so the rule belongs here too. Stage 3 already ignores
-      // paidStatus when prepaid, so the ledger was never at risk.
-      delivery.paidStatus = delivery.prepaid
-        ? 'paid'
-        : (body.paidStatus ?? delivery.paidStatus ?? 'unpaid');
+      // STAGE 2 (phase1.md): record the rider's PAID / PARTIAL / NOT PAID
+      // answer, as normalised above. This posts NOTHING — approval records the
+      // cash from it. A prepaid delivery always reads PAID here: the rider was
+      // never asked, and this endpoint is reachable directly.
+      if (collection) {
+        delivery.paidStatus = collection.paidStatus;
+        delivery.amountCollected = collection.amountCollected;
+      }
       delivery.billPhotoUrl = stored.url;
       delivery.billPhotoStorageKey = stored.key;
       delivery.billPhotoCapturedAt = now;
@@ -392,6 +427,9 @@ export class InventoryApprovalsService {
         deliveryId,
         photoUrl: stored.url,
         uploadedAt: now.toISOString(),
+        paidStatus: delivery.paidStatus,
+        amountCollected: collection?.amountCollected ?? null,
+        amountDue: collection?.amountDue ?? null,
       };
     });
   }
@@ -504,6 +542,7 @@ export class InventoryApprovalsService {
           reviewerId,
           req.deliveryId,
           deliveredByItem,
+          { amountCollected: dto.amountCollected ?? null },
         );
         journalEntryId = ledgerResult.cogsJournalEntryId;
       } else {
@@ -547,6 +586,15 @@ export class InventoryApprovalsService {
       req.approvalNotes = dto.reviewerComment ?? null;
       await reqRepo.save(req);
 
+      // The owner's cash count replaces the rider's figure; say so on the
+      // audit trail whenever the two differ, so a shortfall is never silent.
+      const riderFigure = toDecimal(approvalDelivery?.amountCollected ?? '0');
+      const cashNote =
+        ledgerResult &&
+        dto.amountCollected !== undefined &&
+        !toDecimal(ledgerResult.amountCollected).minus(riderFigure).abs().lessThanOrEqualTo(MONEY_TOLERANCE)
+          ? ` Rider reported ${riderFigure.toFixed(2)} collected; owner counted ${toDecimal(ledgerResult.amountCollected).toFixed(2)}.`
+          : '';
       await auditRepo.save(
         auditRepo.create({
           companyId,
@@ -554,10 +602,13 @@ export class InventoryApprovalsService {
           action: 'approved',
           reviewedBy: reviewerId,
           details:
-            dto.reviewerComment ??
-            (ledgerResult
-              ? `Approved (${ledgerResult.paidStatus.toUpperCase()}) — invoice ${ledgerResult.invoiceNumber ?? 'n/a'}, COGS ${ledgerResult.cogsAmount}`
-              : `Approved ${req.lines.length} item changes`),
+            (dto.reviewerComment ??
+              (ledgerResult
+                ? `Approved (${ledgerResult.paidStatus.toUpperCase()}) — invoice ${ledgerResult.invoiceNumber ?? 'n/a'}, ` +
+                  `advance ${toDecimal(ledgerResult.advanceApplied).toFixed(2)}, ` +
+                  `cash ${toDecimal(ledgerResult.amountCollected).toFixed(2)}, ` +
+                  `left in A/R ${toDecimal(ledgerResult.balanceDue).toFixed(2)}, COGS ${ledgerResult.cogsAmount}`
+                : `Approved ${req.lines.length} item changes`)) + cashNote,
         }),
       );
 
@@ -920,6 +971,15 @@ export class InventoryApprovalsService {
           .findOne({ where: { id: delivery.customerId, companyId } })
       : null;
 
+    // The credit memo totals tax-inclusive, so compare like with like.
+    const creditTotal = grossOf(lines);
+    const balance = toDecimal(invoice?.balance ?? '0');
+    const settlement = !balance.greaterThan(MONEY_TOLERANCE)
+      ? ('refund_cash' as const)
+      : balance.greaterThanOrEqualTo(creditTotal.minus(MONEY_TOLERANCE))
+        ? ('apply_to_invoice' as const)
+        : ('apply_then_refund' as const);
+
     return {
       deliveryRequestId: req.id,
       deliveryId: delivery.id,
@@ -928,24 +988,18 @@ export class InventoryApprovalsService {
       customerName: customer?.name ?? null,
       originalInvoiceId: invoice?.id ?? null,
       invoiceNumber: invoice?.invoiceNumber ?? null,
-      // Drives HOW the credit settles. A credit sale still owes money, so the
-      // credit clears the invoice. A prepaid or doorstep-collected delivery
-      // has nothing left to settle, so the money goes back out as cash —
-      // otherwise the credit would leave A/R negative until somebody raised a
-      // separate refund.
-      invoiceBalance: toDecimal(invoice?.balance ?? '0').toFixed(4),
-      settlement: toDecimal(invoice?.balance ?? '0').greaterThan(0)
-        ? ('apply_to_invoice' as const)
-        : ('refund_cash' as const),
-      settlementAmount: toDecimal(invoice?.balance ?? '0').greaterThan(0)
-        ? toDecimal(invoice?.balance ?? '0').toFixed(4)
-        : lines
-            .reduce(
-              (sum, l) =>
-                sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
-              toDecimal('0'),
-            )
-            .toFixed(4),
+      // Drives HOW the credit settles. What the customer still owes is cleared
+      // from the invoice; what they already paid (an advance, cash at the
+      // door, a later receipt) goes back out as cash — otherwise the credit
+      // would leave A/R negative until somebody raised a separate refund.
+      //   nothing paid   → apply_to_invoice
+      //   everything paid→ refund_cash
+      //   part paid      → apply_then_refund
+      invoiceBalance: balance.toFixed(4),
+      settlement,
+      settlementAmount: (settlement === 'apply_to_invoice' ? Decimal.min(balance, creditTotal) : creditTotal).toFixed(4),
+      /** Cash going back to the customer: all of it, part of it, or none. */
+      refundAmount: Decimal.max(creditTotal.minus(balance), 0).toFixed(4),
       // The reversal posts TODAY, which is also what puts it under the period
       // lock rather than back-dating it into the original delivery's period.
       date: new Date().toISOString().slice(0, 10),
@@ -1219,19 +1273,29 @@ export class InventoryApprovalsService {
 
   /**
    * Attach the accounting context the approval queue needs (phase1.md Phase B):
-   * the rider's PAID/NOT PAID flag, the customer, and the sale amount that
-   * approval will invoice (delivered qty x delivery unit price, tax included).
+   * the customer, the sale approval will invoice (delivered qty × delivery
+   * unit price, tax included), and how it is settled — the advance taken
+   * before dispatch, the cash the rider collected, and what is left for A/R.
+   *
+   * Before approval these are projections from the rider's answer; after it,
+   * amountCollected is what approval recorded and paidStatus follows the
+   * invoice.
    */
   private async enrichWithDelivery<
     T extends { deliveryId: string; changes: { itemId: string; deliveredQty: number }[] },
   >(companyId: string, formatted: T[]): Promise<
     (T & {
-      paidStatus: 'paid' | 'unpaid';
+      paidStatus: DeliveryPaidStatus;
       prepaid: boolean;
       ledgerStatus: string;
       customerId: string | null;
       customerName: string | null;
       saleAmount: string;
+      advanceAmount: string;
+      advanceApplied: string;
+      amountCollected: string;
+      amountDue: string;
+      balanceDue: string;
     })[]
   > {
     const deliveryIds = [...new Set(formatted.map((f) => f.deliveryId).filter(Boolean))];
@@ -1245,26 +1309,34 @@ export class InventoryApprovalsService {
 
     return formatted.map((f) => {
       const d = byId.get(f.deliveryId);
-      let saleAmount = toDecimal(0);
-      if (d) {
-        const itemByItemId = new Map((d.items ?? []).map((i) => [i.itemId, i]));
-        for (const c of f.changes) {
-          const line = itemByItemId.get(c.itemId);
-          if (!line) continue;
-          const price = toDecimal(line.unitPrice);
-          const taxRate = toDecimal(line.taxRate ?? '0');
-          const base = toDecimal(c.deliveredQty).times(price);
-          saleAmount = saleAmount.plus(base).plus(base.times(taxRate).dividedBy(100));
-        }
-      }
+      // Only the lines the rider reported: a line they did not report is not
+      // part of this request's sale.
+      const reported = new Set(f.changes.map((c) => c.itemId));
+      const gross = d
+        ? deliveredGross(
+            (d.items ?? []).filter((i) => reported.has(i.itemId)),
+            new Map(f.changes.map((c) => [c.itemId, c.deliveredQty])),
+          )
+        : toDecimal(0);
+      const advance = d ? deliveryAdvance(d, gross) : toDecimal(0);
+      const advanceApplied = Decimal.min(advance, gross);
+      const amountDue = gross.minus(advanceApplied);
+      const collected = toDecimal(d?.amountCollected ?? '0');
       return {
         ...f,
-        paidStatus: (d?.paidStatus ?? 'unpaid') as 'paid' | 'unpaid',
+        paidStatus: (d?.paidStatus ?? 'unpaid') as DeliveryPaidStatus,
         prepaid: d?.prepaid ?? false,
         ledgerStatus: d?.ledgerStatus ?? 'none',
         customerId: d?.customerId ?? null,
         customerName: d?.customerName ?? null,
-        saleAmount: saleAmount.toFixed(2),
+        saleAmount: gross.toFixed(2),
+        // What was paid up front. A legacy prepaid row may predate the
+        // backfill; its advance was the whole sale.
+        advanceAmount: Decimal.max(toDecimal(d?.advanceAmount ?? '0'), d?.prepaid && !d.advancePaymentId ? gross : 0).toFixed(2),
+        advanceApplied: advanceApplied.toFixed(2),
+        amountCollected: collected.toFixed(2),
+        amountDue: amountDue.toFixed(2),
+        balanceDue: Decimal.max(amountDue.minus(collected), 0).toFixed(2),
       };
     });
   }

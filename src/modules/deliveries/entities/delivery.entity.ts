@@ -1,6 +1,7 @@
 import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { DeliveryPriority, DeliveryStatus } from '../../../types';
+import type { DeliveryPaidStatus } from '../delivery-collection.util';
 import { DeliveryItem } from './delivery-item.entity';
 
 @Entity('deliveries')
@@ -65,15 +66,31 @@ export class Delivery extends BaseCompanyEntity {
   createdBy!: string;
 
   // -------- Ledger link (phase1.md: Goods in Transit model) --------
-  // Rider's PAID / NOT PAID choice; decides the debit side of the Stage-3
-  // revenue entry. Set by the rider, posts nothing by itself.
+  // How much of the sale is settled. Before approval it is the rider's answer
+  // (normalised by resolveCollection) and decides what approval records; once
+  // the ledger is committed it is derived from the invoice and is display only.
   @Column({ type: 'varchar', length: 8, nullable: true, name: 'paid_status' })
-  paidStatus!: 'paid' | 'unpaid' | null;
+  paidStatus!: DeliveryPaidStatus | null;
 
-  // Sale collected before dispatch → Invoice + Payment at Stage 1 instead of
-  // a Sales Order.
+  // True when the advance covers the whole order. Kept alongside
+  // advanceAmount because legacy rows (and the credit-exposure query) read it.
   @Column({ type: 'boolean', default: false })
   prepaid!: boolean;
+
+  // Paid before dispatch, fully or in part. Recorded at creation as a receipt
+  // held in 2400 Customer Advances and applied to the invoice at approval.
+  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'advance_amount' })
+  advanceAmount!: string;
+
+  // The receipt holding the advance. NULL on legacy prepaid rows, whose
+  // advance was a bare journal — they keep the legacy release at approval.
+  @Column({ type: 'uuid', nullable: true, name: 'advance_payment_id' })
+  advancePaymentId!: string | null;
+
+  // Cash taken at the door: the rider's figure until approval, then the
+  // amount approval actually recorded.
+  @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true, name: 'amount_collected' })
+  amountCollected!: string | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'sales_order_id' })
   salesOrderId!: string | null;

@@ -93,6 +93,14 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'proof_bill_photo_captured_at' })
   proofBillPhotoCapturedAt!: Date | null;
 
+  // The rider's own payment answer, as submitted. The delivery carries the
+  // figure approval actually used; this keeps what the rider said.
+  @Column({ type: 'varchar', length: 8, nullable: true, name: 'paid_status' })
+  paidStatus!: string | null;
+
+  @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true, name: 'amount_collected' })
+  amountCollected!: string | null;
+
   // Journal entry posted on approval (Dr COGS / Cr Inventory). Reversed and
   // cleared when the approval is undone.
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })

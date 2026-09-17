@@ -7,7 +7,9 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { DeliveriesService } from './deliveries.service';
+import { DeliveriesService, requestedAdvance } from './deliveries.service';
+import { ApprovalRequestsService } from '../approvals/approval-requests.service';
+import { MONEY_TOLERANCE } from '../../common/utils/money.util';
 import {
   CreateDeliveryDto,
   UpdateDeliveryDto,
@@ -25,7 +27,10 @@ import { CreditOverrideDto, creditOverrideFrom } from '../../common/validation/c
 @RequiresFeature('delivery') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
 @Controller('deliveries')
 export class DeliveriesController {
-  constructor(private readonly svc: DeliveriesService) {}
+  constructor(
+    private readonly svc: DeliveriesService,
+    private readonly approvals: ApprovalRequestsService,
+  ) {}
 
   @Get()
   @Roles('admin', 'staff', 'delivery')
@@ -39,6 +44,17 @@ export class DeliveriesController {
     return this.svc.list(companyId, query, page, limit, user);
   }
 
+  /**
+   * Create a delivery. Direct for both roles — except a delivery the customer
+   * has paid for in advance (fully or in part) created by staff.
+   *
+   * The advance is cash in, and a staff member's cash receipt already waits on
+   * the owner (payments.controller). Letting it in through a delivery would be
+   * the same money without the signature, so a staff member's advance
+   * delivery is filed as a request and NOTHING exists — no delivery, no stock
+   * movement, no receipt — until the owner approves; the dispatcher then runs
+   * this same create. The owner creates it directly, receipt and all.
+   */
   @Post()
   @Roles('admin', 'staff')
   create(
@@ -46,6 +62,17 @@ export class DeliveriesController {
     @Body() dto: CreateDeliveryDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    const { gross, advance } = requestedAdvance(dto);
+    if (user.role !== 'admin' && advance.greaterThan(MONEY_TOLERANCE)) {
+      const customer = dto.customerName ? ` for ${dto.customerName}` : '';
+      return this.approvals.createRequest(
+        'delivery_advance',
+        dto as unknown as Record<string, unknown>,
+        `Delivery${customer} of ${gross.toFixed(2)}, ${advance.toFixed(2)} paid in advance`,
+        user,
+        companyId,
+      );
+    }
     return this.svc.create(companyId, dto, user.id, creditOverrideFrom(dto.creditOverride, user));
   }
 

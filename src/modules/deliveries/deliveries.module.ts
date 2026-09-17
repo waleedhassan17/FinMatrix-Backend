@@ -19,6 +19,7 @@ import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { CreditMemosModule } from '../credit-memos/credit-memos.module';
+import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
@@ -40,8 +41,10 @@ import { CreditMemosModule } from '../credit-memos/credit-memos.module';
     SalesOrdersModule,
     InvoicesModule,
     PaymentsModule,
-    // Prepaid partial deliveries credit the customer for undelivered goods.
+    // Legacy prepaid deliveries reverse their dispatch-time sale on reject.
     CreditMemosModule,
+    // A staff member's advance delivery is filed for the owner, not created.
+    ApprovalsCoreModule,
   ],
   providers: [DeliveriesService, GeocodingService, DeliveryLedgerService],
   controllers: [DeliveriesController],

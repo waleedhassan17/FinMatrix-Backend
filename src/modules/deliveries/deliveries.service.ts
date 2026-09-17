@@ -30,6 +30,42 @@ import {
 } from './dto/delivery.dto';
 import { DeliveryStatus } from '../../types';
 import { CreditOverride } from '../../common/utils/credit-control.util';
+import Decimal from 'decimal.js';
+import { PaymentsService } from '../payments/payments.service';
+import { User } from '../users/entities/user.entity';
+import { MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
+import { businessToday } from '../../common/utils/business-date.util';
+import {
+  COLLECTION_TOLERANCE,
+  acceptsCollectionAnswer,
+  deliveredGross,
+  deliveryAdvance,
+  grossOf,
+  resolveCollection,
+} from './delivery-collection.util';
+
+/**
+ * The advance a new delivery asks for: `advanceAmount` when given, the whole
+ * order when only `prePaid` is set, otherwise none. Exported for the
+ * controller, which routes a staff member's advance to the owner.
+ */
+export function requestedAdvance(dto: Pick<CreateDeliveryDto, 'advanceAmount' | 'prePaid' | 'items'>): {
+  gross: Decimal;
+  advance: Decimal;
+} {
+  const gross = grossOf(
+    (dto.items ?? []).map((it) => ({
+      quantity: it.orderedQty ?? it.quantity ?? 0,
+      unitPrice: it.unitPrice ?? 0,
+      taxRate: it.taxRate ?? 0,
+    })),
+  );
+  const raw = dto.advanceAmount;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    return { gross, advance: toDecimal(raw) };
+  }
+  return { gross, advance: dto.prePaid ? gross : new Decimal(0) };
+}
 
 const STATUS_ORDER: Record<string, number> = {
   unassigned: 0,
@@ -72,6 +108,7 @@ export class DeliveriesService {
     private readonly notificationsService: NotificationsService,
     private readonly geocoding: GeocodingService,
     private readonly ledger: DeliveryLedgerService,
+    private readonly payments: PaymentsService,
   ) {}
 
   /**
@@ -168,12 +205,42 @@ export class DeliveriesService {
     return { scanned: pending.length, updated, geocodingConfigured: this.geocoding.isConfigured };
   }
 
+  /**
+   * Create a delivery — and, when the customer has paid for it in advance,
+   * record that money as a receipt held in 2400 Customer Advances in the same
+   * transaction. It is applied to the invoice when the delivery is approved.
+   *
+   * The advance is cash in, so only the owner reaches this with one: a staff
+   * member's request is filed by the controller and replayed here by the
+   * approval dispatcher, which passes `preparedBy` so the receipt names both.
+   */
   async create(
     companyId: string,
     dto: CreateDeliveryDto,
     userId: string,
     creditOverride: CreditOverride | null = null,
+    opts: { preparedBy?: string | null } = {},
   ) {
+    const { gross, advance: asked } = requestedAdvance(dto);
+    if (asked.isNegative()) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The advance cannot be negative.',
+      });
+    }
+    if (asked.greaterThan(gross.plus(COLLECTION_TOLERANCE))) {
+      throw new BadRequestException({
+        code: 'ADVANCE_EXCEEDS_ORDER',
+        message: `The advance (${asked.toFixed(2)}) is more than the order total (${gross.toFixed(2)}). Record the extra as a separate receipt.`,
+        details: { orderTotal: gross.toFixed(4) },
+      });
+    }
+    // Agreeing with the order total to the paisa is the order total, so the
+    // delivery reads as fully prepaid rather than owing a sub-paisa balance.
+    const advance = asked.greaterThanOrEqualTo(gross.minus(COLLECTION_TOLERANCE)) && asked.greaterThan(MONEY_TOLERANCE)
+      ? gross
+      : asked;
+
     // Resolve + geocode the destination before opening the DB transaction
     // (network call must not hold a transaction open). A manual override
     // from the dispatcher wins over automatic geocoding.
@@ -215,7 +282,7 @@ export class DeliveriesService {
         preferredDate: dto.scheduledDate ?? dto.preferredDate ?? null,
         preferredTimeSlot: dto.preferredTimeSlot ?? null,
         notes: dto.notes ?? null,
-        prepaid: dto.prePaid ?? false,
+        prepaid: false,
         createdBy: userId,
       });
       if (dto.personnelId) d.assignedAt = new Date();
@@ -238,9 +305,45 @@ export class DeliveriesService {
       );
       await itemRepo.save(items);
 
+      // The advance, before dispatch: the credit check at dispatch counts it
+      // as money the customer already has with us.
+      let advanceReceipt: {
+        paymentId: string;
+        paymentNumber: string | null;
+        amount: string;
+        journalEntryId: string | null;
+      } | null = null;
+      if (advance.greaterThan(MONEY_TOLERANCE)) {
+        const preparer = opts.preparedBy
+          ? await em.findOne(User, { where: { id: opts.preparedBy } })
+          : null;
+        const receipt = await this.payments.receiveInTransaction(em, companyId, userId, {
+          customerId: dto.customerId,
+          paymentDate: businessToday(),
+          paymentMethod: 'cash',
+          amount: advance.toFixed(4),
+          reference: d.referenceNo ?? undefined,
+          memo:
+            `Advance for delivery ${d.referenceNo ?? d.id}` +
+            (preparer ? ` — prepared by ${preparer.displayName}, approved by owner` : ''),
+          holdAsAdvance: true,
+        });
+        d.advanceAmount = advance.toFixed(4);
+        d.advancePaymentId = receipt.id;
+        d.prepaid = advance.greaterThanOrEqualTo(gross.minus(MONEY_TOLERANCE));
+        d.paidStatus = d.prepaid ? 'paid' : null;
+        await repo.save(d);
+        advanceReceipt = {
+          paymentId: receipt.id,
+          paymentNumber: receipt.paymentNumber ?? null,
+          amount: receipt.amount,
+          journalEntryId: receipt.journalEntryId ?? null,
+        };
+      }
+
       // STAGE 1 (phase1.md): assigning at creation dispatches the stock —
-      // Sales Order (or prepaid Invoice+Payment) + Dr Goods in Transit /
-      // Cr Inventory, atomically with the delivery itself.
+      // Sales Order + Dr Goods in Transit / Cr Inventory, atomically with the
+      // delivery itself.
       let ledgerResult = null;
       if (dto.personnelId) {
         ledgerResult = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
@@ -253,6 +356,7 @@ export class DeliveriesService {
         scheduledDate: d.preferredDate,
         items,
         ledger: ledgerResult,
+        advance: advanceReceipt,
       };
     });
   }
@@ -290,6 +394,16 @@ export class DeliveriesService {
           code: 'DELIVERY_COMMITTED',
           message:
             'This delivery has already been dispatched. Cancel it instead — that restocks the units and reverses Goods in Transit.',
+        });
+      }
+      // The advance is a real receipt. Deleting the delivery would orphan it
+      // from what it was paid for; cancelling keeps the record and frees the
+      // advance to be applied elsewhere or refunded.
+      if (d.advancePaymentId) {
+        throw new UnprocessableEntityException({
+          code: 'DELIVERY_HAS_ADVANCE',
+          message:
+            'The customer paid an advance for this delivery. Cancel it instead — the advance stays on their account to apply or refund.',
         });
       }
 
@@ -592,12 +706,14 @@ export class DeliveriesService {
       }
 
       d.status = dto.status;
-      // The rider's cash flag normally arrives with the bill photo, but a
-      // client that settles it while marking the delivery delivered had no way
-      // to record it: the field was not on this DTO, so it was stripped and the
-      // delivery stayed 'unpaid' — and approval then debited Accounts
-      // Receivable instead of Cash, with no error to say why.
-      if (dto.paidStatus) d.paidStatus = dto.paidStatus;
+      // The rider's payment answer normally arrives with the bill photo, but a
+      // client may settle it while marking the delivery delivered. Same rules
+      // as the bill photo: nothing is asked of a prepaid delivery, a partial
+      // figure must fit what is due, and once approval has posted from the
+      // answer nothing here may rewrite it.
+      if (dto.paidStatus && acceptsCollectionAnswer(d)) {
+        await this.applyCollectionAnswer(em, d, dto.paidStatus, dto.amountCollected);
+      }
       if (dto.status === 'cancelled') d.cancelReason = dto.notes ?? 'Cancelled by user';
       if (dto.status === 'delivered') d.completedAt = new Date();
       await repo.save(d);
@@ -719,12 +835,14 @@ export class DeliveriesService {
         message: 'This delivery is not assigned to you.',
       });
     }
-    // STAGE 2 (phase1.md): the rider's PAID / NOT PAID flag. It posts NOTHING
-    // — it only rides into the admin approval queue and decides whether the
-    // Stage-3 revenue entry debits Cash or Accounts Receivable.
-    if (dto.paidStatus && d.paidStatus !== dto.paidStatus) {
-      d.paidStatus = dto.paidStatus;
-      await this.repo.save(d);
+    // STAGE 2 (phase1.md): the rider's PAID / PARTIAL / NOT PAID answer. It
+    // posts NOTHING — approval records the cash from it. Judged against what
+    // the customer actually kept, and ignored once approval has posted.
+    if (dto.paidStatus && acceptsCollectionAnswer(d)) {
+      const delivered = dto.deliveredItems?.length
+        ? new Map(dto.deliveredItems.map((i) => [i.itemId, i.deliveredQty]))
+        : undefined;
+      await this.applyCollectionAnswer(this.repo.manager, d, dto.paidStatus, dto.amountCollected, delivered);
     }
 
     // Idempotent replay: confirming an already-delivered delivery succeeds
@@ -774,6 +892,31 @@ export class DeliveriesService {
     await this.historyRepo.save(history);
 
     return { deliveryId: d.id, status: 'delivered', completedAt: d.completedAt };
+  }
+
+  /**
+   * Record the rider's payment answer on the delivery, normalised: a delivery
+   * with nothing due reads PAID whatever was sent, and a partial figure must
+   * fall between zero and what the advance leaves. Posts nothing.
+   */
+  private async applyCollectionAnswer(
+    em: EntityManager,
+    d: Delivery,
+    paidStatus: string,
+    amountCollected: string | undefined,
+    deliveredByItem?: Map<string, string>,
+  ): Promise<void> {
+    const lines = d.items ?? (await em.getRepository(DeliveryItem).find({ where: { deliveryId: d.id } }));
+    const gross = deliveredGross(lines, deliveredByItem);
+    const settled = resolveCollection({
+      gross,
+      advance: deliveryAdvance(d, gross),
+      paidStatus,
+      amountCollected,
+    });
+    d.paidStatus = settled.paidStatus;
+    d.amountCollected = settled.amountCollected;
+    await em.getRepository(Delivery).save(d);
   }
 
   async myHistory(companyId: string, personnelId: string, page: number, limit: number) {

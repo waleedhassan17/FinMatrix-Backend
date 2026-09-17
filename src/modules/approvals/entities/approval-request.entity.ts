@@ -12,6 +12,10 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
  * the owner asked to sign off billing and cash receipts as well. They are the
  * two that a staff member's day-to-day now waits on, so keep the summary lines
  * they carry informative: the owner is reading them to decide.
+ *
+ * `delivery_advance` is a delivery the customer paid for (fully or in part)
+ * before dispatch. The advance is cash in, so staff ask; the whole delivery
+ * waits, and nothing exists until the owner approves.
  */
 export type ApprovalType =
   | 'adjustment'
@@ -23,7 +27,8 @@ export type ApprovalType =
   | 'po'
   | 'invoice'
   | 'invoice_payment'
-  | 'delivery_undo';
+  | 'delivery_undo'
+  | 'delivery_advance';
 
 export const APPROVAL_TYPES: ApprovalType[] = [
   'adjustment',
@@ -36,6 +41,7 @@ export const APPROVAL_TYPES: ApprovalType[] = [
   'invoice',
   'invoice_payment',
   'delivery_undo',
+  'delivery_advance',
 ];
 
 /**

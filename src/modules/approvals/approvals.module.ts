@@ -16,6 +16,7 @@ import { PaymentsModule } from '../payments/payments.module';
 import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { EstimatesModule } from '../estimates/estimates.module';
 import { InventoryApprovalsModule } from '../inventory-approvals/inventory-approvals.module';
+import { DeliveriesModule } from '../deliveries/deliveries.module';
 
 /**
  * Maker-checker for the actions staff may request but not perform.
@@ -46,6 +47,7 @@ import { InventoryApprovalsModule } from '../inventory-approvals/inventory-appro
     InventoryApprovalsModule,
     SalesOrdersModule,
     EstimatesModule,
+    DeliveriesModule,
   ],
   controllers: [ApprovalsController],
   providers: [ApprovalsService, ApprovalDispatcher],

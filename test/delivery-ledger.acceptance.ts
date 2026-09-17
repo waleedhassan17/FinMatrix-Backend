@@ -12,8 +12,17 @@
  *   6. Approve-twice idempotency (409, books unchanged).
  *   7. Partial delivery → delivered part invoiced + COGS, remainder restocked;
  *      1250 still nets to 0.
- *   8. Pre-paid delivery → Invoice + Payment at dispatch; approval posts COGS
- *      only.
+ *   8. Pre-paid delivery → a receipt (RCT) held in 2400 at creation, no sale
+ *      at dispatch; approval invoices, applies the advance, posts COGS.
+ *   9. Rider PARTIAL → cash for part, rest in A/R; a later receipt settles it.
+ *  10. Part advance + rider collects the balance; the owner's cash count
+ *      overrides the rider's figure.
+ *  11. Prepaid, part returned → the unused advance stays on the receipt.
+ *  12. A rider cannot turn a prepaid delivery unpaid, on any route.
+ *  13. Owner creates an advance delivery directly; staff can only request one,
+ *      and nothing exists until the owner approves it.
+ *  14. PARTIAL for nothing, or for more than is due, is refused.
+ *  15. An advance cannot be deleted while its delivery is on the road.
  * After EVERY scenario: Trial Balance balances, Balance Sheet balances, and
  * 1250 nets to zero for completed deliveries. Inventory Valuation ties to
  * Balance Sheet 1200 (+ 1250 while goods are in transit).
@@ -54,14 +63,15 @@ async function req(method: string, path: string, opts: { token?: string; company
   return { status: r.status, body };
 }
 const data = (r: Res) => r.body?.data ?? r.body;
-async function signin(email: string, password: string): Promise<Res> {
+/** Email or username — sign-in resolves either from `identifier`. */
+async function signin(identifier: string, password: string): Promise<Res> {
   for (let attempt = 0; attempt < 6; attempt++) {
-    const r = await req('POST', '/auth/signin', { json: { email, password } });
+    const r = await req('POST', '/auth/signin', { json: { identifier, password } });
     if (r.status !== 429) return r;
     console.log('    (signin throttled — waiting 15s)');
     await new Promise(res => setTimeout(res, 15_000));
   }
-  return req('POST', '/auth/signin', { json: { email, password } });
+  return req('POST', '/auth/signin', { json: { identifier, password } });
 }
 
 const PNG = Buffer.from(
@@ -99,10 +109,12 @@ async function main() {
   check('admin ready', !!T && !!cid);
   const A = { token: T, companyId: cid };
 
+  // Riders sign in with a username and a password, never an email.
+  const riderUsername = `qa.rider.${Date.now()}`;
   const rider = data(await req('POST', '/delivery-personnel', {
-    ...A, json: { email: `qa_rider_${Date.now()}@qa.local`, password: 'Rider@123', name: 'QA Rider' },
+    ...A, json: { username: riderUsername, password: 'Rider@123', name: 'QA Rider' },
   }));
-  const riderLogin = await signin(rider?.email, 'Rider@123');
+  const riderLogin = await signin(riderUsername, 'Rider@123');
   const RT = data(riderLogin)?.tokens?.accessToken;
   check('rider ready', !!rider?.userId && !!RT);
 
@@ -159,7 +171,12 @@ async function main() {
   const itemCost = async () => Number((data(await req('GET', `/inventory/items/${itemId}`, A)))?.unitCost);
 
   // Helper: full rider lifecycle (statuses + bill photo) → returns requestId
-  const riderDelivers = async (deliveryId: string, paidStatus: 'paid' | 'unpaid', changes: any[]) => {
+  const riderDelivers = async (
+    deliveryId: string,
+    paidStatus: 'paid' | 'partial' | 'unpaid',
+    changes: any[],
+    amountCollected?: string,
+  ) => {
     for (const st of ['picked_up', 'in_transit', 'arrived']) {
       await req('PATCH', `/deliveries/${deliveryId}/status`, { token: RT, companyId: cid, json: { status: st } });
     }
@@ -168,6 +185,7 @@ async function main() {
     fd.append('signedBy', 'Delivery Customer');
     fd.append('source', 'camera');
     fd.append('paidStatus', paidStatus);
+    if (amountCollected !== undefined) fd.append('amountCollected', amountCollected);
     fd.append('changes', JSON.stringify(changes));
     const up = await fetch(`${BASE}/deliveries/${deliveryId}/bill-photo`, {
       method: 'POST', headers: { Authorization: `Bearer ${RT}`, 'x-company-id': cid }, body: fd as any,
@@ -297,22 +315,264 @@ async function main() {
   check('S6 undelivered 2 restocked (on-hand −2 net)', close(await qtyOnHand(), onHandBeforePartial - 2), { before: onHandBeforePartial, after: await qtyOnHand() });
   await assertInventoryTies('S6 after partial approval');
 
+  // ═════ Restock for the payment scenarios, at the same cost ═════
+  const po3 = data(await req('POST', '/purchase-orders', {
+    ...A, json: { vendorId: vendor.id, orderDate: TODAY, lines: [{ description: 'More crates', orderedQty: '40', unitCost: '100', itemId }] },
+  }));
+  await req('PATCH', `/purchase-orders/${po3.id}/status`, { ...A, json: { status: 'sent' } });
+  await req('POST', `/purchase-orders/${po3.id}/receive`, { ...A, json: { lines: [{ lineId: po3?.lines?.[0]?.id, receivedQty: '40' }] } });
+  check('restocked 40 @ 100 (average unchanged)', close(await itemCost(), 100, 0.01), await itemCost());
+
+  const approve = async (requestId: string | undefined, body: Record<string, unknown> = {}) => {
+    const r = await req('POST', `/inventory-update-requests/${requestId}/approve`, { ...A, json: body });
+    return { status: r.status, ledger: data(r)?.ledger, body: r.body };
+  };
+  const deliveryRow = async (id: string) => data(await req('GET', `/deliveries/${id}`, A));
+  const line = (deliveredQty: number, returnedQty = 0) => [
+    { itemId, itemName: 'Crate', beforeQty: 0, deliveredQty, returnedQty },
+  ];
+  // What the receipts ledger says the company holds for customers.
+  const unappliedOnReceipts = async () => Number((await pg.query(
+    `SELECT COALESCE(SUM(p.amount - COALESCE(a.applied, 0)), 0) AS s
+       FROM payments p
+       LEFT JOIN (SELECT payment_id, SUM(amount_applied) AS applied FROM payment_applications GROUP BY payment_id) a
+         ON a.payment_id = p.id
+      WHERE p.company_id = $1 AND p.advance_posted = true`, [cid])).rows[0].s);
+  const assertAdvancesTie = async (label: string) => {
+    const bs2400 = bsLine(await balanceSheet(), '2400');
+    const receipts = await unappliedOnReceipts();
+    check(`${label} — GL 2400 (${bs2400}) = unapplied on receipts (${receipts})`, close(bs2400, receipts, 0.01), { bs2400, receipts });
+  };
+
   // ═════ Scenario 7: pre-paid delivery ═════
-  console.log('\n— Scenario E: pre-paid — Invoice + Payment at dispatch, COGS at approval');
-  const cashBeforePrepaid = bsLine(await balanceSheet(), '1000');
+  // 2 × 150 + 10% = 330, paid before dispatch.
+  console.log('\n— Scenario E: pre-paid — receipt held in 2400 at creation, sale at approval');
+  let bsE = await balanceSheet();
+  const cashBeforePrepaid = bsLine(bsE, '1000');
+  const advBeforePrepaid = bsLine(bsE, '2400');
+  const arBeforePrepaid = bsLine(bsE, '1100');
+  const approvalsBefore = Number((await pg.query(`SELECT COUNT(*) AS n FROM approval_requests WHERE company_id = $1`, [cid])).rows[0].n);
   const d5 = await mkDelivery(2, { prePaid: true });
-  check('S7 prepaid dispatch created invoice immediately', !!d5?.ledger?.invoiceNumber, d5?.ledger);
-  bs = await assertBooksBalanced('S7 after prepaid dispatch');
-  // 2 × 150 + 10% = 330 collected up-front
-  check('S7 cash collected at dispatch (330)', close(bsLine(bs, '1000') - cashBeforePrepaid, 330, 0.01), { before: cashBeforePrepaid, after: bsLine(bs, '1000') });
+  check('S7 owner creates a prepaid delivery directly (no approval request)',
+    !!d5?.id && !d5?.pending &&
+      Number((await pg.query(`SELECT COUNT(*) AS n FROM approval_requests WHERE company_id = $1`, [cid])).rows[0].n) === approvalsBefore,
+    d5);
+  check('S7 advance recorded as a receipt (RCT) for 330', /^RCT-/.test(d5?.advance?.paymentNumber ?? '') && close(Number(d5?.advance?.amount), 330, 0.01), d5?.advance);
+  check('S7 NO invoice at dispatch', !d5?.ledger?.invoiceNumber && !d5?.invoiceId, d5?.ledger);
+  check('S7 delivery reads prepaid + PAID', d5?.prepaid === true && d5?.paidStatus === 'paid', { prepaid: d5?.prepaid, paidStatus: d5?.paidStatus });
+  bs = await assertBooksBalanced('S7 after prepaid create + dispatch');
+  check('S7 cash +330 and Customer Advances +330', close(bsLine(bs, '1000') - cashBeforePrepaid, 330, 0.01) && close(bsLine(bs, '2400') - advBeforePrepaid, 330, 0.01),
+    { cash: bsLine(bs, '1000') - cashBeforePrepaid, adv: bsLine(bs, '2400') - advBeforePrepaid });
   check('S7 Goods in Transit = 200', close(bsLine(bs, '1250'), 200, 0.01), bsLine(bs, '1250'));
-  const pod5 = await riderDelivers(d5.id, 'paid', [{ itemId, itemName: 'Crate', beforeQty: await qtyOnHand(), deliveredQty: 2, returnedQty: 0 }]);
-  const approve5 = await req('POST', `/inventory-update-requests/${pod5.requestId}/approve`, { ...A, json: {} });
-  check('S7 approval succeeded', approve5.status === 200 || approve5.status === 201, approve5.body);
+  const reserved = data(await req('GET', `/payments/customer/${customer.id}/advances`, A));
+  check('S7 the advance is reserved for its delivery (not offered to other invoices)',
+    !(reserved?.advances ?? []).some((a: any) => a.paymentId === d5?.advance?.paymentId), reserved);
+  await assertAdvancesTie('S7 after prepaid create');
+
+  const pod5 = await riderDelivers(d5.id, 'unpaid', line(2));
+  check('S7 rider answering NOT PAID on a prepaid delivery still reads PAID, nothing due',
+    pod5.status === 201 && pod5.body?.data?.paidStatus === 'paid' && close(Number(pod5.body?.data?.amountDue), 0, 0.001), pod5.body);
+  const ap5 = await approve(pod5.requestId);
+  check('S7 approval succeeded', ap5.status === 200 || ap5.status === 201, ap5.body);
+  check('S7 approval applied the advance: PAID, 330 applied, no cash receipt, nothing in A/R',
+    ap5.ledger?.paidStatus === 'paid' && close(Number(ap5.ledger?.advanceApplied), 330, 0.01) && !ap5.ledger?.paymentId &&
+      close(Number(ap5.ledger?.balanceDue), 0, 0.001), ap5.ledger);
   bs = await assertBooksBalanced('S7 after prepaid approval');
-  check('S7 approval posted COGS only — cash unchanged since dispatch', close(bsLine(bs, '1000') - cashBeforePrepaid, 330, 0.01), bsLine(bs, '1000'));
+  check('S7 cash unchanged since the advance; 2400 released; A/R unchanged',
+    close(bsLine(bs, '1000') - cashBeforePrepaid, 330, 0.01) && close(bsLine(bs, '2400'), advBeforePrepaid, 0.01) && close(bsLine(bs, '1100'), arBeforePrepaid, 0.01),
+    { cash: bsLine(bs, '1000'), adv: bsLine(bs, '2400'), ar: bsLine(bs, '1100') });
   check('S7 Goods in Transit nets to ZERO', close(bsLine(bs, '1250'), 0, 0.005), bsLine(bs, '1250'));
+  const apps5 = await pg.query(`SELECT COALESCE(SUM(amount_applied), 0) AS s FROM payment_applications WHERE invoice_id = $1 AND payment_id = $2`, [ap5.ledger?.invoiceId, d5?.advance?.paymentId]);
+  check('S7 the invoice shows the advance receipt in its payment history', close(Number(apps5.rows[0].s), 330, 0.01), apps5.rows[0]);
   await assertInventoryTies('S7 after prepaid approval');
+  await assertAdvancesTie('S7 after prepaid approval');
+
+  // ═════ Scenario 9: rider collects PART of a credit sale ═════
+  console.log('\n— Scenario G: rider PARTIAL — cash for part, rest in A/R');
+  bs = await balanceSheet();
+  const cashG = bsLine(bs, '1000');
+  const arG = bsLine(bs, '1100');
+  const d7 = await mkDelivery(2);
+  const pod7 = await riderDelivers(d7.id, 'partial', line(2), '100');
+  check('S9 rider PARTIAL 100 of 330 accepted', pod7.status === 201 && pod7.body?.data?.paidStatus === 'partial' &&
+    close(Number(pod7.body?.data?.amountCollected), 100, 0.001) && close(Number(pod7.body?.data?.amountDue), 330, 0.01), pod7.body);
+  bs = await balanceSheet();
+  check('S9 the rider answer posted NOTHING', close(bsLine(bs, '1000'), cashG, 0.01), bsLine(bs, '1000'));
+  const ap7 = await approve(pod7.requestId);
+  check('S9 approval: PARTIAL, 100 collected, 230 left in A/R',
+    ap7.ledger?.paidStatus === 'partial' && close(Number(ap7.ledger?.amountCollected), 100, 0.01) && close(Number(ap7.ledger?.balanceDue), 230, 0.01) && !!ap7.ledger?.paymentId,
+    ap7.ledger);
+  bs = await assertBooksBalanced('S9 after partial approval');
+  check('S9 cash +100, A/R +230', close(bsLine(bs, '1000') - cashG, 100, 0.01) && close(bsLine(bs, '1100') - arG, 230, 0.01),
+    { cash: bsLine(bs, '1000') - cashG, ar: bsLine(bs, '1100') - arG });
+  const inv7 = await pg.query(`SELECT status, balance FROM invoices WHERE id = $1`, [ap7.ledger?.invoiceId]);
+  check('S9 invoice is partial with 230 open', inv7.rows[0]?.status === 'partial' && close(Number(inv7.rows[0]?.balance), 230, 0.01), inv7.rows[0]);
+  check('S9 delivery reads PARTIAL', (await deliveryRow(d7.id))?.paidStatus === 'partial');
+  await req('POST', '/payments', {
+    ...A, json: { customerId: customer.id, paymentDate: TODAY, paymentMethod: 'cash', amount: '230', applications: [{ invoiceId: ap7.ledger?.invoiceId, amount: '230' }] },
+  });
+  check('S9 a later receipt for the rest turns the delivery PAID', (await deliveryRow(d7.id))?.paidStatus === 'paid');
+  bs = await assertBooksBalanced('S9 after the rest is paid');
+  check('S9 A/R back where it started', close(bsLine(bs, '1100'), arG, 0.01), bsLine(bs, '1100'));
+
+  // ═════ Scenario 10: part advance, rider collects the balance, owner recounts ═════
+  console.log('\n— Scenario H: 100 paid up front, rider collects the balance, owner counts 200');
+  bs = await balanceSheet();
+  const cashH = bsLine(bs, '1000');
+  const arH = bsLine(bs, '1100');
+  const advH = bsLine(bs, '2400');
+  const d8 = await mkDelivery(2, { advanceAmount: '100' });
+  check('S10 part advance: receipt of 100, not prepaid, nothing decided yet',
+    close(Number(d8?.advance?.amount), 100, 0.01) && d8?.prepaid === false && !d8?.paidStatus, { advance: d8?.advance, prepaid: d8?.prepaid, paid: d8?.paidStatus });
+  const pod8 = await riderDelivers(d8.id, 'paid', line(2));
+  check('S10 rider PAID collects the 230 balance, not the order total',
+    pod8.body?.data?.paidStatus === 'paid' && close(Number(pod8.body?.data?.amountCollected), 230, 0.01) && close(Number(pod8.body?.data?.amountDue), 230, 0.01), pod8.body);
+  const tooMuch = await approve(pod8.requestId, { amountCollected: '231' });
+  check('S10 owner cannot count more cash than was due (400)', tooMuch.status === 400, tooMuch.body);
+  const ap8 = await approve(pod8.requestId, { amountCollected: '200' });
+  check('S10 approval with owner count 200: advance 100, cash 200, 30 in A/R, PARTIAL',
+    ap8.ledger?.paidStatus === 'partial' && close(Number(ap8.ledger?.advanceApplied), 100, 0.01) &&
+      close(Number(ap8.ledger?.amountCollected), 200, 0.01) && close(Number(ap8.ledger?.balanceDue), 30, 0.01), ap8.ledger);
+  bs = await assertBooksBalanced('S10 after approval');
+  check('S10 cash +300 overall, A/R +30, 2400 back to where it started',
+    close(bsLine(bs, '1000') - cashH, 300, 0.01) && close(bsLine(bs, '1100') - arH, 30, 0.01) && close(bsLine(bs, '2400'), advH, 0.01),
+    { cash: bsLine(bs, '1000') - cashH, ar: bsLine(bs, '1100') - arH, adv: bsLine(bs, '2400') - advH });
+  const audit8 = await pg.query(`SELECT details FROM inventory_approval_audit_entries WHERE request_id = $1 AND action = 'approved'`, [pod8.requestId]).catch(() => ({ rows: [] as any[] }));
+  check('S10 the audit trail names the rider figure and the owner count',
+    /Rider reported 230\.00 collected; owner counted 200\.00/.test(audit8.rows[0]?.details ?? ''), audit8.rows[0]);
+  await assertAdvancesTie('S10 after approval');
+
+  // ═════ Scenario 11: prepaid, one unit comes back ═════
+  console.log('\n— Scenario I: prepaid 3, customer keeps 2 — the unused advance stays theirs');
+  bs = await balanceSheet();
+  const advI = bsLine(bs, '2400');
+  const d9 = await mkDelivery(3, { prePaid: true }); // 495
+  const pod9 = await riderDelivers(d9.id, 'paid', line(2, 1));
+  check('S11 nothing to collect (the advance covers the 330 kept)', close(Number(pod9.body?.data?.amountDue), 0, 0.001), pod9.body);
+  const ap9 = await approve(pod9.requestId);
+  check('S11 approval applied 330 of the 495 advance, PAID',
+    ap9.ledger?.paidStatus === 'paid' && close(Number(ap9.ledger?.advanceApplied), 330, 0.01), ap9.ledger);
+  bs = await assertBooksBalanced('S11 after approval');
+  check('S11 165 stays in Customer Advances', close(bsLine(bs, '2400') - advI, 165, 0.01), bsLine(bs, '2400') - advI);
+  const free9 = data(await req('GET', `/payments/customer/${customer.id}/advances`, A));
+  const left9 = (free9?.advances ?? []).find((a: any) => a.paymentId === d9?.advance?.paymentId);
+  check('S11 …on the customer’s receipt, free to apply or refund', close(Number(left9?.unapplied), 165, 0.01), free9);
+  await assertInventoryTies('S11 after approval');
+  await assertAdvancesTie('S11 after approval');
+
+  // ═════ Scenario 12: rider cannot unpay a prepaid delivery on the status route ═════
+  console.log('\n— Scenario J: rider sends NOT PAID on the status route of a prepaid delivery');
+  const d10 = await mkDelivery(1, { prePaid: true });
+  await req('PATCH', `/deliveries/${d10.id}/status`, { token: RT, companyId: cid, json: { status: 'picked_up', paidStatus: 'unpaid' } });
+  const statusFlip = await req('PATCH', `/deliveries/${d10.id}/status`, { token: RT, companyId: cid, json: { status: 'in_transit', paidStatus: 'partial', amountCollected: '5' } });
+  check('S12 status route accepted but the delivery still reads PAID with nothing collected',
+    statusFlip.status === 200 && (await deliveryRow(d10.id))?.paidStatus === 'paid' && close(Number((await deliveryRow(d10.id))?.amountCollected ?? 0), 0, 0.001),
+    await deliveryRow(d10.id));
+  const pod10 = await riderDelivers(d10.id, 'partial', line(1), '50');
+  check('S12 bill photo PARTIAL on a prepaid delivery reads PAID', pod10.body?.data?.paidStatus === 'paid', pod10.body);
+  const ap10 = await approve(pod10.requestId);
+  check('S12 approval records no cash from the rider', ap10.ledger?.paidStatus === 'paid' && !ap10.ledger?.paymentId, ap10.ledger);
+
+  // ═════ Scenario 13: owner direct vs staff request ═════
+  console.log('\n— Scenario K: staff may only REQUEST an advance delivery');
+  const suffix = Date.now();
+  const staff = await req('POST', '/settings/users', {
+    ...A, json: { name: 'QA Staff', username: `qa.staff.${suffix}`, password: 'Test1234!', role: 'staff' },
+  });
+  check('S13 staff user created', staff.status === 201, staff.body);
+  const staffLogin = await signin(`qa.staff.${suffix}`, 'Test1234!');
+  const ST = data(staffLogin)?.tokens?.accessToken;
+  check('S13 staff signs in', !!ST, staffLogin.body);
+  const S = { token: ST, companyId: cid };
+  const counts = async () => (await pg.query(
+    `SELECT (SELECT COUNT(*) FROM deliveries WHERE company_id = $1) AS d,
+            (SELECT COUNT(*) FROM payments WHERE company_id = $1) AS p,
+            (SELECT COUNT(*) FROM journal_entries WHERE company_id = $1) AS j`, [cid])).rows[0];
+  const before13 = await counts();
+  const adv13 = bsLine(await balanceSheet(), '2400');
+  const staffAdvance = await req('POST', '/deliveries', {
+    ...S,
+    json: {
+      customerId: customer.id, customerName: 'Delivery Customer', personnelId: rider.userId,
+      items: [{ itemId, itemName: 'Crate', orderedQty: 1, unitPrice: 150, taxRate: 10 }],
+      advanceAmount: '165',
+    },
+  });
+  const pending13 = data(staffAdvance);
+  check('S13 staff advance delivery is filed for the owner', pending13?.pending === true && !!pending13?.requestId && pending13?.type === 'delivery_advance', staffAdvance.body);
+  const after13 = await counts();
+  check('S13 nothing exists yet — no delivery, receipt or journal', after13.d === before13.d && after13.p === before13.p && after13.j === before13.j, { before13, after13 });
+  const staffPlain = await req('POST', '/deliveries', {
+    ...S, json: { customerId: customer.id, customerName: 'Delivery Customer', items: [{ itemId, itemName: 'Crate', orderedQty: 1, unitPrice: 150 }] },
+  });
+  check('S13 staff delivery WITHOUT an advance is still direct', !!data(staffPlain)?.id && !data(staffPlain)?.pending, staffPlain.body);
+  const staffDecides = await req('POST', `/approvals/${pending13?.requestId}/decide`, { ...S, json: { decision: 'approve' } });
+  check('S13 staff cannot approve it (403)', staffDecides.status === 403, staffDecides.status);
+  const ownerDecides = await req('POST', `/approvals/${pending13?.requestId}/decide`, { ...A, json: { decision: 'approve' } });
+  const decided = data(ownerDecides);
+  check('S13 owner approves it', ownerDecides.status === 200 && decided?.status === 'approved' && !!decided?.resultId, ownerDecides.body);
+  const created13 = decided?.resultId ? await deliveryRow(decided.resultId) : null;
+  check('S13 the delivery now exists, prepaid, dispatched to the rider',
+    created13?.prepaid === true && created13?.ledgerStatus === 'in_transit' && created13?.personnelId === rider.userId, created13);
+  const memo13 = await pg.query(`SELECT memo, amount FROM payments WHERE id = $1`, [created13?.advancePaymentId]);
+  check('S13 its receipt names who prepared it', /prepared by QA Staff, approved by owner/.test(memo13.rows[0]?.memo ?? '') && close(Number(memo13.rows[0]?.amount), 165, 0.01), memo13.rows[0]);
+  check('S13 2400 +165', close(bsLine(await balanceSheet(), '2400') - adv13, 165, 0.01));
+  await assertBooksBalanced('S13 after owner approval');
+  const pod13 = await riderDelivers(created13.id, 'paid', line(1));
+  const ap13 = await approve(pod13.requestId);
+  check('S13 the approved request completes like any prepaid delivery', ap13.ledger?.paidStatus === 'paid' && close(Number(ap13.ledger?.advanceApplied), 165, 0.01), ap13.ledger);
+
+  const before13b = await counts();
+  const staffTooBig = data(await req('POST', '/deliveries', {
+    ...S,
+    json: {
+      customerId: customer.id, customerName: 'Delivery Customer',
+      items: [{ itemId, itemName: 'Crate', orderedQty: 9999, unitPrice: 150 }], advanceAmount: '100',
+    },
+  }));
+  const failApprove = await req('POST', `/approvals/${staffTooBig?.requestId}/decide`, { ...A, json: { decision: 'approve' } });
+  const still = data(await req('GET', `/approvals/${staffTooBig?.requestId}`, A));
+  const after13b = await counts();
+  check('S13 a request that no longer fits fails honestly: still pending, reason recorded, nothing created',
+    failApprove.status === 422 && still?.status === 'pending' && !!still?.lastError &&
+      after13b.d === before13b.d && after13b.p === before13b.p && after13b.j === before13b.j,
+    { status: failApprove.status, still, before13b, after13b });
+  await req('POST', `/approvals/${staffTooBig?.requestId}/cancel`, { ...S, json: {} });
+
+  // ═════ Scenario 14: PARTIAL out of range ═════
+  console.log('\n— Scenario L: PARTIAL for nothing, or more than is due');
+  const d11 = await mkDelivery(1); // 165
+  const over = await riderDelivers(d11.id, 'partial', line(1), '200');
+  check('S14 PARTIAL above the amount due is refused (400)', over.status === 400 && JSON.stringify(over.body).includes('COLLECTED_OUT_OF_RANGE'), over.body);
+  const zero = await riderDelivers(d11.id, 'partial', line(1), '0');
+  check('S14 PARTIAL of zero is refused (400)', zero.status === 400, zero.body);
+  const ok11 = await riderDelivers(d11.id, 'partial', line(1), '165');
+  check('S14 PARTIAL for the whole amount is taken as PAID', ok11.status === 201 && ok11.body?.data?.paidStatus === 'paid', ok11.body);
+  // Approved through the older review route the Android app uses, with the
+  // owner's count: the rider said 165, the owner counted 100.
+  const arL = bsLine(await balanceSheet(), '1100');
+  const review11 = await req('PATCH', `/inventory-approvals/${ok11.requestId}/review`, { ...A, json: { action: 'approved', amountCollected: '100' } });
+  check('S14 the app’s review route carries the owner’s cash count', review11.status === 200, review11.body);
+  const row11 = await deliveryRow(d11.id);
+  check('S14 recorded PART PAID: 100 cash, 65 left in A/R',
+    row11?.paidStatus === 'partial' && close(Number(row11?.amountCollected), 100, 0.01) &&
+      close(bsLine(await balanceSheet(), '1100') - arL, 65, 0.01), { row11, ar: bsLine(await balanceSheet(), '1100') - arL });
+
+  // ═════ Scenario 15: an advance on the road cannot be deleted ═════
+  console.log('\n— Scenario M: deleting the advance of a delivery on the road');
+  const adv15 = bsLine(await balanceSheet(), '2400');
+  const d12 = await mkDelivery(1, { prePaid: true });
+  const del1 = await req('DELETE', `/payments/${d12?.advance?.paymentId}`, A);
+  check('S15 refused while the delivery is open (409)', del1.status === 409, del1.body);
+  const cancel12 = await req('PATCH', `/deliveries/${d12.id}/status`, { ...A, json: { status: 'cancelled', notes: 'Customer changed their mind' } });
+  check('S15 delivery cancelled', cancel12.status === 200, cancel12.body);
+  check('S15 the advance stays with the customer after cancelling', close(bsLine(await balanceSheet(), '2400') - adv15, 165, 0.01));
+  const del2 = await req('DELETE', `/payments/${d12?.advance?.paymentId}`, A);
+  check('S15 once cancelled, the receipt can be deleted (refund handled outside)', del2.status === 200, del2.body);
+  bs = await assertBooksBalanced('S15 after cancel + delete');
+  check('S15 2400 back to where it started', close(bsLine(bs, '2400'), adv15, 0.01), bsLine(bs, '2400'));
+  await assertAdvancesTie('S15');
+  await assertInventoryTies('S15');
 
   // ═════ Scenario F: the average MOVES while the goods are on the van ═════
   //
@@ -389,6 +649,17 @@ async function main() {
        FROM general_ledger gl JOIN accounts a ON a.id = gl.account_id
       WHERE gl.company_id = $1 AND a.account_number = '1250'`, [cid]);
   check('FINAL: GL 1250 debits = credits over the run', close(Number(gitRows.rows[0].s), 0, 0.005), gitRows.rows[0]);
+  await assertAdvancesTie('FINAL');
+  const paidDrift = await pg.query(
+    `SELECT d.reference_no, d.paid_status, i.balance, i.amount_paid
+       FROM deliveries d JOIN invoices i ON i.id = d.invoice_id
+      WHERE d.company_id = $1 AND d.ledger_status = 'committed' AND i.status NOT IN ('void', 'draft')
+        AND NOT EXISTS (SELECT 1 FROM credit_memo_applications cma WHERE cma.invoice_id = i.id)
+        AND NOT EXISTS (SELECT 1 FROM credit_memos cm WHERE cm.original_invoice_id = i.id AND cm.status <> 'void')
+        AND d.paid_status IS DISTINCT FROM (CASE WHEN i.balance <= 0.0001 THEN 'paid'
+                                                 WHEN i.amount_paid > 0.0001 THEN 'partial'
+                                                 ELSE 'unpaid' END)`, [cid]);
+  check('FINAL: every approved delivery reads its invoice’s PAID / PARTIAL / NOT PAID (I21)', paidDrift.rows.length === 0, paidDrift.rows);
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);
   if (fails.length) { console.log('Failed:'); fails.forEach(f => console.log(`  - ${f}`)); }

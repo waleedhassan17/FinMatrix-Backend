@@ -23,7 +23,6 @@ import {
   ACCT_COGS,
   ACCT_GOODS_IN_TRANSIT,
   ACCT_INVENTORY,
-  ACCT_CASH,
   ACCT_CUSTOMER_ADVANCES,
   ACCT_AR,
 } from '../accounts/accounts.constants';
@@ -31,6 +30,14 @@ import { toDecimal, MONEY_TOLERANCE, subtractMoney } from '../../common/utils/mo
 import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
 import { Customer } from '../customers/entities/customer.entity';
 import { CreditOverride, enforceCreditLimit, grossValue } from '../../common/utils/credit-control.util';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentApplication } from '../payments/entities/payment-application.entity';
+import {
+  DeliveryPaidStatus,
+  collectionFromAmount,
+  invoicePaidStatus,
+  resolveCollection,
+} from './delivery-collection.util';
 
 /**
  * Result of the Stage-1 commit, echoed to the admin UI so the dispatcher sees
@@ -51,29 +58,42 @@ export interface ApprovalLedgerResult {
   invoiceId: string | null;
   invoiceNumber: string | null;
   invoiceTotal: string | null;
+  /** The receipt recording the cash the rider collected, if any. */
   paymentId: string | null;
   cogsJournalEntryId: string | null;
   cogsAmount: string;
   restockedCost: string;
-  paidStatus: 'paid' | 'unpaid';
-  /** Prepaid deliveries only: credit raised for goods the customer sent back. */
-  creditMemoId: string | null;
-  creditMemoNumber: string | null;
-  creditMemoTotal: string | null;
+  paidStatus: DeliveryPaidStatus;
+  /** Part of the advance taken before dispatch that this sale used. */
+  advanceApplied: string;
+  /** Cash taken at the door, as recorded. */
+  amountCollected: string;
+  /** Left on the invoice in Accounts Receivable. */
+  balanceDue: string;
+}
+
+/** The owner's say on the cash the rider handed in, at approval. */
+export interface ApprovalCollectionInput {
+  /** Overrides the rider's figure; omit to accept it. */
+  amountCollected?: string | null;
 }
 
 /**
  * phase1.md — links the delivery lifecycle to the accounting ledger.
  *
- * STAGE 1 (admin assigns):   Sales Order (non-posting; Invoice+Payment when
- *                            prepaid) + Dr Goods in Transit 1250 / Cr
- *                            Inventory 1200 at frozen cost + on-hand reduced.
- * STAGE 3 (admin approves):  SO → Invoice (revenue: A/R or, when the rider
- *                            collected cash, A/R immediately cleared by a
- *                            recorded Payment) + Dr COGS 5000 / Cr GIT 1250
- *                            for the delivered part, Dr Inventory / Cr GIT for
- *                            the returned/undelivered part.
- * REJECT:                    full reversal Dr Inventory / Cr GIT + restock.
+ * CREATE (advance taken):    a receipt held in 2400 Customer Advances —
+ *                            DeliveriesService.create, not this service.
+ * STAGE 1 (admin assigns):   Sales Order (non-posting) + Dr Goods in Transit
+ *                            1250 / Cr Inventory 1200 at frozen cost + on-hand
+ *                            reduced.
+ * STAGE 3 (admin approves):  SO → Invoice (Dr A/R / Cr Sales / Cr Tax), then
+ *                            settled from what was paid: the advance applied
+ *                            (Dr 2400 / Cr A/R), the rider's cash received
+ *                            (Dr Cash / Cr A/R), the rest left in A/R.
+ *                            + Dr COGS 5000 / Cr GIT 1250 for the delivered
+ *                            part, Dr Inventory / Cr GIT for the returned part.
+ * REJECT:                    full reversal Dr Inventory / Cr GIT + restock;
+ *                            the advance stays with the customer.
  *
  * Every method REQUIRES the caller's EntityManager so posting + stock movement
  * commit or roll back together. All journal lines go through the shared
@@ -200,8 +220,10 @@ export class DeliveryLedgerService {
       return { committed: false };
     }
 
-    // Dispatch is the shipment. On credit (not prepaid) the goods go out only
-    // within the customer's credit limit, or on the owner's override.
+    // Dispatch is the shipment. Unless the customer has paid for all of it,
+    // the goods go out only within their credit limit, or on the owner's
+    // override. A part advance needs no special case: it is an unapplied
+    // receipt, which the assessment already counts against the exposure.
     if (!delivery.prepaid) {
       const value = activeItems.reduce(
         (sum, l) => sum.plus(grossValue(this.lineQty(l), l.unitPrice, l.taxRate ?? '0')),
@@ -285,7 +307,6 @@ export class DeliveryLedgerService {
     let salesOrderNumber: string | null = null;
     const invoiceId: string | null = null;
     const invoiceNumber: string | null = null;
-    let prepaidAdvance = toDecimal('0');
 
     // Every delivery — prepaid or not — gets a NON-POSTING sales order here.
     // The diagram is explicit at this step: "NO revenue, NO COGS — nothing is
@@ -310,12 +331,11 @@ export class DeliveryLedgerService {
     salesOrderId = so.id;
     salesOrderNumber = so.orderNumber;
 
-    // Cash taken before hand-over is a CONTRACT LIABILITY, not income. It is
-    // released to revenue at approval, where the goods actually change hands.
-    if (delivery.prepaid) {
-      prepaidAdvance = toDecimal(so.total ?? '0');
-      delivery.paidStatus = 'paid';
-    }
+    // Cash taken before hand-over is a CONTRACT LIABILITY, not income. It was
+    // recorded when the delivery was created, as a receipt held in 2400, and
+    // is applied to the invoice at approval — dispatch posts nothing for it.
+    // (It used to post a bare Dr Cash / Cr 2400 here, with no receipt behind
+    // it, so the advance never showed among the customer's receipts.)
 
     // ---- The Stage-1 posting: Dr Goods in Transit / Cr Inventory at cost ----
     let journalEntryId: string | null = null;
@@ -347,27 +367,6 @@ export class DeliveryLedgerService {
       journalEntryId = entry.id;
     }
 
-    // Prepaid cash, recorded as a liability in its own entry so the stock
-    // movement above stays a clean Dr Goods in Transit / Cr Inventory.
-    if (prepaidAdvance.greaterThan(MONEY_TOLERANCE)) {
-      const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
-      const advances = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_CUSTOMER_ADVANCES);
-      const amt = prepaidAdvance.toFixed(4);
-      await this.posting.createEntry(em, {
-        companyId,
-        date: this.today(),
-        memo: `Delivery ${delivery.referenceNo ?? delivery.id} — customer paid in advance`,
-        createdBy: userId,
-        status: 'posted',
-        sourceType: 'delivery_advance',
-        sourceId: delivery.id,
-        lines: [
-          { accountId: cash.id, description: 'Cash received before delivery', debit: amt, credit: '0', lineOrder: 0 },
-          { accountId: advances.id, description: 'Customer advance (unearned)', debit: '0', credit: amt, lineOrder: 1 },
-        ],
-      });
-    }
-
     delivery.salesOrderId = salesOrderId;
     delivery.invoiceId = invoiceId;
     delivery.gitJournalEntryId = journalEntryId;
@@ -394,6 +393,14 @@ export class DeliveryLedgerService {
    * treated as fully delivered. Anything dispatched but not delivered returns
    * to Inventory. Goods in Transit is relieved IN FULL at the frozen cost, so
    * it nets to zero for the delivery.
+   *
+   * The invoice is then settled from what was actually paid, in this order:
+   *   1. the advance taken before dispatch, up to the invoice total — anything
+   *      left of it (a short delivery) stays on the customer's receipt, free to
+   *      apply to another invoice or refund;
+   *   2. the cash the rider collected — the owner's count when given, else the
+   *      rider's answer — never more than the advance leaves;
+   *   3. the rest stays in Accounts Receivable.
    */
   async commitApproval(
     em: EntityManager,
@@ -401,6 +408,7 @@ export class DeliveryLedgerService {
     userId: string,
     deliveryId: string,
     deliveredByItem: Map<string, string>,
+    collection: ApprovalCollectionInput = {},
   ): Promise<ApprovalLedgerResult> {
     const deliveryRepo = em.getRepository(Delivery);
     const itemRepo = em.getRepository(DeliveryItem);
@@ -424,7 +432,6 @@ export class DeliveryLedgerService {
       });
     }
 
-    const paidStatus: 'paid' | 'unpaid' = delivery.paidStatus === 'paid' ? 'paid' : 'unpaid';
     const items = await itemRepo.find({ where: { deliveryId: delivery.id } });
     const activeItems = items.filter((i) => this.lineQty(i).greaterThan(0));
 
@@ -443,11 +450,6 @@ export class DeliveryLedgerService {
       taxRate: string;
       lineKind: 'service';
     }[] = [];
-    // Prepaid only: the undelivered portion, valued at SALE price. A prepaid
-    // delivery is invoiced in full at dispatch, so anything the customer sends
-    // back has to be credited or revenue and tax stay overstated.
-    const returnedSaleLines: { description: string; quantity: string; unitPrice: string; taxRate: string }[] = [];
-    let returnedSaleValue = new Decimal(0);
 
     for (const line of activeItems) {
       const dispatched = this.lineQty(line);
@@ -479,16 +481,6 @@ export class DeliveryLedgerService {
       }
 
       if (returned.greaterThan(0)) {
-        // NOTE: no itemId on this line. The restock happens immediately below
-        // as part of the delivery ledger; letting the credit memo restock it
-        // too would put the units back twice and break I13.
-        returnedSaleLines.push({
-          description: line.itemName ?? line.itemId,
-          quantity: returned.toFixed(4),
-          unitPrice: toDecimal(line.unitPrice).toFixed(4),
-          taxRate: toDecimal(line.taxRate ?? '0').toFixed(4),
-        });
-        returnedSaleValue = returnedSaleValue.plus(returned.times(toDecimal(line.unitPrice)));
         const item = await invRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
@@ -525,9 +517,11 @@ export class DeliveryLedgerService {
     let invoiceNumber: string | null = null;
     let invoiceTotal: string | null = null;
     let paymentId: string | null = null;
-    let creditMemoId: string | null = null;
-    let creditMemoNumber: string | null = null;
-    let creditMemoTotal: string | null = null;
+    let advanceApplied = new Decimal(0);
+    let amountCollected = new Decimal(0);
+    let balanceDue = new Decimal(0);
+    // Nothing delivered means nothing sold and nothing owed.
+    let paidStatus: DeliveryPaidStatus = 'paid';
 
     if (invoiceLines.length > 0) {
       // A delivery line carries the price COPIED from the inventory item when it
@@ -574,6 +568,7 @@ export class DeliveryLedgerService {
       invoiceId = invoice.id;
       invoiceNumber = invoice.invoiceNumber;
       invoiceTotal = invoice.total;
+      const total = toDecimal(invoice.total);
 
       if (delivery.salesOrderId) {
         const soRepo = em.getRepository(SalesOrder);
@@ -587,16 +582,35 @@ export class DeliveryLedgerService {
         }
       }
 
-      if (delivery.prepaid) {
-        // The customer paid at dispatch and that cash sits in Customer
-        // Advances. Approval is the moment control transfers, so the liability
-        // is released against the invoice: Dr Customer Advances / Cr A/R.
-        // Together with the invoice above the net is
-        // Dr Customer Advances / Cr Sales — revenue recognised on delivery,
-        // matched to the COGS entry posted below in the same approval.
+      // ---- 1. The advance taken before dispatch ----
+      if (delivery.advancePaymentId) {
+        // Control transfers now, so the advance is earned: apply it to the
+        // invoice through the receipt that holds it (Dr 2400 / Cr A/R), which
+        // leaves a PaymentApplication on the invoice's payment history.
+        const available = await this.unappliedOnReceipt(em, delivery.advancePaymentId);
+        advanceApplied = Decimal.min(available, total);
+        if (advanceApplied.greaterThan(MONEY_TOLERANCE)) {
+          await this.payments.applyInTransaction(
+            em,
+            companyId,
+            userId,
+            delivery.advancePaymentId,
+            {
+              applications: [{ invoiceId: invoice.id, amount: advanceApplied.toFixed(4) }],
+              date: this.today(),
+            },
+            { forDeliveryId: delivery.id },
+          );
+        }
+      } else if (delivery.prepaid) {
+        // LEGACY prepaid: dispatch posted a bare Dr Cash / Cr 2400 for the
+        // whole order, with no receipt to apply. Release it the way those
+        // deliveries always were — Dr 2400 / Cr A/R and the invoice marked
+        // paid. Its advance was the full order, so it covers any invoice this
+        // delivery can raise.
         const advances = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_CUSTOMER_ADVANCES);
         const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, em);
-        const settled = toDecimal(invoice.total).toFixed(4);
+        const settled = total.toFixed(4);
         await this.posting.createEntry(em, {
           companyId,
           date: this.today(),
@@ -615,8 +629,7 @@ export class DeliveryLedgerService {
         invoice.status = 'paid';
         await em.getRepository(Invoice).save(invoice);
         // Creating the invoice raised what the customer owes; the advance just
-        // settled it. Without this the customer's balance kept the whole
-        // prepaid sale as a debt forever.
+        // settled it.
         const customer = await em.findOne(Customer, {
           where: { id: delivery.customerId, companyId },
         });
@@ -624,23 +637,46 @@ export class DeliveryLedgerService {
           customer.balance = subtractMoney(customer.balance, settled).toFixed(4);
           await em.save(customer);
         }
-      } else if (paidStatus === 'paid') {
-        // Rider collected cash on the doorstep: clear the invoice now.
-        // Net effect of invoice + payment = Dr Cash / Cr Sales / Cr Tax.
+        advanceApplied = total;
+      }
+
+      // ---- 2. Cash the rider collected at the door ----
+      // The owner's count, when given, replaces the rider's figure. Either way
+      // it is checked against what the advance leaves, now that the invoice
+      // (and so the amount due) is final.
+      const settle =
+        collection.amountCollected !== undefined && collection.amountCollected !== null
+          ? collectionFromAmount(total, advanceApplied, collection.amountCollected)
+          : resolveCollection({
+              gross: total,
+              advance: advanceApplied,
+              paidStatus: delivery.paidStatus,
+              amountCollected: delivery.amountCollected,
+            });
+      amountCollected = toDecimal(settle.amountCollected);
+      if (amountCollected.greaterThan(MONEY_TOLERANCE)) {
+        // Net effect with the invoice above: Dr Cash / Cr Sales / Cr Tax.
         const payment = await this.payments.receiveInTransaction(em, companyId, userId, {
           customerId: delivery.customerId,
           paymentDate: this.today(),
           paymentMethod: 'cash',
-          amount: invoice.total,
+          amount: amountCollected.toFixed(4),
           reference: delivery.referenceNo ?? undefined,
           memo: `Collected by rider — delivery ${delivery.referenceNo ?? delivery.id}`,
-          applications: [{ invoiceId: invoice.id, amount: invoice.total }],
+          applications: [{ invoiceId: invoice.id, amount: amountCollected.toFixed(4) }],
         });
         paymentId = payment.id;
       }
+
+      // ---- 3. Whatever is left stays in A/R ----
+      const settled =
+        (await em.getRepository(Invoice).findOne({ where: { id: invoice.id, companyId } })) ?? invoice;
+      paidStatus = invoicePaidStatus(settled);
+      balanceDue = toDecimal(settled.balance);
     } else if (invoiceLines.length === 0 && delivery.salesOrderId) {
       // Nothing was delivered — cancel the sales order; the stock reversal
-      // below returns everything to the shelf.
+      // below returns everything to the shelf. An advance stays on the
+      // customer's receipt, untouched.
       const soRepo = em.getRepository(SalesOrder);
       const so = await soRepo.findOne({ where: { id: delivery.salesOrderId, companyId } });
       if (so && so.status !== 'invoiced') {
@@ -702,6 +738,7 @@ export class DeliveryLedgerService {
 
     delivery.invoiceId = invoiceId;
     delivery.paidStatus = paidStatus;
+    delivery.amountCollected = amountCollected.toFixed(4);
     delivery.ledgerStatus = 'committed';
     await deliveryRepo.save(delivery);
 
@@ -714,10 +751,22 @@ export class DeliveryLedgerService {
       cogsAmount: cogsCost.toFixed(4),
       restockedCost: restockCost.toFixed(4),
       paidStatus,
-      creditMemoId,
-      creditMemoNumber,
-      creditMemoTotal,
+      advanceApplied: advanceApplied.toFixed(4),
+      amountCollected: amountCollected.toFixed(4),
+      balanceDue: balanceDue.toFixed(4),
     };
+  }
+
+  /**
+   * What an advance receipt still holds. Zero when the receipt is gone — the
+   * invoice then simply stays in A/R for whatever the advance would have paid.
+   */
+  private async unappliedOnReceipt(em: EntityManager, paymentId: string): Promise<Decimal> {
+    const payment = await em.findOne(Payment, { where: { id: paymentId } });
+    if (!payment) return new Decimal(0);
+    const applications = await em.find(PaymentApplication, { where: { paymentId } });
+    const applied = applications.reduce((sum, a) => sum.plus(toDecimal(a.amountApplied)), new Decimal(0));
+    return Decimal.max(toDecimal(payment.amount).minus(applied), 0);
   }
 
   /**
@@ -725,15 +774,15 @@ export class DeliveryLedgerService {
    * Transit at the frozen cost, restock everything. Idempotent via
    * ledgerStatus.
    *
-   * For a POSTPAID delivery no revenue is touched, because none was ever
-   * recognised — the sales order is simply cancelled.
+   * No revenue is touched, because none was recognised before approval — the
+   * sales order is simply cancelled. An advance the customer paid stays on
+   * their receipt in 2400: the goods came back, so the company still owes
+   * them, and the owner applies it to another invoice or refunds it.
    *
-   * For a PREPAID delivery the sale WAS posted at dispatch (invoice + payment,
-   * see commitStockOnAssign), so reversing only the stock left Sales, output
-   * tax and Cash overstated forever with the goods back on the shelf. A credit
-   * memo reverses it, mirroring what the partial-return path at approval
-   * already does — an auditable document rather than a silent reversal, and it
-   * handles the tax leg for free.
+   * The one exception is a LEGACY prepaid delivery that was invoiced and paid
+   * at dispatch (it carries an invoiceId before approval): that sale is
+   * reversed with a credit memo, an auditable document rather than a silent
+   * reversal.
    */
   async releaseOnReject(
     em: EntityManager,

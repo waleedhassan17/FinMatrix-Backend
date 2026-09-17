@@ -194,3 +194,22 @@ ORDER BY document;
 
 \echo ''
 \echo '=== Done. See qa/DIAGNOSIS.md for how to read this. =============='
+
+-- ─── Legacy prepaid advances with no receipt ────────────────────────
+-- Before advances became receipts, a prepaid delivery posted a bare
+-- Dr Cash / Cr 2400 at dispatch and released it at approval. Where the
+-- delivery was then rejected, cancelled or only partly delivered, part of
+-- that advance is still in 2400 with no receipt the app can apply or refund.
+-- INFORMATIONAL: each row is money the company still owes the customer.
+-- Any correction is a dry-run-first repair, confirmed by the owner.
+SELECT d.reference_no, d.customer_name, d.status, d.ledger_status,
+       COALESCE(SUM(g.credit - g.debit), 0)::numeric(18,2) AS advance_left_in_2400
+FROM deliveries d
+JOIN general_ledger g ON g.source_id = d.id
+                     AND g.source_type IN ('delivery_advance', 'delivery_advance_release')
+JOIN accounts a ON a.id = g.account_id AND a.account_number = '2400'
+WHERE d.company_id = :companyId
+  AND d.prepaid = true
+  AND d.advance_payment_id IS NULL
+GROUP BY d.id, d.reference_no, d.customer_name, d.status, d.ledger_status
+HAVING abs(COALESCE(SUM(g.credit - g.debit), 0)) > 0.01;

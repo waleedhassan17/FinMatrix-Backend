@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -37,9 +38,22 @@ import { Invoice } from '../invoices/entities/invoice.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
+import { invoicePaidStatus } from '../deliveries/delivery-collection.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { businessToday } from '../../common/utils/business-date.util';
 import { assertNotFutureDate } from '../../common/utils/date.util';
+
+/**
+ * A delivery that still owns the advance receipt `paymentIdExpr`: taken before
+ * dispatch and not yet approved, cancelled or returned. Approval applies that
+ * advance to the delivery's own invoice, so until then it may be neither spent
+ * on another invoice nor deleted.
+ */
+const OPEN_DELIVERY_ADVANCE_SQL = (paymentIdExpr: string) => `
+  SELECT d.id, d.reference_no FROM deliveries d
+   WHERE d.advance_payment_id = ${paymentIdExpr}
+     AND d.ledger_status IN ('none', 'in_transit')
+     AND d.status NOT IN ('cancelled', 'failed', 'returned')`;
 
 /** A receipt still holding money that has not been applied to an invoice. */
 export interface CustomerAdvance {
@@ -98,6 +112,9 @@ export class PaymentsService {
          FROM payments p
          LEFT JOIN payment_applications pa ON pa.payment_id = p.id
         WHERE p.company_id = $1 AND p.customer_id = $2
+          -- An advance taken for a delivery still on its way belongs to that
+          -- delivery: approval applies it. It is not free to spend elsewhere.
+          AND NOT EXISTS (${OPEN_DELIVERY_ADVANCE_SQL('p.id')})
         GROUP BY p.id
        HAVING p.amount - COALESCE(SUM(pa.amount_applied), 0) > $3
         ORDER BY p.payment_date, p.created_at`,
@@ -342,9 +359,9 @@ export class PaymentsService {
         app.invoiceId,
         app.amount,
       );
-      // A credit sale that came from a delivery: tell the delivery it has
-      // been settled, or its row reads NOT PAID forever.
-      await this.syncDeliveryPaidStatus(manager, companyId, invoice);
+      // A sale that came from a delivery: keep its PAID / PARTIAL / NOT PAID
+      // in step with the invoice, or the row reads NOT PAID forever.
+      await this.refreshDeliveryPaidStatus(manager, companyId, invoice);
       applied = applied.plus(toDecimal(app.amount));
       appliedNumbers.push(invoice.invoiceNumber);
       appEntities.push(
@@ -435,7 +452,29 @@ export class PaymentsService {
     paymentId: string,
     dto: ApplyPaymentDto,
   ) {
-    await this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction((manager) =>
+      this.applyInTransaction(manager, companyId, userId, paymentId, dto),
+    );
+    return this.getById(companyId, paymentId);
+  }
+
+  /**
+   * Transaction-aware apply(): lets delivery approval settle the invoice it
+   * has just raised from the advance taken before dispatch, atomically with
+   * the invoice and COGS postings. Same checks, same postings.
+   *
+   * `opts.forDelivery` is how approval claims the advance its own delivery
+   * holds. Every other caller is refused while that delivery is open.
+   */
+  async applyInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    paymentId: string,
+    dto: ApplyPaymentDto,
+    opts: { forDeliveryId?: string } = {},
+  ): Promise<void> {
+    {
       const payment = await manager
         .createQueryBuilder(Payment, 'p')
         .setLock('pessimistic_write')
@@ -443,6 +482,15 @@ export class PaymentsService {
         .getOne();
       if (!payment) {
         throw new NotFoundException({ code: 'PAYMENT_NOT_FOUND', message: 'Payment not found' });
+      }
+      const holder = await this.openDeliveryHoldingAdvance(manager, payment.id);
+      if (holder && holder.id !== opts.forDeliveryId) {
+        throw new BadRequestException({
+          code: 'ADVANCE_RESERVED',
+          message:
+            `${payment.paymentNumber ?? 'This receipt'} is the advance for delivery ${holder.referenceNo ?? holder.id}. ` +
+            'It is applied when that delivery is approved; cancel the delivery to free it.',
+        });
       }
       const existing = await manager.find(PaymentApplication, { where: { paymentId } });
       const alreadyApplied = existing.reduce(
@@ -485,7 +533,7 @@ export class PaymentsService {
       for (const a of dto.applications) {
         await this.assertInvoiceBelongsToCustomer(manager, companyId, a.invoiceId, payment.customerId);
         const invoice = await this.invoices.applyPayment(manager, companyId, a.invoiceId, a.amount);
-        await this.syncDeliveryPaidStatus(manager, companyId, invoice);
+        await this.refreshDeliveryPaidStatus(manager, companyId, invoice);
         numbers.push(invoice.invoiceNumber);
         applications.push(
           manager.create(PaymentApplication, {
@@ -529,8 +577,7 @@ export class PaymentsService {
         }
       }
       await manager.save(applications);
-    });
-    return this.getById(companyId, paymentId);
+    }
   }
 
   /**
@@ -560,78 +607,49 @@ export class PaymentsService {
   }
 
   /**
-   * Keep a delivery's PAID / NOT PAID flag honest once its invoice is settled.
+   * Keep a delivery's PAID / PARTIAL / NOT PAID honest as its invoice is paid.
    *
-   * A "NOT PAID" delivery approval raises an ordinary A/R invoice (Stage 3) and
-   * leaves the delivery at paidStatus='unpaid'. Nothing used to tell the
-   * delivery when the customer finally paid, so the approvals list showed a
-   * settled sale as NOT PAID indefinitely — it reads delivery.paidStatus live.
+   * Approval raises the invoice and applies whatever was paid by then (the
+   * advance, the rider's cash). Anything paid later arrives through an ordinary
+   * receipt, and a deleted receipt reopens the invoice; the approvals list reads
+   * delivery.paidStatus live, so without this it would show the state at
+   * approval forever.
    *
-   * This posts NOTHING. Revenue and A/R were recognised at delivery approval,
-   * and the payment itself posts Dr Bank / Cr A/R above. This is display state.
+   * This posts NOTHING — revenue, A/R and the cash were posted by approval and
+   * by the receipts. It is display state, and it is derived from the invoice
+   * rather than nudged, so every path lands on the same answer.
    *
-   * Two constraints worth stating, because both are easy to break later:
-   *
-   *  - Only for a COMMITTED delivery. paidStatus is overloaded: it is also an
-   *    INPUT to posting. DeliveryLedgerService.commitApproval reads it to
-   *    decide whether approval books a cash receipt or leaves the invoice on
-   *    A/R. Writing it before the ledger has committed could turn a credit sale
-   *    into a phantom cash sale. Once committed the decision is frozen, so this
-   *    can only ever be cosmetic. (commitApproval also calls us on the
-   *    rider-collected-cash path — but that runs BEFORE it sets
-   *    delivery.invoiceId, so the lookup finds nothing and we no-op. Keep that
-   *    ordering if you touch either file.)
-   *
-   *  - There is no partial state. delivery.paid_status is varchar(8) holding
-   *    'paid' | 'unpaid' | null. A partial payment writes nothing.
+   * Only for a COMMITTED delivery. Before approval paidStatus is an INPUT to
+   * posting (the rider's answer decides what approval records), and writing it
+   * then could turn a credit sale into a phantom cash sale. commitApproval
+   * applies its own receipts BEFORE it sets delivery.invoiceId, so the lookup
+   * finds nothing during approval and this no-ops; approval sets the status
+   * itself. Keep that ordering if you touch either file.
    */
-  private async syncDeliveryPaidStatus(
+  private async refreshDeliveryPaidStatus(
     manager: EntityManager,
     companyId: string,
     invoice: Invoice,
   ): Promise<void> {
-    const settled =
-      invoice.status === 'paid' ||
-      !isPositive(toDecimal(invoice.balance));
-    if (!settled) return;
-
     const delivery = await manager.findOne(Delivery, {
       where: { invoiceId: invoice.id, companyId },
     });
     if (!delivery) return;
     if (delivery.ledgerStatus !== 'committed') return;
-    if (delivery.paidStatus === 'paid') return;
 
-    delivery.paidStatus = 'paid';
+    const next = invoicePaidStatus(invoice);
+    if (delivery.paidStatus === next) return;
+    delivery.paidStatus = next;
     await manager.save(delivery);
   }
 
-  /**
-   * The mirror, for a deleted payment: the invoice is open again, so the
-   * delivery goes back to NOT PAID.
-   *
-   * Prepaid deliveries are excluded. Their 'paid' came from cash taken before
-   * dispatch and released from Customer Advances at approval, not from this
-   * payment — reverting it would contradict the advance still sitting in the
-   * ledger, and leave the row reading prepaid=true / paidStatus='unpaid'.
-   */
-  private async revertDeliveryPaidStatus(
+  /** The open delivery (if any) whose advance this receipt is. */
+  private async openDeliveryHoldingAdvance(
     manager: EntityManager,
-    companyId: string,
-    invoice: Invoice,
-  ): Promise<void> {
-    if (invoice.status === 'paid') return;
-
-    const delivery = await manager.findOne(Delivery, {
-      where: { invoiceId: invoice.id, companyId },
-    });
-    if (!delivery) return;
-    if (delivery.ledgerStatus !== 'committed') return;
-    if (delivery.prepaid) return;
-    if (delivery.paidStatus === 'unpaid') return;
-
-    delivery.paidStatus = 'unpaid';
-    await manager.save(delivery);
+    paymentId: string,
+  ): Promise<{ id: string; referenceNo: string | null } | null> {
+    const [row] = await manager.query(`${OPEN_DELIVERY_ADVANCE_SQL('$1')} LIMIT 1`, [paymentId]);
+    return row ? { id: row.id, referenceNo: row.reference_no ?? null } : null;
   }
 
   /**
@@ -662,6 +680,19 @@ export class PaymentsService {
       // Bank-reconciliation lock (bankreconcillation.md behavior 9).
       await assertNotReconciled(manager, companyId, [payment.id], 'payment');
 
+      // An advance still owned by a delivery on its way: approval is going to
+      // apply it. Deleting it would leave the rider collecting, and the invoice
+      // expecting, money the books no longer hold.
+      const holder = await this.openDeliveryHoldingAdvance(manager, payment.id);
+      if (holder) {
+        throw new ConflictException({
+          code: 'ADVANCE_IN_USE',
+          message:
+            `${payment.paymentNumber ?? 'This receipt'} is the advance for delivery ${holder.referenceNo ?? holder.id}. ` +
+            'Cancel that delivery first; the advance then stays on the customer’s account and can be deleted or refunded.',
+        });
+      }
+
       // Un-apply from invoices — exact reverse of invoices.applyPayment,
       // with the same row lock against concurrent applications.
       const today = businessToday();
@@ -686,9 +717,9 @@ export class PaymentsService {
           invoice.status = 'sent';
         }
         await manager.save(invoice);
-        // Mirror of syncDeliveryPaidStatus: the invoice is open again, so a
-        // delivery that was settled by this payment goes back to NOT PAID.
-        await this.revertDeliveryPaidStatus(manager, companyId, invoice);
+        // The invoice is open again: the delivery it came from reads what is
+        // now true of it — PARTIAL or NOT PAID.
+        await this.refreshDeliveryPaidStatus(manager, companyId, invoice);
       }
 
       // Restore the customer's balance. A receipt that posted its remainder to

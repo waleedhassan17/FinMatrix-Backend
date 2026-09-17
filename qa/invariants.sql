@@ -284,3 +284,54 @@ FROM (
                         AND l.received_qty > l.billed_qty)
 ) t
 WHERE abs(t.residue) > 0.01;
+
+-- I19. A delivery's advance must be the receipt it names, for its customer and
+-- its amount. The advance is what approval applies to the invoice and what the
+-- rider's "amount to collect" is worked out from; a receipt deleted, re-pointed
+-- or edited under it would have the rider collecting, and the invoice
+-- expecting, money the books do not hold. (payments.delete refuses while the
+-- delivery is open; this catches anything that got round it.)
+-- A MISSING receipt is only a defect while the delivery is open: once it is
+-- cancelled or returned, deleting the receipt is how the owner records giving
+-- the money back.
+SELECT 'I19 DELIVERY ADVANCE RECEIPT MISMATCH' AS violation,
+       d.company_id, d.reference_no, d.advance_amount, p.amount, p.customer_id, d.customer_id
+FROM deliveries d
+LEFT JOIN payments p ON p.id = d.advance_payment_id
+WHERE d.advance_payment_id IS NOT NULL
+  AND ((p.id IS NULL
+        AND d.ledger_status IN ('none', 'in_transit')
+        AND d.status NOT IN ('cancelled', 'failed', 'returned'))
+       OR p.company_id <> d.company_id
+       OR p.customer_id <> d.customer_id
+       OR p.amount <> d.advance_amount);
+
+-- I20. An advance belongs to its delivery until the delivery is approved,
+-- cancelled or returned: nothing else may have spent it. Approval applies it
+-- to the delivery's own invoice (payments.applyInTransaction, forDeliveryId).
+SELECT 'I20 OPEN DELIVERY ADVANCE ALREADY APPLIED' AS violation,
+       d.company_id, d.reference_no, SUM(pa.amount_applied) AS applied
+FROM deliveries d
+JOIN payment_applications pa ON pa.payment_id = d.advance_payment_id
+WHERE d.advance_payment_id IS NOT NULL
+  AND d.ledger_status IN ('none', 'in_transit')
+  AND d.status NOT IN ('cancelled', 'failed', 'returned')
+GROUP BY d.company_id, d.reference_no;
+
+-- I21. Once approved, a delivery's PAID / PARTIAL / NOT PAID is its invoice's.
+-- It is derived, never answered (payments.refreshDeliveryPaidStatus), so any
+-- disagreement means a path wrote it by hand. A sale reversed by a credit memo
+-- is left out: its invoice reads settled because it was credited, not paid,
+-- and the delivery says "reversed" rather than "paid".
+SELECT 'I21 DELIVERY PAID STATUS DISAGREES WITH INVOICE' AS violation,
+       d.company_id, d.reference_no, d.paid_status, i.invoice_number, i.balance, i.amount_paid
+FROM deliveries d
+JOIN invoices i ON i.id = d.invoice_id
+WHERE d.ledger_status = 'committed'
+  AND i.status NOT IN ('void', 'draft')
+  AND NOT EXISTS (SELECT 1 FROM credit_memo_applications cma WHERE cma.invoice_id = i.id)
+  AND NOT EXISTS (SELECT 1 FROM credit_memos cm WHERE cm.original_invoice_id = i.id AND cm.status <> 'void')
+  AND d.paid_status IS DISTINCT FROM (
+        CASE WHEN i.balance <= 0.0001 THEN 'paid'
+             WHEN i.amount_paid > 0.0001 THEN 'partial'
+             ELSE 'unpaid' END);

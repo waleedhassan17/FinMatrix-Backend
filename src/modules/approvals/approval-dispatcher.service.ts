@@ -10,6 +10,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { InventoryApprovalsService } from '../inventory-approvals/inventory-approvals.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 import { EstimatesService } from '../estimates/estimates.service';
+import { DeliveriesService } from '../deliveries/deliveries.service';
 import { ApprovalType } from './entities/approval-request.entity';
 import { CreditOverride } from '../../common/utils/credit-control.util';
 
@@ -47,6 +48,7 @@ export class ApprovalDispatcher {
     private readonly deliveryApprovals: InventoryApprovalsService,
     private readonly salesOrders: SalesOrdersService,
     private readonly estimates: EstimatesService,
+    private readonly deliveries: DeliveriesService,
   ) {}
 
   /**
@@ -61,7 +63,7 @@ export class ApprovalDispatcher {
     payload: Payload,
     companyId: string,
     reviewerId: string,
-    opts: { creditOverride?: CreditOverride | null } = {},
+    opts: { creditOverride?: CreditOverride | null; requestedBy?: string | null } = {},
   ): Promise<DispatchResult> {
     switch (type) {
       // ── Dr/Cr Inventory against the reason's offset account ──────────────
@@ -305,6 +307,24 @@ export class ApprovalDispatcher {
         // reversal is findable by its source_type ('delivery_approval_undo')
         // and source_id, so nothing is lost by not duplicating it here.
         return { id: requestId, journalEntryId: null };
+      }
+
+      // ── A delivery paid for in advance: Dr Cash / Cr Customer Advances ───
+      // Nothing existed while the request was pending. This is the owner's own
+      // create, so the delivery, its advance receipt and (when a rider was
+      // chosen) the dispatch happen together — and stock, the advance ceiling
+      // and the credit limit are checked against today, not the day it was
+      // asked for. A shortfall throws, and the request stays pending with the
+      // reason on lastError.
+      case 'delivery_advance': {
+        const created = await this.deliveries.create(
+          companyId,
+          payload as any,
+          reviewerId,
+          opts.creditOverride ?? null,
+          { preparedBy: opts.requestedBy ?? null },
+        );
+        return { id: created.id, journalEntryId: created.advance?.journalEntryId ?? null };
       }
 
       default: {
