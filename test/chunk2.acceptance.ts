@@ -315,6 +315,120 @@ async function main() {
   check('the proof file streams back', fileRes.status === 200 && (fileRes.headers.get('content-type') ?? '').includes('image/png'),
     { status: fileRes.status, type: fileRes.headers.get('content-type') });
 
+  // ── 8h–8l. Full, partial and split payments; overpayment; a bad amount key ──
+  //
+  // The AP side's own arithmetic, none of it covered until now: the partial-
+  // payment tests elsewhere in this suite are customer-side invoices, and a
+  // client that could not record a payment at all would still have passed every
+  // check above. Bill 1 is 900 (10 × 90) and bill 2 is 1,100 (10 × 110).
+  const billRow = async (id: string) =>
+    (await pg.query(
+      'SELECT total::float8 AS total, amount_paid::float8 AS paid, balance::float8 AS balance, status FROM bills WHERE id = $1',
+      [id],
+    )).rows[0];
+  const vendorBalance = async (): Promise<number> =>
+    Number((await pg.query('SELECT balance::float8 AS b FROM vendors WHERE id = $1', [vendor.id])).rows[0].b);
+  const jeCount = async (): Promise<number> =>
+    Number((await pg.query('SELECT COUNT(*)::int AS c FROM journal_entries WHERE company_id = $1', [cid])).rows[0].c);
+  const freshProof = async (): Promise<string> =>
+    (await uploadProof(PNG, 'image/png', `receipt-${Date.now()}-${Math.random()}.png`)).body?.data?.id;
+  const payJson = async (applications: unknown[]) => ({
+    vendorId: vendor.id, paymentDate: TODAY, paymentMethod: 'cash',
+    bankAccountId: cashForPay?.id, proofId: await freshProof(), applications,
+  });
+
+  // 8h. The 900.00 in 8e settled bill 1 exactly — a bill paid to the cent is
+  // `paid` and owes nothing, never `partial` on a rounding crumb.
+  const b1 = await billRow(bill1Id);
+  check('a bill paid in full reads as paid', b1.status === 'paid', b1);
+  check('a fully paid bill owes nothing', close(b1.balance, 0, 0.001), b1);
+  check('a fully paid bill records the whole amount', close(b1.paid, 900, 0.001), b1);
+
+  // 8i. One payment across TWO bills — one settled in full, one in part. This
+  // is what the Pay Bills screen sends whenever more than one bill is ticked.
+  const splitBill = data(await req('POST', '/bills', {
+    ...A,
+    json: {
+      vendorId: vendor.id, billDate: TODAY, dueDate: TODAY,
+      lines: [{ description: 'Split-test carriage', amount: '300', accountId: rentAcct?.id }],
+    },
+  }));
+  const splitBillId = splitBill?.billId ?? splitBill?.id;
+  check('a second open bill exists for the split', !!splitBillId, splitBill);
+
+  const jeBeforeSplit = await jeCount();
+  const vendorBeforeSplit = await vendorBalance();
+  const paymentsBeforeSplit = await countPayments();
+
+  const split = await req('POST', '/bills/pay', {
+    ...A,
+    json: await payJson([
+      { billId: bill2Id, amount: '400.00' },      // part of 1,100
+      { billId: splitBillId, amount: '300.00' },  // all of 300
+    ]),
+  });
+  check('one payment can settle several bills at once',
+    split.status === 201 || split.status === 200, split.body);
+  await assertBooksBalanced('after a split bill payment');
+
+  const b2Part = await billRow(bill2Id);
+  const bSplit = await billRow(splitBillId);
+  check('the part-paid bill reads as partial', b2Part.status === 'partial', b2Part);
+  check('a part payment leaves balance = total − paid',
+    close(b2Part.balance, 700, 0.001) && close(b2Part.paid, 400, 0.001), b2Part);
+  check('the bill covered in full by the same payment reads as paid',
+    bSplit.status === 'paid' && close(bSplit.balance, 0, 0.001), bSplit);
+
+  // One payment, one entry — not one per bill — and the vendor falls by the
+  // total once, not once per application.
+  check('a split payment writes exactly ONE payment row',
+    (await countPayments()) === paymentsBeforeSplit + 1);
+  check('a split payment posts exactly ONE journal entry',
+    (await jeCount()) === jeBeforeSplit + 1, { before: jeBeforeSplit, after: await jeCount() });
+  check('a split payment reduces the vendor balance by the total once',
+    close(await vendorBalance(), vendorBeforeSplit - 700, 0.001),
+    { before: vendorBeforeSplit, after: await vendorBalance() });
+
+  // 8j. Paying more than a bill still owes is refused outright — not clamped,
+  // not parked as a credit, and never a negative balance.
+  const paymentsBeforeOverpay = await countPayments();
+  const vendorBeforeOverpay = await vendorBalance();
+  const overpay = await req('POST', '/bills/pay', {
+    ...A, json: await payJson([{ billId: bill2Id, amount: '700.01' }]),
+  });
+  check('paying more than a bill owes is refused (400)', overpay.status === 400, overpay.body);
+  check('and the refusal names PAYMENT_EXCEEDS_BALANCE',
+    JSON.stringify(overpay.body ?? {}).includes('PAYMENT_EXCEEDS_BALANCE'), overpay.body);
+  check('a refused overpayment wrote no payment row',
+    (await countPayments()) === paymentsBeforeOverpay);
+  check('a refused overpayment left the bill untouched',
+    close((await billRow(bill2Id)).balance, 700, 0.001));
+  check('a refused overpayment left the vendor balance untouched',
+    close(await vendorBalance(), vendorBeforeOverpay, 0.001));
+
+  // 8k. The exact shape a client gets wrong. `amountApplied` is the RESPONSE
+  // field name; sent as the request key it is stripped by the whitelist and
+  // `amount` arrives undefined. It must fail loudly rather than post zero.
+  const badKey = await req('POST', '/bills/pay', {
+    ...A, json: await payJson([{ billId: bill2Id, amountApplied: '10.00' }]),
+  });
+  check('an application without `amount` is refused (400)', badKey.status === 400, badKey.body);
+  check('and the message names applications.0.amount',
+    JSON.stringify(badKey.body ?? {}).includes('applications.0.amount'), badKey.body);
+  check('the rejected payload wrote nothing', (await countPayments()) === paymentsBeforeOverpay);
+
+  // 8l. Settling the remainder flips partial → paid and closes the balance.
+  const settle = await req('POST', '/bills/pay', {
+    ...A, json: await payJson([{ billId: bill2Id, amount: '700.00' }]),
+  });
+  check('the remainder of a part-paid bill can be settled',
+    settle.status === 201 || settle.status === 200, settle.body);
+  const b2Done = await billRow(bill2Id);
+  check('settling the remainder flips partial → paid', b2Done.status === 'paid', b2Done);
+  check('and the bill owes nothing and records the full total',
+    close(b2Done.balance, 0, 0.001) && close(b2Done.paid, b2Done.total, 0.001), b2Done);
+  await assertBooksBalanced('after settling the part-paid bill');
+
   // ── 9. Inventory adjustment (−2) ─────────────────────────────────────────
   console.log('\n— Inventory adjustment');
   const adj = await req('POST', `/inventory/items/${itemId}/adjust`, { ...A, json: { itemId, newQty: '14', reason: 'damage' } });
