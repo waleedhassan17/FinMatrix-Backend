@@ -10,6 +10,11 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Primary key is the plan KEY, not a UUID, because that key is what every
  * company row already stores and what the config is indexed by.
  *
+ * Lives in database/migrations/, which is the only path data-source.ts globs
+ * ('dist/database/migrations/*.js'). There is a stray src/migrations/ holding
+ * one older file that has consequently never run -- putting anything there
+ * deploys silently and applies nothing.
+ *
  * Every value column is nullable: NULL means "no opinion, use the config".
  * That is what lets an admin change a price without restating the rider
  * limit, and what makes reverting one field a matter of writing NULL rather
