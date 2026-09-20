@@ -312,9 +312,88 @@ export const TIER_PLAN_KEYS: TierPlanKey[] = [
  */
 export function plansForType(companyType: string | null | undefined): PlanConfig[] {
   if (!companyType) return [];
-  return TIER_PLAN_KEYS.map((k) => PLAN_CONFIG[k]).filter(
-    (p) => p.companyType !== null && p.companyType === companyType,
+  return TIER_PLAN_KEYS.map((k) => withOverride(PLAN_CONFIG[k])).filter(
+    (p) =>
+      p.companyType !== null &&
+      p.companyType === companyType &&
+      // A retired plan stays resolvable for companies already on it, but is
+      // not offered to anyone new.
+      isPlanOffered(p.key),
   );
+}
+
+
+// ─── Admin overrides ─────────────────────────────────
+/**
+ * The fields an admin may change from the console.
+ *
+ * Deliberately narrow. Everything here is either a number a customer is
+ * quoted, the one limit the platform actually enforces, or display text:
+ *
+ *   monthlyMinorUnits / priceMinorUnits  what the customer is charged
+ *   deliveryPersonnelLimit               the only plan difference enforced
+ *   label                                display only
+ *   isOffered                            whether it is sold to anyone new
+ *
+ * What is NOT editable, and why:
+ *
+ *   key            it is the primary key, stored on every company row
+ *   durationMonths the key says `_6mo`; changing the number makes it lie,
+ *                  and existing subscriptions were sold against the old one
+ *   companyType    moves the plan to a different tier ladder
+ *   currency       would silently reprice every past quote
+ */
+export interface PlanOverridePatch {
+  label?: string;
+  monthlyMinorUnits?: number;
+  priceMinorUnits?: number;
+  deliveryPersonnelLimit?: number;
+  isOffered?: boolean;
+}
+
+/**
+ * Overrides live in a module-level map rather than being threaded through
+ * every consumer.
+ *
+ * getPlanConfig() is the single resolution point for billing, auth, companies
+ * and delivery-personnel, and all of them call it SYNCHRONOUSLY. Making the
+ * catalogue database-backed by making those call sites async would have meant
+ * changing four modules, including the price-on-submit path. Merging here
+ * instead means every existing caller picks up an admin's edit with no change
+ * at all.
+ *
+ * PlanOverrideService owns this map: it loads the table at boot and re-loads
+ * it after every write. Nothing else may write to it.
+ */
+const PLAN_OVERRIDES = new Map<PlanKey, PlanOverridePatch>();
+
+/** Replaces the whole set. Called by PlanOverrideService only. */
+export function loadPlanOverrides(entries: Iterable<[PlanKey, PlanOverridePatch]>): void {
+  PLAN_OVERRIDES.clear();
+  for (const [key, patch] of entries) PLAN_OVERRIDES.set(key, patch);
+}
+
+/** The raw override for a plan, or undefined. For the admin editor's "reset". */
+export function getPlanOverride(key: PlanKey): PlanOverridePatch | undefined {
+  return PLAN_OVERRIDES.get(key);
+}
+
+/** Whether a plan is still sold. An override may retire one without deleting it. */
+export function isPlanOffered(key: PlanKey): boolean {
+  return PLAN_OVERRIDES.get(key)?.isOffered !== false;
+}
+
+function withOverride(base: PlanConfig): PlanConfig {
+  const patch = PLAN_OVERRIDES.get(base.key);
+  if (!patch) return base;
+  return {
+    ...base,
+    label: patch.label ?? base.label,
+    monthlyMinorUnits: patch.monthlyMinorUnits ?? base.monthlyMinorUnits,
+    priceMinorUnits: patch.priceMinorUnits ?? base.priceMinorUnits,
+    deliveryPersonnelLimit:
+      patch.deliveryPersonnelLimit ?? base.deliveryPersonnelLimit,
+  };
 }
 
 export function isPlanKey(v: unknown): v is PlanKey {
@@ -326,7 +405,12 @@ export function normalizePlan(raw: string | null | undefined): PlanKey {
 }
 
 export function getPlanConfig(raw: string | null | undefined): PlanConfig {
-  return PLAN_CONFIG[normalizePlan(raw)];
+  return withOverride(PLAN_CONFIG[normalizePlan(raw)]);
+}
+
+/** Every plan in the catalogue, admin edits applied, in config order. */
+export function allPlanConfigs(): PlanConfig[] {
+  return TIER_PLAN_KEYS.map((k) => withOverride(PLAN_CONFIG[k]));
 }
 
 /** Rs amount as a display string, e.g. 100000 → "Rs 1,000". */

@@ -13,13 +13,56 @@ import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
-import { PLAN_CONFIG, TIER_PLAN_KEYS, formatMinorUnits } from '../billing/plan-config';
+import {
+  PLAN_CONFIG,
+  TIER_PLAN_KEYS,
+  formatMinorUnits,
+  getPlanConfig,
+  getPlanOverride,
+  isPlanKey,
+  isPlanOffered,
+  type PlanKey,
+} from '../billing/plan-config';
+import { PlanOverrideService } from './plan-override.service';
+
+/** What the console may change on a plan. See PlanOverride for why this is narrow. */
+export interface UpdatePlanDto {
+  label?: string;
+  monthlyMinorUnits?: number;
+  priceMinorUnits?: number;
+  deliveryPersonnelLimit?: number;
+  isOffered?: boolean;
+  updatedBy?: string | null;
+}
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { MailService } from '../mail/mail.service';
 import { COMPANY_STATUS, isCompanyApproved } from '../../types';
+
+const PLAN_TIER_FEATURES: Record<string, string[]> = {
+    small_business: [
+      'Invoices, bills, payments & estimates',
+      'Customers, vendors & chart of accounts',
+      'Tax tracking + core reports (P&L, BS, TB, aging)',
+    ],
+    // Each list stands on its own. "Everything in <tier>" pointed buyers at a
+    // tier that is not on sale, so they were told a plan includes something
+    // they could not see. Four lines at most — the app's plan card shows four.
+    large_org: [
+      'Invoices, bills, payments, tax & core reports',
+      'Payroll, employees & payslips',
+      'Budgets vs actual, team roles & bank reconciliation',
+      'Optional inventory (per-company toggle)',
+    ],
+    warehouse: [
+      'Complete accounting: invoices, bills, payments, tax & reports',
+      'Payroll, budgets, bank reconciliation & team roles',
+      'Full inventory + purchase orders (GRNI 3-way match)',
+      'Deliveries with rider app, admin approval & Goods-in-Transit accounting',
+    ],
+};
 
 @Injectable()
 export class SuperAdminService {
@@ -33,6 +76,7 @@ export class SuperAdminService {
     @InjectRepository(CompanySubscription) private readonly subRepo: Repository<CompanySubscription>,
     private readonly dataSource: DataSource,
     private readonly mail: MailService,
+    private readonly planOverrides: PlanOverrideService,
   ) {}
 
   // ─── Seed Super Admin ───────────────────────────────────────────────────────
@@ -362,30 +406,30 @@ export class SuperAdminService {
       large_org: 'Large Organization',
       warehouse: 'Warehouse',
     };
-    const tierFeatures: Record<string, string[]> = {
-      small_business: [
-        'Invoices, bills, payments & estimates',
-        'Customers, vendors & chart of accounts',
-        'Tax tracking + core reports (P&L, BS, TB, aging)',
-      ],
-      // Each list stands on its own. "Everything in <tier>" pointed buyers at a
-      // tier that is not on sale, so they were told a plan includes something
-      // they could not see. Four lines at most — the app's plan card shows four.
-      large_org: [
-        'Invoices, bills, payments, tax & core reports',
-        'Payroll, employees & payslips',
-        'Budgets vs actual, team roles & bank reconciliation',
-        'Optional inventory (per-company toggle)',
-      ],
-      warehouse: [
-        'Complete accounting: invoices, bills, payments, tax & reports',
-        'Payroll, budgets, bank reconciliation & team roles',
-        'Full inventory + purchase orders (GRNI 3-way match)',
-        'Deliveries with rider app, admin approval & Goods-in-Transit accounting',
-      ],
+    return TIER_PLAN_KEYS.map((key, i) => this.planToView(key, i));
+  }
+
+  /**
+   * One plan in the shape the catalogue returns.
+   *
+   * Extracted so an edit can answer with exactly what the list would show for
+   * that plan -- the console then renders what actually took effect rather
+   * than echoing back the fields it asked to change.
+   */
+  planToView(rawKey: string, index?: number) {
+    const tierNames: Record<string, string> = {
+      small_business: 'Small Business',
+      large_org: 'Large Organization',
+      warehouse: 'Warehouse',
     };
-    return TIER_PLAN_KEYS.map((key, i) => {
-      const p = PLAN_CONFIG[key];
+    const tierFeatures = PLAN_TIER_FEATURES;
+    {
+      // Through getPlanConfig, so an admin's price or limit edit is reflected
+      // here exactly as it is on the customer-facing quote.
+      const p = getPlanConfig(rawKey);
+      const key = p.key;
+      const i = index ?? TIER_PLAN_KEYS.indexOf(key as never);
+      const override = isPlanKey(key) ? getPlanOverride(key as PlanKey) : undefined;
       return {
         // Legacy shape (id/name/priceMonthly/priceYearly/features/…):
         id: p.key,
@@ -407,16 +451,30 @@ export class SuperAdminService {
         totalLabel: formatMinorUnits(p.priceMinorUnits, p.currency),
         currency: p.currency,
         deliveryPersonnelLimit: p.deliveryPersonnelLimit,
+        // Editing state, so the console can show what has been changed from
+        // the configured default and offer to put it back.
+        isOffered: isPlanKey(key) ? isPlanOffered(key as PlanKey) : true,
+        isEdited: !!override && Object.keys(override).length > 0,
+        editedFields: override ? Object.keys(override) : [],
       };
-    });
+    }
   }
 
+  /**
+   * Plans are defined in code and cannot be created from the console.
+   *
+   * This is not a gap. A plan key is stored on every company row and is what
+   * billing, the renewal cron and the rider limit all resolve against; minting
+   * one at runtime means a key with no config behind it. Editing the existing
+   * catalogue is supported -- see updateSubscriptionPlan.
+   */
   async createSubscriptionPlan(dto: CreateSubscriptionPlanDto) {
     void dto;
     throw new BadRequestException({
       code: 'PLANS_CONFIG_DEFINED',
       message:
-        'Subscription plans are defined in the server configuration (billing/plan-config.ts), not in the database. Change the config and redeploy to adjust pricing.',
+        'Plans are defined in the server configuration and cannot be created here. ' +
+        'You can edit the price, rider limit and name of an existing plan.',
     });
   }
 
@@ -435,14 +493,40 @@ export class SuperAdminService {
     return this.planRepo.save(plan);
   }
 
-  async updateSubscriptionPlan(planId: string, dto: Partial<CreateSubscriptionPlanDto>) {
-    void planId;
-    void dto;
-    throw new BadRequestException({
-      code: 'PLANS_CONFIG_DEFINED',
-      message:
-        'Subscription plans are defined in the server configuration (billing/plan-config.ts), not in the database. Change the config and redeploy to adjust pricing.',
-    });
+  /**
+   * Edit one plan.
+   *
+   * `planId` is the plan KEY ('warehouse_starter_6mo'), which is what the
+   * catalogue returns as its id and what every company row stores -- not a
+   * UUID from the subscription_plans table, which is a separate and unrelated
+   * set of rows.
+   *
+   * The edit lands in plan_overrides and takes effect immediately, including
+   * on the price a customer is quoted and charged. It does NOT change what
+   * anyone already on the plan has been billed.
+   */
+  async updateSubscriptionPlan(planId: string, dto: UpdatePlanDto) {
+    const updated = await this.planOverrides.apply(
+      planId,
+      {
+        ...(dto.label !== undefined ? { label: dto.label } : {}),
+        ...(dto.monthlyMinorUnits !== undefined
+          ? { monthlyMinorUnits: dto.monthlyMinorUnits }
+          : {}),
+        ...(dto.priceMinorUnits !== undefined
+          ? { priceMinorUnits: dto.priceMinorUnits }
+          : {}),
+        ...(dto.deliveryPersonnelLimit !== undefined
+          ? { deliveryPersonnelLimit: dto.deliveryPersonnelLimit }
+          : {}),
+        ...(dto.isOffered !== undefined ? { isOffered: dto.isOffered } : {}),
+      },
+      dto.updatedBy ?? null,
+    );
+    void updated;
+    // The merged plan, so the caller renders what actually took effect rather
+    // than echoing back what it asked for.
+    return this.planToView(planId);
   }
 
   private async legacyUpdateSubscriptionPlan(planId: string, dto: Partial<CreateSubscriptionPlanDto>) {
@@ -462,13 +546,17 @@ export class SuperAdminService {
     return this.planRepo.save(plan);
   }
 
+  /**
+   * Revert a plan to exactly what the configuration declares.
+   *
+   * Deleting a plan outright is deliberately not offered: existing companies
+   * store its key, and a key with nothing behind it breaks their renewal and
+   * their rider limit. To stop selling one, set isOffered false -- it keeps
+   * resolving for whoever is on it and is shown to nobody new.
+   */
   async deleteSubscriptionPlan(planId: string) {
-    void planId;
-    throw new BadRequestException({
-      code: 'PLANS_CONFIG_DEFINED',
-      message:
-        'Subscription plans are defined in the server configuration (billing/plan-config.ts) and cannot be deleted.',
-    });
+    await this.planOverrides.reset(planId);
+    return this.planToView(planId);
   }
 
   private async legacyDeleteSubscriptionPlan(planId: string) {

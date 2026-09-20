@@ -17,6 +17,7 @@ import { SuperAdminService } from './super-admin.service';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { FeatureOverrideDto } from './dto/feature-override.dto';
+import { UpdatePlanDto } from './dto/update-plan.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { PublicRoute } from '../../common/decorators/public.decorator';
@@ -182,19 +183,29 @@ export class SuperAdminController {
     return this.service.createSubscriptionPlan(dto);
   }
 
+  /**
+   * Edit one plan.
+   *
+   * `:id` is the plan KEY ('warehouse_starter_6mo') -- what the catalogue
+   * returns as its id and what every company row stores. It is NOT a UUID,
+   * which is why there is no ParseUUIDPipe here: this route previously had
+   * one, and it would have rejected every real plan id with a 400 before the
+   * handler ran.
+   */
   @Patch('plans/:id')
   async updatePlan(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: Partial<CreateSubscriptionPlanDto>,
+    @Param('id') id: string,
+    @Body() dto: UpdatePlanDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     guardSuperAdmin(user);
-    return this.service.updateSubscriptionPlan(id, dto);
+    return this.service.updateSubscriptionPlan(id, { ...dto, updatedBy: user.id });
   }
 
+  /** Revert a plan to exactly what the configuration declares. */
   @Delete('plans/:id')
   async deletePlan(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     guardSuperAdmin(user);
