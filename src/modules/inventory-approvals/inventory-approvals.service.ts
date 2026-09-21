@@ -38,6 +38,7 @@ import {
   SubmitBillPhotoDto,
 } from './dto/inventory-approval.dto';
 import { toDecimal, MONEY_TOLERANCE } from '../../common/utils/money.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import {
   acceptsCollectionAnswer,
   deliveredGross,
@@ -673,21 +674,29 @@ export class InventoryApprovalsService {
           toDecimal(delivered - returned).times(toDecimal(item.unitCost)),
         );
 
-        await moveRepo.save(
-          moveRepo.create({
-            companyId,
-            itemId: line.itemId,
-            date: new Date().toISOString().split('T')[0],
-            type: 'delivery',
-            quantityChange: String(returned - delivered),
-            balanceAfter: String(next),
-            reference: `Approval ${req.id}`,
-            sourceType: 'inventory_approval',
-            sourceId: req.id,
-            createdBy: reviewerId,
-            description: `delivery_approved: ${req.deliveryReference ?? req.deliveryId}`,
-          }),
-        );
+        // `netCost` above accumulates (delivered - returned) x unitCost and the
+        // entry below posts Dr COGS / Cr Inventory by it, so 1200 moves by the
+        // negation — which is this line's quantity change at the same rate.
+        //
+        // Computed with Decimal rather than the Number() arithmetic around it:
+        // this figure is compared against the ledger by invariant I23, and a
+        // float rounding difference there is a failing build. The quantity
+        // arithmetic is left alone deliberately — changing it would change the
+        // strings already stored in quantity_on_hand.
+        await recordInventoryMovement(em, {
+          companyId,
+          itemId: line.itemId,
+          date: new Date().toISOString().split('T')[0],
+          type: 'delivery',
+          quantityChange: String(returned - delivered),
+          balanceAfter: String(next),
+          valueChange: toDecimal(returned - delivered).times(toDecimal(item.unitCost)),
+          reference: `Approval ${req.id}`,
+          sourceType: 'inventory_approval',
+          sourceId: req.id,
+          createdBy: reviewerId,
+          description: `delivery_approved: ${req.deliveryReference ?? req.deliveryId}`,
+        });
       }
 
       // Ledger commit (chunk 2): goods dispatched to the customer leave stock,
@@ -1079,21 +1088,38 @@ export class InventoryApprovalsService {
         item.quantityOnHand = String(Math.max(0, restored));
         await itemRepo.save(item);
 
-        await moveRepo.save(
-          moveRepo.create({
+        // The undo reverses the approval's ledger commit EXACTLY — see the
+        // comment below — so the movement must mirror what the approval
+        // recorded for THIS item, not what the item costs now. Read back
+        // rather than recomputed, for the same reason the journal entry is
+        // reversed line by line: the average may have drifted since.
+        const priorMoves = await moveRepo.find({
+          where: {
             companyId,
             itemId: line.itemId,
-            date: new Date().toISOString().split('T')[0],
-            type: 'adjustment',
-            quantityChange: String(delivered - returned),
-            balanceAfter: String(Math.max(0, restored)),
-            reference: `Undo Approval ${req.id}`,
             sourceType: 'inventory_approval',
             sourceId: req.id,
-            createdBy: reviewerId,
-            description: `approval_undone: ${req.deliveryReference ?? req.deliveryId}`,
-          }),
+          },
+        });
+        const priorValue = priorMoves.reduce(
+          (t, m) => t.plus(toDecimal(m.valueChange ?? '0')),
+          new Decimal(0),
         );
+
+        await recordInventoryMovement(em, {
+          companyId,
+          itemId: line.itemId,
+          date: new Date().toISOString().split('T')[0],
+          type: 'adjustment',
+          quantityChange: String(delivered - returned),
+          balanceAfter: String(Math.max(0, restored)),
+          valueChange: priorValue.negated(),
+          reference: `Undo Approval ${req.id}`,
+          sourceType: 'inventory_approval',
+          sourceId: req.id,
+          createdBy: reviewerId,
+          description: `approval_undone: ${req.deliveryReference ?? req.deliveryId}`,
+        });
       }
 
       // Reverse the approval's ledger commit EXACTLY (swap Dr/Cr of the

@@ -16,6 +16,7 @@ import {
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -485,20 +486,22 @@ export class CreditMemosService {
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);
 
-      await moveRepo.save(
-        moveRepo.create({
-          companyId: cm.companyId,
-          itemId: item.id,
-          date: cm.date,
-          type: reverse ? 'sale' : 'return',
-          quantityChange: (reverse ? qty.negated() : qty).toFixed(4),
-          balanceAfter: newQty.toFixed(4),
-          reference: cm.creditMemoNumber,
-          sourceType: reverse ? 'credit_memo_void' : 'credit_memo',
-          sourceId: cm.id,
-          createdBy: userId,
-        }),
-      );
+      // `cost` is qty x the FROZEN restock rate, which is exactly what the
+      // journal entry moves 1200 by — see the averaging note above. Not
+      // recomputed from item.unitCost, which the lines just changed.
+      await recordInventoryMovement(manager, {
+        companyId: cm.companyId,
+        itemId: item.id,
+        date: cm.date,
+        type: reverse ? 'sale' : 'return',
+        quantityChange: reverse ? qty.negated() : qty,
+        balanceAfter: newQty,
+        valueChange: reverse ? cost.negated() : cost,
+        reference: cm.creditMemoNumber,
+        sourceType: reverse ? 'credit_memo_void' : 'credit_memo',
+        sourceId: cm.id,
+        createdBy: userId,
+      });
     }
     return total;
   }

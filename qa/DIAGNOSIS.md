@@ -105,3 +105,39 @@ correctly (invoice 300, journal entry present). That is a supported case. Only a
 whose lines are **all** unpriced is a blocker, which is why section 5 reports
 `all_lines_unpriced` separately from `unpriced_lines`, and why the backend guard rejects
 only a whole invoice that totals zero while real cost is moving.
+
+## Per-item inventory value drift (diagnostic, not a gate)
+
+I22 and I23 are gates: invoice line costs must tie to that invoice's COGS
+posting, and movement value must tie to GL 1200 per company. Both hold on real
+data.
+
+A PER-ITEM version is deliberately *not* a gate. Run it when investigating one
+item's value history:
+
+```sql
+SELECT it.sku, it.quantity_on_hand, it.unit_cost,
+       (it.quantity_on_hand * it.unit_cost)::numeric(18,2) AS carrying,
+       t.run::numeric(18,2)                                AS running,
+       (it.quantity_on_hand * it.unit_cost - t.run)::numeric(18,2) AS drift
+FROM inventory_items it
+CROSS JOIN LATERAL (
+  SELECT COALESCE(SUM(m.value_change), 0)::numeric(18,4) AS run
+    FROM inventory_movements m
+   WHERE m.item_id = it.id AND m.company_id = it.company_id
+) t
+WHERE NOT EXISTS (SELECT 1 FROM inventory_movements m
+                   WHERE m.item_id = it.id AND m.value_change IS NULL)
+  AND NOT EXISTS (SELECT 1 FROM inventory_movements m
+                   WHERE m.item_id = it.id AND m.balance_after < 0)
+  AND abs(it.quantity_on_hand * it.unit_cost - t.run)
+      > it.quantity_on_hand * 0.00005 + 0.01;
+```
+
+It is not a gate because an item whose average cost was ever repriced WITHOUT a
+matching movement — `FixOverstatedAverageCost1787200000000` did exactly that,
+and PurchaseOrdersService only re-averages `if (newQty > 0)`, so stock received
+back from oversold does too — cannot reconcile per item even though the company
+still ties exactly. On the current dataset four QA fixture items sit here while
+every company ties to the cent. A check that cannot pass is worse than no
+check; this one is a lead to follow, not a build to fail.

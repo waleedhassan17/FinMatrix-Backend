@@ -102,6 +102,29 @@ export class Company extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'company_type' })
   companyType!: string | null;
 
+  /**
+   * The first date from which this company's per-item inventory VALUE can be
+   * trusted. NULL means never — no movement carries a value yet.
+   *
+   * Value history is reconstructed by anchoring on today (quantity_on_hand ×
+   * unit_cost, which invariant I13 already ties to GL 1200) and walking
+   * BACKWARDS through inventory_movements.value_change. That is exact for every
+   * date at or after this horizon and undefined before it, which is the honest
+   * shape: the uncertainty is pushed to the old end of the series rather than
+   * contaminating recent months with a made-up opening balance.
+   *
+   * Set by the cost backfill migration to the day after the last movement that
+   * carries no value. Invariants I23 and I24 are scoped by it, so drift below
+   * the horizon is expected and is not a defect to "correct" with a journal
+   * entry.
+   */
+  @Column({
+    type: 'date',
+    nullable: true,
+    name: 'inventory_cost_history_from',
+  })
+  inventoryCostHistoryFrom!: string | null;
+
   // Large-organization per-company inventory toggle (basic stock + COGS only).
   // Ignored for the other types: small_business is always off, warehouse
   // always on.

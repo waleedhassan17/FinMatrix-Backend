@@ -1,4 +1,13 @@
-import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -10,6 +19,7 @@ import {
   ReportsService,
   reportToday,
 } from './reports.service';
+import { AgingQueryDto, UnifiedAgingQueryDto } from './dto/aging-query.dto';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -50,6 +60,32 @@ export class ReportsController {
     return this.send(data, format, res, 'profit-loss');
   }
 
+  /**
+   * The transactions behind one statement line.
+   *
+   * Registered BEFORE the other `profit-loss` routes is not required — the
+   * segment is literal — but it is kept adjacent to profit-loss on purpose:
+   * this is that report's drill-down, not a general ledger view.
+   *
+   * No `@Res()`, so unlike its neighbours this one goes through
+   * ResponseEnvelopeInterceptor and returns `{ success, data }`. That is the
+   * shape the newer endpoints use; `send()` exists for the CSV export, which a
+   * paginated drill-down has no use for.
+   */
+  @Get('profit-loss/lines/:accountCode/entries')
+  @Roles('admin', 'staff')
+  async profitLossLineEntries(
+    @CurrentCompany() companyId: string,
+    @Param('accountCode') accountCode: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
+  ) {
+    const { s, e } = this.range(startDate, endDate);
+    return this.svc.statementLineEntries(companyId, accountCode, s, e, page, limit);
+  }
+
   @Get('balance-sheet')
   @Roles('admin', 'staff')
   async balanceSheet(
@@ -66,22 +102,22 @@ export class ReportsController {
   @Roles('admin', 'staff')
   async arAging(
     @CurrentCompany() companyId: string,
-    @Query('format') format = 'json',
+    @Query() query: AgingQueryDto,
     @Res() res: Response,
   ) {
-    const data = await this.svc.arAging(companyId);
-    return this.send(data, format, res, 'ar-aging');
+    const data = await this.svc.arAging(companyId, query);
+    return this.send(data, query.format ?? 'json', res, 'ar-aging');
   }
 
   @Get('ap-aging')
   @Roles('admin', 'staff')
   async apAging(
     @CurrentCompany() companyId: string,
-    @Query('format') format = 'json',
+    @Query() query: AgingQueryDto,
     @Res() res: Response,
   ) {
-    const data = await this.svc.apAging(companyId);
-    return this.send(data, format, res, 'ap-aging');
+    const data = await this.svc.apAging(companyId, query);
+    return this.send(data, query.format ?? 'json', res, 'ap-aging');
   }
 
   @Get('inventory-valuation')
@@ -93,6 +129,54 @@ export class ReportsController {
   ) {
     const data = await this.svc.inventoryValuation(companyId);
     return this.send(data, format, res, 'inventory-valuation');
+  }
+
+  /**
+   * Company-wide inventory value over time, from GL 1200. Exact, and ties to
+   * the balance sheet at every point.
+   */
+  @Get('inventory-valuation/trend')
+  @Roles('admin', 'staff')
+  async inventoryValuationTrend(
+    @CurrentCompany() companyId: string,
+    @Query('months', new ParseIntPipe({ optional: true })) months = 12,
+  ) {
+    return this.svc.inventoryValuationTrend(companyId, months);
+  }
+
+  /**
+   * One item's stock level month by month.
+   *
+   * The `items/:itemId/history` shape keeps the parameter off the segment that
+   * follows `inventory-valuation`, so it cannot collide with the literal
+   * `trend` route above. Nest matches in declaration order: a route declared
+   * as `inventory-valuation/:x` would swallow `trend`, which is why there
+   * isn't one.
+   */
+  @Get('inventory-valuation/items/:itemId/history')
+  @Roles('admin', 'staff')
+  async inventoryItemHistory(
+    @CurrentCompany() companyId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Query('months', new ParseIntPipe({ optional: true })) months = 12,
+  ) {
+    return this.svc.inventoryItemHistory(companyId, itemId, months);
+  }
+
+  /**
+   * One item's sales and gross margin over a period. The payoff for recording
+   * cost per line: revenue was always answerable, cost was not.
+   */
+  @Get('item-performance/:itemId')
+  @Roles('admin', 'staff')
+  async itemPerformance(
+    @CurrentCompany() companyId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+  ) {
+    const { s, e } = this.range(startDate, endDate);
+    return this.svc.itemPerformance(companyId, itemId, s, e);
   }
 
   @Get('trial-balance')
@@ -167,13 +251,11 @@ export class ReportsController {
   @Roles('admin', 'staff')
   async aging(
     @CurrentCompany() companyId: string,
-    @Query('asOfDate') asOfDate: string,
-    @Query('type') type: 'ar' | 'ap',
-    @Query('format') format = 'json',
+    @Query() query: UnifiedAgingQueryDto,
     @Res() res: Response,
   ) {
-    const data = await this.svc.aging(companyId, asOfDate, type);
-    return this.send(data, format, res, 'aging');
+    const data = await this.svc.aging(companyId, query);
+    return this.send(data, query.format ?? 'json', res, 'aging');
   }
 
   private send(data: unknown, format: string, res: Response, filename: string) {

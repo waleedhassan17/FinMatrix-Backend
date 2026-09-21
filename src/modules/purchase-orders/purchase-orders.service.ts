@@ -19,6 +19,7 @@ import {
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { BillsService, PoBillLineLink } from '../bills/bills.service';
@@ -409,6 +410,10 @@ export class PurchaseOrdersService {
         const base = round4(delta.abs().times(toDecimal(line.unitCost)));
         const landed = netOfTax ? base : base.plus(round4(base.times(toDecimal(line.taxRate)).dividedBy(100)));
         const onHand = toDecimal(item.quantityOnHand);
+        // The signed amount this receipt moves account 1200 by, captured in
+        // whichever branch below computes it. Recorded on the stock movement so
+        // the per-item value series can be summed back to the control account.
+        let inventoryImpact: Decimal;
 
         if (delta.greaterThan(0)) {
           const newQty = onHand.plus(delta);
@@ -423,6 +428,7 @@ export class PurchaseOrdersService {
           line.grniAccrued = toDecimal(line.grniAccrued).plus(landed).toFixed(4);
           bump(ACCT_INVENTORY, landed);
           bump(ACCT_GRNI, landed.negated());
+          inventoryImpact = landed;
         } else {
           // A receipt correction: the goods go back out at the item's CURRENT
           // average cost (so the stock subledger keeps tying to 1200), and the
@@ -438,23 +444,33 @@ export class PurchaseOrdersService {
           bump(ACCT_INVENTORY, stockValue.negated());
           bump(ACCT_GRNI, grniReversal);
           bump(ACCT_COGS, stockValue.minus(grniReversal));
+          inventoryImpact = stockValue.negated();
         }
         await itemRepo.save(item);
         await manager.save(line);
-        await moveRepo.save(
-          moveRepo.create({
-            companyId,
-            itemId: item.id,
-            date: today,
-            type: 'receipt',
-            quantityChange: delta.toFixed(4),
-            balanceAfter: item.quantityOnHand,
-            reference: po.poNumber,
-            sourceType: 'purchase_order',
-            sourceId: po.id,
-            createdBy: userId,
-          }),
-        );
+        // THE site where the value is not qty x the item's average.
+        //
+        // A receipt adds `landed` to 1200 — the line's cost plus capitalised
+        // tax when the company is not sales-tax registered — and only THEN
+        // re-averages the pile, so `delta x item.unitCost` (post-average) and
+        // `delta x line.unitCost` (pre-tax) are both different figures from the
+        // one the ledger actually moved by. `inventoryImpact` IS the
+        // `bump(ACCT_INVENTORY, …)` argument from the branch above, which is
+        // the whole point: the movement and the journal entry cannot disagree
+        // because they are the same value.
+        await recordInventoryMovement(manager, {
+          companyId,
+          itemId: item.id,
+          date: today,
+          type: 'receipt',
+          quantityChange: delta,
+          balanceAfter: item.quantityOnHand,
+          valueChange: inventoryImpact,
+          reference: po.poNumber,
+          sourceType: 'purchase_order',
+          sourceId: po.id,
+          createdBy: userId,
+        });
       }
 
       const entryLines: PostingLineInput[] = [];

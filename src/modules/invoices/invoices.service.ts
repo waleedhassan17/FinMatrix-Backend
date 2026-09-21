@@ -27,6 +27,7 @@ import {
   toMoneyString,
 } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -834,8 +835,29 @@ export class InvoicesService {
     reverse: boolean,
   ): Promise<Decimal> {
     const itemRepo = manager.getRepository(InventoryItem);
-    const moveRepo = manager.getRepository(InventoryMovement);
     let total = new Decimal(0);
+
+    // The cost columns are `select: false` — they must not ride along on the
+    // six read paths that hand invoice lines to the client — so a relation
+    // load leaves them undefined. Fetched explicitly here, which is the one
+    // place that needs them, and only on a void: a fresh posting is computing
+    // the cost, not reading it back.
+    const frozenCosts = new Map<string, Decimal>();
+    if (reverse && invoice.lines?.length) {
+      const rows = await manager
+        .getRepository(InvoiceLineItem)
+        .createQueryBuilder('l')
+        .select('l.id', 'id')
+        .addSelect('l.cost_amount', 'costAmount')
+        .where('l.invoice_id = :invoiceId', { invoiceId: invoice.id })
+        .getRawMany<{ id: string; costAmount: string | null }>();
+      for (const r of rows) {
+        if (r.costAmount !== null && r.costAmount !== undefined) {
+          frozenCosts.set(r.id, toDecimal(r.costAmount));
+        }
+      }
+    }
+
     for (const line of invoice.lines ?? []) {
       if (!line.itemId) continue;
       const item = await itemRepo.findOne({
@@ -843,12 +865,23 @@ export class InvoicesService {
       });
       if (!item) continue;
       const qty = toDecimal(line.quantity);
-      const cost = qty.times(toDecimal(item.unitCost));
+      // On a VOID, unwind what this line actually cost when it was sold, not
+      // what the item costs today. A purchase between the sale and the void
+      // re-averages the item, and a reversal a different size from the original
+      // leaves residue in 5000/1200 forever. `cost_amount` is frozen on the
+      // line at posting precisely so this can be exact — the same reason
+      // delivery_items.unit_cost and credit_memo_lines.restock_unit_cost exist.
+      //
+      // The fallback is for lines posted before that column existed. It is
+      // nearly dead code: the `moved === 0` guard below skips a line that never
+      // moved stock, which is the same condition as having no cost recorded.
+      const frozen = frozenCosts.get(line.id) ?? null;
+      const cost = reverse && frozen !== null ? frozen : qty.times(toDecimal(item.unitCost));
       if (reverse) {
         // Only put back what this invoice actually took off the shelf. Items
         // with no cost used to be skipped entirely when sold (see below), so an
         // older invoice may have moved nothing to reverse.
-        const moved = await moveRepo.count({
+        const moved = await manager.getRepository(InventoryMovement).count({
           where: { companyId: invoice.companyId, itemId: item.id, sourceType: 'invoice', sourceId: invoice.id },
         });
         if (moved === 0) continue;
@@ -867,20 +900,34 @@ export class InvoicesService {
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);
 
-      await moveRepo.save(
-        moveRepo.create({
-          companyId: invoice.companyId,
-          itemId: item.id,
-          date: invoice.invoiceDate,
-          type: reverse ? 'return' : 'sale',
-          quantityChange: (reverse ? qty : qty.negated()).toFixed(4),
-          balanceAfter: newQty.toFixed(4),
-          reference: invoice.invoiceNumber,
-          sourceType: reverse ? 'invoice_void' : 'invoice',
-          sourceId: invoice.id,
-          createdBy: userId,
-        }),
-      );
+      // Freeze what this line cost, on the way out.
+      //
+      // The figure was always computed here and then thrown away — only the
+      // per-invoice sum survived, as one aggregate COGS line. Keeping it per
+      // line is what makes gross margin per item answerable at all, and it is
+      // what lets a void reverse exactly (see `frozen` above).
+      if (!reverse) {
+        line.unitCost = toDecimal(item.unitCost).toFixed(4);
+        line.costAmount = cost.toFixed(4);
+        line.costBasis = 'posted';
+        await manager.getRepository(InvoiceLineItem).save(line);
+      }
+
+      await recordInventoryMovement(manager, {
+        companyId: invoice.companyId,
+        itemId: item.id,
+        date: invoice.invoiceDate,
+        type: reverse ? 'return' : 'sale',
+        quantityChange: reverse ? qty : qty.negated(),
+        balanceAfter: newQty,
+        // 1200 is credited by `cost` on a sale and debited by it on a void,
+        // which is the pair of lines the caller pushes from `cogsTotal`.
+        valueChange: reverse ? cost : cost.negated(),
+        reference: invoice.invoiceNumber,
+        sourceType: reverse ? 'invoice_void' : 'invoice',
+        sourceId: invoice.id,
+        createdBy: userId,
+      });
     }
     return total;
   }

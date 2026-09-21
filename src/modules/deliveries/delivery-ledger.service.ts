@@ -27,6 +27,7 @@ import {
   ACCT_AR,
 } from '../accounts/accounts.constants';
 import { toDecimal, MONEY_TOLERANCE, subtractMoney } from '../../common/utils/money.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
 import { Customer } from '../customers/entities/customer.entity';
 import { CreditOverride, enforceCreditLimit, grossValue } from '../../common/utils/credit-control.util';
@@ -273,21 +274,23 @@ export class DeliveryLedgerService {
       await itemRepo.save(line);
       totalCost = totalCost.plus(qty.times(toDecimal(item.unitCost)));
 
-      await moveRepo.save(
-        moveRepo.create({
-          companyId,
-          itemId: item.id,
-          date: this.today(),
-          type: 'delivery',
-          quantityChange: qty.negated().toFixed(4),
-          balanceAfter: newQty.toFixed(4),
-          reference: delivery.referenceNo ?? delivery.id,
-          sourceType: 'delivery_dispatch',
-          sourceId: delivery.id,
-          createdBy: userId,
-          description: `dispatched: ${delivery.referenceNo ?? delivery.id}`,
-        }),
-      );
+      // Stock leaves at the cost frozen on the line two statements above, which
+      // is the same figure `totalCost` accumulates and the dispatch entry
+      // credits 1200 by.
+      await recordInventoryMovement(em, {
+        companyId,
+        itemId: item.id,
+        date: this.today(),
+        type: 'delivery',
+        quantityChange: qty.negated(),
+        balanceAfter: newQty,
+        valueChange: qty.times(toDecimal(line.unitCost)).negated(),
+        reference: delivery.referenceNo ?? delivery.id,
+        sourceType: 'delivery_dispatch',
+        sourceId: delivery.id,
+        createdBy: userId,
+        description: `dispatched: ${delivery.referenceNo ?? delivery.id}`,
+      });
     }
 
     // ---- Sale document: a NON-POSTING sales order, always ----
@@ -493,21 +496,22 @@ export class DeliveryLedgerService {
           restockCost = restockCost.plus(returned.times(unitCost));
           const newQty = this.absorbReturnIntoAverage(item, returned, unitCost);
           await invRepo.save(item);
-          await moveRepo.save(
-            moveRepo.create({
-              companyId,
-              itemId: item.id,
-              date: this.today(),
-              type: 'return',
-              quantityChange: returned.toFixed(4),
-              balanceAfter: newQty.toFixed(4),
-              reference: delivery.referenceNo ?? delivery.id,
-              sourceType: 'delivery_return',
-              sourceId: delivery.id,
-              createdBy: userId,
-              description: `undelivered/returned on approval: ${delivery.referenceNo ?? delivery.id}`,
-            }),
-          );
+          // `restockCost` above is the same product, and it is what the entry
+          // debits 1200 by.
+          await recordInventoryMovement(em, {
+            companyId,
+            itemId: item.id,
+            date: this.today(),
+            type: 'return',
+            quantityChange: returned,
+            balanceAfter: newQty,
+            valueChange: returned.times(unitCost),
+            reference: delivery.referenceNo ?? delivery.id,
+            sourceType: 'delivery_return',
+            sourceId: delivery.id,
+            createdBy: userId,
+            description: `undelivered/returned on approval: ${delivery.referenceNo ?? delivery.id}`,
+          });
         }
       }
     }
@@ -843,21 +847,21 @@ export class DeliveryLedgerService {
       totalCost = totalCost.plus(qty.times(toDecimal(line.unitCost)));
       const newQty = this.absorbReturnIntoAverage(item, qty, toDecimal(line.unitCost));
       await invRepo.save(item);
-      await moveRepo.save(
-        moveRepo.create({
-          companyId,
-          itemId: item.id,
-          date: this.today(),
-          type: 'return',
-          quantityChange: qty.toFixed(4),
-          balanceAfter: newQty.toFixed(4),
-          reference: delivery.referenceNo ?? delivery.id,
-          sourceType: 'delivery_return',
-          sourceId: delivery.id,
-          createdBy: userId,
-          description: `delivery rejected — stock restored: ${delivery.referenceNo ?? delivery.id}`,
-        }),
-      );
+      // Mirrors `totalCost` on the line above, at the cost frozen at dispatch.
+      await recordInventoryMovement(em, {
+        companyId,
+        itemId: item.id,
+        date: this.today(),
+        type: 'return',
+        quantityChange: qty,
+        balanceAfter: newQty,
+        valueChange: qty.times(toDecimal(line.unitCost)),
+        reference: delivery.referenceNo ?? delivery.id,
+        sourceType: 'delivery_return',
+        sourceId: delivery.id,
+        createdBy: userId,
+        description: `delivery rejected — stock restored: ${delivery.referenceNo ?? delivery.id}`,
+      });
     }
 
     let journalEntryId: string | null = null;

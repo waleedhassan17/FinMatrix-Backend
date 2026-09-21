@@ -7,6 +7,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import { toDecimal } from '../../common/utils/money.util';
 import { Agency } from './entities/agency.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { recordMovementAtAverage } from '../../common/utils/inventory-movement.util';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto, AddAgencyItemDto } from './dto/agency.dto';
 
 @Injectable()
@@ -178,20 +179,18 @@ export class AgenciesService {
       const qty = toDecimal(saved.quantityOnHand);
       if (qty.greaterThan(0)) {
         const date = new Date().toISOString().split('T')[0];
-        await em.getRepository(InventoryMovement).save(
-          em.getRepository(InventoryMovement).create({
-            companyId,
-            itemId: saved.id,
-            date,
-            type: 'adjustment',
-            quantityChange: qty.toFixed(4),
-            balanceAfter: qty.toFixed(4),
-            description: `Opening stock at agency ${agency.name}`,
-            sourceType: 'opening_stock',
-            sourceId: saved.id,
-            createdBy: userId,
-          }),
-        );
+        // Value follows quantity at the item's cost — the same figure
+        // postOpeningStockJe debits to 1200 immediately below.
+        await recordMovementAtAverage(em, saved, {
+          date,
+          type: 'adjustment',
+          quantityChange: qty,
+          balanceAfter: qty,
+          description: `Opening stock at agency ${agency.name}`,
+          sourceType: 'opening_stock',
+          sourceId: saved.id,
+          createdBy: userId,
+        });
         // Same posting the inventory module uses: Dr 1200 / Cr 3900 (§3.12).
         await this.inventory.postOpeningStockJe(em, companyId, userId, saved, qty, date);
       }

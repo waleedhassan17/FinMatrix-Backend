@@ -26,6 +26,10 @@ import {
 } from './dto/inventory.dto';
 import { MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { InventoryAdjustmentReason } from '../../types';
+import {
+  recordInventoryMovement,
+  recordMovementAtAverage,
+} from '../../common/utils/inventory-movement.util';
 import { assertNonNegativeQuantity } from '../../common/utils/stock.util';
 import { assertNotFutureDate, todayIso } from '../../common/utils/date.util';
 import { PostingService } from '../journal-entries/posting.service';
@@ -179,20 +183,18 @@ export class InventoryService {
       item.quantityOnHand = qty.toFixed(4);
       await itemRepo.save(item);
 
-      const move = await moveRepo.save(
-        moveRepo.create({
-          companyId,
-          itemId: item.id,
-          date,
-          type: 'adjustment',
-          quantityChange: qty.toFixed(4),
-          balanceAfter: qty.toFixed(4),
-          description: dto.notes ?? 'Opening stock',
-          sourceType: 'opening_stock',
-          sourceId: item.id,
-          createdBy: userId,
-        }),
-      );
+      // Value follows quantity at the item's cost, which is exactly what
+      // postOpeningStockJe debits to 1200 below.
+      const move = await recordMovementAtAverage(em, item, {
+        date,
+        type: 'adjustment',
+        quantityChange: qty,
+        balanceAfter: qty,
+        description: dto.notes ?? 'Opening stock',
+        sourceType: 'opening_stock',
+        sourceId: item.id,
+        createdBy: userId,
+      });
 
       const journalEntryId = await this.postOpeningStockJe(em, companyId, userId, item, qty, date);
       return { item, movement: move, journalEntryId };
@@ -353,19 +355,18 @@ export class InventoryService {
       });
       await adjRepo.save(adj);
 
-      const move = moveRepo.create({
-        companyId,
-        itemId: dto.itemId,
+      // postInventoryAdjustmentJe moves 1200 by variance x unitCost, so the
+      // movement carries the same figure, signed with the variance.
+      const move = await recordMovementAtAverage(em, item, {
         date,
         type: 'adjustment',
-        quantityChange: variance.toFixed(4),
-        balanceAfter: next.toFixed(4),
+        quantityChange: variance,
+        balanceAfter: next,
         description: dto.notes ?? 'Inventory adjustment',
         sourceType: 'inventory_adjustment',
         sourceId: adj.id,
         createdBy: userId,
       });
-      await moveRepo.save(move);
 
       // Per FinMatrixGuide §3.8: an adjustment moves stock AND the Inventory GL
       // together, recording the difference as a shrinkage/adjustment expense.
@@ -471,20 +472,23 @@ export class InventoryService {
         }),
       );
 
-      await moveRepo.save(
-        moveRepo.create({
-          companyId,
-          itemId: adj.itemId,
-          date: today,
-          type: 'adjustment',
-          quantityChange: variance.negated().toFixed(4),
-          balanceAfter: restored.toFixed(4),
-          description: `Reversal of adjustment ${adj.id}`,
-          sourceType: 'inventory_adjustment_void',
-          sourceId: reversal.id,
-          createdBy: userId,
-        }),
-      );
+      // The reversal unwinds `originalValue`, which was frozen from the
+      // adjustment being reversed rather than re-read from the item — the
+      // average may have moved since, and a reversal that is a different size
+      // from the original leaves residue in 1200.
+      await recordInventoryMovement(em, {
+        companyId,
+        itemId: adj.itemId,
+        date: today,
+        type: 'adjustment',
+        quantityChange: variance.negated(),
+        balanceAfter: restored,
+        valueChange: variance.isNegative() ? originalValue : originalValue.negated(),
+        description: `Reversal of adjustment ${adj.id}`,
+        sourceType: 'inventory_adjustment_void',
+        sourceId: reversal.id,
+        createdBy: userId,
+      });
 
       if (originalValue.greaterThan(0)) {
         const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
@@ -578,18 +582,23 @@ export class InventoryService {
           item.locationId = dto.toLocationId;
           await itemRepo.save(item);
         }
-        await moveRepo.save(moveRepo.create({
+        // Zero, and a KNOWN zero rather than an unrecorded one: every location
+        // rolls up to the same Inventory account, so relocating stock moves no
+        // value at all. That is a different statement from NULL, and the
+        // difference is what the confidence horizon is measured from.
+        await recordInventoryMovement(em, {
           companyId,
           itemId: l.itemId,
           date: dto.transferDate,
           type: 'transfer',
           quantityChange: '0',
           balanceAfter: item.quantityOnHand,
+          valueChange: '0',
           reference: dto.reference ?? null,
           sourceType: 'stock_transfer',
           sourceId: xfer.id,
           createdBy: userId,
-        }));
+        });
       }
       return xfer;
     });
@@ -652,20 +661,18 @@ export class InventoryService {
               createdBy: userId,
             }),
           );
-          await moveRepo.save(
-            moveRepo.create({
-              companyId,
-              itemId: item.id,
-              date: dto.countDate,
-              type: 'adjustment',
-              quantityChange: variance.toFixed(4),
-              balanceAfter: counted.toFixed(4),
-              description: 'Physical count adjustment',
-              sourceType: 'physical_count',
-              sourceId: count.id,
-              createdBy: userId,
-            }),
-          );
+          // Same shape as a manual adjustment: the count's variance moves 1200
+          // at the item's average, via postInventoryAdjustmentJe below.
+          await recordMovementAtAverage(em, item, {
+            date: dto.countDate,
+            type: 'adjustment',
+            quantityChange: variance,
+            balanceAfter: counted,
+            description: 'Physical count adjustment',
+            sourceType: 'physical_count',
+            sourceId: count.id,
+            createdBy: userId,
+          });
           const je = await this.postInventoryAdjustmentJe(
             em,
             companyId,

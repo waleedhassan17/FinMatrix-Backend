@@ -56,6 +56,26 @@ export function addDaysIso(isoDate: string, days: number): string {
 }
 
 /**
+ * Whole calendar days from `fromIso` to `toIso`, free of any time zone.
+ * Positive when `toIso` is the later date.
+ *
+ * Both ends are snapped to UTC midnight before subtracting, so the result is a
+ * count of calendar days and never a fraction rounded by the local clock. The
+ * aging report used to do this as
+ * `Math.floor((new Date() - new Date(dueDate)) / 86400000)`, which compares a
+ * date-only column parsed as UTC midnight against a local wall-clock instant:
+ * in Asia/Karachi that reads up to 5 hours short and can land a document a
+ * whole day out. Invisible at 30-day buckets, a whole bucket at 3-day ones.
+ */
+export function daysBetweenIso(fromIso: string, toIso: string): number {
+  const [fy, fm, fd] = fromIso.slice(0, 10).split('-').map(Number);
+  const [ty, tm, td] = toIso.slice(0, 10).split('-').map(Number);
+  return Math.round(
+    (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000,
+  );
+}
+
+/**
  * Days of credit a vendor or customer payment-terms code grants. The stored
  * codes are `net30`-style (types/index.ts PaymentTerms); the underscored
  * spellings the clients use are accepted too.

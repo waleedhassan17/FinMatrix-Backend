@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Invoice } from '../invoices/entities/invoice.entity';
@@ -14,9 +19,129 @@ import type {
   PnlLine,
   ProfitLossReport,
 } from './reports.types';
+import {
+  AgingBucketSpecError,
+  LEGACY_BOUNDARIES,
+  bucketKeyFor,
+  buildBucketSpec,
+  resolveAgingSpec,
+  type AgingSpecRequest,
+  type ResolvedAgingSpec,
+} from './aging-buckets';
+import { businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: any) => parseFloat(v ?? '0') || 0;
+
+const MONTH_LABELS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/** 'Jan 26' — the label shape every trend series in this file already uses. */
+const monthLabel = (yr: number, mo: number) =>
+  `${MONTH_LABELS[mo - 1]} ${String(yr).slice(2)}`;
+
+interface MonthSlot {
+  /** Sort/join key, 'YYYY-MM'. */
+  period: string;
+  label: string;
+  /** Last calendar day of the month, for an as-of cut. */
+  endDate: string;
+}
+
+/**
+ * The last `count` calendar months ending with the month containing `endIso`.
+ *
+ * Built from the calendar rather than from the data so a series has a fixed
+ * width: a chart whose bar count depends on how much history a company happens
+ * to have re-scales every time a month is added, and an item with one month of
+ * movements renders as a single bar filling the frame.
+ */
+function monthWindow(endIso: string, count: number): MonthSlot[] {
+  const [y, m] = endIso.slice(0, 7).split('-').map(Number);
+  return Array.from({ length: count }, (_, i) => {
+    const offset = count - 1 - i;
+    const d = new Date(Date.UTC(y, m - 1 - offset, 1));
+    const yr = d.getUTCFullYear();
+    const mo = d.getUTCMonth() + 1;
+    // Day 0 of the NEXT month is the last day of this one, leap years included.
+    const last = new Date(Date.UTC(yr, mo, 0)).getUTCDate();
+    return {
+      period: `${yr}-${String(mo).padStart(2, '0')}`,
+      label: monthLabel(yr, mo),
+      endDate: `${yr}-${String(mo).padStart(2, '0')}-${String(last).padStart(2, '0')}`,
+    };
+  });
+}
+
+/** Whole months from one ISO date to another, inclusive of both ends. */
+function monthSpan(startIso: string, endIso: string): number {
+  const [sy, sm] = startIso.slice(0, 7).split('-').map(Number);
+  const [ey, em] = endIso.slice(0, 7).split('-').map(Number);
+  return (ey - sy) * 12 + (em - sm) + 1;
+}
+
+/**
+ * What to call the document behind a ledger row, for the statement drill-down.
+ *
+ * Deliberately separate from cashFlow's META map: that one answers "which cash
+ * flow section is this", so it labels both `invoice` and `payment` as "Cash
+ * received from customers". Here the question is "what do I open", and those
+ * two are different records.
+ */
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  invoice: 'Invoice',
+  invoice_void: 'Invoice (voided)',
+  payment: 'Customer payment',
+  credit_memo: 'Credit memo',
+  credit_memo_refund: 'Credit memo refund',
+  bill: 'Bill',
+  bill_payment: 'Bill payment',
+  vendor_credit: 'Vendor credit',
+  purchase_order: 'Goods receipt',
+  payroll: 'Payroll run',
+  tax_payment: 'Tax payment',
+  opening_balance: 'Opening balance',
+  opening_stock: 'Opening stock',
+  inventory_adjustment: 'Inventory adjustment',
+  delivery_dispatch: 'Delivery dispatch',
+  delivery_approval: 'Delivery approval',
+  delivery_return: 'Delivery return',
+  delivery_advance_release: 'Delivery advance',
+  journal_entry: 'Journal entry',
+};
+
+/**
+ * The classic bucket keys mapped onto the field names the clients have always
+ * read. buildBucketSpec generates keys from the boundaries ('d1to30'), while
+ * the wire format predates it ('bucket1to30'); this is the one place the two
+ * vocabularies meet.
+ */
+const LEGACY_FIELD_BY_KEY: Record<string, string> = {
+  current: 'current',
+  d1to30: 'bucket1to30',
+  d31to60: 'bucket31to60',
+  d61to90: 'bucket61to90',
+  d91plus: 'bucket90Plus',
+};
+
+/**
+ * A DATE from a raw query, as a plain 'YYYY-MM-DD'. Accepts the string a
+ * ::text cast returns and the Date that node-postgres produces without one, so
+ * a caller that forgets the cast degrades to the right answer rather than NaN.
+ */
+const toIsoDay = (v: unknown): string | null => {
+  if (!v) return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    const m = `${v.getMonth() + 1}`.padStart(2, '0');
+    const d = `${v.getDate()}`.padStart(2, '0');
+    return `${v.getFullYear()}-${m}-${d}`;
+  }
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
 
 /**
  * What a dated report covers when the caller names no range.
@@ -43,6 +168,8 @@ export const reportToday = () => new Date().toISOString().slice(0, 10);
 
 @Injectable()
 export class ReportsService {
+  private readonly logger = new Logger(ReportsService.name);
+
   constructor(
     @InjectRepository(Invoice) private readonly invoiceRepo: Repository<Invoice>,
     @InjectRepository(Bill) private readonly billRepo: Repository<Bill>,
@@ -374,54 +501,272 @@ export class ReportsService {
   }
 
   // ── A/R Aging (bucketed) ─────────────────────────────────────────
-  async arAging(companyId: string) {
-    const asOf = new Date();
+  //
+  // due_date is cast to text on purpose. It is a DATE column, and node-postgres
+  // parses DATE into a JS Date at LOCAL midnight — so the value that came back
+  // depended on the server's zone before it reached any of our arithmetic.
+  // ::text hands us the stored calendar day verbatim.
+  /**
+   * The company's saved aging preference, if any.
+   *
+   * Resolved server-side rather than by the client so that a saved default also
+   * governs the CSV export and every other consumer, not just the screen that
+   * set it.
+   */
+  private async savedAgingPreference(companyId: string): Promise<AgingSpecRequest | null> {
+    try {
+      const rows = await this.dataSource.query(
+        `SELECT report_preferences AS prefs FROM company_settings WHERE company_id = $1`,
+        [companyId],
+      );
+      const aging = rows?.[0]?.prefs?.aging;
+      if (!aging || typeof aging !== 'object') return null;
+      return {
+        preset: typeof aging.preset === 'string' ? aging.preset : null,
+        buckets: typeof aging.buckets === 'string' ? aging.buckets : null,
+      };
+    } catch (err: any) {
+      // 42703 = undefined_column: the report_preferences migration has not run
+      // on this database. Two reports going dark is a worse outcome than
+      // quietly using the default, but a silently skipped migration is worth
+      // saying out loud.
+      if (err?.code === '42703') {
+        this.logger.warn(
+          'company_settings.report_preferences is missing — aging is using the default buckets. Run migrations.',
+        );
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Settle the bucket set for a request. A request that fully specifies itself
+   * skips the settings lookup — analyticsDashboard reads only the legacy
+   * scalars and has no reason to pay for a round trip.
+   */
+  private async resolveSpecFor(
+    companyId: string,
+    request?: AgingSpecRequest,
+  ): Promise<ResolvedAgingSpec> {
+    const selfContained =
+      !!request && (request.preset === 'custom' ? !!request.buckets : !!request.preset || !!request.buckets);
+    try {
+      return resolveAgingSpec(request ?? null, selfContained ? null : await this.savedAgingPreference(companyId));
+    } catch (err) {
+      if (err instanceof AgingBucketSpecError) {
+        throw new BadRequestException({ code: 'INVALID_AGING_BUCKETS', message: err.message });
+      }
+      throw err;
+    }
+  }
+
+  async arAging(companyId: string, request?: AgingSpecRequest) {
+    const spec = await this.resolveSpecFor(companyId, request);
     const rowsRaw = await this.dataSource.query(
-      `SELECT i.customer_id AS "customerId", c.name AS "customerName", i.balance::numeric AS balance, i.due_date AS "dueDate"
+      `SELECT i.customer_id AS "customerId", c.name AS "customerName", i.balance::numeric AS balance, i.due_date::text AS "dueDate"
        FROM invoices i JOIN customers c ON c.id = i.customer_id
        WHERE i.company_id=$1 AND i.balance::numeric > 0 AND i.status NOT IN ('paid','void','draft')`, [companyId]);
-    return this.bucketAging(rowsRaw, asOf, 'customerId', 'customerName');
+    return this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
   }
 
-  async apAging(companyId: string) {
-    const asOf = new Date();
+  async apAging(companyId: string, request?: AgingSpecRequest) {
+    const spec = await this.resolveSpecFor(companyId, request);
     const rowsRaw = await this.dataSource.query(
-      `SELECT b.vendor_id AS "customerId", v.company_name AS "customerName", b.balance::numeric AS balance, b.due_date AS "dueDate"
+      `SELECT b.vendor_id AS "customerId", v.company_name AS "customerName", b.balance::numeric AS balance, b.due_date::text AS "dueDate"
        FROM bills b JOIN vendors v ON v.id = b.vendor_id
        WHERE b.company_id=$1 AND b.balance::numeric > 0 AND b.status NOT IN ('paid','void','draft')`, [companyId]);
-    return this.bucketAging(rowsRaw, asOf, 'customerId', 'customerName');
+    return this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
   }
 
-  private bucketAging(rowsRaw: any[], asOf: Date, idKey: string, nameKey: string) {
+  /**
+   * Slice open balances by how overdue they are.
+   *
+   * Emits TWO shapes over one pass of the data:
+   *
+   *  - `buckets[]` + `amounts` — the configurable set the caller asked for,
+   *    self-describing so a client renders columns from the payload rather than
+   *    from five names compiled into it.
+   *  - the five `current`/`bucket1to30`/… scalars — ALWAYS on 30/60/90,
+   *    whatever preset was requested. A shipped Android build, the live
+   *    website, analyticsDashboard's arAgingTrend and three CI suites read
+   *    these. Re-bucketing changes how the money is sliced, never how much of
+   *    it there is, so both shapes describe the same books without disagreeing
+   *    and `total` is identical under every preset.
+   */
+  private bucketAging(
+    rowsRaw: any[],
+    requested: ResolvedAgingSpec | undefined,
+    idKey: string,
+    nameKey: string,
+  ) {
+    const resolved = requested ?? resolveAgingSpec(null, null);
+    const spec = resolved.spec;
+    const legacySpec = buildBucketSpec([...LEGACY_BOUNDARIES]);
+    const asOfDate = businessToday();
+
+    const zeroAmounts = () => Object.fromEntries(spec.map((b) => [b.key, 0])) as Record<string, number>;
+    const blankLegacy = () => ({
+      current: 0, bucket1to30: 0, bucket31to60: 0, bucket61to90: 0, bucket90Plus: 0,
+    });
+
     const map = new Map<string, any>();
-    const blank = () => ({ current: 0, bucket1to30: 0, bucket31to60: 0, bucket61to90: 0, bucket90Plus: 0, total: 0 });
     for (const row of rowsRaw) {
       const id = row[idKey];
       const name = row[nameKey] ?? 'Unknown';
       const bal = num(row.balance);
-      const due = new Date(row.dueDate);
-      const age = Math.floor((asOf.getTime() - due.getTime()) / 86400000);
-      if (!map.has(id)) map.set(id, { customerId: id, customerName: name, ...blank() });
+      // due_date is NOT NULL on both invoices and bills, so this guard should
+      // never fire. It is here because the old code read a missing date as
+      // Invalid Date, which failed every `age <=` comparison and silently
+      // dropped the balance into 90-plus — the worst possible default.
+      const due = toIsoDay(row.dueDate);
+      const age = due === null ? 0 : daysBetweenIso(due, asOfDate);
+
+      if (!map.has(id)) {
+        map.set(id, { customerId: id, customerName: name, amounts: zeroAmounts(), total: 0, ...blankLegacy() });
+      }
       const e = map.get(id);
-      if (age <= 0) e.current += bal;
-      else if (age <= 30) e.bucket1to30 += bal;
-      else if (age <= 60) e.bucket31to60 += bal;
-      else if (age <= 90) e.bucket61to90 += bal;
-      else e.bucket90Plus += bal;
+      e.amounts[bucketKeyFor(age, spec)] += bal;
+      e[LEGACY_FIELD_BY_KEY[bucketKeyFor(age, legacySpec)]] += bal;
       e.total += bal;
     }
-    const rows = Array.from(map.values()).map((e) => ({
-      ...e,
-      current: r2(e.current), bucket1to30: r2(e.bucket1to30), bucket31to60: r2(e.bucket31to60),
-      bucket61to90: r2(e.bucket61to90), bucket90Plus: r2(e.bucket90Plus), total: r2(e.total),
-    })).sort((a, b) => b.total - a.total);
-    const totals = rows.reduce((t, e) => ({
-      current: t.current + e.current, bucket1to30: t.bucket1to30 + e.bucket1to30,
-      bucket31to60: t.bucket31to60 + e.bucket31to60, bucket61to90: t.bucket61to90 + e.bucket61to90,
-      bucket90Plus: t.bucket90Plus + e.bucket90Plus, total: t.total + e.total,
-    }), { current: 0, bucket1to30: 0, bucket31to60: 0, bucket61to90: 0, bucket90Plus: 0, total: 0 });
-    Object.keys(totals).forEach((k) => ((totals as any)[k] = r2((totals as any)[k])));
-    return { asOfDate: asOf.toISOString().slice(0, 10), rows, totals };
+
+    const rows = Array.from(map.values())
+      .map((e) => ({
+        ...e,
+        amounts: Object.fromEntries(
+          Object.entries(e.amounts).map(([k, v]) => [k, r2(v as number)]),
+        ) as Record<string, number>,
+        current: r2(e.current), bucket1to30: r2(e.bucket1to30), bucket31to60: r2(e.bucket31to60),
+        bucket61to90: r2(e.bucket61to90), bucket90Plus: r2(e.bucket90Plus), total: r2(e.total),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    const totals = rows.reduce(
+      (t, e) => {
+        for (const b of spec) t.amounts[b.key] += e.amounts[b.key];
+        t.current += e.current; t.bucket1to30 += e.bucket1to30;
+        t.bucket31to60 += e.bucket31to60; t.bucket61to90 += e.bucket61to90;
+        t.bucket90Plus += e.bucket90Plus; t.total += e.total;
+        return t;
+      },
+      { amounts: zeroAmounts(), ...blankLegacy(), total: 0 },
+    );
+    for (const b of spec) totals.amounts[b.key] = r2(totals.amounts[b.key]);
+    for (const k of ['current', 'bucket1to30', 'bucket31to60', 'bucket61to90', 'bucket90Plus', 'total'] as const) {
+      totals[k] = r2(totals[k]);
+    }
+
+    return { asOfDate, preset: resolved.preset, buckets: spec, rows, totals };
+  }
+
+  /**
+   * The transactions behind one statement line.
+   *
+   * A P&L line is a SUM over general_ledger grouped by account — the account
+   * code is the only thing that survives the grouping. This walks back to the
+   * rows that made it, which is the difference between "Office Expenses is
+   * 41,200" and "…and here is the bill that put 9,000 of it there".
+   *
+   * Reads general_ledger, NOT LedgerService. They are different tables:
+   * LedgerService reads journal_entry_lines, which has no source_type/source_id
+   * and labels every row 'journal_entry' — so it cannot say which document a
+   * figure came from, which is the entire point of a drill-down. general_ledger
+   * carries both columns NOT NULL and is indexed (company_id, account_id, date).
+   *
+   * `amount` is signed the way the statement reads the account, so summing it
+   * over every page reproduces the line exactly. That identity is the contract
+   * this endpoint exists to keep, and it is pinned by a test.
+   *
+   * Paginated, unlike /ledger. A drill-down on Sales Revenue over a year is
+   * every invoice the company has ever issued.
+   */
+  async statementLineEntries(
+    companyId: string,
+    accountCode: string,
+    startDate: string,
+    endDate: string,
+    page = 1,
+    limit = 50,
+  ) {
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+    const safePage = Math.max(Math.trunc(page) || 1, 1);
+
+    const accounts = await this.dataSource.query(
+      `SELECT a.id, a.account_number AS "accountCode", a.name AS "accountName",
+              a.type AS "accountType", a.sub_type AS "subType"
+         FROM accounts a
+        WHERE a.company_id = $1 AND a.account_number = $2
+        LIMIT 1`,
+      [companyId, accountCode],
+    );
+    const account = accounts?.[0];
+    if (!account) {
+      // An empty list would read as "this account had no activity", which is a
+      // different and much more reassuring claim than "there is no such
+      // account". The clients pass a code straight off a statement line, so
+      // this firing means they have drifted apart.
+      throw new NotFoundException({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `No account numbered ${accountCode} in this company.`,
+      });
+    }
+
+    const where = `g.company_id = $1 AND g.account_id = $2 AND g.date >= $3 AND g.date <= $4`;
+    const params = [companyId, account.id, s, e];
+
+    const [totals] = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS cnt,
+              COALESCE(SUM(g.debit::numeric), 0) AS dr,
+              COALESCE(SUM(g.credit::numeric), 0) AS cr
+         FROM general_ledger g WHERE ${where}`,
+      params,
+    );
+
+    const rows = await this.dataSource.query(
+      `SELECT g.id, g.date::text AS date, g.reference, g.memo,
+              g.debit::numeric AS debit, g.credit::numeric AS credit,
+              g.source_type AS "sourceType", g.source_id AS "sourceId"
+         FROM general_ledger g
+        WHERE ${where}
+        ORDER BY g.date ASC, g.created_at ASC
+        LIMIT $5 OFFSET $6`,
+      [...params, safeLimit, (safePage - 1) * safeLimit],
+    );
+
+    // Signed the way the statement reads this account's normal balance, so the
+    // entries add up to the figure the user tapped rather than to its negative.
+    const creditNormal =
+      account.accountType === 'revenue' ||
+      account.accountType === 'liability' ||
+      account.accountType === 'equity';
+    const signed = (dr: number, cr: number) => (creditNormal ? cr - dr : dr - cr);
+
+    return {
+      accountCode: account.accountCode,
+      accountName: account.accountName,
+      accountType: account.accountType,
+      range: { startDate: s, endDate: e },
+      // The whole range, not this page — it is what the statement line shows.
+      lineAmount: r2(signed(num(totals?.dr), num(totals?.cr))),
+      data: rows.map((row: any) => ({
+        id: row.id,
+        date: row.date,
+        reference: row.reference,
+        memo: row.memo,
+        debit: r2(num(row.debit)),
+        credit: r2(num(row.credit)),
+        amount: r2(signed(num(row.debit), num(row.credit))),
+        sourceType: row.sourceType,
+        sourceId: row.sourceId,
+        sourceLabel: SOURCE_TYPE_LABELS[row.sourceType] ?? 'Journal entry',
+      })),
+      total: totals?.cnt ?? 0,
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   // ── Inventory Valuation ──────────────────────────────────────────
@@ -437,6 +782,297 @@ export class ReportsService {
     const byCategory = Array.from(catMap.entries()).map(([category, totalValue]) => ({ category, totalValue: r2(totalValue) }));
     const totalValue = r2(rows.reduce((a, x) => a + x.value, 0));
     return { rows, byCategory, totalValue };
+  }
+
+  /**
+   * What the company's stock has been worth, month by month.
+   *
+   * Straight off general_ledger account 1200, which makes every point EXACT and
+   * tied to the balance sheet by construction — the same identity
+   * test/demo-invariants.ts already asserts for the current snapshot, extended
+   * backwards. No new column and no estimate: the ledger has always recorded
+   * what inventory was worth, only nothing ever asked it.
+   *
+   * Closing balance, not movement, so the series answers "what was stock worth
+   * at the end of March" rather than "how much did it change in March". Months
+   * with no movement carry the previous close forward instead of reading zero.
+   */
+  async inventoryValuationTrend(companyId: string, months = 12) {
+    const count = Math.min(Math.max(Math.trunc(months) || 12, 1), 60);
+    const window = monthWindow(businessToday(), count);
+
+    const rows = await this.dataSource.query(
+      `SELECT to_char(g.date, 'YYYY-MM') AS period,
+              COALESCE(SUM(g.debit::numeric - g.credit::numeric), 0) AS net
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+        WHERE g.company_id = $1 AND a.account_number = '1200'
+        GROUP BY period
+        ORDER BY period`,
+      [companyId],
+    );
+
+    const netByPeriod = new Map<string, number>(
+      rows.map((r: any) => [r.period as string, num(r.net)]),
+    );
+
+    // Everything posted before the window opens is the opening balance, so the
+    // first point is a real closing value rather than one month's movement.
+    const first = window[0].period;
+    let running = 0;
+    for (const [period, net] of netByPeriod) {
+      if (period < first) running += net;
+    }
+
+    const points = window.map((slot) => {
+      running += netByPeriod.get(slot.period) ?? 0;
+      return {
+        period: slot.period,
+        label: slot.label,
+        asOfDate: slot.endDate,
+        value: r2(running),
+      };
+    });
+
+    return { months: count, points };
+  }
+
+  /**
+   * One item's stock level, month by month.
+   *
+   * Quantity is EXACT: inventory_movements carries a server-snapshotted
+   * `balance_after` on every row, so the closing figure is read rather than
+   * recomputed, and it is ordered by (date, created_at) because `date` is
+   * date-only and several movements land on one day.
+   *
+   * Value is a different claim and is deliberately NOT made here. There is no
+   * cost on a movement, and `inventory_items.unit_cost` is a mutable current
+   * weighted average that every receipt re-averages — so pricing a
+   * three-year-old quantity at today's average would be retroactively wrong,
+   * and wrong in a way that looks entirely plausible on a chart. `closingValue`
+   * is null and `valueKnown` false until per-movement cost is captured; the
+   * coverage block says so in words the UI can show.
+   */
+  async inventoryItemHistory(companyId: string, itemId: string, months = 12) {
+    const count = Math.min(Math.max(Math.trunc(months) || 12, 1), 60);
+
+    const items = await this.itemRepo.find({ where: { id: itemId, companyId } });
+    const item = items[0];
+    if (!item) {
+      throw new NotFoundException({
+        code: 'ITEM_NOT_FOUND',
+        message: 'No such inventory item in this company.',
+      });
+    }
+
+    const window = monthWindow(businessToday(), count);
+    const rows = await this.dataSource.query(
+      `SELECT to_char(m.date, 'YYYY-MM') AS period,
+              (array_agg(m.balance_after::numeric
+                         ORDER BY m.date DESC, m.created_at DESC))[1] AS closing,
+              COALESCE(SUM(CASE WHEN m.quantity_change::numeric > 0
+                                THEN m.quantity_change::numeric ELSE 0 END), 0) AS qty_in,
+              COALESCE(SUM(CASE WHEN m.quantity_change::numeric < 0
+                                THEN -m.quantity_change::numeric ELSE 0 END), 0) AS qty_out
+         FROM inventory_movements m
+        WHERE m.company_id = $1 AND m.item_id = $2
+        GROUP BY period
+        ORDER BY period`,
+      [companyId, itemId],
+    );
+
+    const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
+
+    // The close carried into the window: the last month with any movement at or
+    // before it. Without this an item bought once, two years ago, and never
+    // touched since reads as zero on hand for the whole chart.
+    const first = window[0].period;
+    let carried = 0;
+    for (const r of rows) {
+      if ((r.period as string) < first) carried = num(r.closing);
+      else break;
+    }
+
+    const firstMovement = rows.length ? (rows[0].period as string) : null;
+
+    const points = window.map((slot) => {
+      const row = byPeriod.get(slot.period);
+      if (row) carried = num(row.closing);
+      return {
+        period: slot.period,
+        label: slot.label,
+        asOfDate: slot.endDate,
+        // Before the item's first movement it did not exist on any shelf;
+        // afterwards a monthless gap means "unchanged", not "zero".
+        closingQty: firstMovement && slot.period < firstMovement ? null : r2(carried),
+        qtyIn: r2(num(row?.qty_in)),
+        qtyOut: r2(num(row?.qty_out)),
+        closingValue: null as number | null,
+        valueKnown: false,
+      };
+    });
+
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      sku: item.sku,
+      months: count,
+      points,
+      coverage: {
+        quantity: 'exact',
+        value: 'unavailable',
+        message:
+          'Stock levels are exact. Month-end VALUE is not shown because cost is ' +
+          'not yet recorded on each stock movement — valuing past quantities at ' +
+          "today's average cost would misstate them.",
+      },
+    };
+  }
+
+  /**
+   * One item's sales and gross margin, month by month.
+   *
+   * Revenue comes from invoice lines; cost comes from the per-line
+   * `cost_amount` frozen at posting, plus the delivery branch, whose cost was
+   * always frozen on `delivery_items` at dispatch.
+   *
+   * The two branches key on disjoint conditions — invoice lines with an
+   * `item_id`, versus delivery items — so nothing is counted twice. Delivery
+   * invoices carry no `item_id` on purpose: the stock left at dispatch, and a
+   * non-null item_id is what makes posting relieve it a second time.
+   *
+   * `estimatedCogsShare` is the fraction of the period's cost that came from
+   * apportioning a multi-item invoice's posted COGS across its lines. Each
+   * invoice's total is exact; the split between different items on one invoice
+   * is an estimate, and a margin built on a mostly-apportioned period is a
+   * number nobody should act on. Reporting the share is what lets the reader
+   * decide that for themselves.
+   */
+  async itemPerformance(
+    companyId: string,
+    itemId: string,
+    startDate: string,
+    endDate: string,
+  ) {
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
+
+    const items = await this.itemRepo.find({ where: { id: itemId, companyId } });
+    const item = items[0];
+    if (!item) {
+      throw new NotFoundException({
+        code: 'ITEM_NOT_FOUND',
+        message: 'No such inventory item in this company.',
+      });
+    }
+
+    const rows = await this.dataSource.query(
+      `WITH sales AS (
+         SELECT to_char(i.invoice_date, 'YYYY-MM') AS period,
+                SUM(li.quantity)::numeric(18,4)    AS units,
+                SUM(li.line_total)::numeric(18,4)  AS revenue,
+                SUM(COALESCE(li.cost_amount, 0))::numeric(18,4) AS cogs,
+                SUM(CASE WHEN li.cost_basis = 'apportioned'
+                         THEN COALESCE(li.cost_amount, 0) ELSE 0 END)::numeric(18,4) AS est_cogs,
+                bool_or(li.cost_amount IS NULL) AS cost_missing
+           FROM invoice_line_items li
+           JOIN invoices i ON i.id = li.invoice_id
+          WHERE i.company_id = $1 AND li.item_id = $2
+            AND i.status NOT IN ('draft', 'void')
+            AND i.invoice_date >= $3 AND i.invoice_date <= $4
+          GROUP BY period
+       ),
+       delivered AS (
+         -- Cost was frozen on the delivery line at dispatch, so this branch is
+         -- exact rather than apportioned.
+         --
+         -- Dated by the delivery's INVOICE, not the dispatch: revenue and COGS
+         -- are recognised at approval, which is when that invoice is raised.
+         -- Using the invoice date puts the sale in the same month the P&L puts
+         -- it, which is the whole point of reporting margin against it.
+         SELECT to_char(i.invoice_date, 'YYYY-MM') AS period,
+                SUM(di.delivered_qty)::numeric(18,4) AS units,
+                SUM(di.delivered_qty * di.unit_price)::numeric(18,4) AS revenue,
+                SUM(di.delivered_qty * di.unit_cost)::numeric(18,4)  AS cogs,
+                0::numeric(18,4) AS est_cogs,
+                false AS cost_missing
+           FROM delivery_items di
+           JOIN deliveries d ON d.id = di.delivery_id
+           JOIN invoices i   ON i.id = d.invoice_id
+          WHERE d.company_id = $1 AND di.item_id = $2
+            AND d.ledger_status = 'committed'
+            AND i.status NOT IN ('draft', 'void')
+            AND i.invoice_date >= $3 AND i.invoice_date <= $4
+          GROUP BY period
+       )
+       SELECT period, SUM(units) AS units, SUM(revenue) AS revenue,
+              SUM(cogs) AS cogs, SUM(est_cogs) AS est_cogs,
+              bool_or(cost_missing) AS cost_missing
+         FROM (SELECT * FROM sales UNION ALL SELECT * FROM delivered) u
+        GROUP BY period
+        ORDER BY period`,
+      [companyId, itemId, s, e],
+    );
+
+    const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
+
+    // The window is the requested range, expressed as whole months, so a chart
+    // keeps a fixed width rather than re-scaling as history accumulates.
+    const months = Math.min(
+      Math.max(monthSpan(s, e), 1),
+      60,
+    );
+    const window = monthWindow(e === REPORT_RANGE_DEFAULTS.endDate ? businessToday() : e, months);
+
+    const points = window.map((slot) => {
+      const r = byPeriod.get(slot.period);
+      const revenue = r2(num(r?.revenue));
+      const cogs = r2(num(r?.cogs));
+      const grossProfit = r2(revenue - cogs);
+      return {
+        period: slot.period,
+        label: slot.label,
+        unitsSold: r2(num(r?.units)),
+        revenue,
+        cogs,
+        grossProfit,
+        // Null rather than 0 on a month with no sales: a margin of zero is a
+        // claim about a period that traded, not about one that did not.
+        marginPct: revenue > 0 ? r2((grossProfit / revenue) * 100) : null,
+        costKnown: !r?.cost_missing,
+      };
+    });
+
+    const revenue = r2(points.reduce((t, p) => t + p.revenue, 0));
+    const cogs = r2(points.reduce((t, p) => t + p.cogs, 0));
+    const estCogs = r2(
+      window.reduce((t, slot) => t + num(byPeriod.get(slot.period)?.est_cogs), 0),
+    );
+    const grossProfit = r2(revenue - cogs);
+
+    const [company] = await this.dataSource.query(
+      `SELECT inventory_cost_history_from::text AS since FROM companies WHERE id = $1`,
+      [companyId],
+    );
+
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      sku: item.sku,
+      range: { startDate: s, endDate: e },
+      points,
+      totals: {
+        unitsSold: r2(points.reduce((t, p) => t + p.unitsSold, 0)),
+        revenue,
+        cogs,
+        grossProfit,
+        marginPct: revenue > 0 ? r2((grossProfit / revenue) * 100) : null,
+      },
+      /** The first date from which cost is recorded. Null means never. */
+      costHistoryFrom: company?.since ?? null,
+      /** 0..1 — how much of the cost above is an apportioned estimate. */
+      estimatedCogsShare: cogs > 0 ? r2(estCogs / cogs) : 0,
+    };
   }
 
   // ── Delivery Daily ───────────────────────────────────────────────
@@ -484,7 +1120,6 @@ export class ReportsService {
 
   // ── Analytics Dashboard ──────────────────────────────────────────
   async analyticsDashboard(companyId: string) {
-    const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const revRows = await this.dataSource.query(
       `SELECT EXTRACT(YEAR FROM invoice_date::date)::int AS yr, EXTRACT(MONTH FROM invoice_date::date)::int AS mo, SUM(total::numeric) AS v
        FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`, [companyId]);
@@ -529,8 +1164,10 @@ export class ReportsService {
     return qb.getRawMany();
   }
 
-  async aging(companyId: string, asOfDate: string, type: 'ar' | 'ap') {
-    return type === 'ap' ? this.apAging(companyId) : this.arAging(companyId);
+  async aging(companyId: string, request?: AgingSpecRequest & { type?: 'ar' | 'ap' }) {
+    return request?.type === 'ap'
+      ? this.apAging(companyId, request)
+      : this.arAging(companyId, request);
   }
 
   // ── Admin home dashboard summary ─────────────────────────────────
@@ -723,7 +1360,6 @@ export class ReportsService {
   ): Promise<CashFlowReport> {
     const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
     const e = endDate || reportToday();
-    const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     // Cash/Bank accounts (sub_type), so custom user-added bank accounts count too.
     const cashFilter = `a.sub_type IN ('Cash','Bank')`;

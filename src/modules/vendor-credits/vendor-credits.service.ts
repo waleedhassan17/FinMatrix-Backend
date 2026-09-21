@@ -20,6 +20,7 @@ import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { assertSufficientStock } from '../../common/utils/stock.util';
+import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
@@ -322,19 +323,22 @@ export class VendorCreditsService {
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);
 
-      await moveRepo.save(
-        moveRepo.create({
-          companyId,
-          itemId: item.id,
-          date: vc.date,
-          type: reverse ? 'return' : 'sale',
-          quantityChange: (reverse ? qty : qty.negated()).toFixed(4),
-          balanceAfter: newQty.toFixed(4),
-          reference: vc.vendorCreditNumber,
-          sourceType: reverse ? 'vendor_credit_void' : 'vendor_credit',
-          sourceId: vc.id,
-        }),
-      );
+      // `movedValue` is the line's own amount, which is exactly what the
+      // journal entry credits 1200 by — see this method's docblock. Deriving it
+      // from item.unitCost instead would use the average the lines above just
+      // recomputed, and the subledger would drift from the control account.
+      await recordInventoryMovement(manager, {
+        companyId,
+        itemId: item.id,
+        date: vc.date,
+        type: reverse ? 'return' : 'sale',
+        quantityChange: reverse ? qty : qty.negated(),
+        balanceAfter: newQty,
+        valueChange: reverse ? movedValue : movedValue.negated(),
+        reference: vc.vendorCreditNumber,
+        sourceType: reverse ? 'vendor_credit_void' : 'vendor_credit',
+        sourceId: vc.id,
+      });
     }
   }
 

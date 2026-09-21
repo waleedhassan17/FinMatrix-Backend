@@ -335,3 +335,79 @@ WHERE d.ledger_status = 'committed'
         CASE WHEN i.balance <= 0.0001 THEN 'paid'
              WHEN i.amount_paid > 0.0001 THEN 'partial'
              ELSE 'unpaid' END);
+
+-- I22. Per-item cost on an invoice's lines must equal that invoice's own COGS
+-- posting.
+--
+-- This is the whole warrant for the per-item margin report. The apportionment
+-- that fills these columns for a multi-item invoice estimates the SPLIT and
+-- never the TOTAL: largest-remainder makes the lines sum to the posted figure
+-- exactly. A row here means either a backfill that did not balance, or a write
+-- path that set cost_amount without posting it (or posted without setting it) —
+-- in every case the margin report would be reporting a cost the ledger has
+-- never seen.
+--
+-- Lines are judged only once they have a basis. 'unknown' (nothing
+-- recoverable), 'delivery' (the cost lives on delivery_items) and NULL (a
+-- draft, not yet posted) are excluded on purpose, and an invoice with ANY such
+-- line is skipped whole — a partial sum cannot tie to a total.
+SELECT 'I22 INVOICE LINE COST vs GL 5000' AS violation,
+       t.company_id, t.invoice_number, t.status,
+       t.lines_cost, t.gl_cogs, (t.lines_cost - t.gl_cogs) AS drift
+FROM (
+  SELECT i.company_id, i.id, i.invoice_number, i.status,
+         COALESCE((SELECT SUM(li.cost_amount)
+                     FROM invoice_line_items li
+                    WHERE li.invoice_id = i.id), 0)::numeric(18,4) AS lines_cost,
+         COALESCE((SELECT SUM(g.debit - g.credit)
+                     FROM general_ledger g
+                     JOIN accounts a ON a.id = g.account_id
+                                    AND a.company_id = g.company_id
+                    WHERE g.company_id  = i.company_id
+                      AND g.source_type = 'invoice'
+                      AND g.source_id   = i.id
+                      AND a.account_number = '5000'), 0)::numeric(18,4) AS gl_cogs
+    FROM invoices i
+   WHERE i.status <> 'draft'
+     AND NOT EXISTS (SELECT 1 FROM invoice_line_items li
+                      WHERE li.invoice_id = i.id
+                        AND (li.cost_basis IS NULL
+                             OR li.cost_basis IN ('unknown','delivery')))
+     AND EXISTS (SELECT 1 FROM invoice_line_items li
+                  WHERE li.invoice_id = i.id AND li.item_id IS NOT NULL)
+) t
+WHERE abs(t.lines_cost - t.gl_cogs) > 0.01;
+
+-- I23. Reconstructed inventory value must tie to its control account.
+--
+-- The per-item value report answers "what was this worth at month end" by
+-- summing value_change. That sum is only an answer if EVERY path that moves
+-- account 1200 also records a movement carrying the same amount. Fifteen call
+-- sites write movements; chk_movement_value_known stops any of them omitting
+-- the value, and this stops any of them recording the WRONG one.
+--
+-- Compared per COMPANY, never per source_type: the movement and the ledger do
+-- not always agree on what to call the same event — a goods receipt writes a
+-- movement typed 'purchase_order' against a GL entry typed 'po_receipt', and
+-- stock restored on delivery approval writes 'delivery_return' against
+-- 'delivery_approval'. The amounts tie; only the labels differ.
+--
+-- Account 1250 Goods in Transit is deliberately NOT included: dispatch credits
+-- 1200 and writes a movement, approval debits 1250 and writes none. Both sides
+-- agree that stock in transit has left the shelf, and I15 watches 1250.
+SELECT 'I23 MOVEMENT VALUE vs GL 1200' AS violation,
+       t.company_id, t.gl_1200, t.movement_value,
+       (t.gl_1200 - t.movement_value) AS drift
+FROM (
+  SELECT c.id AS company_id,
+    (SELECT COALESCE(SUM(g.debit - g.credit), 0)
+       FROM general_ledger g
+       JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+      WHERE g.company_id = c.id
+        AND a.account_number = '1200')::numeric(18,4) AS gl_1200,
+    (SELECT COALESCE(SUM(m.value_change), 0)
+       FROM inventory_movements m
+      WHERE m.company_id = c.id)::numeric(18,4) AS movement_value
+  FROM companies c
+) t
+WHERE abs(t.gl_1200 - t.movement_value) > 0.01;
