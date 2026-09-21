@@ -867,8 +867,8 @@ describe('ReportsService — statementLineEntries', () => {
     );
 
     expect(r.lineAmount).toBe(1150);
-    expect(r.data.map((d: any) => d.amount)).toEqual([800, 400, -50]);
-    expect(r.data.reduce((t: number, d: any) => t + d.amount, 0)).toBeCloseTo(
+    expect(r.entries.map((d: any) => d.amount)).toEqual([800, 400, -50]);
+    expect(r.entries.reduce((t: number, d: any) => t + d.amount, 0)).toBeCloseTo(
       r.lineAmount,
       2,
     );
@@ -890,7 +890,7 @@ describe('ReportsService — statementLineEntries', () => {
     );
 
     expect(r.lineAmount).toBe(8000);
-    expect(r.data.map((d: any) => d.amount)).toEqual([9000, -1000]);
+    expect(r.entries.map((d: any) => d.amount)).toEqual([9000, -1000]);
   });
 
   it('names the document behind each row rather than calling everything a journal entry', async () => {
@@ -910,13 +910,13 @@ describe('ReportsService — statementLineEntries', () => {
       '2026-12-31',
     );
 
-    expect(r.data.map((d: any) => d.sourceLabel)).toEqual([
+    expect(r.entries.map((d: any) => d.sourceLabel)).toEqual([
       'Bill',
       'Delivery approval',
       'Journal entry', // an unmapped type degrades to the generic noun
     ]);
     // Every row stays drillable — sourceId is what the client opens.
-    expect(r.data.every((d: any) => !!d.sourceId)).toBe(true);
+    expect(r.entries.every((d: any) => !!d.sourceId)).toBe(true);
   });
 
   it('reports lineAmount over the whole range, not just the page', async () => {

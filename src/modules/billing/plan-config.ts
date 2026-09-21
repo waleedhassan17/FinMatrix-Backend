@@ -14,6 +14,8 @@
  * All accounting features are available on EVERY plan; the only plan difference
  * enforced anywhere is `deliveryPersonnelLimit`.
  */
+import { BILLING_DISABLED_BUILD } from '../../common/feature-flags';
+
 /**
  * Legacy keys (free|standard|pro) predate the three-tier model. They stay in
  * the config so existing companies' rows keep resolving (limits, renewals,
@@ -412,6 +414,32 @@ export function getPlanConfig(raw: string | null | undefined): PlanConfig {
 export function allPlanConfigs(): PlanConfig[] {
   return TIER_PLAN_KEYS.map((k) => withOverride(PLAN_CONFIG[k]));
 }
+
+/**
+ * BILLING-DISABLED BUILD: the rider seat cap for a plan.
+ *
+ * Every company approved during the testing phase lands on the default `free`
+ * plan, and free allows ONE active rider. With no plan step to upgrade
+ * through, a warehouse would hit an unliftable paywall on rider #2 — the
+ * server refusing with "Upgrade your plan to add more delivery personnel"
+ * and no upgrade path on screen. So free is uncapped while the flag is on.
+ *
+ * `free` ONLY. A company genuinely on Standard or Pro keeps its real limit,
+ * and PLAN_CONFIG itself is left untouched — the entry still reads 1, which
+ * is what plan-config.spec.ts pins and what the restored build must get back.
+ */
+export function riderSeatLimit(config: PlanConfig): number {
+  if (BILLING_DISABLED_BUILD && config.key === 'free') return UNCAPPED_RIDER_SEATS;
+  return config.deliveryPersonnelLimit;
+}
+
+/**
+ * Stands in for "no limit" without being Infinity: this value is serialized to
+ * both clients as `deliveryPersonnelLimit` and compared with `>=`, and
+ * Infinity does not survive JSON (it becomes null). Large enough that no
+ * warehouse reaches it, small enough to stay a safe integer.
+ */
+export const UNCAPPED_RIDER_SEATS = 999_999;
 
 /** Rs amount as a display string, e.g. 100000 → "Rs 1,000". */
 export function formatMinorUnits(minor: number, currency = 'PKR'): string {

@@ -897,6 +897,31 @@ export class InvoicesService {
       // chk_no_negative_stock as a raw 500 — refuse it cleanly first (I11).
       if (!reverse) assertSufficientStock(item.name, onHand, qty);
       const newQty = reverse ? onHand.plus(qty) : onHand.minus(qty);
+
+      // A VOID puts the units back at the cost the sale FROZE, so the average
+      // has to absorb them at that cost — exactly as a credit-memo restock
+      // does, and for the same reason.
+      //
+      // The journal entry debits Inventory 1200 by `cost`, which is qty x the
+      // frozen rate. If the average is left alone, the subledger rises by
+      // qty x the CURRENT average instead, and SUM(qty x unit_cost) parts
+      // company with the control account by the difference — permanently
+      // (I13). That drift is what appeared the moment the void stopped using
+      // today's average: the ledger became right and the valuation snapshot
+      // started disagreeing with it.
+      //
+      //   restock: (Q·A + q·f) / (Q + q)   — moves total value by exactly q·f
+      //
+      // A sale does not re-average: it removes units at the running average,
+      // which is what the average already is.
+      if (reverse && newQty.greaterThan(0)) {
+        const nextValue = onHand.times(toDecimal(item.unitCost)).plus(cost);
+        item.unitCost = nextValue
+          .dividedBy(newQty)
+          .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+          .toFixed(4);
+      }
+
       item.quantityOnHand = newQty.toFixed(4);
       await itemRepo.save(item);
 

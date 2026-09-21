@@ -678,8 +678,10 @@ export class ReportsService {
    * over every page reproduces the line exactly. That identity is the contract
    * this endpoint exists to keep, and it is pinned by a test.
    *
-   * Paginated, unlike /ledger. A drill-down on Sales Revenue over a year is
-   * every invoice the company has ever issued.
+   * Paginated, unlike /ledger, and ordered NEWEST FIRST. A drill-down on Sales
+   * Revenue over a year is every invoice the company has ever issued; showing
+   * the oldest fifty of those puts the least interesting end of the account on
+   * screen and makes recent activity unreachable.
    */
   async statementLineEntries(
     companyId: string,
@@ -725,13 +727,59 @@ export class ReportsService {
       params,
     );
 
+    // Resolve the DOCUMENT behind each row, not just the journal entry that
+    // recorded it.
+    //
+    // `g.reference` is the JE number (JE-005). That identifies the posting, and
+    // a posting is not what anyone is looking for: asked "what is in Sales
+    // Revenue", the answer is INV-2026-0001 for Acme Ltd, not JE-005. One LEFT
+    // JOIN per source family, keyed on (source_type, source_id) — a join per
+    // family, not per row.
+    //
+    // Deliveries need their own join even though they post through an invoice:
+    // the GL row carries the DELIVERY's id, not the invoice's, so without this
+    // a delivery-approval COGS row falls back to its journal number and names
+    // nobody.
     const rows = await this.dataSource.query(
       `SELECT g.id, g.date::text AS date, g.reference, g.memo,
               g.debit::numeric AS debit, g.credit::numeric AS credit,
-              g.source_type AS "sourceType", g.source_id AS "sourceId"
+              g.source_type AS "sourceType", g.source_id AS "sourceId",
+              COALESCE(inv.invoice_number, bl.bill_number, cm.credit_memo_number,
+                       vc.vendor_credit_number, po.po_number,
+                       pay.payment_number, bp.reference,
+                       dinv.invoice_number, dl.reference_no)   AS "documentNumber",
+              COALESCE(ic.name, cc.name, pc.name,
+                       bv.company_name, vv.company_name,
+                       pv.company_name, bpv.company_name,
+                       dc.name)                                AS "counterpartyName"
          FROM general_ledger g
+         LEFT JOIN invoices inv       ON inv.id = g.source_id
+                                     AND g.source_type IN ('invoice','invoice_void')
+         LEFT JOIN customers ic       ON ic.id = inv.customer_id
+         LEFT JOIN bills bl           ON bl.id = g.source_id
+                                     AND g.source_type IN ('bill','bill_void')
+         LEFT JOIN vendors bv         ON bv.id = bl.vendor_id
+         LEFT JOIN credit_memos cm    ON cm.id = g.source_id
+                                     AND g.source_type IN ('credit_memo','credit_memo_void','credit_memo_refund')
+         LEFT JOIN customers cc       ON cc.id = cm.customer_id
+         LEFT JOIN vendor_credits vc  ON vc.id = g.source_id
+                                     AND g.source_type IN ('vendor_credit','vendor_credit_void')
+         LEFT JOIN vendors vv         ON vv.id = vc.vendor_id
+         LEFT JOIN purchase_orders po ON po.id = g.source_id
+                                     AND g.source_type IN ('purchase_order','po_receipt')
+         LEFT JOIN vendors pv         ON pv.id = po.vendor_id
+         LEFT JOIN payments pay       ON pay.id = g.source_id
+                                     AND g.source_type = 'payment'
+         LEFT JOIN customers pc       ON pc.id = pay.customer_id
+         LEFT JOIN bill_payments bp   ON bp.id = g.source_id
+                                     AND g.source_type = 'bill_payment'
+         LEFT JOIN vendors bpv        ON bpv.id = bp.vendor_id
+         LEFT JOIN deliveries dl      ON dl.id = g.source_id
+                                     AND g.source_type LIKE 'delivery%'
+         LEFT JOIN invoices dinv      ON dinv.id = dl.invoice_id
+         LEFT JOIN customers dc       ON dc.id = dl.customer_id
         WHERE ${where}
-        ORDER BY g.date ASC, g.created_at ASC
+        ORDER BY g.date DESC, g.created_at DESC
         LIMIT $5 OFFSET $6`,
       [...params, safeLimit, (safePage - 1) * safeLimit],
     );
@@ -751,7 +799,16 @@ export class ReportsService {
       range: { startDate: s, endDate: e },
       // The whole range, not this page — it is what the statement line shows.
       lineAmount: r2(signed(num(totals?.dr), num(totals?.cr))),
-      data: rows.map((row: any) => ({
+      // `entries`, NOT `data`. ResponseEnvelopeInterceptor lifts a returned
+      // `data` key into the envelope slot and DISCARDS every sibling, so
+      // calling this `data` put a bare array on the wire and threw away
+      // accountCode, lineAmount, total, page and limit. Both clients then
+      // looked for `.data` on an array, found nothing, and rendered "No
+      // transactions in this period." for every account in every period.
+      //
+      // Nothing here may be named `data` again. See the note in
+      // response-envelope.interceptor.ts.
+      entries: rows.map((row: any) => ({
         id: row.id,
         date: row.date,
         reference: row.reference,
@@ -762,6 +819,10 @@ export class ReportsService {
         sourceType: row.sourceType,
         sourceId: row.sourceId,
         sourceLabel: SOURCE_TYPE_LABELS[row.sourceType] ?? 'Journal entry',
+        // The document's own number — INV-2026-0001 — falling back to the
+        // journal reference when the row is a manual entry with no document.
+        documentNumber: row.documentNumber ?? row.reference ?? null,
+        counterpartyName: row.counterpartyName ?? null,
       })),
       total: totals?.cnt ?? 0,
       page: safePage,
@@ -929,6 +990,94 @@ export class ReportsService {
     };
   }
 
+
+  /**
+   * The four document sources that carry an item dimension, as one UNION.
+   *
+   * Shared by `itemPerformance` (one item, by month) and `inventoryPerformance`
+   * (every item, one row each) so the two can never drift into reporting
+   * different margins for the same sale. `$1` is the company, `$2`/`$3` the
+   * date range, and `$4` — when `byItem` is false — the single item.
+   *
+   * ── Revenue is NET OF TAX ─────────────────────────────────────────────────
+   * `line_total` INCLUDES tax; the ledger posts revenue net of it. Measured on
+   * real books: 59 invoices differed and the gap was exactly the sum of tax.
+   * Subtracting `tax_amount` rather than recomputing from qty x unit_price also
+   * keeps any line-level discount, which is already baked into `line_total`.
+   *
+   * ── Customer returns are SALES, and are netted here ───────────────────────
+   * A credit memo reverses a sale, so it reduces that item's revenue and cost.
+   * Both are attributable: `credit_memo_lines` carries `item_id` and the
+   * restock cost frozen at the time.
+   *
+   * ── Purchase returns are NOT ──────────────────────────────────────────────
+   * A vendor credit sends goods back to a supplier. It moves GL 5000, but it is
+   * not a cost of anything sold, and folding it into an item's cost of SALES
+   * would distort the margin. It surfaces in the reconciliation instead.
+   *
+   * ── The delivery arm is not optional ──────────────────────────────────────
+   * An invoice raised for a delivery carries `lineKind: 'service'` and no
+   * `item_id`, deliberately, so posting does not relieve stock twice. Built on
+   * invoice lines alone this query would report zero revenue for every item
+   * sold through the delivery flow. The arms are disjoint, so nothing is
+   * double-counted. Delivery `unit_price` is already tax-exclusive.
+   */
+  private itemSalesUnionSql(byItem: boolean): string {
+    const itemFilter = byItem ? '' : 'AND %ALIAS%.item_id = $4';
+    const inv = itemFilter.replace('%ALIAS%', 'li');
+    const del = itemFilter.replace('%ALIAS%', 'di');
+    const cm = itemFilter.replace('%ALIAS%', 'cml');
+    return `
+      SELECT li.item_id AS item_id,
+             to_char(i.invoice_date, 'YYYY-MM') AS period,
+             SUM(li.quantity)::numeric(18,4) AS units,
+             SUM(li.line_total - COALESCE(li.tax_amount, 0))::numeric(18,4) AS revenue,
+             SUM(COALESCE(li.cost_amount, 0))::numeric(18,4) AS cogs,
+             SUM(CASE WHEN li.cost_basis = 'apportioned'
+                      THEN COALESCE(li.cost_amount, 0) ELSE 0 END)::numeric(18,4) AS est_cogs,
+             bool_or(li.cost_amount IS NULL) AS cost_missing
+        FROM invoice_line_items li
+        JOIN invoices i ON i.id = li.invoice_id
+       WHERE i.company_id = $1 AND li.item_id IS NOT NULL ${inv}
+         AND i.status NOT IN ('draft', 'void')
+         AND i.invoice_date >= $2 AND i.invoice_date <= $3
+       GROUP BY li.item_id, period
+
+      UNION ALL
+
+      SELECT di.item_id AS item_id,
+             to_char(i.invoice_date, 'YYYY-MM') AS period,
+             SUM(di.delivered_qty)::numeric(18,4) AS units,
+             SUM(di.delivered_qty * di.unit_price)::numeric(18,4) AS revenue,
+             SUM(di.delivered_qty * di.unit_cost)::numeric(18,4) AS cogs,
+             0::numeric(18,4) AS est_cogs,
+             false AS cost_missing
+        FROM delivery_items di
+        JOIN deliveries d ON d.id = di.delivery_id
+        JOIN invoices i   ON i.id = d.invoice_id
+       WHERE d.company_id = $1 ${del}
+         AND d.ledger_status = 'committed'
+         AND i.status NOT IN ('draft', 'void')
+         AND i.invoice_date >= $2 AND i.invoice_date <= $3
+       GROUP BY di.item_id, period
+
+      UNION ALL
+
+      SELECT cml.item_id AS item_id,
+             to_char(cm.date, 'YYYY-MM') AS period,
+             -SUM(cml.quantity)::numeric(18,4) AS units,
+             -SUM(cml.quantity * cml.unit_price)::numeric(18,4) AS revenue,
+             -SUM(cml.quantity * COALESCE(cml.restock_unit_cost, 0))::numeric(18,4) AS cogs,
+             0::numeric(18,4) AS est_cogs,
+             bool_or(cml.restock_unit_cost IS NULL) AS cost_missing
+        FROM credit_memo_lines cml
+        JOIN credit_memos cm ON cm.id = cml.credit_memo_id
+       WHERE cm.company_id = $1 AND cml.item_id IS NOT NULL ${cm}
+         AND cm.status <> 'void'
+         AND cm.date >= $2 AND cm.date <= $3
+       GROUP BY cml.item_id, period`;
+  }
+
   /**
    * One item's sales and gross margin, month by month.
    *
@@ -967,51 +1116,13 @@ export class ReportsService {
     }
 
     const rows = await this.dataSource.query(
-      `WITH sales AS (
-         SELECT to_char(i.invoice_date, 'YYYY-MM') AS period,
-                SUM(li.quantity)::numeric(18,4)    AS units,
-                SUM(li.line_total)::numeric(18,4)  AS revenue,
-                SUM(COALESCE(li.cost_amount, 0))::numeric(18,4) AS cogs,
-                SUM(CASE WHEN li.cost_basis = 'apportioned'
-                         THEN COALESCE(li.cost_amount, 0) ELSE 0 END)::numeric(18,4) AS est_cogs,
-                bool_or(li.cost_amount IS NULL) AS cost_missing
-           FROM invoice_line_items li
-           JOIN invoices i ON i.id = li.invoice_id
-          WHERE i.company_id = $1 AND li.item_id = $2
-            AND i.status NOT IN ('draft', 'void')
-            AND i.invoice_date >= $3 AND i.invoice_date <= $4
-          GROUP BY period
-       ),
-       delivered AS (
-         -- Cost was frozen on the delivery line at dispatch, so this branch is
-         -- exact rather than apportioned.
-         --
-         -- Dated by the delivery's INVOICE, not the dispatch: revenue and COGS
-         -- are recognised at approval, which is when that invoice is raised.
-         -- Using the invoice date puts the sale in the same month the P&L puts
-         -- it, which is the whole point of reporting margin against it.
-         SELECT to_char(i.invoice_date, 'YYYY-MM') AS period,
-                SUM(di.delivered_qty)::numeric(18,4) AS units,
-                SUM(di.delivered_qty * di.unit_price)::numeric(18,4) AS revenue,
-                SUM(di.delivered_qty * di.unit_cost)::numeric(18,4)  AS cogs,
-                0::numeric(18,4) AS est_cogs,
-                false AS cost_missing
-           FROM delivery_items di
-           JOIN deliveries d ON d.id = di.delivery_id
-           JOIN invoices i   ON i.id = d.invoice_id
-          WHERE d.company_id = $1 AND di.item_id = $2
-            AND d.ledger_status = 'committed'
-            AND i.status NOT IN ('draft', 'void')
-            AND i.invoice_date >= $3 AND i.invoice_date <= $4
-          GROUP BY period
-       )
-       SELECT period, SUM(units) AS units, SUM(revenue) AS revenue,
+      `SELECT period, SUM(units) AS units, SUM(revenue) AS revenue,
               SUM(cogs) AS cogs, SUM(est_cogs) AS est_cogs,
               bool_or(cost_missing) AS cost_missing
-         FROM (SELECT * FROM sales UNION ALL SELECT * FROM delivered) u
+         FROM (${this.itemSalesUnionSql(false)}) u
         GROUP BY period
         ORDER BY period`,
-      [companyId, itemId, s, e],
+      [companyId, s, e, itemId],
     );
 
     const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
@@ -1072,6 +1183,229 @@ export class ReportsService {
       costHistoryFrom: company?.since ?? null,
       /** 0..1 — how much of the cost above is an apportioned estimate. */
       estimatedCogsShare: cogs > 0 ? r2(estCogs / cogs) : 0,
+    };
+  }
+
+
+  /**
+   * Every item's sales, cost and gross margin for a period, beside what it is
+   * carrying in stock.
+   *
+   * One table answering both questions the Inventory Valuation report raises:
+   * what is my money sitting in, and which of it actually earns. Stock figures
+   * are AS OF NOW (they tie to balance-sheet 1200); revenue and margin cover
+   * the requested period. The two are labelled separately on screen because
+   * they are different claims about different moments.
+   *
+   * Items that sold nothing still appear, with zeros — dead stock is exactly
+   * what this report exists to surface, and dropping it would hide the answer.
+   *
+   * ── On the reconciliation block ───────────────────────────────────────────
+   * Per-item figures can never simply equal the P&L, because some of what sits
+   * in revenue and COGS has no item dimension at all: service lines on
+   * invoices, sales tax, manual journal entries, bills coded straight to COGS,
+   * and purchase returns. Rather than let an accountant discover that as a
+   * discrepancy and distrust the whole screen, the difference is named and
+   * itemised. That is what makes this report investigable rather than merely
+   * decorative.
+   */
+  async inventoryPerformance(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+    sort: 'grossProfit' | 'revenue' | 'marginPct' | 'stockValue' = 'grossProfit',
+  ) {
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
+
+    const rows = await this.dataSource.query(
+      `WITH sales AS (
+         SELECT item_id,
+                SUM(units)::numeric(18,4)   AS units,
+                SUM(revenue)::numeric(18,4) AS revenue,
+                SUM(cogs)::numeric(18,4)    AS cogs,
+                SUM(est_cogs)::numeric(18,4) AS est_cogs,
+                bool_or(cost_missing)       AS cost_missing
+           FROM (${this.itemSalesUnionSql(true)}) u
+          GROUP BY item_id
+       )
+       SELECT it.id AS "itemId", it.name AS "itemName", it.sku,
+              COALESCE(it.category, 'Uncategorized') AS category,
+              COALESCE(sa.units, 0)   AS units,
+              COALESCE(sa.revenue, 0) AS revenue,
+              COALESCE(sa.cogs, 0)    AS cogs,
+              COALESCE(sa.est_cogs, 0) AS est_cogs,
+              COALESCE(sa.cost_missing, false) AS cost_missing,
+              it.quantity_on_hand AS "qtyOnHand",
+              it.unit_cost        AS "unitCost"
+         FROM inventory_items it
+         LEFT JOIN sales sa ON sa.item_id = it.id
+        WHERE it.company_id = $1`,
+      [companyId, s, e],
+    );
+
+    const mapped = rows.map((r: any) => {
+      const revenue = r2(num(r.revenue));
+      const cogs = r2(num(r.cogs));
+      const qty = num(r.qtyOnHand);
+      const unitCost = num(r.unitCost);
+      const grossProfit = r2(revenue - cogs);
+      return {
+        itemId: r.itemId,
+        itemName: r.itemName,
+        sku: r.sku,
+        category: r.category,
+        unitsSold: r2(num(r.units)),
+        revenue,
+        cogs,
+        grossProfit,
+        // Null, never 0, in a period the item did not trade: a margin of zero
+        // is a claim about a period that sold something.
+        marginPct: revenue > 0 ? r2((grossProfit / revenue) * 100) : null,
+        qtyOnHand: r2(qty),
+        unitCost: r2(unitCost),
+        stockValue: r2(qty * unitCost),
+        costBasis: r.cost_missing
+          ? 'partial'
+          : num(r.est_cogs) > 0
+            ? 'apportioned'
+            : 'posted',
+      };
+    });
+
+    const key = sort;
+    mapped.sort((a: any, b: any) => {
+      // Nulls last whichever way the column sorts — an item that did not trade
+      // has no margin, and floating it to the top would bury the ones that did.
+      const av = a[key];
+      const bv = b[key];
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return bv - av;
+    });
+
+    const sum = (f: (x: any) => number) => r2(mapped.reduce((t: number, x: any) => t + f(x), 0));
+    const revenue = sum((x) => x.revenue);
+    const cogs = sum((x) => x.cogs);
+    const estCogs = r2(rows.reduce((t: number, r: any) => t + num(r.est_cogs), 0));
+
+    // What the ledger says, so the gap can be named rather than discovered.
+    const [gl] = await this.dataSource.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN a.account_number = '4000'
+                           THEN g.credit - g.debit ELSE 0 END), 0)::numeric(18,4) AS revenue,
+         COALESCE(SUM(CASE WHEN a.account_number = '5000'
+                           THEN g.debit - g.credit ELSE 0 END), 0)::numeric(18,4) AS cogs
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+        WHERE g.company_id = $1 AND a.account_number IN ('4000', '5000')
+          AND g.date >= $2 AND g.date <= $3`,
+      [companyId, s, e],
+    );
+
+    const glRevenue = r2(num(gl?.revenue));
+    const glCogs = r2(num(gl?.cogs));
+
+    // Name the difference instead of leaving it as one unexplained lump.
+    //
+    // Decomposing revenue and cost by the document that posted them shows which
+    // parts could never belong to an item: a manual journal entry against
+    // revenue, a bill coded straight to cost of sales, goods sent back to a
+    // supplier. Whatever those do not account for is sales tax and service
+    // lines, which is the residual — so the block always foots exactly rather
+    // than nearly.
+    const srcRows = await this.dataSource.query(
+      `SELECT a.account_number AS acct, g.source_type AS src,
+              SUM(CASE WHEN a.account_number = '4000'
+                       THEN g.credit - g.debit ELSE g.debit - g.credit END)::numeric(18,4) AS net
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+        WHERE g.company_id = $1 AND a.account_number IN ('4000', '5000')
+          AND g.date >= $2 AND g.date <= $3
+        GROUP BY a.account_number, g.source_type`,
+      [companyId, s, e],
+    );
+
+    const netOf = (acct: string, types: string[]) =>
+      r2(
+        srcRows
+          .filter((r: any) => r.acct === acct && types.includes(r.src))
+          .reduce((t: number, r: any) => t + num(r.net), 0),
+      );
+
+    const manualRevenue = netOf('4000', ['journal_entry', 'opening_balance']);
+    const supplierReturns = netOf('5000', ['vendor_credit', 'vendor_credit_void']);
+
+    const unallocatedRevenue = r2(glRevenue - revenue);
+    const unallocatedCogs = r2(glCogs - cogs);
+
+    const reconcilingItems = [
+      {
+        label: 'Sales tax and non-stock lines',
+        revenue: r2(unallocatedRevenue - manualRevenue),
+        cogs: 0,
+        reason:
+          'Tax is collected, not earned, and a service or delivery charge on an invoice belongs to no item.',
+      },
+      {
+        label: 'Manual journal entries',
+        revenue: manualRevenue,
+        cogs: 0,
+        reason: 'Posted straight to the account with no document behind them.',
+      },
+      {
+        label: 'Supplier returns',
+        revenue: 0,
+        cogs: supplierReturns,
+        reason:
+          'Goods sent back to a supplier reduce cost of sales in the ledger, but they are not the cost of anything sold — counting them against an item would flatter its margin.',
+      },
+      {
+        label: 'Costs billed directly',
+        revenue: 0,
+        cogs: r2(unallocatedCogs - supplierReturns),
+        reason:
+          'Bills coded straight to cost of sales. Bill lines carry an account, not an item.',
+      },
+    ].filter((x) => Math.abs(x.revenue) > 0.005 || Math.abs(x.cogs) > 0.005);
+
+    const [company] = await this.dataSource.query(
+      `SELECT inventory_cost_history_from::text AS since FROM companies WHERE id = $1`,
+      [companyId],
+    );
+
+    return {
+      range: { startDate: s, endDate: e },
+      sort,
+      rows: mapped,
+      totals: {
+        unitsSold: sum((x) => x.unitsSold),
+        revenue,
+        cogs,
+        grossProfit: r2(revenue - cogs),
+        marginPct: revenue > 0 ? r2(((revenue - cogs) / revenue) * 100) : null,
+        stockValue: sum((x) => x.stockValue),
+      },
+      reconciliation: {
+        glRevenue,
+        glCogs,
+        itemRevenue: revenue,
+        itemCogs: cogs,
+        // Named, not hidden. Everything the ledger holds that no item can own:
+        // service lines, sales tax, manual entries against revenue, bills coded
+        // straight to COGS, and purchase returns.
+        unallocatedRevenue,
+        unallocatedCogs,
+        // Itemised, and it foots: the first entry is a residual, so
+        // itemRevenue + sum(items.revenue) = glRevenue exactly, and likewise
+        // for cost. Nothing is hand-waved.
+        items: reconcilingItems,
+        note:
+          'Per-item figures cover goods sold. The difference from the Profit & Loss is ' +
+          'listed above — none of it belongs to a single item.',
+      },
+      estimatedCogsShare: cogs > 0 ? r2(estCogs / cogs) : 0,
+      costHistoryFrom: company?.since ?? null,
     };
   }
 

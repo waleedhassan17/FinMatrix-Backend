@@ -17,6 +17,7 @@ import {
   TRIAL_PLAN_KEY,
 } from '../billing/plan-config';
 import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
+import { BILLING_DISABLED_BUILD } from '../../common/feature-flags';
 import {
   normalizeEmail,
   normalizePhone,
@@ -320,18 +321,25 @@ export class CompaniesService {
       });
     }
 
-    // A subscription plan must be selected before submitting (Step B).
-    const sub = await this.subRepo.findOne({
-      where: [
-        { companyId, status: 'active' },
-        { companyId, status: 'trial' },
-      ],
-    });
-    if (!sub) {
-      throw new BadRequestException({
-        code: 'PLAN_REQUIRED',
-        message: 'Please select a subscription plan before submitting',
+    // BILLING-DISABLED BUILD: there is no plan step, so requiring a plan here
+    // would strand every new company in `draft` — submitted by nobody, absent
+    // from the admin queue, and 403ing on every business request. The clients
+    // now call this straight off company creation instead. The check is kept
+    // verbatim behind the flag; restoring it is flipping the flag back.
+    if (!BILLING_DISABLED_BUILD) {
+      // A subscription plan must be selected before submitting (Step B).
+      const sub = await this.subRepo.findOne({
+        where: [
+          { companyId, status: 'active' },
+          { companyId, status: 'trial' },
+        ],
       });
+      if (!sub) {
+        throw new BadRequestException({
+          code: 'PLAN_REQUIRED',
+          message: 'Please select a subscription plan before submitting',
+        });
+      }
     }
 
     company.status = COMPANY_STATUS.PENDING_APPROVAL;

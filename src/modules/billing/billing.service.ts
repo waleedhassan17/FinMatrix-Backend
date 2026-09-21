@@ -35,6 +35,7 @@ import {
   PlanKey,
   type PlanConfig,
   plansForType,
+  riderSeatLimit,
   TRIAL_DURATION_DAYS,
   TRIAL_PLAN_KEY,
 } from './plan-config';
@@ -266,14 +267,19 @@ export class BillingService {
         WHERE company_id = $1 AND status = 'plan_locked'`,
       [companyId],
     );
+    // BILLING-DISABLED BUILD: read the cap through riderSeatLimit() so the
+    // uncapped `free` plan is what both clients' usage bars and "can I add
+    // another rider?" checks see. Without this the app would still draw
+    // "1 of 1 — plan limit reached" over a server that now allows more.
+    const seatLimit = riderSeatLimit(config);
     return {
       plan,
       planLabel: config.label,
-      deliveryPersonnelLimit: config.deliveryPersonnelLimit,
+      deliveryPersonnelLimit: seatLimit,
       currentCount,
       // Riders paused because the plan allows fewer than the company has.
       lockedCount: Number(lockedRows[0]?.count ?? 0),
-      canAddMore: currentCount < config.deliveryPersonnelLimit,
+      canAddMore: currentCount < seatLimit,
       // The next paid tier's limit, for the "upgrade for more" prompt.
       upgradeLimit: PLAN_CONFIG.standard.deliveryPersonnelLimit,
     };

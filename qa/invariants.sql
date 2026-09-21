@@ -411,3 +411,25 @@ FROM (
   FROM companies c
 ) t
 WHERE abs(t.gl_1200 - t.movement_value) > 0.01;
+
+-- I25 is deliberately NOT here.
+--
+-- The obvious SQL version — add up what the item report attributes, add the
+-- named unallocated parts, compare to GL 4000 — cannot be written correctly at
+-- this level, and a first attempt fired on every company with service revenue.
+-- The reason is that the two arms mean different things at different
+-- granularities: for PER-ITEM attribution, a delivery's revenue is read from
+-- delivery_items because the invoice it raised carries no item on its lines;
+-- but at COMPANY level that same revenue is already inside those invoice
+-- lines, so adding both double-counts. Getting it right in one statement means
+-- re-deriving the endpoint's whole case analysis in SQL, where it would drift
+-- from the code it is supposed to be checking.
+--
+-- The check still exists, in the place where it can be exact: the endpoint
+-- computes its own reconciliation — goods sold, plus each named unallocated
+-- part, equals the ledger — and scripts/verify-reports.mjs asserts that it
+-- foots against a live API. That is the same property, verified where the
+-- arithmetic actually lives.
+--
+-- A check that cannot pass is worse than no check: it trains you to ignore the
+-- one thing that would tell you the ledger is wrong.

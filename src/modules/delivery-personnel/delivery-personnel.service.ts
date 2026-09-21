@@ -9,7 +9,7 @@ import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-lo
 import { User } from '../users/entities/user.entity';
 import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
-import { getPlanConfig, isTrialPlan } from '../billing/plan-config';
+import { getPlanConfig, isTrialPlan, riderSeatLimit } from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 
 @Injectable()
@@ -238,17 +238,22 @@ export class DeliveryPersonnelService {
       [companyId],
     );
     const activeCount = Number(activeCountRow[0]?.count ?? 0);
-    if (activeCount >= planConfig.deliveryPersonnelLimit) {
+    // BILLING-DISABLED BUILD: riderSeatLimit() uncaps the `free` plan every
+    // test company lands on. Read through it rather than the raw config, or
+    // warehouses are refused their second rider with no upgrade path on
+    // screen. Paid plans are unaffected.
+    const seatLimit = riderSeatLimit(planConfig);
+    if (activeCount >= seatLimit) {
       throw new BadRequestException({
         code: 'DELIVERY_PERSONNEL_LIMIT_REACHED',
         message: isTrialPlan(planConfig.key)
-          ? `Your free trial includes ${planConfig.deliveryPersonnelLimit} active delivery ` +
-            `rider${planConfig.deliveryPersonnelLimit === 1 ? '' : 's'}. ` +
+          ? `Your free trial includes ${seatLimit} active delivery ` +
+            `rider${seatLimit === 1 ? '' : 's'}. ` +
             'Subscribe to a plan to add more.'
-          : `Your ${planConfig.label} plan allows ${planConfig.deliveryPersonnelLimit} ` +
-            `delivery ${planConfig.deliveryPersonnelLimit === 1 ? 'person' : 'people'}. ` +
+          : `Your ${planConfig.label} plan allows ${seatLimit} ` +
+            `delivery ${seatLimit === 1 ? 'person' : 'people'}. ` +
             `Upgrade your plan to add more delivery personnel.`,
-        limit: planConfig.deliveryPersonnelLimit,
+        limit: seatLimit,
         currentCount: activeCount,
       });
     }

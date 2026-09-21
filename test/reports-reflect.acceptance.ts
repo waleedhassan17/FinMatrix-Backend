@@ -609,6 +609,20 @@ async function main() {
     // current cost is no longer the cost the sale was posted at.
     await stock(mvId, 20, 400);
 
+    // The gap between the stock subledger and its control account, BEFORE the
+    // void. A delta, per this suite's convention — these books already carry
+    // drift from earlier runs, and an absolute check would measure that
+    // instead of what this step did.
+    const subledgerGap = async () => {
+      const { rows } = await db.query(
+        `SELECT COALESCE(SUM(quantity_on_hand * unit_cost), 0)::numeric(18,2) AS v
+           FROM inventory_items WHERE company_id = $1`,
+        [COMPANY],
+      );
+      return n(rows[0]?.v) - (await glNet('1200'));
+    };
+    const gapBefore = await subledgerGap();
+
     await req('POST', `/invoices/${inv.id}/void`, { reason: 'cost-capture check' });
     const cogsAfterVoid = await glNet('5000');
 
@@ -619,6 +633,25 @@ async function main() {
       'G2 voiding reverses COGS by what the sale cost, after an intervening receipt',
       near(cogsAfterVoid, cogsBeforeSale),
       { cogsBeforeSale, saleCost, cogsAfterVoid },
+    );
+
+    // G2b. The void must not WIDEN the gap between the stock subledger and its
+    // control account.
+    //
+    // The void returns units at the cost the sale froze, so the item's average
+    // has to absorb them at that cost — as a credit-memo restock already does.
+    // Leaving the average alone makes the ledger right and the valuation report
+    // wrong: qty x unit_cost rises by qty x the CURRENT average while GL 1200
+    // rises by qty x the frozen cost, and the two never meet again (I13).
+    //
+    // That is exactly what happened when the void stopped using today's
+    // average, and nothing caught it — the ledger balanced, the trial balance
+    // balanced, and only the valuation report disagreed with the balance sheet.
+    const gapAfter = await subledgerGap();
+    ok(
+      'G2b the void does not widen the gap between stock and Inventory 1200',
+      near(gapAfter, gapBefore, 1),
+      { gapBefore: Math.round(gapBefore * 100) / 100, gapAfter: Math.round(gapAfter * 100) / 100 },
     );
 
     // G3. And the line kept the cost it was posted at.
@@ -660,6 +693,79 @@ async function main() {
       near(n(tieRows[0]?.gl), n(tieRows[0]?.mv)),
       { gl1200: n(tieRows[0]?.gl), movements: n(tieRows[0]?.mv) },
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // H. The P&L drill-down survives the response envelope
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // This exists because the drill-down shipped broken for every account in
+  // every period, and nothing caught it. The service returned its rows under a
+  // key named `data`; ResponseEnvelopeInterceptor lifts a `data` key into the
+  // envelope slot and discards every sibling, so what reached the clients was a
+  // bare array with accountCode, lineAmount and total gone — and both rendered
+  // "No transactions in this period."
+  //
+  // Every other test of this endpoint calls the service method directly, which
+  // never runs the interceptor. That is exactly why it was invisible, so this
+  // one goes over HTTP.
+  console.log('\n— H. P&L drill-down over HTTP —');
+
+  {
+    const pl = data(await req('GET', `/reports/profit-loss?startDate=${TODAY}&endDate=${TODAY}`));
+    const line = (pl?.income ?? [])[0] ?? (pl?.cogsLines ?? [])[0] ?? (pl?.expenseLines ?? [])[0];
+    ok('H1 the P&L offers a per-account line to drill into', !!line?.accountCode, {
+      accountCode: line?.accountCode,
+    });
+
+    if (line?.accountCode) {
+      const res = await req(
+        'GET',
+        `/reports/profit-loss/lines/${line.accountCode}/entries?startDate=${TODAY}&endDate=${TODAY}&limit=5`,
+      );
+      const d = data(res);
+
+      // The object must SURVIVE. An array here means the envelope flattened it
+      // again and the clients are about to show nothing.
+      ok('H2 the drill-down returns an object, not a bare array', !Array.isArray(d), {
+        got: Array.isArray(d) ? 'array' : typeof d,
+      });
+      ok('H3 it carries its own entries', Array.isArray(d?.entries), {
+        keys: d && typeof d === 'object' ? Object.keys(d) : null,
+      });
+      ok('H4 the metadata survived the envelope', d?.accountCode === line.accountCode && d?.lineAmount !== undefined && d?.total !== undefined, {
+        accountCode: d?.accountCode,
+        lineAmount: d?.lineAmount,
+        total: d?.total,
+      });
+
+      const entries = d?.entries ?? [];
+      if (entries.length) {
+        // Named, not numbered: the record is INV-2026-0001, not JE-005.
+        ok('H5 each row names its document', entries.every((e: any) => !!e.documentNumber), {
+          sample: entries[0]?.documentNumber,
+        });
+        ok('H6 each row stays drillable', entries.every((e: any) => !!e.sourceId), {
+          sample: entries[0]?.sourceType,
+        });
+        // Newest first, so a busy account does not open on its oldest rows.
+        const dates = entries.map((e: any) => e.date);
+        ok(
+          'H7 rows are newest first',
+          dates.every((v: string, i: number) => i === 0 || dates[i - 1] >= v),
+          { dates },
+        );
+      }
+
+      // The contract: what is listed adds up to the line it sits under.
+      if (entries.length && entries.length >= n(d?.total)) {
+        const shown = entries.reduce((t: number, e: any) => t + n(e.amount), 0);
+        ok('H8 the entries sum to the line', near(shown, n(d?.lineAmount)), {
+          entries: shown,
+          line: d?.lineAmount,
+        });
+      }
+    }
   }
 
   // ── Books still sound ──────────────────────────────────────────

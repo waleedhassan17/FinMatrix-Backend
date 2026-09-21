@@ -43,6 +43,21 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
           return payload as SuccessEnvelope<unknown>;
         }
 
+        // A handler that already shaped its own `{ data, message }` is passed
+        // through rather than nested one level deeper.
+        //
+        // ⚠ THIS BRANCH DISCARDS EVERY OTHER KEY. A handler returning
+        // `{ data, total, page }` — or any object that happens to carry a
+        // `data` field — arrives at the client as a bare `data` value with the
+        // siblings silently gone. That is not hypothetical: the P&L drill-down
+        // shipped returning its rows under `data` alongside `lineAmount` and
+        // `total`, and every client rendered "no transactions" for months
+        // because the array replaced the object it was supposed to sit inside.
+        //
+        // If a response needs metadata beside its rows, name the rows
+        // something else — `entries`, `rows`, `items`. And test it over HTTP:
+        // a service-level unit test never runs this interceptor, which is
+        // precisely why that bug was invisible.
         if (
           payload &&
           typeof payload === 'object' &&

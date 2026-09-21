@@ -179,6 +179,29 @@ export class ReportsController {
     return this.svc.itemPerformance(companyId, itemId, s, e);
   }
 
+  /**
+   * Every item's sales, cost and margin for a period, beside its stock value.
+   *
+   * The Inventory Valuation report answers "what is my money sitting in"; this
+   * answers "and which of it earns". Declared after the literal
+   * `inventory-valuation/*` routes so nothing shadows them.
+   */
+  @Get('inventory-performance')
+  @Roles('admin', 'staff')
+  async inventoryPerformance(
+    @CurrentCompany() companyId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('sort') sort?: string,
+  ) {
+    const { s, e } = this.range(startDate, endDate);
+    const allowed = ['grossProfit', 'revenue', 'marginPct', 'stockValue'] as const;
+    const key = (allowed as readonly string[]).includes(sort ?? '')
+      ? (sort as (typeof allowed)[number])
+      : 'grossProfit';
+    return this.svc.inventoryPerformance(companyId, s, e, key);
+  }
+
   @Get('trial-balance')
   @Roles('admin', 'staff')
   async trialBalance(
