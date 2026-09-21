@@ -532,6 +532,136 @@ async function main() {
     message: zero.body?.error?.message ?? zero.body?.message,
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // G. Cost is RECORDED per line and per movement, not recomputed
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // These two cases cover the mistakes the cost-capture change is most likely
+  // to be broken by later, both of which are invisible in ordinary use.
+  console.log('\n— G. Per-line and per-movement cost —');
+
+  {
+    // A fresh item, stocked twice at DIFFERENT costs, so the weighted average
+    // moves between the two receipts.
+    const mv = data(
+      await req('POST', '/inventory/items', {
+        sku: `RPT-MV-${RUN}`,
+        name: `Moving Cost Widget ${RUN}`,
+        unitOfMeasure: 'unit',
+        costMethod: 'average',
+        unitCost: '0',
+        sellingPrice: '500',
+      }),
+    );
+    const mvId = mv?.id ?? mv?.item?.id;
+
+    await stock(mvId, 10, 100);
+
+    // G1. A RECEIPT is valued at what it added to 1200 — `landed` — and NOT at
+    // the item's average, which the receipt itself has just moved. This is the
+    // single most likely way to break the tie to the control account, because
+    // qty x unit_cost looks right and is a different number.
+    const glBefore = await glNet('1200');
+    // Marked before the SECOND receipt so the movement below is scoped to it
+    // alone — the first receipt is also a `purchase_order` movement on this
+    // item, and summing both against one receipt's ledger delta compares two
+    // different things.
+    const { rows: markRows } = await db.query(`SELECT now() AS t`);
+    const mark: Date = markRows[0].t;
+
+    await stock(mvId, 10, 200);
+    const glAfter = await glNet('1200');
+
+    const { rows: recRows } = await db.query(
+      `SELECT COALESCE(SUM(value_change), 0)::numeric AS v
+         FROM inventory_movements
+        WHERE company_id = $1 AND item_id = $2 AND source_type = 'purchase_order'
+          AND created_at > $3`,
+      [COMPANY, mvId, mark],
+    );
+    const receiptValue = n(recRows[0]?.v);
+    ok(
+      'G1 a receipt records what it added to Inventory, not qty x the new average',
+      near(receiptValue, glAfter - glBefore),
+      { movement: receiptValue, gl1200Delta: Number((glAfter - glBefore).toFixed(2)) },
+    );
+
+    // G2. Voiding an invoice must reverse COGS by what the SALE cost, even
+    // though a purchase has re-averaged the item in between. Before the line
+    // froze its cost this reversal was sized from the current average and left
+    // residue in 5000/1200 forever.
+    const cogsBeforeSale = await glNet('5000');
+    const inv = data(
+      await req('POST', '/invoices', {
+        customerId: customer.id,
+        invoiceDate: TODAY,
+        dueDate: TODAY,
+        status: 'sent',
+        lines: [
+          { description: `Moving Cost Widget ${RUN}`, quantity: '4', unitPrice: '500', taxRate: '0', itemId: mvId },
+        ],
+      }),
+    );
+    const cogsAfterSale = await glNet('5000');
+    const saleCost = cogsAfterSale - cogsBeforeSale;
+
+    // Re-average the item AFTER the sale and BEFORE the void, so the item's
+    // current cost is no longer the cost the sale was posted at.
+    await stock(mvId, 20, 400);
+
+    await req('POST', `/invoices/${inv.id}/void`, { reason: 'cost-capture check' });
+    const cogsAfterVoid = await glNet('5000');
+
+    // Back exactly where it started. Sized from the item's CURRENT average it
+    // would land somewhere else, and the difference would sit in 5000/1200 for
+    // good — the bug this column was added to close.
+    ok(
+      'G2 voiding reverses COGS by what the sale cost, after an intervening receipt',
+      near(cogsAfterVoid, cogsBeforeSale),
+      { cogsBeforeSale, saleCost, cogsAfterVoid },
+    );
+
+    // G3. And the line kept the cost it was posted at.
+    const { rows: lineRows } = await db.query(
+      `SELECT unit_cost::numeric AS uc, cost_amount::numeric AS ca, cost_basis
+         FROM invoice_line_items WHERE invoice_id = $1 AND item_id = $2`,
+      [inv.id, mvId],
+    );
+    ok('G3 the invoice line froze its own cost at posting', lineRows[0]?.cost_basis === 'posted', {
+      unitCost: lineRows[0]?.uc,
+      costAmount: lineRows[0]?.ca,
+      basis: lineRows[0]?.cost_basis,
+    });
+
+    // G4. Nothing writes a movement without a value any more.
+    const { rows: nullRows } = await db.query(
+      `SELECT count(*)::int AS c FROM inventory_movements
+        WHERE company_id = $1 AND created_at > now() - interval '5 minutes'
+          AND value_change IS NULL`,
+      [COMPANY],
+    );
+    ok('G4 every movement this run recorded a value', nullRows[0]?.c === 0, {
+      unvalued: nullRows[0]?.c,
+    });
+
+    // G5. The whole point: movement value ties to the control account (I23).
+    const { rows: tieRows } = await db.query(
+      `SELECT
+         (SELECT COALESCE(SUM(g.debit - g.credit), 0)
+            FROM general_ledger g
+            JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+           WHERE g.company_id = $1 AND a.account_number = '1200')::numeric AS gl,
+         (SELECT COALESCE(SUM(m.value_change), 0)
+            FROM inventory_movements m WHERE m.company_id = $1)::numeric AS mv`,
+      [COMPANY],
+    );
+    ok(
+      'G5 movement value ties to Inventory 1200 across the whole company',
+      near(n(tieRows[0]?.gl), n(tieRows[0]?.mv)),
+      { gl1200: n(tieRows[0]?.gl), movements: n(tieRows[0]?.mv) },
+    );
+  }
+
   // ── Books still sound ──────────────────────────────────────────
   const tbFinal = await trialBalance();
   ok('F1 trial balance balances at the end', tbFinal?.isBalanced === true, {
