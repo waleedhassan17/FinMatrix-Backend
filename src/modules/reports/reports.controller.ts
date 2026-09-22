@@ -20,6 +20,7 @@ import {
   reportToday,
 } from './reports.service';
 import { AgingQueryDto, UnifiedAgingQueryDto } from './dto/aging-query.dto';
+import { AgingDetailQueryDto } from './dto/aging-detail-query.dto';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -118,6 +119,50 @@ export class ReportsController {
   ) {
     const data = await this.svc.apAging(companyId, query);
     return this.send(data, query.format ?? 'json', res, 'ap-aging');
+  }
+
+  /**
+   * The open invoices behind one customer's A/R aging row.
+   *
+   * Kept beside its parent report deliberately: this is that report's
+   * drill-down, not a general invoice list. Like `profitLossLineEntries` and
+   * unlike the aging routes above, there is **no `@Res()`** — this goes through
+   * ResponseEnvelopeInterceptor and returns `{ success, data }`. `send()` exists
+   * for the CSV export, which a paginated drill-down has no use for.
+   *
+   * The caller must pass back the `preset`/`buckets` the report is showing, or
+   * the server resolves the company default and every bucket label in the
+   * detail disagrees with the column that was clicked.
+   */
+  @Get('ar-aging/customers/:customerId/documents')
+  @Roles('admin', 'staff')
+  async arAgingCustomerDocuments(
+    @CurrentCompany() companyId: string,
+    // A malformed id must fail loudly. Unvalidated, it becomes a query that
+    // matches nothing, which reads as "this customer owes nothing".
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Query() query: AgingDetailQueryDto,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
+  ) {
+    return this.svc.arAgingPartyDocuments(
+      companyId, customerId, query, query.bucket, page, limit,
+    );
+  }
+
+  /** The open bills behind one vendor's A/P aging row. */
+  @Get('ap-aging/vendors/:vendorId/documents')
+  @Roles('admin', 'staff')
+  async apAgingVendorDocuments(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @Query() query: AgingDetailQueryDto,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
+  ) {
+    return this.svc.apAgingPartyDocuments(
+      companyId, vendorId, query, query.bucket, page, limit,
+    );
   }
 
   @Get('inventory-valuation')

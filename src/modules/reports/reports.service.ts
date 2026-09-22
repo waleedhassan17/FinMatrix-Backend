@@ -33,6 +33,26 @@ import { businessToday, daysBetweenIso } from '../../common/utils/business-date.
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
+/**
+ * What "open" means for aging, in one place.
+ *
+ * `balance > 0` alone is not enough and `status` alone is not enough: a draft is
+ * not owed to anybody yet, and a voided document never was. Both aging queries
+ * and both drill-downs read this, so the summary and the detail beneath it
+ * cannot come to different conclusions about which documents exist.
+ *
+ * That is not hypothetical. `InvoicesService.outstandingForCustomer` answers
+ * almost the same question with `status NOT IN ('draft','void')` — no `paid` —
+ * and reusing it here would have made a party's documents disagree with the row
+ * they were opened from. Aging totals also tie to GL 1100/2000 in four
+ * acceptance suites, so this predicate is load-bearing beyond these reports:
+ * change it and those ties move.
+ *
+ * @param alias the table alias in the caller's query (`i` invoices, `b` bills)
+ */
+const openDocPredicate = (alias: string) =>
+  `${alias}.balance::numeric > 0 AND ${alias}.status NOT IN ('paid','void','draft')`;
+
 const MONTH_LABELS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -566,7 +586,7 @@ export class ReportsService {
     const rowsRaw = await this.dataSource.query(
       `SELECT i.customer_id AS "customerId", c.name AS "customerName", i.balance::numeric AS balance, i.due_date::text AS "dueDate"
        FROM invoices i JOIN customers c ON c.id = i.customer_id
-       WHERE i.company_id=$1 AND i.balance::numeric > 0 AND i.status NOT IN ('paid','void','draft')`, [companyId]);
+       WHERE i.company_id=$1 AND ${openDocPredicate('i')}`, [companyId]);
     return this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
   }
 
@@ -575,8 +595,198 @@ export class ReportsService {
     const rowsRaw = await this.dataSource.query(
       `SELECT b.vendor_id AS "customerId", v.company_name AS "customerName", b.balance::numeric AS balance, b.due_date::text AS "dueDate"
        FROM bills b JOIN vendors v ON v.id = b.vendor_id
-       WHERE b.company_id=$1 AND b.balance::numeric > 0 AND b.status NOT IN ('paid','void','draft')`, [companyId]);
+       WHERE b.company_id=$1 AND ${openDocPredicate('b')}`, [companyId]);
     return this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
+  }
+
+  /**
+   * One party's open documents behind its aging row — the AR side.
+   *
+   * @see agingPartyDocuments for why this is here and not in InvoicesService.
+   */
+  async arAgingPartyDocuments(
+    companyId: string,
+    customerId: string,
+    request?: AgingSpecRequest,
+    bucket?: string,
+    page = 1,
+    limit = 50,
+  ) {
+    return this.agingPartyDocuments({
+      companyId,
+      partyId: customerId,
+      partyType: 'customer',
+      partyQuery: `SELECT c.name AS name FROM customers c WHERE c.id = $1 AND c.company_id = $2 LIMIT 1`,
+      docQuery:
+        `SELECT i.id AS "documentId", i.invoice_number AS "documentNumber",
+                i.invoice_date::text AS "issueDate", i.due_date::text AS "dueDate",
+                i.total::numeric AS total, i.amount_paid::numeric AS "amountPaid",
+                i.balance::numeric AS balance, i.status
+           FROM invoices i
+          WHERE i.company_id = $1 AND i.customer_id = $2 AND ${openDocPredicate('i')}
+          ORDER BY i.due_date ASC, i.invoice_number ASC`,
+      documentType: 'invoice',
+      request,
+      bucket,
+      page,
+      limit,
+    });
+  }
+
+  /** One party's open documents behind its aging row — the AP side. */
+  async apAgingPartyDocuments(
+    companyId: string,
+    vendorId: string,
+    request?: AgingSpecRequest,
+    bucket?: string,
+    page = 1,
+    limit = 50,
+  ) {
+    return this.agingPartyDocuments({
+      companyId,
+      partyId: vendorId,
+      partyType: 'vendor',
+      partyQuery: `SELECT v.company_name AS name FROM vendors v WHERE v.id = $1 AND v.company_id = $2 LIMIT 1`,
+      docQuery:
+        `SELECT b.id AS "documentId", b.bill_number AS "documentNumber",
+                b.bill_date::text AS "issueDate", b.due_date::text AS "dueDate",
+                b.total::numeric AS total, b.amount_paid::numeric AS "amountPaid",
+                b.balance::numeric AS balance, b.status
+           FROM bills b
+          WHERE b.company_id = $1 AND b.vendor_id = $2 AND ${openDocPredicate('b')}
+          ORDER BY b.due_date ASC, b.bill_number ASC`,
+      documentType: 'bill',
+      request,
+      bucket,
+      page,
+      limit,
+    });
+  }
+
+  /**
+   * The open documents behind one aging row.
+   *
+   * ── Why this lives here and not in InvoicesService ──────────────────────
+   * `InvoicesService.outstandingForCustomer` looks like the function for this
+   * job and is not: its predicate is `status NOT IN ('draft','void')`, which
+   * does NOT exclude `paid`, while aging does. Under `balance > 0` the two
+   * coincide in practice — and "coincides in practice" is exactly the
+   * assumption that makes a drill-down disagree with the row it opened from,
+   * months later, for one company, over one invoice. Both sides read
+   * `openDocPredicate` instead, so they cannot drift apart. There is
+   * deliberately no vendor twin of that method either; this is the one place
+   * that knows what "open" means for aging.
+   *
+   * ── Why the bucketing is in JS and the pagination is not in SQL ─────────
+   * Each document is bucketed with the same `bucketKeyFor` the report uses.
+   * Filtering by bucket in SQL would need a second implementation of it in
+   * Postgres, which is the duplication `aging-buckets.ts` exists to prevent, so
+   * the filter runs here — and `LIMIT`/`OFFSET` therefore cannot, or pages
+   * would be short and `total` would not foot. The set is one party's open
+   * documents: smaller than what arAging already loads for the whole company.
+   *
+   * ── The contract ────────────────────────────────────────────────────────
+   * With no bucket, `outstandingTotal` equals that party's aging row total.
+   * With one, it equals `row.amounts[bucket]`. `daysOverdue` is signed, so a
+   * document not yet due reports a negative number and the client can say "due
+   * in 4 days" without recomputing anything.
+   */
+  private async agingPartyDocuments(args: {
+    companyId: string;
+    partyId: string;
+    partyType: 'customer' | 'vendor';
+    partyQuery: string;
+    docQuery: string;
+    documentType: 'invoice' | 'bill';
+    request?: AgingSpecRequest;
+    bucket?: string;
+    page: number;
+    limit: number;
+  }) {
+    const {
+      companyId, partyId, partyType, partyQuery, docQuery, documentType,
+      request, bucket, page, limit,
+    } = args;
+
+    // The same resolution arAging performs, so the detail's buckets ARE the
+    // report's buckets rather than merely resembling them.
+    const resolved = await this.resolveSpecFor(companyId, request);
+    const spec = resolved.spec;
+
+    if (bucket && !spec.some((b) => b.key === bucket)) {
+      // Not an empty list: an unknown key means the client and the bucket spec
+      // have drifted, and "nothing in this bucket" would hide that.
+      throw new BadRequestException({
+        code: 'UNKNOWN_AGING_BUCKET',
+        message: `No bucket ${bucket} in this report. Buckets: ${spec.map((b) => b.key).join(', ')}.`,
+      });
+    }
+
+    const partyRows = await this.dataSource.query(partyQuery, [partyId, companyId]);
+    const partyName = partyRows?.[0]?.name;
+    if (partyName === undefined) {
+      // An empty document list would read as "this party owes nothing", a
+      // materially more reassuring claim than "there is no such party".
+      throw new NotFoundException({
+        code: partyType === 'customer' ? 'CUSTOMER_NOT_FOUND' : 'VENDOR_NOT_FOUND',
+        message: `No ${partyType} with id ${partyId} in this company.`,
+      });
+    }
+
+    const raw: any[] = await this.dataSource.query(docQuery, [companyId, partyId]);
+    const asOfDate = businessToday();
+    const labelFor = new Map(spec.map((b) => [b.key, b.label]));
+
+    const all = raw.map((r) => {
+      // Identical to bucketAging: calendar days in the business zone, off the
+      // stored date, never elapsed milliseconds.
+      const due = toIsoDay(r.dueDate);
+      const daysOverdue = due === null ? 0 : daysBetweenIso(due, asOfDate);
+      const bucketKey = bucketKeyFor(daysOverdue, spec);
+      return {
+        documentId: r.documentId,
+        documentType,
+        documentNumber: r.documentNumber ?? null,
+        issueDate: r.issueDate ?? null,
+        dueDate: r.dueDate ?? null,
+        daysOverdue,
+        bucketKey,
+        bucketLabel: labelFor.get(bucketKey) ?? bucketKey,
+        total: r2(num(r.total)),
+        amountPaid: r2(num(r.amountPaid)),
+        balance: r2(num(r.balance)),
+        status: r.status,
+      };
+    });
+
+    const matching = bucket ? all.filter((d) => d.bucketKey === bucket) : all;
+    // Over every matching document, not just this page — this is the figure
+    // that has to foot to the aging row.
+    const outstandingTotal = r2(matching.reduce((t, d) => t + d.balance, 0));
+
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+    const safePage = Math.max(Math.trunc(page) || 1, 1);
+    const start = (safePage - 1) * safeLimit;
+
+    return {
+      partyType,
+      partyId,
+      partyName,
+      asOfDate,
+      preset: resolved.preset,
+      buckets: spec,
+      bucket: bucket ?? null,
+      outstandingTotal,
+      // NOT `data`: ResponseEnvelopeInterceptor lifts a `data` key into the
+      // envelope slot and discards every sibling, which is how the P&L
+      // drill-down shipped without its metadata for months. NOT `entries`
+      // either — that means posted ledger rows everywhere else in this
+      // codebase, and these are open source documents.
+      documents: matching.slice(start, start + safeLimit),
+      total: matching.length,
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   /**

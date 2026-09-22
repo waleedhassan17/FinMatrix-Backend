@@ -1,6 +1,10 @@
+import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { firstValueFrom, of } from 'rxjs';
 import { DataSource } from 'typeorm';
+import { ResponseEnvelopeInterceptor } from '../../common/interceptors/response-envelope.interceptor';
 import { REPORT_RANGE_DEFAULTS, ReportsService } from './reports.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Bill } from '../bills/entities/bill.entity';
@@ -786,6 +790,324 @@ describe('ReportsService — aging', () => {
     const r: any = await svc.apAging('c1');
     expect(r.rows[0].bucket90Plus).toBe(500);
     expect(r.totals.total).toBe(500);
+  });
+});
+
+/**
+ * Aging drill-down — one party's open documents.
+ *
+ * The property that carries this endpoint is the same one that carries the P&L
+ * drill-down: what it returns must add up to the row it was opened from. A
+ * detail that disagrees with its own row makes a correct report look wrong, and
+ * a finance tool that shows figures which do not reconcile is worse than one
+ * that shows fewer figures.
+ *
+ * So the fixture below feeds BOTH `arAging` and `arAgingPartyDocuments` from one
+ * list of documents, and the tests compare the two against each other rather
+ * than against numbers typed into the test.
+ */
+describe('ReportsService — aging party documents', () => {
+  const dueDaysAgo = (days: number): string => addDaysIso(businessToday(), -days);
+
+  type Doc = {
+    id: string;
+    number: string;
+    /** Days overdue. Negative means not yet due. */
+    days: number;
+    balance: string;
+    status?: string;
+  };
+
+  /** Captures every statement the service issues, so we can assert on the SQL. */
+  const sqlSeen: string[] = [];
+
+  const makeQuery = (docs: Doc[], prefs: unknown = null, party: unknown = { name: 'Acme' }) =>
+    jest.fn(async (sql: string) => {
+      sqlSeen.push(sql);
+      if (sql.includes('report_preferences')) return prefs === null ? [] : [{ prefs }];
+      // Party lookups. Distinct from the summary's `JOIN customers c ON …`.
+      if (sql.includes('FROM customers c WHERE c.id')) return party === null ? [] : [party];
+      if (sql.includes('FROM vendors v WHERE v.id')) return party === null ? [] : [party];
+      // The drill-down. Checked before the summary because both name `invoices i`.
+      if (sql.includes('i.customer_id = $2')) {
+        return docs.map((d) => ({
+          documentId: d.id,
+          documentNumber: d.number,
+          issueDate: dueDaysAgo(d.days + 30),
+          dueDate: dueDaysAgo(d.days),
+          total: d.balance,
+          amountPaid: '0',
+          balance: d.balance,
+          status: d.status ?? 'sent',
+        }));
+      }
+      // The summary, from the same documents.
+      if (sql.includes('FROM invoices i JOIN customers c')) {
+        return docs.map((d) => ({
+          customerId: 'cust-1',
+          customerName: 'Acme',
+          balance: d.balance,
+          dueDate: dueDaysAgo(d.days),
+        }));
+      }
+      return [];
+    });
+
+  beforeEach(() => {
+    sqlSeen.length = 0;
+  });
+
+  const SPREAD: Doc[] = [
+    { id: 'i1', number: 'INV-1', days: -5, balance: '100' }, // not yet due
+    { id: 'i2', number: 'INV-2', days: 10, balance: '200' }, // 1–30
+    { id: 'i3', number: 'INV-3', days: 20, balance: '50' }, // 1–30
+    { id: 'i4', number: 'INV-4', days: 45, balance: '300' }, // 31–60
+    { id: 'i5', number: 'INV-5', days: 200, balance: '25' }, // 91+
+  ];
+
+  it('foots to the aging row total when no bucket is named', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const summary: any = await svc.arAging('c1');
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+
+    expect(detail.outstandingTotal).toBe(summary.rows[0].total);
+    expect(detail.total).toBe(SPREAD.length);
+    expect(detail.partyName).toBe('Acme');
+    expect(detail.partyType).toBe('customer');
+    expect(detail.partyId).toBe('cust-1');
+  });
+
+  it('foots to the aging row bucket when one is named', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const summary: any = await svc.arAging('c1');
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1', undefined, 'd1to30');
+
+    // 200 + 50, and the row's own figure for that column, computed independently.
+    expect(detail.outstandingTotal).toBe(summary.rows[0].amounts.d1to30);
+    expect(detail.total).toBe(2);
+    expect(detail.documents.map((d: any) => d.documentNumber)).toEqual(['INV-2', 'INV-3']);
+  });
+
+  it('every document reports the bucket its own row would have put it in', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    const byNumber = Object.fromEntries(
+      detail.documents.map((d: any) => [d.documentNumber, d.bucketKey]),
+    );
+    expect(byNumber).toEqual({
+      'INV-1': 'current',
+      'INV-2': 'd1to30',
+      'INV-3': 'd1to30',
+      'INV-4': 'd31to60',
+      'INV-5': 'd91plus',
+    });
+  });
+
+  it('asks the database for exactly the documents aging ages', async () => {
+    // The regression guard. InvoicesService.outstandingForCustomer answers
+    // almost this question with `status NOT IN ('draft','void')` — no `paid` —
+    // and swapping it in here would make the detail disagree with its row for
+    // any paid document still carrying a balance. The mock cannot execute a
+    // WHERE clause, so this asserts the predicate the service actually sends,
+    // and that it is character-identical to the summary's.
+    const svc = await makeService(makeQuery(SPREAD));
+    await svc.arAging('c1');
+    await svc.arAgingPartyDocuments('c1', 'cust-1');
+
+    const summarySql = sqlSeen.find((s) => s.includes('FROM invoices i JOIN customers c'))!;
+    const detailSql = sqlSeen.find((s) => s.includes('i.customer_id = $2'))!;
+    const predicate = /i\.balance::numeric > 0 AND i\.status NOT IN \('paid','void','draft'\)/;
+
+    expect(summarySql).toMatch(predicate);
+    expect(detailSql).toMatch(predicate);
+  });
+
+  it('re-buckets with the requested preset, not the company default', async () => {
+    const svc = await makeService(makeQuery(SPREAD, { aging: { preset: 'monthly' } }));
+    const detail: any = await svc.arAgingPartyDocuments(
+      'c1', 'cust-1', { preset: 'days3' }, undefined,
+    );
+
+    expect(detail.preset).toBe('days3');
+    // days3 is 3,6,9,12 → current, 1–3, 4–6, 7–9, 10–12, 13+. A document 10
+    // days overdue sits mid-table here and in `1–30` under monthly: same money,
+    // finer columns, which is the whole reason the preset is configurable.
+    expect(detail.buckets.map((b: any) => b.key)).toContain('d13plus');
+    const inv2 = detail.documents.find((d: any) => d.documentNumber === 'INV-2');
+    expect(inv2.bucketKey).toBe('d10to12');
+    expect(inv2.bucketLabel).toBe('10–12');
+    // …and the oldest document has moved into the open-ended bucket.
+    const inv5 = detail.documents.find((d: any) => d.documentNumber === 'INV-5');
+    expect(inv5.bucketKey).toBe('d13plus');
+  });
+
+  it('counts a document due today as current, in calendar days', async () => {
+    // The same boundary the summary suite guards: elapsed milliseconds read
+    // short in Asia/Karachi and could age a same-day document by a whole day.
+    const svc = await makeService(
+      makeQuery([{ id: 'i1', number: 'INV-1', days: 0, balance: '100' }]),
+    );
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    expect(detail.documents[0].bucketKey).toBe('current');
+    expect(detail.documents[0].daysOverdue).toBe(0);
+  });
+
+  it('separates 30 days overdue from 31', async () => {
+    const svc = await makeService(
+      makeQuery([
+        { id: 'i1', number: 'INV-30', days: 30, balance: '10' },
+        { id: 'i2', number: 'INV-31', days: 31, balance: '10' },
+      ]),
+    );
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    const byNumber = Object.fromEntries(
+      detail.documents.map((d: any) => [d.documentNumber, d.bucketKey]),
+    );
+    expect(byNumber['INV-30']).toBe('d1to30');
+    expect(byNumber['INV-31']).toBe('d31to60');
+  });
+
+  it('reports a negative daysOverdue for a document that is not yet due', async () => {
+    // Signed, so the client can say "due in 5 days" without recomputing.
+    const svc = await makeService(makeQuery(SPREAD));
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    const notDue = detail.documents.find((d: any) => d.documentNumber === 'INV-1');
+    expect(notDue.daysOverdue).toBe(-5);
+    expect(notDue.bucketKey).toBe('current');
+  });
+
+  it('paginates after filtering, and totals over everything that matched', async () => {
+    const many: Doc[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `i${i}`,
+      number: `INV-${i}`,
+      days: 10,
+      balance: '100',
+    }));
+    const svc = await makeService(makeQuery(many));
+    const detail: any = await svc.arAgingPartyDocuments(
+      'c1', 'cust-1', undefined, 'd1to30', 1, 2,
+    );
+
+    expect(detail.documents).toHaveLength(2);
+    expect(detail.total).toBe(5);
+    // Money is over all five, not the two on this page — otherwise the panel
+    // could not be reconciled against the row.
+    expect(detail.outstandingTotal).toBe(500);
+    expect(detail.page).toBe(1);
+    expect(detail.limit).toBe(2);
+  });
+
+  it('clamps an absurd limit rather than trying to serve it', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const detail: any = await svc.arAgingPartyDocuments(
+      'c1', 'cust-1', undefined, undefined, 1, 99999,
+    );
+    expect(detail.limit).toBe(200);
+  });
+
+  it('refuses a bucket key this report does not have', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    // Not an empty list: an unknown key means the client and the spec have
+    // drifted, and "nothing in this bucket" would hide that.
+    await expect(
+      svc.arAgingPartyDocuments('c1', 'cust-1', undefined, 'd4to6'),
+    ).rejects.toMatchObject({
+      response: { code: 'UNKNOWN_AGING_BUCKET' },
+    });
+  });
+
+  it('refuses an unknown customer rather than reporting no debt', async () => {
+    const svc = await makeService(makeQuery(SPREAD, null, null));
+    await expect(svc.arAgingPartyDocuments('c1', 'nobody')).rejects.toMatchObject({
+      response: { code: 'CUSTOMER_NOT_FOUND' },
+    });
+  });
+
+  it('refuses an unknown vendor on the payables side', async () => {
+    const svc = await makeService(makeQuery([], null, null));
+    await expect(svc.apAgingPartyDocuments('c1', 'nobody')).rejects.toMatchObject({
+      response: { code: 'VENDOR_NOT_FOUND' },
+    });
+  });
+
+  it('names the payables side honestly rather than reusing the A/R field names', async () => {
+    // The summary calls a vendor `customerName` for back-compat with shipped
+    // clients. A new endpoint has none, so it does not inherit the lie.
+    const svc = await makeService(makeQuery([], null, { name: 'Supplier Co' }));
+    const detail: any = await svc.apAgingPartyDocuments('c1', 'vend-1');
+    expect(detail.partyType).toBe('vendor');
+    expect(detail.partyName).toBe('Supplier Co');
+    expect(detail).not.toHaveProperty('customerName');
+  });
+
+  it('returns the bucket spec so the panel can label itself', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const summary: any = await svc.arAging('c1');
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    // Identical, because both resolved it the same way. This is what stops the
+    // detail's labels disagreeing with the column that was clicked.
+    expect(detail.buckets).toEqual(summary.buckets);
+    expect(detail.asOfDate).toBe(summary.asOfDate);
+  });
+
+  it('is empty, not broken, for a party with nothing open', async () => {
+    const svc = await makeService(makeQuery([]));
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
+    expect(detail.documents).toEqual([]);
+    expect(detail.outstandingTotal).toBe(0);
+    expect(detail.total).toBe(0);
+  });
+
+  /**
+   * The envelope, driven for real.
+   *
+   * This is the bug that took the P&L drill-down down for months: naming the
+   * rows `data` makes ResponseEnvelopeInterceptor lift the array into the
+   * envelope slot and discard every sibling, so the client gets rows with no
+   * `outstandingTotal`, no `partyName` and no `total`. A service-level test
+   * never runs the interceptor, which is exactly why nobody saw it.
+   *
+   * So rather than trusting the field name by inspection, this pushes the real
+   * service output through the real interceptor and checks the metadata is
+   * still there on the other side. It needs no HTTP server, and it fails the
+   * moment somebody renames `documents` to `data`.
+   */
+  it('survives the response envelope with its metadata intact', async () => {
+    const svc = await makeService(makeQuery(SPREAD));
+    const payload = await svc.arAgingPartyDocuments('c1', 'cust-1');
+
+    const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
+    const enveloped: any = await firstValueFrom(
+      interceptor.intercept({} as ExecutionContext, {
+        handle: () => of(payload),
+      } as CallHandler),
+    );
+
+    expect(enveloped.success).toBe(true);
+    // The rows arrived…
+    expect(enveloped.data.documents).toHaveLength(SPREAD.length);
+    // …and so did everything beside them.
+    expect(enveloped.data.outstandingTotal).toBe(675);
+    expect(enveloped.data.partyName).toBe('Acme');
+    expect(enveloped.data.partyType).toBe('customer');
+    expect(enveloped.data.total).toBe(SPREAD.length);
+    expect(enveloped.data.buckets).toHaveLength(5);
+    expect(enveloped.data.asOfDate).toBe(businessToday());
+  });
+
+  it('would have caught the P&L bug: a `data` key loses its siblings', async () => {
+    // The counter-example, pinned so the reason for the field name cannot be
+    // lost. If this ever stops being true the interceptor changed, and the
+    // naming constraint above can be revisited.
+    const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
+    const enveloped: any = await firstValueFrom(
+      interceptor.intercept({} as ExecutionContext, {
+        handle: () => of({ data: [1, 2], outstandingTotal: 99 }),
+      } as CallHandler),
+    );
+    expect(enveloped.data).toEqual([1, 2]);
+    expect(enveloped.outstandingTotal).toBeUndefined();
+    expect(enveloped.data.outstandingTotal).toBeUndefined();
   });
 });
 
