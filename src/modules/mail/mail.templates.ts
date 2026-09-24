@@ -59,19 +59,29 @@ export interface RenderedEmail {
 }
 
 export const emailTemplates = {
-  verification(displayName: string, deepLink: string, webLink: string): RenderedEmail {
+  /**
+   * The button is an https link to the web app's verify page, which opens in
+   * every mail client and carries the owner on into company setup. It used to
+   * be the `finmatrix://` deep link: dead on a desktop, blocked by most phone
+   * mail apps, and its fallback was a bare API page that could only say "open
+   * the app". The deep link stays, second, for an owner reading on the phone
+   * the app is installed on.
+   */
+  verification(displayName: string, appLink: string, deepLink: string): RenderedEmail {
+    const name = esc(displayName);
     return {
       subject: 'Verify your FinMatrix email',
       html: layout(
         'Confirm your email address',
-        `<p>Hi ${displayName},</p>
-         <p>Thanks for signing up for FinMatrix. Tap the button below to verify your email and continue setting up your company.</p>
-         <p style="margin:24px 0;">${button(deepLink, 'Verify email')}</p>
-         <p style="font-size:13px;color:#6b7280;">If the button doesn't open the app, use this link instead:<br/>
-         <a href="${webLink}">${webLink}</a></p>
-         <p style="font-size:13px;color:#6b7280;">This link expires soon and can only be used once.</p>`,
+        `<p>Hi ${name},</p>
+         <p>Thanks for signing up for FinMatrix. Confirm your email address and we will take you straight on to setting up your company.</p>
+         <p style="margin:24px 0;">${button(appLink, 'Verify email')}</p>
+         <p style="font-size:13px;color:#6b7280;">Button not working? Copy this link into your browser:<br/>
+         <a href="${appLink}">${appLink}</a></p>
+         <p style="font-size:13px;color:#6b7280;">Using the FinMatrix Android app on this phone? <a href="${deepLink}">Open the app instead</a>.</p>
+         <p style="font-size:13px;color:#6b7280;">The link expires in 24 hours. If you did not sign up for FinMatrix, you can ignore this email.</p>`,
       ),
-      text: `Hi ${displayName},\n\nVerify your FinMatrix email:\n${deepLink}\n\nIf the app link doesn't work, open: ${webLink}\n\nThis link expires soon and can only be used once.`,
+      text: `Hi ${displayName},\n\nConfirm your FinMatrix email address:\n${appLink}\n\nUsing the FinMatrix Android app on this phone? Open: ${deepLink}\n\nThe link expires in 24 hours. If you did not sign up for FinMatrix, you can ignore this email.`,
     };
   },
 
@@ -103,16 +113,47 @@ export const emailTemplates = {
     };
   },
 
-  approved(displayName: string, companyName: string): RenderedEmail {
+  approved(displayName: string, companyName: string, appUrl?: string): RenderedEmail {
+    const open = appUrl ? `${appUrl}/dashboard` : '';
     return {
       subject: `${companyName} has been approved 🎉`,
       html: layout(
         'Your company has been approved',
-        `<p>Hi ${displayName},</p>
-         <p>Good news — <strong>${companyName}</strong> has been approved. You now have full access to FinMatrix.</p>
-         <p>Sign in to get started.</p>`,
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Good news — <strong>${esc(companyName)}</strong> has been approved. You now have full access to FinMatrix.</p>
+         ${open ? `<p style="margin:24px 0;">${button(open, 'Open FinMatrix')}</p>` : '<p>Sign in to get started.</p>'}
+         <p style="font-size:13px;color:#6b7280;">Already have FinMatrix open? It moves on by itself — no need to sign in again.</p>`,
       ),
-      text: `Hi ${displayName},\n\n${companyName} has been approved. You now have full access to FinMatrix. Sign in to get started.`,
+      text: `Hi ${displayName},\n\n${companyName} has been approved. You now have full access to FinMatrix.${open ? `\n\nOpen FinMatrix: ${open}` : ' Sign in to get started.'}`,
+    };
+  },
+
+  /** Access paused by a FinMatrix administrator. Nothing is deleted. */
+  deactivated(displayName: string, companyName: string): RenderedEmail {
+    return {
+      subject: `${companyName}: access paused`,
+      html: layout(
+        'Your company account has been deactivated',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Access to <strong>${esc(companyName)}</strong> on FinMatrix has been paused by our team, so you and your team cannot sign in for now.</p>
+         <p>Your data is safe and untouched. Reply to your FinMatrix contact to restore access.</p>`,
+      ),
+      text: `Hi ${displayName},\n\nAccess to ${companyName} on FinMatrix has been paused by our team, so you and your team cannot sign in for now.\n\nYour data is safe and untouched. Reply to your FinMatrix contact to restore access.`,
+    };
+  },
+
+  /** Access restored after a deactivation. */
+  reactivated(displayName: string, companyName: string, appUrl?: string): RenderedEmail {
+    const open = appUrl ? `${appUrl}/dashboard` : '';
+    return {
+      subject: `${companyName} is active again`,
+      html: layout(
+        'Your company account is active again',
+        `<p>Hi ${esc(displayName)},</p>
+         <p><strong>${esc(companyName)}</strong> has been reactivated. You and your team can sign in and pick up where you left off.</p>
+         ${open ? `<p style="margin:24px 0;">${button(open, 'Open FinMatrix')}</p>` : ''}`,
+      ),
+      text: `Hi ${displayName},\n\n${companyName} has been reactivated. You and your team can sign in and pick up where you left off.${open ? `\n\nOpen FinMatrix: ${open}` : ''}`,
     };
   },
 

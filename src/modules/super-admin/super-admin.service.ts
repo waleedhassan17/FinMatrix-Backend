@@ -7,7 +7,8 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { In, Repository, DataSource } from 'typeorm';
+import { likeContains } from '../../common/utils/like.util';
 import * as bcrypt from 'bcryptjs';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
@@ -157,12 +158,21 @@ export class SuperAdminService {
       .where('c.createdAt >= :since', { since: sevenDaysAgo })
       .getCount();
 
-    // Recent registrations (last 6)
+    // Recent registrations (last 6), with who registered them.
     const recentRegistrations = await this.companyRepo
       .createQueryBuilder('c')
       .orderBy('c.createdAt', 'DESC')
       .limit(6)
       .getMany();
+    const recentOwnerIds = [
+      ...new Set(recentRegistrations.map((c) => c.createdBy).filter(Boolean)),
+    ];
+    const recentOwners = new Map(
+      (recentOwnerIds.length
+        ? await this.userRepo.findBy({ id: In(recentOwnerIds) })
+        : []
+      ).map((u) => [u.id, u]),
+    );
 
     return {
       companies: {
@@ -186,6 +196,8 @@ export class SuperAdminService {
         email: c.email,
         status: c.status ?? 'active',
         createdAt: c.createdAt,
+        ownerName: recentOwners.get(c.createdBy)?.displayName ?? null,
+        ownerEmail: recentOwners.get(c.createdBy)?.email ?? null,
       })),
     };
   }
@@ -199,7 +211,13 @@ export class SuperAdminService {
     return undefined;
   }
 
-  async getAllCompanies(page = 1, limit = 20, status?: string, isTrial?: boolean) {
+  async getAllCompanies(
+    page = 1,
+    limit = 20,
+    status?: string,
+    isTrial?: boolean,
+    search?: string,
+  ) {
     const qb = this.companyRepo.createQueryBuilder('c').orderBy('c.createdAt', 'DESC');
 
     if (status && status !== 'all') {
@@ -223,6 +241,21 @@ export class SuperAdminService {
     if (isTrial !== undefined) {
       qb.andWhere('c.isTrial = :isTrial', { isTrial });
     }
+    // Finding one company among many is most of what an administrator does
+    // before deciding on it, and they know it by whatever they were told: the
+    // business name, its email, or the owner's name or address. Escaped, so a
+    // "%" or "_" someone types is searched for rather than matching everything.
+    const term = search?.trim();
+    if (term) {
+      qb.andWhere(
+        `(c.name ILIKE :q OR c.email ILIKE :q OR EXISTS (
+            SELECT 1 FROM users o
+             WHERE o.id = c.created_by
+               AND (o.email ILIKE :q OR o.display_name ILIKE :q)
+          ))`,
+        { q: likeContains(term) },
+      );
+    }
 
     const total = await qb.getCount();
     const companies = await qb
@@ -230,33 +263,56 @@ export class SuperAdminService {
       .take(limit)
       .getMany();
 
-    const enriched = await Promise.all(
-      companies.map(async c => {
-        const memberCount = await this.userCompanyRepo.count({
-          where: { companyId: c.id },
-        });
-        const subscription = await this.subRepo.findOne({
-          where: { companyId: c.id, status: 'active' },
-          relations: { plan: true },
-        });
-        return {
-          id: c.id,
-          name: c.name,
-          industry: c.industry,
-          email: c.email,
-          phone: c.phone,
-          status: c.status ?? 'active',
-          rejectionReason: c.rejectionReason,
-          memberCount,
-          planName: subscription?.plan?.name ?? null,
-          createdAt: c.createdAt,
-          reviewedAt: c.reviewedAt,
-          isTrial: c.isTrial,
-          trialStartedAt: c.trialStartedAt,
-          trialConvertedAt: c.trialConvertedAt,
-        };
-      }),
-    );
+    // Three batched look-ups for the whole page. This used to run two queries
+    // per company (member count, active subscription) — forty round-trips to
+    // draw one page of twenty.
+    const ids = companies.map((c) => c.id);
+    const ownerIds = [...new Set(companies.map((c) => c.createdBy).filter(Boolean))];
+    const [memberRows, subscriptions, owners] = ids.length
+      ? await Promise.all([
+          this.userCompanyRepo
+            .createQueryBuilder('uc')
+            .select('uc.companyId', 'companyId')
+            .addSelect('COUNT(*)', 'count')
+            .where('uc.companyId IN (:...ids)', { ids })
+            .groupBy('uc.companyId')
+            .getRawMany<{ companyId: string; count: string }>(),
+          this.subRepo.find({
+            where: { companyId: In(ids), status: 'active' },
+            relations: { plan: true },
+          }),
+          ownerIds.length ? this.userRepo.findBy({ id: In(ownerIds) }) : Promise.resolve([]),
+        ])
+      : [[], [], []];
+    const memberCount = new Map(memberRows.map((r) => [r.companyId, Number(r.count)]));
+    const planName = new Map(subscriptions.map((s) => [s.companyId, s.plan?.name ?? null]));
+    const ownerById = new Map(owners.map((o) => [o.id, o]));
+
+    const enriched = companies.map((c) => {
+      const owner = ownerById.get(c.createdBy);
+      return {
+        id: c.id,
+        name: c.name,
+        industry: c.industry,
+        email: c.email,
+        phone: c.phone,
+        status: c.status ?? 'active',
+        rejectionReason: c.rejectionReason,
+        memberCount: memberCount.get(c.id) ?? 0,
+        planName: planName.get(c.id) ?? null,
+        createdAt: c.createdAt,
+        reviewedAt: c.reviewedAt,
+        isTrial: c.isTrial,
+        trialStartedAt: c.trialStartedAt,
+        trialConvertedAt: c.trialConvertedAt,
+        // Who to call about it. The company's own email is often blank; the
+        // owner's is the address every approval email goes to.
+        ownerName: owner?.displayName ?? null,
+        ownerEmail: owner?.email ?? null,
+        ownerPhone: owner?.phone ?? null,
+        ownerEmailVerified: owner ? owner.isEmailVerified : null,
+      };
+    });
 
     return {
       data: {
@@ -286,9 +342,25 @@ export class SuperAdminService {
       order: { createdAt: 'DESC' },
     });
 
+    // The person the decision is about. `createdBy` is the owner's user id; the
+    // member list has them too, but without a phone or whether they ever
+    // confirmed their address.
+    const owner = company.createdBy
+      ? await this.userRepo.findOneBy({ id: company.createdBy })
+      : null;
+
     return {
       ...company,
       status: company.status ?? 'active',
+      owner: owner
+        ? {
+            id: owner.id,
+            displayName: owner.displayName,
+            email: owner.email,
+            phone: owner.phone,
+            isEmailVerified: owner.isEmailVerified,
+          }
+        : null,
       members: members.map(m => ({
         id: m.user?.id,
         email: m.user?.email,
@@ -351,6 +423,7 @@ export class SuperAdminService {
     }
 
     const wasApproved = isCompanyApproved(company.status);
+    const wasInactive = company.status === 'inactive' || company.status === 'suspended';
 
     company.status = newStatus;
     company.rejectionReason =
@@ -367,9 +440,16 @@ export class SuperAdminService {
     // Notify the company owner (best-effort).
     const owner = await this.userRepo.findOneBy({ id: company.createdBy });
     // An owner-created (username-only) account has no address to notify.
+    // Each transition gets the email that describes it. Reactivating an
+    // inactive company used to send "has been approved 🎉", and deactivating
+    // one sent nothing — the owner learned of it from a failed sign-in.
     if (owner?.email) {
-      if (isCompanyApproved(newStatus) && !wasApproved) {
+      if (isCompanyApproved(newStatus) && wasInactive) {
+        await this.mail.sendReactivatedEmail(owner.email, owner.displayName, company.name);
+      } else if (isCompanyApproved(newStatus) && !wasApproved) {
         await this.mail.sendApprovalEmail(owner.email, owner.displayName, company.name);
+      } else if (newStatus === 'inactive' && wasApproved) {
+        await this.mail.sendDeactivatedEmail(owner.email, owner.displayName, company.name);
       } else if (newStatus === COMPANY_STATUS.REJECTED) {
         await this.mail.sendRejectionEmail(
           owner.email,

@@ -12,6 +12,7 @@ import {
   normalizeCompanyStatus,
 } from '../utils/company-status.util';
 import { RIDER_SEAT_LOCKED_MESSAGE } from '../../modules/delivery-personnel/rider-seats';
+import { assertEmailVerified } from '../utils/email-verified.util';
 
 /**
  * Extracts companyId from the authenticated user (JWT), enforces that the
@@ -30,6 +31,10 @@ export class CompanyGuard implements CanActivate {
     const req = context
       .switchToHttp()
       .getRequest<Request & { user?: AuthenticatedUser; companyId?: string | null }>();
+
+    // Before anything company-shaped: an unverified owner holds a session only
+    // so they can wait on the verify screen, never to use the books.
+    assertEmailVerified(req.user);
 
     const companyId = req.user?.companyId ?? null;
     if (!companyId) {

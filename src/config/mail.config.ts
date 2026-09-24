@@ -17,6 +17,12 @@ export default registerAs('mail', () => ({
   pass: process.env.SMTP_PASSWORD ?? process.env.SMTP_PASS ?? '',
   from: process.env.SMTP_FROM ?? 'FinMatrix <no-reply@finmatrix.pk>',
 
+  // The owner-facing web app. Verification emails send owners HERE first: an
+  // https link opens in every mail client, where the `finmatrix://` deep link
+  // is dead on a desktop and blocked by most phone mail apps. The page verifies
+  // and carries the owner on into company setup.
+  webAppUrl: (process.env.WEB_APP_URL ?? 'https://finmatrix-theta.vercel.app').replace(/\/+$/, ''),
+
   // Deep-link / web-fallback config for verification emails.
   appScheme: process.env.APP_DEEP_LINK_SCHEME ?? 'finmatrix',
   webFallbackBaseUrl:

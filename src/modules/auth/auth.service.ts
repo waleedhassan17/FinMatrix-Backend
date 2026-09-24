@@ -242,31 +242,7 @@ export class AuthService {
       });
     }
 
-    let membership = user.defaultCompanyId
-      ? await this.userCompanyRepo.findOne({
-          where: { userId: user.id, companyId: user.defaultCompanyId },
-          relations: { company: true },
-        })
-      : null;
-
-    // defaultCompanyId can dangle. Deleting a company cascades away the
-    // user_companies row but leaves the pointer on the user, so keying the
-    // lookup on it alone resolved to nothing and signed the user in with
-    // companyId: null — locked out of companies they still belong to, with
-    // every request answering NOT_COMPANY_MEMBER. Fall back to any membership.
-    if (!membership) {
-      membership = await this.userCompanyRepo.findOne({
-        where: { userId: user.id },
-        relations: { company: true },
-      });
-      // Repair the stale pointer so the next sign-in takes the fast path.
-      if (membership && user.defaultCompanyId !== membership.companyId) {
-        user.defaultCompanyId = membership.companyId;
-        await this.dataSource
-          .getRepository(User)
-          .update(user.id, { defaultCompanyId: membership.companyId });
-      }
-    }
+    const membership = await this.resolveMembership(user);
 
     // super_admin is a platform-level role — never let a company membership override it
     const isSuperAdmin = user.role === 'super_admin';
@@ -291,19 +267,23 @@ export class AuthService {
       });
     }
 
-    // Hard gate: company admins cannot sign in until their email is verified.
-    // An owner-created account has no email to verify, so the gate cannot
-    // apply to it — without this guard, promoting a username-only user to
-    // admin would lock them out permanently with no way to satisfy the check.
-    // After the portal gate: an unverified owner on the wrong door is told
-    // which door is theirs before being sent off to verify.
-    if (user.role === 'admin' && user.email && !user.isEmailVerified) {
-      this.logger.warn(`Login blocked (email not verified): ${identifier}`);
-      throw new ForbiddenException({
-        code: 'EMAIL_NOT_VERIFIED',
-        message: 'Please verify your email before signing in.',
-        email: user.email,
-      });
+    // Unverified owner: a SOFT gate. This used to refuse the sign-in outright
+    // (403 EMAIL_NOT_VERIFIED, no token), which left the client nothing to
+    // wait with — the owner verified in another tab or on their phone, then
+    // had to come back and sign in a second time. Now the session is issued
+    // and `user.isEmailVerified: false` routes both clients to their verify
+    // screen, which notices the moment the link is opened and moves on.
+    //
+    // The session can do nothing else. JwtStrategy marks it unverified, and
+    // CompanyGuard and EmailVerifiedGuard refuse it on every company route,
+    // exactly as they refuse the session /auth/signup has always returned.
+    //
+    // An owner-created account has no email to verify, so this cannot apply to
+    // it. After the portal gate: an unverified owner on the wrong door is still
+    // told which door is theirs.
+    const emailUnverified = user.role === 'admin' && !!user.email && !user.isEmailVerified;
+    if (emailUnverified) {
+      this.logger.warn(`Login → verify-email only (email not verified): ${identifier}`);
     }
 
     const company = membership?.company ?? null;
@@ -317,7 +297,10 @@ export class AuthService {
     // client route to the Renew screen; CompanyGuard still blocks every
     // business endpoint, and only /billing/* stays reachable. Super-admins and
     // delivery riders are exempt from this gate entirely.
-    if (!isSuperAdmin && role !== 'delivery' && company) {
+    // Skipped for an unverified owner: confirming the address comes first, and
+    // the client shows the company's state once it has. The session is refused
+    // everywhere a company status would matter anyway.
+    if (!isSuperAdmin && role !== 'delivery' && company && !emailUnverified) {
       // effectiveCompanyStatus applies the LIVE expiry check: a paid plan past
       // its expiry date reports 'inactive' (renew-only) even before the daily
       // billing cron persists the flip.
@@ -430,7 +413,58 @@ export class AuthService {
     const user = await this.users.getByIdOrFail(payload.sub);
     stored.revokedAt = new Date();
     await this.refreshRepo.save(stored);
-    return this.issueTokens(user, payload.companyId, payload.role);
+
+    // A session that began before the owner had a company — every session a
+    // new owner has, since signup and sign-in both come before onboarding —
+    // carries companyId: null, and rotation used to copy that forward for the
+    // life of the session. So an approved owner who never signed out kept a
+    // token CompanyGuard refused with NOT_COMPANY_MEMBER on every request, and
+    // the only cure was signing out. Resolve it the way sign-in does instead.
+    // A token that already names a company keeps it: this only fills a gap.
+    let companyId = payload.companyId;
+    let role = payload.role;
+    if (!companyId && role !== 'super_admin' && user.role !== 'super_admin') {
+      const membership = await this.resolveMembership(user);
+      if (membership) {
+        companyId = membership.companyId;
+        role = membership.role as UserRole;
+      }
+    }
+    return this.issueTokens(user, companyId, role);
+  }
+
+  /**
+   * The company a session is about: the default company while the user still
+   * belongs to it, otherwise any membership.
+   *
+   * defaultCompanyId can dangle. Deleting a company cascades away the
+   * user_companies row but leaves the pointer on the user, so keying the
+   * lookup on it alone resolved to nothing and signed the user in with
+   * companyId: null — locked out of companies they still belong to, with
+   * every request answering NOT_COMPANY_MEMBER. The stale pointer is repaired
+   * so the next lookup takes the fast path.
+   */
+  private async resolveMembership(user: User): Promise<UserCompany | null> {
+    let membership = user.defaultCompanyId
+      ? await this.userCompanyRepo.findOne({
+          where: { userId: user.id, companyId: user.defaultCompanyId },
+          relations: { company: true },
+        })
+      : null;
+
+    if (!membership) {
+      membership = await this.userCompanyRepo.findOne({
+        where: { userId: user.id },
+        relations: { company: true },
+      });
+      if (membership && user.defaultCompanyId !== membership.companyId) {
+        user.defaultCompanyId = membership.companyId;
+        await this.dataSource
+          .getRepository(User)
+          .update(user.id, { defaultCompanyId: membership.companyId });
+      }
+    }
+    return membership;
   }
 
   async signout(userId: string): Promise<{ revoked: number }> {
@@ -513,7 +547,9 @@ export class AuthService {
     return token;
   }
 
-  async verifyEmail(token: string): Promise<{ verified: true; email: string | null }> {
+  async verifyEmail(
+    token: string,
+  ): Promise<{ verified: true; email: string | null; alreadyVerified: boolean }> {
     if (!token) {
       throw new BadRequestException({
         code: 'INVALID_TOKEN',
@@ -523,10 +559,25 @@ export class AuthService {
     const record = await this.verificationRepo.findOne({
       where: { tokenHash: this.hashToken(token) },
     });
-    if (!record || record.usedAt || record.expiresAt < new Date()) {
+    if (!record) {
       throw new BadRequestException({
         code: 'INVALID_TOKEN',
-        message: 'Verification link is invalid, used, or expired',
+        message: 'This verification link is not valid. Request a new one.',
+      });
+    }
+    if (record.usedAt || record.expiresAt < new Date()) {
+      // A spent link for an address that IS verified is a success, not a
+      // failure. Mail scanners open links before the owner does, owners click
+      // twice, and a resend retires the earlier link — each of those used to
+      // answer "Verification failed" about an email that had been verified.
+      // Only a link that still has work to do can fail.
+      const owner = await this.users.findById(record.userId);
+      if (owner?.isEmailVerified) {
+        return { verified: true, email: owner.email, alreadyVerified: true };
+      }
+      throw new BadRequestException({
+        code: 'INVALID_TOKEN',
+        message: 'This verification link has expired or been replaced. Request a new one.',
       });
     }
     const user = await this.users.getByIdOrFail(record.userId);
@@ -539,7 +590,20 @@ export class AuthService {
     record.usedAt = new Date();
     await this.verificationRepo.save(record);
     this.logger.log(`Email verified: ${user.email}`);
-    return { verified: true, email: user.email };
+    return { verified: true, email: user.email, alreadyVerified: false };
+  }
+
+  /**
+   * Where the API's own verification page sends an owner onward. Neither link
+   * carries the token: it is spent by then, and both clients re-read the
+   * account instead (see AuthController.verifyEmailWeb).
+   */
+  verificationOnwardLinks(): { web: string; signIn: string; app: string } {
+    return {
+      web: `${this.mail.webAppUrl()}/login?verified=1`,
+      signIn: `${this.mail.webAppUrl()}/login`,
+      app: `${this.mail.appScheme()}://verify-email?verified=1`,
+    };
   }
 
   async resendVerification(email: string): Promise<{ delivered: boolean }> {

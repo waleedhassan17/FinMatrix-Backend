@@ -51,6 +51,7 @@ describe('AuthService', () => {
     findByUsername: jest.Mock;
     findByIdentifier: jest.Mock;
     getByIdOrFail: jest.Mock;
+    findById: jest.Mock;
     save: jest.Mock;
   };
   let verificationRepo: ReturnType<typeof repoMock>;
@@ -80,6 +81,7 @@ describe('AuthService', () => {
           : users.findByUsername(identifier),
       ),
       getByIdOrFail: jest.fn(),
+      findById: jest.fn(),
       save: jest.fn(async (u) => u),
     };
     verificationRepo = repoMock();
@@ -138,7 +140,11 @@ describe('AuthService', () => {
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('blocks an unverified company admin from signing in', async () => {
+    // Soft gate. An unverified owner used to be refused with no token, which
+    // left the client nothing to wait with: they verified elsewhere, then had
+    // to sign in a second time. The session they get now is refused on every
+    // company route (JwtStrategy + EmailVerifiedGuard / CompanyGuard).
+    it('gives an unverified company admin a verify-only session', async () => {
       const passwordHash = await bcrypt.hash('Admin123!', 4);
       users.findByEmail.mockResolvedValue({
         id: 'u1',
@@ -148,9 +154,35 @@ describe('AuthService', () => {
         isActive: true,
         isEmailVerified: false,
       });
-      await expect(
-        service.signin({ email: 'admin@x.z', password: 'Admin123!' }),
-      ).rejects.toMatchObject({ response: { code: 'EMAIL_NOT_VERIFIED' } });
+      jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
+      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      const res = await service.signin({ email: 'admin@x.z', password: 'Admin123!' });
+      expect(res.tokens.accessToken).toBeTruthy();
+      expect(res.user.isEmailVerified).toBe(false);
+    });
+
+    it('does not let a pending company override the verify step', async () => {
+      const passwordHash = await bcrypt.hash('Admin123!', 4);
+      users.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'admin@x.z',
+        passwordHash,
+        role: 'admin',
+        isActive: true,
+        isEmailVerified: false,
+        defaultCompanyId: 'c1',
+      });
+      userCompanyRepo.findOne.mockResolvedValue({
+        userId: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        company: { id: 'c1', name: 'Acme', status: 'pending_approval', rejectionReason: null },
+      });
+      jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
+      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      const res = await service.signin({ email: 'admin@x.z', password: 'Admin123!' });
+      expect(res.user.isEmailVerified).toBe(false);
+      expect(res.tokens.accessToken).toBeTruthy();
     });
 
     // ── Onboarding resume ────────────────────────────────────────────────
@@ -281,10 +313,9 @@ describe('AuthService', () => {
       ).rejects.toMatchObject({ response: { code: 'WRONG_PORTAL' } });
     });
 
-    it('still sends an unverified owner on the owner door to verification', async () => {
-      await expect(
-        signInAs('admin', { portal: 'admin', verified: false }),
-      ).rejects.toMatchObject({ response: { code: 'EMAIL_NOT_VERIFIED' } });
+    it('lets an unverified owner in on the owner door, flagged for verification', async () => {
+      const res = await signInAs('admin', { portal: 'admin', verified: false });
+      expect(res.user.isEmailVerified).toBe(false);
     });
 
     it.each([
@@ -370,9 +401,37 @@ describe('AuthService', () => {
   });
 
   describe('verifyEmail', () => {
-    it('throws on an unknown/expired token', async () => {
+    it('throws on an unknown token', async () => {
       verificationRepo.findOne.mockResolvedValue(null);
       await expect(service.verifyEmail('bad')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // Mail scanners open links first, owners click twice, a resend retires the
+    // earlier link. None of those may answer "failed" about a verified email.
+    it('answers a spent link for a verified address with success', async () => {
+      verificationRepo.findOne.mockResolvedValue({
+        userId: 'u1',
+        usedAt: new Date(),
+        expiresAt: new Date(Date.now() + 100000),
+      });
+      users.findById.mockResolvedValue({ id: 'u1', email: 'a@b.c', isEmailVerified: true });
+      await expect(service.verifyEmail('used')).resolves.toMatchObject({
+        verified: true,
+        alreadyVerified: true,
+      });
+      expect(verificationRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a spent link while the address is unverified', async () => {
+      verificationRepo.findOne.mockResolvedValue({
+        userId: 'u1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      users.findById.mockResolvedValue({ id: 'u1', email: 'a@b.c', isEmailVerified: false });
+      await expect(service.verifyEmail('expired')).rejects.toMatchObject({
+        response: { code: 'INVALID_TOKEN' },
+      });
     });
 
     it('marks the user verified and consumes the token', async () => {
@@ -387,8 +446,43 @@ describe('AuthService', () => {
       users.getByIdOrFail.mockResolvedValue(user);
       const res = await service.verifyEmail(token);
       expect(res.verified).toBe(true);
+      expect(res.alreadyVerified).toBe(false);
       expect(user.isEmailVerified).toBe(true);
       expect(verificationRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  // A session begun before the owner had a company carries companyId: null.
+  // Rotation used to copy that forward forever, so an approved owner who never
+  // signed out was refused NOT_COMPANY_MEMBER on every request.
+  describe('refresh', () => {
+    const refreshWith = async (payloadCompanyId: string | null) => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: payloadCompanyId, role: 'admin' });
+      refreshRepo.findOne.mockResolvedValue({
+        tokenHash: 'h',
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 100000),
+      });
+      users.getByIdOrFail.mockResolvedValue({
+        id: 'u1',
+        email: 'owner@x.z',
+        role: 'admin',
+        defaultCompanyId: 'c1',
+      });
+      userCompanyRepo.findOne.mockResolvedValue({ userId: 'u1', companyId: 'c1', role: 'admin' });
+      jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
+      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600, iat: 0 });
+      await service.refresh('refresh.jwt');
+      return jwtMock.signAsync.mock.calls[0][0] as { companyId: string | null };
+    };
+
+    it('fills in the company for a session that began before it existed', async () => {
+      expect((await refreshWith(null)).companyId).toBe('c1');
+    });
+
+    it('keeps the company a token already names', async () => {
+      expect((await refreshWith('c9')).companyId).toBe('c9');
+      expect(userCompanyRepo.findOne).not.toHaveBeenCalled();
     });
   });
 

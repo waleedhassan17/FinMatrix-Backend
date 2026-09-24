@@ -136,31 +136,48 @@ export class AuthController {
   }
 
   /**
-   * Web fallback page used when the verification email is opened on a device
-   * where the app is not installed. Verifies the token server-side and renders
-   * a small HTML page with a button to open the app via its custom scheme.
+   * The API's own verification page. New emails link to the web app's verify
+   * page instead (MailService.buildVerificationLinks); this stays for links
+   * already sitting in inboxes, and for any client that still builds it.
+   *
+   * It no longer hands the token on to the app. The token is single-use and
+   * this request has just spent it, so "Open FinMatrix app" used to deliver a
+   * dead token and the app answered "Verification failed" about an email that
+   * had just been verified. Both onward links now simply say "verified", and
+   * the web app or the app re-reads the account to move on.
    */
   @Get('verify')
   @PublicRoute()
   @ApiOperation({ summary: 'Web fallback page for email verification.' })
   async verifyEmailWeb(@Query('token') token: string, @Res() res: Response) {
-    let ok = false;
+    let outcome: FallbackOutcome = 'failed';
     try {
-      await this.auth.verifyEmail(token);
-      ok = true;
+      const result = await this.auth.verifyEmail(token);
+      outcome = result.alreadyVerified ? 'already' : 'verified';
     } catch {
-      ok = false;
+      outcome = 'failed';
     }
-    const deepLink = `finmatrix://verify-email?token=${encodeURIComponent(token ?? '')}`;
-    res.type('html').send(renderFallbackPage(ok, deepLink));
+    res.type('html').send(renderFallbackPage(outcome, this.auth.verificationOnwardLinks()));
   }
 }
 
-function renderFallbackPage(ok: boolean, deepLink: string): string {
-  const title = ok ? 'Email verified ✅' : 'Verification failed';
-  const message = ok
-    ? 'Your email has been verified. Open the FinMatrix app to continue setting up your company.'
-    : 'This verification link is invalid, already used, or expired. Open the app and request a new link.';
+type FallbackOutcome = 'verified' | 'already' | 'failed';
+
+function renderFallbackPage(
+  outcome: FallbackOutcome,
+  links: { web: string; signIn: string; app: string },
+): string {
+  const ok = outcome !== 'failed';
+  const title = ok ? 'Email verified ✅' : 'This link has expired';
+  const message =
+    outcome === 'verified'
+      ? 'Your email address is confirmed. Continue to set up your company.'
+      : outcome === 'already'
+        ? 'Your email address was already confirmed. Continue to set up your company.'
+        : 'This verification link has expired or been replaced by a newer one. Sign in and we will send you a fresh link.';
+  const primary = ok ? 'Continue on the web' : 'Sign in';
+  const btn =
+    'display:inline-block;margin-top:12px;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;';
   return `<!doctype html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>FinMatrix — Email verification</title></head>
@@ -168,7 +185,8 @@ function renderFallbackPage(ok: boolean, deepLink: string): string {
   <div style="max-width:480px;margin:48px auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:32px;text-align:center;">
     <h1 style="font-size:20px;">${title}</h1>
     <p style="color:#4b5563;">${message}</p>
-    <a href="${deepLink}" style="display:inline-block;margin-top:16px;background:#1f6feb;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">Open FinMatrix app</a>
+    <a href="${ok ? links.web : links.signIn}" style="${btn}background:#1f4e79;color:#fff;">${primary}</a><br/>
+    <a href="${links.app}" style="${btn}background:#fff;color:#1f4e79;border:1px solid #d3dae3;">Open the FinMatrix app</a>
   </div>
 </body></html>`;
 }

@@ -36,6 +36,22 @@ describe('JwtStrategy (signout denylist)', () => {
     strategy = moduleRef.get(JwtStrategy);
   });
 
+  it('marks an owner who has not confirmed their email as unverified', async () => {
+    users.findById.mockResolvedValue({ ...activeUser, role: 'admin', isEmailVerified: false });
+    await expect(strategy.validate(payload())).resolves.toMatchObject({ emailVerified: false });
+  });
+
+  it('never marks an account with no email to confirm as unverified', async () => {
+    users.findById.mockResolvedValue({
+      id: 'u1',
+      email: null,
+      role: 'admin',
+      isActive: true,
+      isEmailVerified: false,
+    });
+    await expect(strategy.validate(payload())).resolves.toMatchObject({ emailVerified: true });
+  });
+
   it('accepts a token whose jti is not denylisted', async () => {
     await expect(strategy.validate(payload())).resolves.toMatchObject({ id: 'u1' });
   });

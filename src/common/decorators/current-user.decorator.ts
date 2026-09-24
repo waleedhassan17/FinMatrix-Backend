@@ -8,6 +8,14 @@ export interface AuthenticatedUser {
   username: string | null;
   role: 'admin' | 'delivery' | 'staff' | 'super_admin';
   companyId: string | null;
+  /**
+   * False only for an owner whose email address is not confirmed yet. Such a
+   * session exists (signup and sign-in both issue one, so the client can wait
+   * on the verify screen and move on by itself), but it may do nothing else —
+   * see assertEmailVerified. Optional so a user built elsewhere (tests, other
+   * strategies) is treated as verified rather than locked out.
+   */
+  emailVerified?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

@@ -57,19 +57,40 @@ export class MailService implements OnModuleInit {
 
   // ── High-level senders ──────────────────────────────────────────────────
 
-  /** Builds the app deep link + web fallback URL for an email-verification token. */
-  buildVerificationLinks(token: string): { deepLink: string; webLink: string } {
+  /**
+   * The links an email-verification token travels in.
+   *
+   * `appLink` is the one the email leads with: the web app's own verify page,
+   * over https, so it opens in any mail client and carries the owner straight
+   * on into company setup. `deepLink` opens the Android app directly, for an
+   * owner reading on the phone the app is on. `webLink` is the API's own
+   * fallback page, which links sent before `appLink` existed still point at.
+   */
+  buildVerificationLinks(token: string): { appLink: string; deepLink: string; webLink: string } {
     const scheme = this.config.get<string>('mail.appScheme', 'finmatrix');
     const webBase = this.config.get<string>('mail.webFallbackBaseUrl', '');
+    const webAppUrl = this.config.get<string>('mail.webAppUrl', '');
+    const t = encodeURIComponent(token);
     return {
-      deepLink: `${scheme}://verify-email?token=${encodeURIComponent(token)}`,
-      webLink: `${webBase}/verify?token=${encodeURIComponent(token)}`,
+      appLink: `${webAppUrl}/verify-email?token=${t}`,
+      deepLink: `${scheme}://verify-email?token=${t}`,
+      webLink: `${webBase}/verify?token=${t}`,
     };
   }
 
+  /** Where the product lives for an owner, with no trailing slash. */
+  webAppUrl(): string {
+    return this.config.get<string>('mail.webAppUrl', '');
+  }
+
+  /** The app's deep-link scheme, e.g. `finmatrix`. */
+  appScheme(): string {
+    return this.config.get<string>('mail.appScheme', 'finmatrix');
+  }
+
   async sendVerificationEmail(to: string, displayName: string, token: string): Promise<void> {
-    const { deepLink, webLink } = this.buildVerificationLinks(token);
-    await this.send(to, emailTemplates.verification(displayName, deepLink, webLink));
+    const { appLink, deepLink } = this.buildVerificationLinks(token);
+    await this.send(to, emailTemplates.verification(displayName, appLink, deepLink));
   }
 
   async sendOtpEmail(to: string, displayName: string, otp: string): Promise<void> {
@@ -87,7 +108,15 @@ export class MailService implements OnModuleInit {
   }
 
   async sendApprovalEmail(to: string, displayName: string, companyName: string): Promise<void> {
-    await this.send(to, emailTemplates.approved(displayName, companyName));
+    await this.send(to, emailTemplates.approved(displayName, companyName, this.webAppUrl()));
+  }
+
+  async sendDeactivatedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+    await this.send(to, emailTemplates.deactivated(displayName, companyName));
+  }
+
+  async sendReactivatedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+    await this.send(to, emailTemplates.reactivated(displayName, companyName, this.webAppUrl()));
   }
 
   async sendRejectionEmail(

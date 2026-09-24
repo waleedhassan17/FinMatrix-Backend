@@ -113,6 +113,7 @@ export class SuperAdminController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
     @Query('isTrial') isTrial?: string,
+    @Query('search') search?: string,
   ) {
     guardSuperAdmin(user);
     return this.service.getAllCompanies(
@@ -120,6 +121,7 @@ export class SuperAdminController {
       limit,
       status,
       SuperAdminService.parseTrialFilter(isTrial),
+      search,
     );
   }
 

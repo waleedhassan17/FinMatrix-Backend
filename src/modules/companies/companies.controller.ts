@@ -15,6 +15,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { isUUID } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
 import { StartTrialDto } from './dto/start-trial.dto';
 import { CompaniesService } from './companies.service';
 import {
@@ -31,7 +32,11 @@ import {
 
 @ApiTags('companies')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+// EmailVerifiedGuard: every route here acts on a company, and none of it is for
+// an owner who has not confirmed their address yet — least of all creating or
+// submitting one. Sign-in used to be the only place this was checked, and the
+// session /auth/signup returns never passed through it.
+@UseGuards(JwtAuthGuard, EmailVerifiedGuard)
 @Controller('companies')
 export class CompaniesController {
   constructor(private readonly companies: CompaniesService) {}
