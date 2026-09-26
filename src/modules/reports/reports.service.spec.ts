@@ -1376,12 +1376,14 @@ describe('ReportsService — inventory history', () => {
   });
 
   describe('inventoryItemHistory', () => {
-    const ITEM = { id: 'i1', name: 'Engine Oil 5L', sku: 'WC-OIL-5L' };
+    const ITEM = { id: 'i1', name: 'Engine Oil 5L', sku: 'WC-OIL-5L', quantityOnHand: '0', unitCost: '0' };
 
-    async function makeItemService(rows: any[], found = true) {
+    async function makeItemService(rows: any[], found = true, onHand = '0') {
       const query = jest.fn(async () => rows);
       const repo = {} as never;
-      const itemRepo = { find: jest.fn(async () => (found ? [ITEM] : [])) };
+      const itemRepo = {
+        find: jest.fn(async () => (found ? [{ ...ITEM, quantityOnHand: onHand }] : [])),
+      };
       const moduleRef = await Test.createTestingModule({
         providers: [
           ReportsService,
@@ -1397,11 +1399,15 @@ describe('ReportsService — inventory history', () => {
       return moduleRef.get(ReportsService);
     }
 
-    it('reads the snapshotted closing balance and carries quiet months forward', async () => {
-      const svc = await makeItemService([
-        { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0' },
-        { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15' },
-      ]);
+    it('walks back from the quantity on hand, carrying quiet months forward', async () => {
+      const svc = await makeItemService(
+        [
+          { period: monthsAgo(3), qty_in: '40', qty_out: '0' },
+          { period: monthsAgo(1), qty_in: '0', qty_out: '15' },
+        ],
+        true,
+        '25',
+      );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
 
       expect(r.points.map((p: any) => p.closingQty)).toEqual([40, 40, 25, 25]);
@@ -1411,9 +1417,11 @@ describe('ReportsService — inventory history', () => {
     it('leaves months before the item ever moved as null, not zero', async () => {
       // null is "this item did not exist yet"; 0 is "it existed and was out of
       // stock". A chart that cannot tell them apart invents a stockout.
-      const svc = await makeItemService([
-        { period: monthsAgo(1), closing: '10', qty_in: '10', qty_out: '0' },
-      ]);
+      const svc = await makeItemService(
+        [{ period: monthsAgo(1), qty_in: '10', qty_out: '0' }],
+        true,
+        '10',
+      );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
 
       expect(r.points.map((p: any) => p.closingQty)).toEqual([
@@ -1425,21 +1433,26 @@ describe('ReportsService — inventory history', () => {
     });
 
     it('opens on stock bought before the window and never touched since', async () => {
-      const svc = await makeItemService([
-        { period: monthsAgo(30), closing: '72', qty_in: '72', qty_out: '0' },
-      ]);
+      const svc = await makeItemService(
+        [{ period: monthsAgo(30), qty_in: '72', qty_out: '0' }],
+        true,
+        '72',
+      );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 3);
       expect(r.points.map((p: any) => p.closingQty)).toEqual([72, 72, 72]);
     });
 
     it('declines to guess a value it cannot know', async () => {
-      const svc = await makeItemService([
-        { period: monthsAgo(0), closing: '10', qty_in: '10', qty_out: '0' },
-      ]);
+      const svc = await makeItemService(
+        [{ period: monthsAgo(0), qty_in: '10', qty_out: '0' }],
+        true,
+        '10',
+      );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 2);
 
       // Pricing a past quantity at today's mutable average would be plausible
-      // and wrong. Until cost is captured per movement, this says so.
+      // and wrong. With no cost horizon (no `since` on the rows) nothing is
+      // claimed, and the response says so.
       expect(r.points.every((p: any) => p.closingValue === null)).toBe(true);
       expect(r.points.every((p: any) => p.valueKnown === false)).toBe(true);
       expect(r.coverage.quantity).toBe('exact');
@@ -1453,6 +1466,319 @@ describe('ReportsService — inventory history', () => {
       ).rejects.toMatchObject({
         response: { code: 'ITEM_NOT_FOUND' },
       });
+    });
+  });
+});
+
+describe('ReportsService — item explorer', () => {
+  /** 'YYYY-MM' of `back` months before the current business month. */
+  const monthsAgo = (back: number): string => {
+    const [y, m] = businessToday().slice(0, 7).split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 - back, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const ITEM = {
+    id: 'i1',
+    name: 'Engine Oil 5L',
+    sku: 'WC-OIL-5L',
+    category: 'Lubricants',
+    unitOfMeasure: 'can',
+    unitCost: '10.0000',
+    sellingPrice: '14.0000',
+    quantityOnHand: '25.0000',
+    reorderPoint: '30.0000',
+    isActive: true,
+  };
+
+  /**
+   * A DataSource whose answer depends on which query was asked — these
+   * methods run several, and a single canned answer would feed month rows to
+   * the customer query.
+   */
+  const routed = (routes: [RegExp, unknown[]][]) =>
+    jest.fn(async (sql: string, _params?: unknown[]) => {
+      for (const [re, rows] of routes) if (re.test(sql)) return rows;
+      return [];
+    });
+
+  async function makeItemService(query: jest.Mock, found = true) {
+    const repo = {} as never;
+    const itemRepo = { find: jest.fn(async () => (found ? [ITEM] : [])) };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        ReportsService,
+        { provide: DataSource, useValue: { query } },
+        { provide: getRepositoryToken(Invoice), useValue: repo },
+        { provide: getRepositoryToken(Bill), useValue: repo },
+        { provide: getRepositoryToken(InventoryItem), useValue: itemRepo },
+        { provide: getRepositoryToken(InventoryMovement), useValue: repo },
+        { provide: getRepositoryToken(Delivery), useValue: repo },
+        { provide: getRepositoryToken(TaxPayment), useValue: repo },
+      ],
+    }).compile();
+    return moduleRef.get(ReportsService);
+  }
+
+  describe('inventoryItemHistory — month-end value', () => {
+    const since = `${monthsAgo(6)}-01`;
+
+    it('walks back from today, so the latest close is qty × average cost', async () => {
+      // 25 on hand at 10 today = 250. Last month 15 went out (−150), three
+      // months ago 40 came in (+400).
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
+          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '-150', value_missing: false, since },
+        ]),
+      );
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
+
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([400, 400, 250, 250]);
+      expect(r.points.every((p: any) => p.valueKnown)).toBe(true);
+      expect(r.coverage.value).toBe('exact');
+      expect(r.coverage.message).toBe('');
+    });
+
+    it('ends on the quantity on hand even when entries were typed out of order', async () => {
+      // The old snapshot read would have closed this month on whatever the
+      // last-DATED movement's running balance was; the walk cannot miss.
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(0), qty_in: '0', qty_out: '4', value_net: '-40', value_missing: false, since },
+        ]),
+      );
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 1);
+      expect(r.points[0].closingQty).toBe(25);
+      expect(r.points[0].closingValue).toBe(250);
+    });
+
+    it('claims nothing for a month that ended before the cost horizon', async () => {
+      const horizon = `${monthsAgo(1)}-01`;
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since: horizon },
+          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '-150', value_missing: false, since: horizon },
+        ]),
+      );
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
+
+      // Months −3 and −2 closed before the horizon: the quantity is still
+      // exact, the value is not claimed.
+      expect(r.points.map((p: any) => p.closingQty)).toEqual([40, 40, 25, 25]);
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([null, null, 250, 250]);
+      expect(r.coverage.value).toBe('partial');
+      expect(r.coverage.costHistoryFrom).toBe(horizon);
+      expect(r.coverage.message).toContain(horizon);
+    });
+
+    it('stops the walk at a movement that carries no value', async () => {
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
+          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '0', value_missing: true, since },
+        ]),
+      );
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
+
+      // Everything before the unvalued movement would be off by whatever it
+      // moved, so none of it is claimed.
+      expect(r.points.map((p: any) => p.valueKnown)).toEqual([false, false, true, true]);
+      expect(r.points[0].closingValue).toBeNull();
+    });
+
+    it('reports a back-dated sale as stock below zero, with a value to match', async () => {
+      // Received 40 in month −1 and sold 8 on an invoice dated month −3,
+      // entered after the receipt. By document date the item was 8 short
+      // until the receipt — which the chart says, quantity and value alike,
+      // rather than borrowing a running balance typed in a different order.
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(3), closing: '32', qty_in: '0', qty_out: '8', value_net: '-80', value_missing: false, since },
+          { period: monthsAgo(1), closing: '32', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
+        ]),
+      );
+      // 32 on hand at 10 = 320 today.
+      (svc as any).itemRepo.find = jest.fn(async () => [{ ...ITEM, quantityOnHand: '32' }]);
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
+
+      expect(r.points.map((p: any) => p.closingQty)).toEqual([-8, -8, 32, 32]);
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([-80, -80, 320, 320]);
+      expect(r.coverage.value).toBe('exact');
+      expect(r.coverage.message).toMatch(/below zero at the end of/);
+    });
+
+    it('declines every value when the company has no horizon at all', async () => {
+      const svc = await makeItemService(
+        jest.fn(async () => [
+          { period: monthsAgo(0), closing: '10', qty_in: '10', qty_out: '0', value_net: '100', value_missing: false, since: null },
+        ]),
+      );
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 2);
+      expect(r.points.every((p: any) => p.closingValue === null)).toBe(true);
+      expect(r.coverage.value).toBe('unavailable');
+    });
+
+    it('covers the whole months of a range when given one', async () => {
+      const svc = await makeItemService(jest.fn(async () => []));
+      const r: any = await svc.inventoryItemHistory('c1', 'i1', 12, {
+        startDate: '2025-11-15',
+        endDate: '2026-02-03',
+      });
+      expect(r.points.map((p: any) => p.period)).toEqual([
+        '2025-11',
+        '2025-12',
+        '2026-01',
+        '2026-02',
+      ]);
+      expect(r.months).toBe(4);
+    });
+  });
+
+  describe('itemPerformance — facts and customers', () => {
+    const MONTH = { period: monthsAgo(0), units: '6', revenue: '600', cogs: '360', est_cogs: '0', cost_missing: false };
+    const CUSTOMERS = [
+      { customerId: 'k1', customerName: 'Acme Ltd', units: '3', revenue: '300', cogs: '180' },
+      { customerId: 'k2', customerName: 'Beta', units: '1', revenue: '100', cogs: '60' },
+      { customerId: 'k3', customerName: 'Gamma', units: '1', revenue: '80', cogs: '60' },
+      { customerId: 'k4', customerName: 'Delta', units: '0.5', revenue: '60', cogs: '30' },
+      { customerId: 'k5', customerName: 'Epsilon', units: '0.3', revenue: '40', cogs: '20' },
+      { customerId: 'k6', customerName: '', units: '0.2', revenue: '20', cogs: '10' },
+    ];
+
+    const makeQuery = () =>
+      routed([
+        [/GROUP BY period\s/, [MONTH]],
+        [/"customerName"/, CUSTOMERS],
+        [/last_sold/, [{ since: '2026-04-08', last_sold: '2026-09-21' }]],
+      ]);
+
+    it('states the item as it stands today', async () => {
+      const svc = await makeItemService(makeQuery());
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      expect(r.item).toEqual({
+        category: 'Lubricants',
+        unitOfMeasure: 'can',
+        sellingPrice: 14,
+        unitCost: 10,
+        qtyOnHand: 25,
+        stockValue: 250,
+        reorderPoint: 30,
+        isActive: true,
+        lastSoldDate: '2026-09-21',
+      });
+      expect(r.costHistoryFrom).toBe('2026-04-08');
+      expect(r.totals.revenue).toBe(600);
+    });
+
+    it('names the top five customers and folds the rest', async () => {
+      const svc = await makeItemService(makeQuery());
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      expect(r.customers.map((c: any) => c.customerName)).toEqual([
+        'Acme Ltd',
+        'Beta',
+        'Gamma',
+        'Delta',
+        'Epsilon',
+      ]);
+      expect(r.customers[0]).toMatchObject({ unitsSold: 3, revenue: 300, grossProfit: 120 });
+      expect(r.otherCustomers).toEqual({ count: 1, unitsSold: 0.2, revenue: 20, grossProfit: 10 });
+    });
+
+    it('asks for revenue net of the invoice discount', async () => {
+      const query = makeQuery();
+      const svc = await makeItemService(query);
+      await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      // The ledger credits 4000 with subtotal − discount; a line that ignored
+      // the discount would overstate every item on a discounted invoice.
+      const monthSql = query.mock.calls.find(([sql]) => /GROUP BY period\s/.test(sql))![0];
+      expect(monthSql).toMatch(/discount_amount/);
+      expect(monthSql).toMatch(/i\.subtotal::numeric > 0/);
+    });
+
+    it("404s on an item that is not this company's", async () => {
+      const svc = await makeItemService(makeQuery(), false);
+      await expect(svc.itemPerformance('c1', 'nope', '2026-01-01', '2026-01-31')).rejects.toMatchObject({
+        response: { code: 'ITEM_NOT_FOUND' },
+      });
+    });
+  });
+
+  describe('itemSalesEntries', () => {
+    const ROWS = [
+      { date: '2026-09-20', docType: 'credit_memo', docId: 'cm1', docNumber: 'CM-0003', customerId: 'k1', customerName: 'Acme Ltd', lineId: 'l3', units: '-1', revenue: '-100', cogs: '-60', costBasis: 'exact', costMissing: false },
+      { date: '2026-09-18', docType: 'invoice', docId: 'in2', docNumber: 'INV-0009', customerId: 'k1', customerName: 'Acme Ltd', lineId: 'l2', units: '2', revenue: '180', cogs: '120', costBasis: 'posted', costMissing: false },
+      { date: '2026-09-02', docType: 'delivery', docId: 'in1', docNumber: 'INV-0007', customerId: null, customerName: '', lineId: 'l1', units: '3', revenue: '300', cogs: '180', costBasis: 'delivery', costMissing: false },
+    ];
+
+    const makeQuery = () =>
+      routed([
+        [/COUNT\(\*\)::int AS total/, [{ total: 42, units: '4', revenue: '380', cogs: '240' }]],
+        [/LIMIT \$5 OFFSET \$6/, ROWS],
+      ]);
+
+    it('lists each line with its document, price and margin', async () => {
+      const svc = await makeItemService(makeQuery());
+      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30');
+
+      expect(r.entries[1]).toMatchObject({
+        docType: 'invoice',
+        docNumber: 'INV-0009',
+        units: 2,
+        unitPrice: 90,
+        revenue: 180,
+        cogs: 120,
+        grossProfit: 60,
+        marginPct: 33.33,
+      });
+      // A return reads at the price it was credited at, and has no margin of
+      // its own to speak of.
+      expect(r.entries[0]).toMatchObject({ units: -1, unitPrice: 100, marginPct: null });
+      expect(r.entries[2].customerName).toBe('(no customer)');
+      expect(r.totals).toEqual({ unitsSold: 4, revenue: 380, cogs: 240, grossProfit: 140 });
+      expect(r.total).toBe(42);
+    });
+
+    it('pages by LIMIT/OFFSET and clamps an absurd page size', async () => {
+      const query = makeQuery();
+      const svc = await makeItemService(query);
+      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30', 3, 5000);
+
+      expect(r.limit).toBe(100);
+      expect(r.page).toBe(3);
+      const pageCall = query.mock.calls.find(([sql]) => /LIMIT \$5/.test(sql))!;
+      expect(pageCall[1]!.slice(4)).toEqual([100, 200]);
+    });
+
+    it('keeps its rows under `entries`, never `data`', async () => {
+      // The response envelope lifts a `data` key and drops every sibling —
+      // which is how the P&L drill-down once shipped empty.
+      const svc = await makeItemService(makeQuery());
+      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30');
+      expect(r).not.toHaveProperty('data');
+      expect(Array.isArray(r.entries)).toBe(true);
+    });
+  });
+
+  describe('inventoryPerformance — ledger and last sale', () => {
+    it('reports the control account beside the stock, and when each item last sold', async () => {
+      const query = routed([
+        [/WITH sales AS/, [
+          { itemId: 'i1', itemName: 'Oil', sku: 'O', category: 'Lubricants', units: '0', revenue: '0', cogs: '0', est_cogs: '0', cost_missing: false, qtyOnHand: '25', unitCost: '10' },
+        ]],
+        [/AS "lastSold"/, [{ itemId: 'i1', lastSold: '2026-03-14' }]],
+        [/account_number = '1200'/, [{ value: '245.5' }]],
+      ]);
+      const svc = await makeItemService(query);
+      const r: any = await svc.inventoryPerformance('c1', '2026-09-01', '2026-09-30');
+
+      expect(r.totals.stockValue).toBe(250);
+      expect(r.totals.ledgerValue).toBe(245.5);
+      expect(r.rows[0].lastSoldDate).toBe('2026-03-14');
+      expect(r.rows[0].marginPct).toBeNull();
     });
   });
 });

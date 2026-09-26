@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Param,
@@ -21,6 +22,18 @@ import {
 } from './reports.service';
 import { AgingQueryDto, UnifiedAgingQueryDto } from './dto/aging-query.dto';
 import { AgingDetailQueryDto } from './dto/aging-detail-query.dto';
+
+/** A real calendar date in `YYYY-MM-DD` form — not merely the right shape. */
+const isIsoDate = (v: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [y, m, d] = v.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
+};
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -45,6 +58,37 @@ export class ReportsController {
       s: startDate || REPORT_RANGE_DEFAULTS.startDate,
       e: endDate || REPORT_RANGE_DEFAULTS.endDate,
     };
+  }
+
+  /**
+   * `range`, for the routes that refuse a malformed date rather than pass it
+   * to Postgres — where `2026-13-01` is a 500 with a driver message, not an
+   * answer. Absent dates still default to all-time, as `range` does.
+   */
+  private checkedRange(
+    startDate?: string,
+    endDate?: string,
+    strictOrder = true,
+  ) {
+    for (const [name, v] of [
+      ['startDate', startDate],
+      ['endDate', endDate],
+    ] as const) {
+      if (v && !isIsoDate(v)) {
+        throw new BadRequestException({
+          code: 'INVALID_DATE',
+          message: `${name} must be a real date in YYYY-MM-DD form.`,
+        });
+      }
+    }
+    const r = this.range(startDate, endDate);
+    if (strictOrder && r.s > r.e) {
+      throw new BadRequestException({
+        code: 'INVALID_RANGE',
+        message: 'startDate must not be after endDate.',
+      });
+    }
+    return r;
   }
 
   @Get('profit-loss')
@@ -204,7 +248,19 @@ export class ReportsController {
     @CurrentCompany() companyId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Query('months', new ParseIntPipe({ optional: true })) months = 12,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
   ) {
+    // A range, when given, wins over `months` — the item explorer asks for the
+    // same window its sales charts cover. `months` alone is what shipped
+    // Android builds send, and it keeps meaning what it always did.
+    if (startDate && endDate) {
+      const { s, e } = this.checkedRange(startDate, endDate);
+      return this.svc.inventoryItemHistory(companyId, itemId, months, {
+        startDate: s,
+        endDate: e,
+      });
+    }
     return this.svc.inventoryItemHistory(companyId, itemId, months);
   }
 
@@ -220,8 +276,27 @@ export class ReportsController {
     @Query('startDate') startDate: string,
     @Query('endDate') endDate: string,
   ) {
-    const { s, e } = this.range(startDate, endDate);
+    const { s, e } = this.checkedRange(startDate, endDate);
     return this.svc.itemPerformance(companyId, itemId, s, e);
+  }
+
+  /**
+   * The document lines behind one item's figures — invoices, deliveries and
+   * returns — newest first and paginated. A month's entries add up to that
+   * month on `item-performance`, because both read the same rows.
+   */
+  @Get('item-performance/:itemId/entries')
+  @Roles('admin', 'staff')
+  async itemSalesEntries(
+    @CurrentCompany() companyId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 25,
+  ) {
+    const { s, e } = this.checkedRange(startDate, endDate);
+    return this.svc.itemSalesEntries(companyId, itemId, s, e, page, limit);
   }
 
   /**
@@ -239,7 +314,9 @@ export class ReportsController {
     @Query('endDate') endDate: string,
     @Query('sort') sort?: string,
   ) {
-    const { s, e } = this.range(startDate, endDate);
+    // Format only: an inverted range has always come back empty here, and a
+    // shipped client that sends one should keep getting that, not a 400.
+    const { s, e } = this.checkedRange(startDate, endDate, false);
     const allowed = ['grossProfit', 'revenue', 'marginPct', 'stockValue'] as const;
     const key = (allowed as readonly string[]).includes(sort ?? '')
       ? (sort as (typeof allowed)[number])

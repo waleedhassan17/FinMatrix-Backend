@@ -31,6 +31,9 @@ import {
 import { businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** How many customers the item explorer names before folding the rest. */
+const TOP_CUSTOMERS = 5;
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
 /**
@@ -1109,42 +1112,73 @@ export class ReportsService {
   }
 
   /**
-   * One item's stock level, month by month.
+   * One item's stock level and value, month by month.
    *
-   * Quantity is EXACT: inventory_movements carries a server-snapshotted
-   * `balance_after` on every row, so the closing figure is read rather than
-   * recomputed, and it is ordered by (date, created_at) because `date` is
-   * date-only and several movements land on one day.
+   * Both are reconstructed the way `companies.inventory_cost_history_from`
+   * documents: anchor on TODAY — quantity_on_hand, and quantity_on_hand ×
+   * unit_cost, which I13 ties to GL 1200 — and walk BACKWARDS through the
+   * dated movements. A month's close is today's figure less everything dated
+   * after that month ended. So the latest point is exactly what the valuation
+   * table shows for the item, and every earlier point is what the dated
+   * record says, the same way the ledger dates a posting.
    *
-   * Value is a different claim and is deliberately NOT made here. There is no
-   * cost on a movement, and `inventory_items.unit_cost` is a mutable current
-   * weighted average that every receipt re-averages — so pricing a
-   * three-year-old quantity at today's average would be retroactively wrong,
-   * and wrong in a way that looks entirely plausible on a chart. `closingValue`
-   * is null and `valueKnown` false until per-movement cost is captured; the
-   * coverage block says so in words the UI can show.
+   * Quantity used to be read from the `balance_after` snapshot of each
+   * month's last-dated movement instead. That follows the order documents
+   * were TYPED IN, not their dates, and a back-dated document breaks it: an
+   * invoice dated April but entered in July carries July's running balance,
+   * so April read 24 on the shelf while the dated record says 16 short, and
+   * the current month could disagree with the quantity on hand outright. The
+   * walk cannot: it ends on the true quantity by construction, and quantity
+   * and value always describe the same stock. A month that goes BELOW zero is
+   * real information — goods were invoiced before their receipt was dated —
+   * and is reported rather than smoothed over (see `coverage.message`).
+   *
+   * Value is exact for every month ending on or after the horizon and
+   * undefined before it, so earlier months come back null with `valueKnown:
+   * false` — the uncertainty stays at the old end of the chart instead of
+   * seeping into recent months as a made-up opening balance. A movement that
+   * carries no value leaves a hole in the walk, so nothing before it is
+   * claimed either.
+   *
+   * The window is either the last `months` months or, given a range, the whole
+   * months it touches (at most 60) — so the stock charts line up with the
+   * sales charts beside them on the item explorer.
    */
-  async inventoryItemHistory(companyId: string, itemId: string, months = 12) {
-    const count = Math.min(Math.max(Math.trunc(months) || 12, 1), 60);
+  async inventoryItemHistory(
+    companyId: string,
+    itemId: string,
+    months = 12,
+    range?: { startDate?: string; endDate?: string },
+  ) {
+    const item = await this.findItemOrFail(companyId, itemId);
 
-    const items = await this.itemRepo.find({ where: { id: itemId, companyId } });
-    const item = items[0];
-    if (!item) {
-      throw new NotFoundException({
-        code: 'ITEM_NOT_FOUND',
-        message: 'No such inventory item in this company.',
-      });
+    let window: MonthSlot[];
+    if (range?.startDate && range?.endDate) {
+      const count = Math.min(
+        Math.max(monthSpan(range.startDate, range.endDate), 1),
+        60,
+      );
+      window = monthWindow(range.endDate, count);
+    } else {
+      window = monthWindow(
+        businessToday(),
+        Math.min(Math.max(Math.trunc(months) || 12, 1), 60),
+      );
     }
+    const count = window.length;
 
-    const window = monthWindow(businessToday(), count);
+    // `since` rides along on every row rather than costing a second round
+    // trip; with no movements there is nothing to value anyway.
     const rows = await this.dataSource.query(
       `SELECT to_char(m.date, 'YYYY-MM') AS period,
-              (array_agg(m.balance_after::numeric
-                         ORDER BY m.date DESC, m.created_at DESC))[1] AS closing,
               COALESCE(SUM(CASE WHEN m.quantity_change::numeric > 0
                                 THEN m.quantity_change::numeric ELSE 0 END), 0) AS qty_in,
               COALESCE(SUM(CASE WHEN m.quantity_change::numeric < 0
-                                THEN -m.quantity_change::numeric ELSE 0 END), 0) AS qty_out
+                                THEN -m.quantity_change::numeric ELSE 0 END), 0) AS qty_out,
+              COALESCE(SUM(m.value_change::numeric), 0) AS value_net,
+              bool_or(m.value_change IS NULL) AS value_missing,
+              (SELECT c.inventory_cost_history_from::text
+                 FROM companies c WHERE c.id = $1) AS since
          FROM inventory_movements m
         WHERE m.company_id = $1 AND m.item_id = $2
         GROUP BY period
@@ -1153,35 +1187,83 @@ export class ReportsService {
     );
 
     const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
-
-    // The close carried into the window: the last month with any movement at or
-    // before it. Without this an item bought once, two years ago, and never
-    // touched since reads as zero on hand for the whole chart.
-    const first = window[0].period;
-    let carried = 0;
-    for (const r of rows) {
-      if ((r.period as string) < first) carried = num(r.closing);
-      else break;
-    }
-
+    const since = toIsoDay(rows[0]?.since);
     const firstMovement = rows.length ? (rows[0].period as string) : null;
+
+    const qtyNow = num(item.quantityOnHand);
+    const valueNow = qtyNow * num(item.unitCost);
+
+    // Walking backwards: what moved AFTER each month — quantity and value —
+    // and whether any of it carries no value (a hole in the walk).
+    const after = new Map<
+      string,
+      { qty: number; value: number; missing: boolean }
+    >();
+    let laterQty = 0;
+    let laterValue = 0;
+    let laterMissing = false;
+    for (let i = rows.length - 1, w = count - 1; w >= 0; w--) {
+      const slot = window[w];
+      while (i >= 0 && (rows[i].period as string) > slot.period) {
+        laterQty += num(rows[i].qty_in) - num(rows[i].qty_out);
+        laterValue += num(rows[i].value_net);
+        laterMissing = laterMissing || rows[i].value_missing === true;
+        i--;
+      }
+      after.set(slot.period, {
+        qty: laterQty,
+        value: laterValue,
+        missing: laterMissing,
+      });
+    }
 
     const points = window.map((slot) => {
       const row = byPeriod.get(slot.period);
-      if (row) carried = num(row.closing);
+      const later = after.get(slot.period)!;
+      // Before the item's first movement it did not exist on any shelf: null,
+      // which says "not yet", where a zero would invent a stockout.
+      const existed = firstMovement !== null && slot.period >= firstMovement;
+      const valueKnown =
+        existed && since !== null && slot.endDate >= since && !later.missing;
       return {
         period: slot.period,
         label: slot.label,
         asOfDate: slot.endDate,
-        // Before the item's first movement it did not exist on any shelf;
-        // afterwards a monthless gap means "unchanged", not "zero".
-        closingQty: firstMovement && slot.period < firstMovement ? null : r2(carried),
+        closingQty: existed ? r2(qtyNow - later.qty) : null,
         qtyIn: r2(num(row?.qty_in)),
         qtyOut: r2(num(row?.qty_out)),
-        closingValue: null as number | null,
-        valueKnown: false,
+        closingValue: valueKnown ? r2(valueNow - later.value) : null,
+        valueKnown,
       };
     });
+
+    const knownCount = points.filter((p) => p.valueKnown).length;
+    const existing = points.filter((p) => p.closingQty !== null).length;
+    const value =
+      knownCount === 0
+        ? 'unavailable'
+        : knownCount === existing
+          ? 'exact'
+          : 'partial';
+    const short = points.find((p) => p.closingQty !== null && p.closingQty < 0);
+
+    const notes: string[] = [];
+    if (since === null && existing > 0) {
+      notes.push(
+        'Month-end value is not shown: no stock movement in this company has recorded its cost yet.',
+      );
+    } else if (value === 'partial') {
+      notes.push(
+        `Month-end value is shown from ${since}, when cost began to be recorded on every ` +
+          "stock movement; valuing earlier quantities at today's average cost would misstate them.",
+      );
+    }
+    if (short) {
+      notes.push(
+        `Stock is below zero at the end of ${short.label} by document date: goods were ` +
+          'invoiced before the receipt that supplied them was dated.',
+      );
+    }
 
     return {
       itemId: item.id,
@@ -1191,29 +1273,53 @@ export class ReportsService {
       points,
       coverage: {
         quantity: 'exact',
-        value: 'unavailable',
-        message:
-          'Stock levels are exact. Month-end VALUE is not shown because cost is ' +
-          'not yet recorded on each stock movement — valuing past quantities at ' +
-          "today's average cost would misstate them.",
+        value,
+        costHistoryFrom: since,
+        message: notes.join(' '),
       },
     };
   }
 
+  /** The item, scoped to the company, or a 404 that says so. */
+  private async findItemOrFail(companyId: string, itemId: string) {
+    const items = await this.itemRepo.find({
+      where: { id: itemId, companyId },
+    });
+    const item = items[0];
+    if (!item) {
+      throw new NotFoundException({
+        code: 'ITEM_NOT_FOUND',
+        message: 'No such inventory item in this company.',
+      });
+    }
+    return item;
+  }
 
   /**
-   * The four document sources that carry an item dimension, as one UNION.
+   * Every document line that sold (or took back) an item, one row each.
    *
-   * Shared by `itemPerformance` (one item, by month) and `inventoryPerformance`
-   * (every item, one row each) so the two can never drift into reporting
-   * different margins for the same sale. `$1` is the company, `$2`/`$3` the
-   * date range, and `$4` — when `byItem` is false — the single item.
+   * The single source for per-item sales. `itemSalesUnionSql` groups it by
+   * month, the item explorer's "what's behind this month" pages through it,
+   * and top customers group it by customer — so the three can never disagree
+   * about what an item sold. `$1` is the company, `$2`/`$3` the date range,
+   * and `$4` — when `byItem` is false — the single item.
+   *
+   * Columns: item_id, date, period, doc_type ('invoice' | 'delivery' |
+   * 'credit_memo'), doc_id (the document to open — for a delivery, the invoice
+   * it raised), doc_number, customer_id, line_id, units, revenue, cogs,
+   * est_cogs, cost_missing, cost_basis.
    *
    * ── Revenue is NET OF TAX ─────────────────────────────────────────────────
    * `line_total` INCLUDES tax; the ledger posts revenue net of it. Measured on
    * real books: 59 invoices differed and the gap was exactly the sum of tax.
-   * Subtracting `tax_amount` rather than recomputing from qty x unit_price also
-   * keeps any line-level discount, which is already baked into `line_total`.
+   *
+   * ── …and NET OF THE INVOICE DISCOUNT ──────────────────────────────────────
+   * A discount is set on the invoice, not the line, and the ledger credits
+   * 4000 with `subtotal − discount_amount`. Each line takes its share of it in
+   * proportion to its pre-tax amount (`subtotal` is the sum of those), which
+   * is how an invoice's lines add back up to the revenue the ledger posted.
+   * Before this, a discounted invoice overstated every item on it and the
+   * difference sat unexplained in the reconciliation's residual.
    *
    * ── Customer returns are SALES, and are netted here ───────────────────────
    * A credit memo reverses a sale, so it reduces that item's revenue and cost.
@@ -1232,36 +1338,53 @@ export class ReportsService {
    * sold through the delivery flow. The arms are disjoint, so nothing is
    * double-counted. Delivery `unit_price` is already tax-exclusive.
    */
-  private itemSalesUnionSql(byItem: boolean): string {
+  private itemSalesLinesSql(byItem: boolean): string {
     const itemFilter = byItem ? '' : 'AND %ALIAS%.item_id = $4';
     const inv = itemFilter.replace('%ALIAS%', 'li');
     const del = itemFilter.replace('%ALIAS%', 'di');
     const cm = itemFilter.replace('%ALIAS%', 'cml');
+    // The share of an invoice's pre-tax amount that survives its discount.
+    const kept = `(CASE WHEN i.subtotal::numeric > 0
+                        THEN 1 - COALESCE(i.discount_amount, 0)::numeric / i.subtotal::numeric
+                        ELSE 1 END)`;
     return `
       SELECT li.item_id AS item_id,
+             i.invoice_date AS date,
              to_char(i.invoice_date, 'YYYY-MM') AS period,
-             SUM(li.quantity)::numeric(18,4) AS units,
-             SUM(li.line_total - COALESCE(li.tax_amount, 0))::numeric(18,4) AS revenue,
-             SUM(COALESCE(li.cost_amount, 0))::numeric(18,4) AS cogs,
-             SUM(CASE WHEN li.cost_basis = 'apportioned'
-                      THEN COALESCE(li.cost_amount, 0) ELSE 0 END)::numeric(18,4) AS est_cogs,
-             bool_or(li.cost_amount IS NULL) AS cost_missing
+             'invoice'::text AS doc_type,
+             i.id AS doc_id,
+             i.invoice_number::text AS doc_number,
+             i.customer_id AS customer_id,
+             li.id AS line_id,
+             li.quantity::numeric AS units,
+             ((li.line_total - COALESCE(li.tax_amount, 0)) * ${kept})::numeric(18,4) AS revenue,
+             COALESCE(li.cost_amount, 0)::numeric AS cogs,
+             (CASE WHEN li.cost_basis = 'apportioned'
+                   THEN COALESCE(li.cost_amount, 0) ELSE 0 END)::numeric AS est_cogs,
+             (li.cost_amount IS NULL) AS cost_missing,
+             COALESCE(li.cost_basis, 'unknown')::text AS cost_basis
         FROM invoice_line_items li
         JOIN invoices i ON i.id = li.invoice_id
        WHERE i.company_id = $1 AND li.item_id IS NOT NULL ${inv}
          AND i.status NOT IN ('draft', 'void')
          AND i.invoice_date >= $2 AND i.invoice_date <= $3
-       GROUP BY li.item_id, period
 
       UNION ALL
 
-      SELECT di.item_id AS item_id,
-             to_char(i.invoice_date, 'YYYY-MM') AS period,
-             SUM(di.delivered_qty)::numeric(18,4) AS units,
-             SUM(di.delivered_qty * di.unit_price)::numeric(18,4) AS revenue,
-             SUM(di.delivered_qty * di.unit_cost)::numeric(18,4) AS cogs,
-             0::numeric(18,4) AS est_cogs,
-             false AS cost_missing
+      SELECT di.item_id,
+             i.invoice_date,
+             to_char(i.invoice_date, 'YYYY-MM'),
+             'delivery'::text,
+             i.id,
+             i.invoice_number::text,
+             COALESCE(d.customer_id, i.customer_id),
+             di.id,
+             di.delivered_qty::numeric,
+             (di.delivered_qty * di.unit_price * ${kept})::numeric(18,4),
+             (di.delivered_qty * di.unit_cost)::numeric,
+             0::numeric,
+             false,
+             'delivery'::text
         FROM delivery_items di
         JOIN deliveries d ON d.id = di.delivery_id
         JOIN invoices i   ON i.id = d.invoice_id
@@ -1269,27 +1392,52 @@ export class ReportsService {
          AND d.ledger_status = 'committed'
          AND i.status NOT IN ('draft', 'void')
          AND i.invoice_date >= $2 AND i.invoice_date <= $3
-       GROUP BY di.item_id, period
 
       UNION ALL
 
-      SELECT cml.item_id AS item_id,
-             to_char(cm.date, 'YYYY-MM') AS period,
-             -SUM(cml.quantity)::numeric(18,4) AS units,
-             -SUM(cml.quantity * cml.unit_price)::numeric(18,4) AS revenue,
-             -SUM(cml.quantity * COALESCE(cml.restock_unit_cost, 0))::numeric(18,4) AS cogs,
-             0::numeric(18,4) AS est_cogs,
-             bool_or(cml.restock_unit_cost IS NULL) AS cost_missing
+      SELECT cml.item_id,
+             cm.date,
+             to_char(cm.date, 'YYYY-MM'),
+             'credit_memo'::text,
+             cm.id,
+             cm.credit_memo_number::text,
+             cm.customer_id,
+             cml.id,
+             -cml.quantity::numeric,
+             -(cml.quantity * cml.unit_price)::numeric(18,4),
+             -(cml.quantity * COALESCE(cml.restock_unit_cost, 0))::numeric,
+             0::numeric,
+             (cml.restock_unit_cost IS NULL),
+             (CASE WHEN cml.restock_unit_cost IS NULL THEN 'unknown' ELSE 'exact' END)::text
         FROM credit_memo_lines cml
         JOIN credit_memos cm ON cm.id = cml.credit_memo_id
        WHERE cm.company_id = $1 AND cml.item_id IS NOT NULL ${cm}
          AND cm.status <> 'void'
-         AND cm.date >= $2 AND cm.date <= $3
-       GROUP BY cml.item_id, period`;
+         AND cm.date >= $2 AND cm.date <= $3`;
   }
 
   /**
-   * One item's sales and gross margin, month by month.
+   * Per-item sales by month: `itemSalesLinesSql` grouped. Shared by
+   * `itemPerformance` (one item, by month) and `inventoryPerformance` (every
+   * item, one row each) so the two can never drift into reporting different
+   * margins for the same sale.
+   */
+  private itemSalesUnionSql(byItem: boolean): string {
+    return `
+      SELECT l.item_id,
+             l.period,
+             SUM(l.units)::numeric(18,4)    AS units,
+             SUM(l.revenue)::numeric(18,4)  AS revenue,
+             SUM(l.cogs)::numeric(18,4)     AS cogs,
+             SUM(l.est_cogs)::numeric(18,4) AS est_cogs,
+             bool_or(l.cost_missing)        AS cost_missing
+        FROM (${this.itemSalesLinesSql(byItem)}) l
+       GROUP BY l.item_id, l.period`;
+  }
+
+  /**
+   * One item's sales and gross margin, month by month, with what the item
+   * explorer needs beside them: the item's own facts and who bought it.
    *
    * Revenue comes from invoice lines; cost comes from the per-line
    * `cost_amount` frozen at posting, plus the delivery branch, whose cost was
@@ -1306,6 +1454,9 @@ export class ReportsService {
    * is an estimate, and a margin built on a mostly-apportioned period is a
    * number nobody should act on. Reporting the share is what lets the reader
    * decide that for themselves.
+   *
+   * `item` and `customers` are additive: a client built before them reads the
+   * rest of this response exactly as it did.
    */
   async itemPerformance(
     companyId: string,
@@ -1316,14 +1467,7 @@ export class ReportsService {
     const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
     const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
 
-    const items = await this.itemRepo.find({ where: { id: itemId, companyId } });
-    const item = items[0];
-    if (!item) {
-      throw new NotFoundException({
-        code: 'ITEM_NOT_FOUND',
-        message: 'No such inventory item in this company.',
-      });
-    }
+    const item = await this.findItemOrFail(companyId, itemId);
 
     const rows = await this.dataSource.query(
       `SELECT period, SUM(units) AS units, SUM(revenue) AS revenue,
@@ -1371,10 +1515,52 @@ export class ReportsService {
     );
     const grossProfit = r2(revenue - cogs);
 
-    const [company] = await this.dataSource.query(
-      `SELECT inventory_cost_history_from::text AS since FROM companies WHERE id = $1`,
-      [companyId],
+    // Who bought it in the range. Grouped over the same lines as the months
+    // above, so the customers add up to the period's totals.
+    const customerRows = await this.dataSource.query(
+      `SELECT l.customer_id AS "customerId",
+              COALESCE(c.name, '') AS "customerName",
+              SUM(l.units)::numeric(18,4)   AS units,
+              SUM(l.revenue)::numeric(18,4) AS revenue,
+              SUM(l.cogs)::numeric(18,4)    AS cogs
+         FROM (${this.itemSalesLinesSql(false)}) l
+         LEFT JOIN customers c ON c.id = l.customer_id AND c.company_id = $1
+        GROUP BY l.customer_id, c.name
+        ORDER BY SUM(l.revenue) DESC, c.name`,
+      [companyId, s, e, itemId],
     );
+    const customers = customerRows.map((r: any) => {
+      const rev = r2(num(r.revenue));
+      return {
+        customerId: r.customerId ?? null,
+        customerName: r.customerName || '(no customer)',
+        unitsSold: r2(num(r.units)),
+        revenue: rev,
+        grossProfit: r2(rev - num(r.cogs)),
+      };
+    });
+    const top = customers.slice(0, TOP_CUSTOMERS);
+    const rest = customers.slice(TOP_CUSTOMERS);
+
+    // The horizon, and the last time the item sold at all — not just in this
+    // range, because "not sold since March" is the answer to a range that is
+    // empty. Returns are not sales here: taking stock back is not selling it.
+    const [meta] = await this.dataSource.query(
+      `SELECT (SELECT inventory_cost_history_from::text
+                 FROM companies WHERE id = $1) AS since,
+              (SELECT MAX(l.date)::text
+                 FROM (${this.itemSalesLinesSql(false)}) l
+                WHERE l.doc_type <> 'credit_memo') AS last_sold`,
+      [
+        companyId,
+        REPORT_RANGE_DEFAULTS.startDate,
+        REPORT_RANGE_DEFAULTS.endDate,
+        itemId,
+      ],
+    );
+
+    const qtyOnHand = num(item.quantityOnHand);
+    const unitCost = num(item.unitCost);
 
     return {
       itemId: item.id,
@@ -1390,9 +1576,121 @@ export class ReportsService {
         marginPct: revenue > 0 ? r2((grossProfit / revenue) * 100) : null,
       },
       /** The first date from which cost is recorded. Null means never. */
-      costHistoryFrom: company?.since ?? null,
+      costHistoryFrom: toIsoDay(meta?.since),
       /** 0..1 — how much of the cost above is an apportioned estimate. */
       estimatedCogsShare: cogs > 0 ? r2(estCogs / cogs) : 0,
+      /** The item as it stands today — stock figures are AS OF NOW. */
+      item: {
+        category: item.category || 'Uncategorized',
+        unitOfMeasure: item.unitOfMeasure || 'unit',
+        sellingPrice: r2(num(item.sellingPrice)),
+        unitCost: r2(unitCost),
+        qtyOnHand: r2(qtyOnHand),
+        stockValue: r2(qtyOnHand * unitCost),
+        reorderPoint: r2(num(item.reorderPoint)),
+        isActive: item.isActive !== false,
+        lastSoldDate: toIsoDay(meta?.last_sold),
+      },
+      customers: top,
+      otherCustomers: {
+        count: rest.length,
+        unitsSold: r2(rest.reduce((t: number, c: any) => t + c.unitsSold, 0)),
+        revenue: r2(rest.reduce((t: number, c: any) => t + c.revenue, 0)),
+        grossProfit: r2(
+          rest.reduce((t: number, c: any) => t + c.grossProfit, 0),
+        ),
+      },
+    };
+  }
+
+  /**
+   * The document lines behind one item's figures for a range — what the item
+   * explorer lists under "What's behind March".
+   *
+   * Read from `itemSalesLinesSql`, the same rows `itemPerformance` groups by
+   * month, so a month's entries add up to that month's point exactly. Newest
+   * first and paginated: a year of a fast-moving item is every invoice it was
+   * on. The page lives under `entries` — never `data`, which the response
+   * envelope would lift out and discard `total` and `page` beside it.
+   */
+  async itemSalesEntries(
+    companyId: string,
+    itemId: string,
+    startDate: string,
+    endDate: string,
+    page = 1,
+    limit = 25,
+  ) {
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
+    const pageNo = Math.max(Math.trunc(page) || 1, 1);
+    const size = Math.min(Math.max(Math.trunc(limit) || 25, 1), 100);
+
+    const item = await this.findItemOrFail(companyId, itemId);
+    const params = [companyId, s, e, itemId];
+
+    const [sum] = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS total,
+              COALESCE(SUM(l.units), 0)::numeric(18,4)   AS units,
+              COALESCE(SUM(l.revenue), 0)::numeric(18,4) AS revenue,
+              COALESCE(SUM(l.cogs), 0)::numeric(18,4)    AS cogs
+         FROM (${this.itemSalesLinesSql(false)}) l`,
+      params,
+    );
+
+    const rows = await this.dataSource.query(
+      `SELECT l.date::text AS date, l.doc_type AS "docType", l.doc_id AS "docId",
+              l.doc_number AS "docNumber", l.customer_id AS "customerId",
+              COALESCE(c.name, '') AS "customerName", l.line_id AS "lineId",
+              l.units, l.revenue, l.cogs, l.cost_basis AS "costBasis",
+              l.cost_missing AS "costMissing"
+         FROM (${this.itemSalesLinesSql(false)}) l
+         LEFT JOIN customers c ON c.id = l.customer_id AND c.company_id = $1
+        ORDER BY l.date DESC, l.doc_number DESC, l.line_id
+        LIMIT $5 OFFSET $6`,
+      [...params, size, (pageNo - 1) * size],
+    );
+
+    const entries = rows.map((r: any) => {
+      const units = r2(num(r.units));
+      const revenue = r2(num(r.revenue));
+      const cogs = r2(num(r.cogs));
+      const grossProfit = r2(revenue - cogs);
+      return {
+        date: toIsoDay(r.date),
+        docType: r.docType as 'invoice' | 'delivery' | 'credit_memo',
+        docId: r.docId,
+        docNumber: r.docNumber ?? '',
+        customerId: r.customerId ?? null,
+        customerName: r.customerName || '(no customer)',
+        units,
+        // What each unit went for, net of tax and discount — a return reads
+        // at the price it was credited at, not as a negative price.
+        unitPrice: units !== 0 ? r2(revenue / units) : 0,
+        revenue,
+        cogs,
+        grossProfit,
+        marginPct: revenue > 0 ? r2((grossProfit / revenue) * 100) : null,
+        costBasis: r.costBasis ?? 'unknown',
+        costKnown: r.costMissing !== true,
+      };
+    });
+
+    const revenue = r2(num(sum?.revenue));
+    const cogs = r2(num(sum?.cogs));
+    return {
+      itemId: item.id,
+      range: { startDate: s, endDate: e },
+      entries,
+      total: Number(sum?.total ?? 0),
+      page: pageNo,
+      limit: size,
+      totals: {
+        unitsSold: r2(num(sum?.units)),
+        revenue,
+        cogs,
+        grossProfit: r2(revenue - cogs),
+      },
     };
   }
 
@@ -1454,6 +1752,24 @@ export class ReportsService {
       [companyId, s, e],
     );
 
+    // The last time each item sold at all, whatever the range — "not sold in
+    // this period" is only half an answer without "since when". Returns are
+    // not sales here: taking stock back is not selling it.
+    const lastSoldRows = await this.dataSource.query(
+      `SELECT l.item_id AS "itemId", MAX(l.date)::text AS "lastSold"
+         FROM (${this.itemSalesLinesSql(true)}) l
+        WHERE l.doc_type <> 'credit_memo'
+        GROUP BY l.item_id`,
+      [
+        companyId,
+        REPORT_RANGE_DEFAULTS.startDate,
+        REPORT_RANGE_DEFAULTS.endDate,
+      ],
+    );
+    const lastSold = new Map<string, string | null>(
+      lastSoldRows.map((r: any) => [r.itemId as string, toIsoDay(r.lastSold)]),
+    );
+
     const mapped = rows.map((r: any) => {
       const revenue = r2(num(r.revenue));
       const cogs = r2(num(r.cogs));
@@ -1480,6 +1796,7 @@ export class ReportsService {
           : num(r.est_cogs) > 0
             ? 'apportioned'
             : 'posted',
+        lastSoldDate: lastSold.get(r.itemId) ?? null,
       };
     });
 
@@ -1515,6 +1832,19 @@ export class ReportsService {
 
     const glRevenue = r2(num(gl?.revenue));
     const glCogs = r2(num(gl?.cogs));
+
+    // The control account the stock column should agree with. All-time, like
+    // the snapshot beside it: quantity on hand reflects every posting, dated
+    // or not, so a date cut here would compare two different moments. The
+    // screen shows the difference rather than letting a drift go unseen —
+    // it is the I13 invariant, surfaced where someone can act on it.
+    const [ledger] = await this.dataSource.query(
+      `SELECT COALESCE(SUM(g.debit - g.credit), 0)::numeric(18,4) AS value
+         FROM general_ledger g
+         JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
+        WHERE g.company_id = $1 AND a.account_number = '1200'`,
+      [companyId],
+    );
 
     // Name the difference instead of leaving it as one unexplained lump.
     //
@@ -1595,6 +1925,8 @@ export class ReportsService {
         grossProfit: r2(revenue - cogs),
         marginPct: revenue > 0 ? r2(((revenue - cogs) / revenue) * 100) : null,
         stockValue: sum((x) => x.stockValue),
+        /** GL 1200, all time — what `stockValue` should equal. */
+        ledgerValue: r2(num(ledger?.value)),
       },
       reconciliation: {
         glRevenue,

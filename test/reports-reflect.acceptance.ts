@@ -768,6 +768,123 @@ async function main() {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // I. The item explorer over HTTP
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // The explorer reads three endpoints and has to agree with the ledger and
+  // with itself: an item's month adds up to the documents listed under it, its
+  // latest stock value is what the valuation table shows, and a discounted
+  // invoice counts at what the ledger actually booked. Over HTTP, because the
+  // response envelope is where the P&L drill-down once lost its rows.
+  console.log('\n— I. Item explorer over HTTP —');
+
+  {
+    const monthStart = `${TODAY.slice(0, 7)}-01`;
+    const window = `startDate=${monthStart}&endDate=${TODAY}`;
+    const perfOf = async () =>
+      data(await req('GET', `/reports/item-performance/${pricedId}?${window}`)) as any;
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+
+    const before = await perfOf();
+    const pnlBefore = n((await pnl())?.revenue);
+
+    // I1–I2. A 10% invoice discount is shared across the lines by their
+    // pre-tax amount: the item's 800 keeps 720, the 200 handling line 180.
+    const dinv = data(
+      await req('POST', '/invoices', {
+        customerId: customer.id,
+        invoiceDate: TODAY,
+        dueDate: TODAY,
+        status: 'sent',
+        discountType: 'percent',
+        discountValue: '10',
+        lines: [
+          { description: `Reports Widget ${RUN}`, quantity: '2', unitPrice: '400', taxRate: '0', itemId: pricedId },
+          { description: 'Handling', quantity: '1', unitPrice: '200', taxRate: '0', lineKind: 'service' },
+        ],
+      }),
+    );
+    const after = await perfOf();
+    const pnlAfter = n((await pnl())?.revenue);
+    ok('I1 the ledger booked revenue net of the discount', near(pnlAfter - pnlBefore, 900), {
+      delta: round2(pnlAfter - pnlBefore),
+    });
+    ok(
+      "I2 the item took its share of the discount, not its list price",
+      near(n(after?.totals?.revenue) - n(before?.totals?.revenue), 720),
+      { delta: round2(n(after?.totals?.revenue) - n(before?.totals?.revenue)) },
+    );
+    ok('I3 the item arrives with its facts', typeof after?.item?.qtyOnHand === 'number' && !!after?.item?.lastSoldDate, {
+      item: after?.item,
+    });
+    ok(
+      'I4 the buyer is among its customers',
+      (after?.customers ?? []).some((c: any) => c.customerId === customer.id),
+      { customers: after?.customers },
+    );
+
+    // I5–I7. The entries survive the envelope and add up to the month.
+    const res = await req(
+      'GET',
+      `/reports/item-performance/${pricedId}/entries?${window}&limit=100`,
+    );
+    const d = data(res);
+    ok('I5 entries arrive as an object with rows and a count', !Array.isArray(d) && Array.isArray(d?.entries) && typeof d?.total === 'number', {
+      keys: d && typeof d === 'object' ? Object.keys(d) : null,
+    });
+    const entries: any[] = d?.entries ?? [];
+    const point = (after?.points ?? []).find((p: any) => p.period === TODAY.slice(0, 7));
+    if (entries.length >= n(d?.total)) {
+      const shown = entries.reduce((t, e) => t + n(e.revenue), 0);
+      ok('I6 the month is exactly the documents listed under it', near(shown, n(point?.revenue)) && near(n(d?.totals?.revenue), n(point?.revenue)), {
+        entries: round2(shown),
+        month: point?.revenue,
+      });
+    }
+    ok(
+      'I7 the discounted line lists at its discounted price',
+      entries.some((e) => e.docId === dinv?.id && near(n(e.revenue), 720) && near(n(e.unitPrice), 360)),
+      { line: entries.find((e) => e.docId === dinv?.id) },
+    );
+
+    // I8–I9. The stock history ends where the valuation table stands.
+    const hist = data(
+      await req('GET', `/reports/inventory-valuation/items/${pricedId}/history?${window}`),
+    ) as any;
+    const last = (hist?.points ?? [])[(hist?.points ?? []).length - 1];
+    const { rows: itemRows } = await db.query(
+      `SELECT quantity_on_hand::numeric AS q, unit_cost::numeric AS c FROM inventory_items WHERE id = $1`,
+      [pricedId],
+    );
+    const qty = n(itemRows[0]?.q);
+    const cost = n(itemRows[0]?.c);
+    ok('I8 the latest close is the quantity on hand', (hist?.points ?? []).length === 1 && near(n(last?.closingQty), qty), {
+      points: (hist?.points ?? []).length,
+      closingQty: last?.closingQty,
+      onHand: qty,
+    });
+    ok('I9 the latest close is valued at quantity × average cost', last?.valueKnown === true && near(n(last?.closingValue), round2(qty * cost)), {
+      closingValue: last?.closingValue,
+      expected: round2(qty * cost),
+    });
+
+    // I10. A malformed date is refused, not handed to Postgres.
+    const bad = await req('GET', `/reports/item-performance/${pricedId}?startDate=2026-13-01&endDate=${TODAY}`);
+    ok('I10 a malformed date is a 400', bad.status === 400 && codeOf(bad) === 'INVALID_DATE', {
+      status: bad.status,
+      code: codeOf(bad),
+    });
+
+    // I11–I12. The valuation screen's tie-out and "last sold".
+    const ip = data(await req('GET', `/reports/inventory-performance?${window}`)) as any;
+    ok('I11 inventory-performance carries the Inventory 1200 balance', near(n(ip?.totals?.ledgerValue), await glNet('1200')), {
+      ledgerValue: ip?.totals?.ledgerValue,
+    });
+    const row = (ip?.rows ?? []).find((r: any) => r.itemId === pricedId);
+    ok('I12 an item sold today says so', row?.lastSoldDate === TODAY, { lastSoldDate: row?.lastSoldDate });
+  }
+
   // ── Books still sound ──────────────────────────────────────────
   const tbFinal = await trialBalance();
   ok('F1 trial balance balances at the end', tbFinal?.isBalanced === true, {
