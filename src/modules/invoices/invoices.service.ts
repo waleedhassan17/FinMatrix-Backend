@@ -42,6 +42,14 @@ import {
 } from '../accounts/accounts.constants';
 import { InvoiceStatus } from '../../types';
 import { businessToday } from '../../common/utils/business-date.util';
+import {
+  applyDerivedStatusFilter,
+  derivedStatus,
+  documentListSummary,
+} from '../../common/utils/document-status.util';
+
+/** Stored statuses an invoice owes money under before it is overdue. */
+const INVOICE_OPEN_STATUSES = ['sent', 'partial'] as const;
 import { assertSalesLinesClassified } from '../../common/utils/sales-lines.util';
 import { CreditOverride, enforceCreditLimit } from '../../common/utils/credit-control.util';
 
@@ -100,22 +108,30 @@ export class InvoicesService {
     query: ListInvoicesQueryDto,
     pagination: PaginationParams,
   ) {
-    const qb = this.repo
-      .createQueryBuilder('i')
-      .where('i.companyId = :companyId', { companyId });
-    if (query.status) qb.andWhere('i.status = :s', { s: query.status });
-    if (query.customerId) qb.andWhere('i.customerId = :c', { c: query.customerId });
-    if (query.startDate && query.endDate) {
-      // Named apart from the status's `:s`: one name holds one value per query.
-      qb.andWhere('i.invoiceDate BETWEEN :startDate AND :endDate', {
-        startDate: query.startDate,
-        endDate: query.endDate,
+    const today = businessToday();
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.repo
+        .createQueryBuilder('i')
+        .where('i.companyId = :companyId', { companyId });
+      if (query.customerId) qb.andWhere('i.customerId = :c', { c: query.customerId });
+      if (query.startDate && query.endDate) {
+        qb.andWhere('i.invoiceDate BETWEEN :startDate AND :endDate', {
+          startDate: query.startDate,
+          endDate: query.endDate,
+        });
+      }
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['i.invoiceNumber', 'i.notes'],
+        customerColumn: 'i.customerId',
       });
-    }
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['i.invoiceNumber', 'i.notes'],
-      customerColumn: 'i.customerId',
-    });
+      return qb;
+    };
+
+    const qb = filtered();
+    // By the status each invoice DISPLAYS: "overdue" includes a sent invoice
+    // nobody has paid past its due date, and "sent" leaves it out.
+    applyDerivedStatusFilter(qb, 'i', query.status, INVOICE_OPEN_STATUSES, today);
     qb.orderBy('i.invoiceDate', 'DESC').addOrderBy('i.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 
@@ -128,23 +144,21 @@ export class InvoicesService {
       : [];
     const customerNameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
 
-    const statusCounts = await this.repo
-      .createQueryBuilder('i')
-      .select('i.status', 'status')
-      .addSelect('COUNT(*)', 'count')
-      .addSelect('COALESCE(SUM(i.total), 0)', 'total')
-      .where('i.companyId = :companyId', { companyId })
-      .groupBy('i.status')
-      .getRawMany<{ status: string; count: string; total: string }>();
+    const summary = await documentListSummary(filtered(), 'i', INVOICE_OPEN_STATUSES, today);
 
+    // `success` makes ResponseEnvelopeInterceptor pass this through whole.
+    // Without it the interceptor keeps only `data`, and the summary and
+    // pagination never reached a client — which is why the lists counted and
+    // totalled only the page they held. `data` stays the same array, so every
+    // client already reading it is unaffected.
     return {
-      data: data.map((i) => ({ ...i, customerName: customerNameMap[i.customerId] ?? '' })),
-      summary: Object.fromEntries(
-        statusCounts.map((r) => [
-          r.status,
-          { count: parseInt(r.count, 10), total: toDecimal(r.total).toFixed(4) },
-        ]),
-      ),
+      success: true as const,
+      data: data.map((i) => ({
+        ...i,
+        status: derivedStatus(i, INVOICE_OPEN_STATUSES, today),
+        customerName: customerNameMap[i.customerId] ?? '',
+      })),
+      summary,
       pagination: {
         page: pagination.page,
         limit: pagination.limit,
@@ -176,7 +190,13 @@ export class InvoicesService {
           where: { id: inv.customerId, companyId },
         })
       : null;
-    return { ...inv, customerName: customer?.name ?? '' } as Invoice;
+    // A fresh object, never the entity: the displayed status must not be
+    // saved back as the stored one.
+    return {
+      ...inv,
+      status: derivedStatus(inv, INVOICE_OPEN_STATUSES, businessToday()),
+      customerName: customer?.name ?? '',
+    } as Invoice;
   }
 
   /** Check an invoice's lines without creating anything (a staff request is filed only if they pass). */

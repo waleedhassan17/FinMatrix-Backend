@@ -43,6 +43,14 @@ import { BillStatus } from '../../types';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { businessToday } from '../../common/utils/business-date.util';
+import {
+  applyDerivedStatusFilter,
+  derivedStatus,
+  documentListSummary,
+} from '../../common/utils/document-status.util';
+
+/** Stored statuses a bill owes money under before it is overdue. */
+const BILL_OPEN_STATUSES = ['open', 'partial'] as const;
 import { assertMoneyAccount } from '../../common/utils/money-account.util';
 
 /** What a bill line raised from a purchase order bills (see createInTransaction). */
@@ -119,12 +127,8 @@ export class BillsService {
    * and no stored state to drift.
    */
   private withDerivedStatus<T extends { status: string; dueDate: string; balance: string }>(bill: T): T {
-    const today = businessToday();
-    const owes = toDecimal(bill.balance).greaterThan(0);
-    if (owes && bill.dueDate < today && (bill.status === 'open' || bill.status === 'partial')) {
-      return { ...bill, status: 'overdue' };
-    }
-    return bill;
+    const status = derivedStatus(bill, BILL_OPEN_STATUSES, businessToday());
+    return status === bill.status ? bill : { ...bill, status };
   }
 
   async list(
@@ -132,16 +136,26 @@ export class BillsService {
     query: ListBillsQueryDto,
     pagination: PaginationParams,
   ) {
-    const qb = this.billRepo
-      .createQueryBuilder('b')
-      .where('b.companyId = :companyId', { companyId });
-    if (query.status) qb.andWhere('b.status = :s', { s: query.status });
-    if (query.vendorId) qb.andWhere('b.vendorId = :v', { v: query.vendorId });
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['b.billNumber', 'b.memo'],
-      vendorColumn: 'b.vendorId',
-    });
-    qb.orderBy('b.billDate', 'DESC');
+    const today = businessToday();
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.billRepo
+        .createQueryBuilder('b')
+        .where('b.companyId = :companyId', { companyId });
+      if (query.vendorId) qb.andWhere('b.vendorId = :v', { v: query.vendorId });
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['b.billNumber', 'b.memo'],
+        vendorColumn: 'b.vendorId',
+      });
+      return qb;
+    };
+
+    const qb = filtered();
+    // By the status each bill DISPLAYS — overdue is derived from the due date
+    // below, so the filter has to follow the same rule or "Open" would list
+    // bills that show as Overdue.
+    applyDerivedStatusFilter(qb, 'b', query.status, BILL_OPEN_STATUSES, today);
+    qb.orderBy('b.billDate', 'DESC').addOrderBy('b.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
 
@@ -151,10 +165,16 @@ export class BillsService {
       : [];
     const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
 
+    const summary = await documentListSummary(filtered(), 'b', BILL_OPEN_STATUSES, today);
+
+    // `success` makes ResponseEnvelopeInterceptor pass this through whole —
+    // see InvoicesService.list. `data` stays the same array.
     return {
+      success: true as const,
       data: data.map((b) =>
         this.withDerivedStatus({ ...b, vendorName: vendorNameMap[b.vendorId] ?? '' }),
       ),
+      summary,
       pagination: {
         page: pagination.page,
         limit: pagination.limit,
@@ -193,6 +213,15 @@ export class BillsService {
         }),
       );
     }
+
+    // The list decorates every bill with its vendor's name; this one never
+    // did, so a bill opened on its own showed a blank vendor in the app. The
+    // invoice detail had the same gap with the customer and gained the name
+    // the same way. Not a column: saving the entity ignores it.
+    const vendor = b.vendorId
+      ? await this.vendorRepo.findOne({ where: { id: b.vendorId, companyId } })
+      : null;
+    Object.assign(b, { vendorName: vendor?.companyName ?? '' });
     return b;
   }
 
