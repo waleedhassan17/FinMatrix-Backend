@@ -54,8 +54,14 @@ const ENTITY_FEATURE: Partial<Record<SearchEntity, FeatureKey>> = {
   journalEntries: 'journalEntries',
 };
 
-/** A delivery rider's search stays on what their job needs. */
-const DELIVERY_ENTITIES: SearchEntity[] = ['customers', 'vendors', 'invoices', 'bills', 'inventory'];
+/**
+ * A delivery rider's search stays on what their job needs: stock. Not
+ * customers or vendors — riders may not read those lists — and not invoices or
+ * bills either, whose hits name the customer or vendor and would hand the same
+ * lists over one row at a time. The rider app has no search screen; this is
+ * the server refusing the question, not a screen hiding it.
+ */
+const DELIVERY_ENTITIES: SearchEntity[] = ['inventory'];
 
 const PER_BUCKET = 20;
 

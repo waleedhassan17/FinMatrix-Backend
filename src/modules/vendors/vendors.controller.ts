@@ -31,6 +31,12 @@ import {
 @ApiTags('vendors')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, CompanyGuard, RolesGuard)
+// Owners and staff only, reads included. Without a role here the GET routes
+// answered any company member, so a delivery rider could list every vendor
+// and read their balances and statements. A rider's deliveries already carry
+// the vendor details the job needs. Routes that name their own @Roles
+// (create, edit, delete) keep their narrower set.
+@Roles('admin', 'staff')
 @Controller('vendors')
 export class VendorsController {
   constructor(private readonly vendors: VendorsService) {}

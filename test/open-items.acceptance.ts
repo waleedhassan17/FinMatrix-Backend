@@ -13,7 +13,9 @@
  *   C. An unapplied receipt and an open credit memo come off what is due.
  *   D. The vendor side: open bills only, the A/P aging row, a vendor credit
  *      netted.
- *   E. Refusals: an unknown party is 404, a malformed id 400, a rider 403.
+ *   E. Refusals: an unknown party is 404, a malformed id 400, a rider 403 —
+ *      and a rider can read neither the customer nor the vendor list, one
+ *      record, a statement, or either through search.
  *
  * Each run makes its own customer and vendor, so it holds on books that
  * already contain data.
@@ -316,6 +318,24 @@ async function main() {
   const asRiderAp = await req('GET', `/reports/ap-aging/vendors/${vendor.id}/summary`, undefined, riderToken);
   ok('E5 on the payables side too', asRiderAp.status === 403, asRiderAp.status);
 
+  // Riders may not read the customer or vendor lists at all — not by the
+  // lists, not one record at a time, and not through search.
+  for (const [label, path] of [
+    ['E6 a rider cannot list customers', '/customers'],
+    ['E7 a rider cannot open a customer', `/customers/${customer.id}`],
+    ['E8 a rider cannot read a customer statement', `/customers/${customer.id}/statement?startDate=2026-01-01&endDate=${TODAY}`],
+    ['E9 a rider cannot list vendors', '/vendors'],
+    ['E10 a rider cannot open a vendor', `/vendors/${vendor.id}`],
+  ] as const) {
+    const r = await req('GET', path, undefined, riderToken);
+    ok(`${label} (403)`, r.status === 403, r.status);
+  }
+  const riderSearch = data(await req('GET', `/search?q=${encodeURIComponent('Summary')}`, undefined, riderToken)) as any;
+  const leaked = ['customers', 'vendors', 'invoices', 'bills'].filter((k) => (riderSearch?.results?.[k] ?? []).length > 0);
+  ok('E11 a rider\'s search names no customer or vendor', leaked.length === 0, { leaked, results: riderSearch?.results });
+  const ownerList = await req('GET', '/customers');
+  const ownerVendors = await req('GET', '/vendors');
+  ok('E12 the owner still reads both lists', ownerList.status === 200 && ownerVendors.status === 200, [ownerList.status, ownerVendors.status]);
 
   await db.end();
 
