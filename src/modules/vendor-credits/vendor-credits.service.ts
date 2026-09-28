@@ -15,7 +15,6 @@ import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
-import { Bill } from '../bills/entities/bill.entity';
 import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/accounts.constants';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
@@ -150,38 +149,11 @@ export class VendorCreditsService {
   }
 
   async applyToBill(companyId: string, id: string, dto: ApplyVendorCreditDto): Promise<VendorCredit> {
+    // One implementation, shared with a settlement that spends credit and cash
+    // together (BillsService.settle), so both hold the same checks.
     return this.dataSource.transaction(async (manager) => {
-      // Lock the credit, not just the bill: two concurrent applies of the same
-      // credit would otherwise both read the same balance and both pass (M1).
-      const vc = await manager.findOne(VendorCredit, {
-        where: { id, companyId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!vc) throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
-      if (vc.status === 'void' || vc.status === 'closed') {
-        throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Vendor credit is ${vc.status}` });
-      }
-      const amt = toDecimal(dto.amount);
-      if (amt.greaterThan(toDecimal(vc.balance))) {
-        throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
-      }
-      // A vendor's credit can only settle that vendor's bill.
-      const target = await manager.findOne(Bill, { where: { id: dto.billId, companyId } });
-      if (!target) {
-        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
-      }
-      if (target.vendorId !== vc.vendorId) {
-        throw new BadRequestException({
-          code: 'VENDOR_MISMATCH',
-          message: 'That bill belongs to a different vendor.',
-        });
-      }
-      await this.bills.applyCredit(manager, companyId, dto.billId, dto.amount);
-      vc.amountApplied = addMoney(vc.amountApplied, amt).toFixed(4);
-      vc.balance = toDecimal(vc.total).minus(toDecimal(vc.amountApplied)).toFixed(4);
-      vc.status = toDecimal(vc.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
-      await manager.save(vc);
-      return vc;
+      const { credit } = await this.bills.applyVendorCredit(manager, companyId, id, dto.billId, dto.amount);
+      return credit;
     });
   }
 

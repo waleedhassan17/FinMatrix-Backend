@@ -27,6 +27,7 @@ import {
   CreateBillDto,
   ListBillsQueryDto,
   PayBillsDto,
+  SettleBillsDto,
   UpdateBillDto,
 } from './dto/bill.dto';
 import {
@@ -114,6 +115,42 @@ export class BillsController {
       'bill_payment',
       dto as unknown as Record<string, unknown>,
       `Bill payment by ${dto.paymentMethod} dated ${dto.paymentDate}`,
+      user,
+      companyId,
+    );
+  }
+
+  /**
+   * Settle a vendor's bills from their credits and/or cash, in one step —
+   * credit first, then cash, all or nothing. Staff ask and the owner signs
+   * off, exactly as for a cash payment: the approval replays this same call.
+   */
+  @Post('settle')
+  @Roles('admin', 'staff')
+  @HttpCode(200)
+  settle(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SettleBillsDto,
+  ) {
+    if (user.role === 'admin')
+      return this.bills.settle(companyId, user.id, dto);
+    const credit = (dto.credits ?? []).reduce(
+      (t, c) => t + (Number(c.amount) || 0),
+      0,
+    );
+    const cash = (dto.cash?.applications ?? []).reduce(
+      (t, a) => t + (Number(a.amount) || 0),
+      0,
+    );
+    const parts = [
+      credit > 0 ? `${credit.toFixed(2)} from vendor credit` : '',
+      cash > 0 ? `${cash.toFixed(2)} by ${dto.cash?.paymentMethod}` : '',
+    ].filter(Boolean);
+    return this.approvals.createRequest(
+      'bill_payment',
+      { action: 'settle', ...dto } as unknown as Record<string, unknown>,
+      `Bill settlement dated ${dto.paymentDate}: ${parts.join(' + ')}`,
       user,
       companyId,
     );

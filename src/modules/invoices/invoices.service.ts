@@ -198,7 +198,13 @@ export class InvoicesService {
       .andWhere('i.customerId = :c', { c: customerId })
       .andWhere('i.balance > 0')
       .andWhere("i.status NOT IN ('draft', 'void')")
+      // Oldest due first — overdue invoices before current ones — and the same
+      // order every time: two invoices due the same day used to come back in
+      // whatever order Postgres chose, so the sweep could settle a different
+      // one on a retry.
       .orderBy('i.dueDate', 'ASC')
+      .addOrderBy('i.invoiceDate', 'ASC')
+      .addOrderBy('i.invoiceNumber', 'ASC')
       .getMany();
   }
 
@@ -644,6 +650,15 @@ export class InvoicesService {
       });
     }
     const amt = toDecimal(amount);
+    // Every way of settling an invoice — a receipt, an advance, a credit memo —
+    // ends here. A negative amount would re-open the invoice and raise what the
+    // customer owes, so it is refused once, for all of them.
+    if (!amt.greaterThan(0)) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The amount applied to an invoice must be positive',
+      });
+    }
     if (amt.greaterThan(toDecimal(invoice.balance))) {
       throw new BadRequestException({
         code: 'PAYMENT_EXCEEDS_BALANCE',

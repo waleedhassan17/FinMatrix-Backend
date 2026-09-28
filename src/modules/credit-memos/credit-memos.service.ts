@@ -14,7 +14,7 @@ import {
   ApplyCreditMemoDto, CreateCreditMemoDto, CreditMemoLineDto, ListCreditMemosQueryDto,
 } from './dto/credit-memo.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
-import { addMoney, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
+import { addMoney, isPositive, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
@@ -270,41 +270,64 @@ export class CreditMemosService {
   }
 
   async applyToInvoice(companyId: string, id: string, dto: ApplyCreditMemoDto): Promise<CreditMemo> {
-    return this.dataSource.transaction(async (manager) => {
-      // Lock the credit itself, not just the invoice. Without this two
-      // concurrent applies of the same credit both read the same balance,
-      // both pass the EXCEEDS_CREDIT check, and the second amountApplied
-      // write wins — spending the credit twice (M1).
-      const cm = await manager.findOne(CreditMemo, {
-        where: { id, companyId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
-      if (cm.status === 'void' || cm.status === 'refunded' || cm.status === 'closed') {
-        throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Credit memo is ${cm.status}` });
-      }
-      const amt = toDecimal(dto.amount);
-      if (amt.greaterThan(toDecimal(cm.balance))) {
-        throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
-      }
-      // A customer's credit can only settle that customer's invoice.
-      const target = await manager.findOne(Invoice, { where: { id: dto.invoiceId, companyId } });
-      if (!target) {
-        throw new NotFoundException({ code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' });
-      }
-      if (target.customerId !== cm.customerId) {
-        throw new BadRequestException({
-          code: 'CUSTOMER_MISMATCH',
-          message: 'That invoice belongs to a different customer.',
-        });
-      }
-      await this.invoices.applyPayment(manager, companyId, dto.invoiceId, dto.amount);
-      cm.amountApplied = addMoney(cm.amountApplied, amt).toFixed(4);
-      cm.balance = toDecimal(cm.total).minus(toDecimal(cm.amountApplied)).toFixed(4);
-      cm.status = toDecimal(cm.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
-      await manager.save(cm);
-      return cm;
+    return this.dataSource.transaction((manager) =>
+      this.applyInTransaction(manager, companyId, id, dto.invoiceId, dto.amount),
+    );
+  }
+
+  /**
+   * Settle a customer's invoice from one of their credit memos, inside the
+   * caller's transaction — so a receipt that uses a credit memo and new cash
+   * together either lands whole or not at all.
+   *
+   * Nothing posts: the memo's creation already credited A/R. Only the invoice
+   * and the memo move.
+   */
+  async applyInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    id: string,
+    invoiceId: string,
+    amount: string,
+  ): Promise<CreditMemo> {
+    // Lock the credit itself, not just the invoice. Without this two
+    // concurrent applies of the same credit both read the same balance,
+    // both pass the EXCEEDS_CREDIT check, and the second amountApplied
+    // write wins — spending the credit twice (M1).
+    const cm = await manager.findOne(CreditMemo, {
+      where: { id, companyId },
+      lock: { mode: 'pessimistic_write' },
     });
+    if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
+    if (cm.status === 'void' || cm.status === 'refunded' || cm.status === 'closed') {
+      throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Credit memo is ${cm.status}` });
+    }
+    const amt = toDecimal(amount);
+    // A negative amount would re-open the invoice and grow the memo past its
+    // own total — credit out of nothing.
+    if (!isPositive(amt)) {
+      throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount applied must be positive' });
+    }
+    if (amt.greaterThan(toDecimal(cm.balance).plus(MONEY_TOLERANCE))) {
+      throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
+    }
+    // A customer's credit can only settle that customer's invoice.
+    const target = await manager.findOne(Invoice, { where: { id: invoiceId, companyId } });
+    if (!target) {
+      throw new NotFoundException({ code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' });
+    }
+    if (target.customerId !== cm.customerId) {
+      throw new BadRequestException({
+        code: 'CUSTOMER_MISMATCH',
+        message: 'That invoice belongs to a different customer.',
+      });
+    }
+    await this.invoices.applyPayment(manager, companyId, invoiceId, amt.toFixed(4));
+    cm.amountApplied = addMoney(cm.amountApplied, amt).toFixed(4);
+    cm.balance = toDecimal(cm.total).minus(toDecimal(cm.amountApplied)).toFixed(4);
+    cm.status = toDecimal(cm.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
+    await manager.save(cm);
+    return cm;
   }
 
   async refund(companyId: string, id: string, userId: string): Promise<CreditMemo> {

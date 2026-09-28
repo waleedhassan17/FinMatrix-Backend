@@ -12,9 +12,11 @@ import { PaymentApplication } from './entities/payment-application.entity';
 import { Customer } from '../customers/entities/customer.entity';
 import {
   ApplyPaymentDto,
+  CustomerCreditUseDto,
   ListPaymentsQueryDto,
   PaymentApplicationDto,
   ReceivePaymentDto,
+  SettleInvoicesDto,
 } from './dto/payment.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import {
@@ -27,6 +29,7 @@ import {
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { CreditMemosService } from '../credit-memos/credit-memos.service';
 import {
   ACCT_AR,
   ACCT_BANK,
@@ -42,6 +45,7 @@ import { invoicePaidStatus } from '../deliveries/delivery-collection.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { businessToday } from '../../common/utils/business-date.util';
 import { assertNotFutureDate } from '../../common/utils/date.util';
+import { assertMoneyAccount } from '../../common/utils/money-account.util';
 import {
   OPEN_DELIVERY_ADVANCE_SQL,
   UNAPPLIED_RECEIPTS_SQL,
@@ -59,6 +63,28 @@ export interface CustomerAdvance {
   advancePosted: boolean;
 }
 
+/** One credit on account spent in a settlement. */
+export interface SettledCustomerCredit {
+  kind: 'advance' | 'credit_memo';
+  /** The receipt holding the advance, or the credit memo. */
+  id: string;
+  reference: string | null;
+  invoiceId: string;
+  amount: string;
+}
+
+/**
+ * What a settlement did. `payment` is null when credit on account covered
+ * everything — no new money, so no receipt. Never `data` (see the envelope).
+ */
+export interface InvoiceSettlement {
+  payment: Awaited<ReturnType<PaymentsService['getById']>> | null;
+  credits: SettledCustomerCredit[];
+  creditTotal: string;
+  cashTotal: string;
+  invoices: Array<{ id: string; invoiceNumber: string; balance: string; status: string }>;
+}
+
 @Injectable()
 export class PaymentsService {
   constructor(
@@ -66,6 +92,7 @@ export class PaymentsService {
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
     private readonly invoices: InvoicesService,
+    private readonly creditMemos: CreditMemosService,
     @InjectRepository(Payment) private readonly repo: Repository<Payment>,
     @InjectRepository(PaymentApplication)
     private readonly appRepo: Repository<PaymentApplication>,
@@ -259,6 +286,16 @@ export class PaymentsService {
     // EXCEED the payment amount.
     let applications: PaymentApplicationDto[];
     if (dto.applications && dto.applications.length > 0) {
+      // Checked before anything is written: a negative application would
+      // raise the invoice's balance and unbalance the receipt's entry.
+      for (const a of dto.applications) {
+        if (!isPositive(toDecimal(a.amount))) {
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'Each amount applied must be positive',
+          });
+        }
+      }
       const sum = dto.applications.reduce(
         (acc, a) => addMoney(acc, a.amount),
         toDecimal(0),
@@ -291,6 +328,7 @@ export class PaymentsService {
           message: 'Bank/Cash account not found',
         });
       }
+      assertMoneyAccount(found);
       bank = found;
     } else {
       const defaultNumber =
@@ -554,6 +592,108 @@ export class PaymentsService {
       }
       await manager.save(applications);
     }
+  }
+
+  /**
+   * Settle a customer's invoices from what they already have on account —
+   * advances held by earlier receipts, open credit memos — and/or new money,
+   * in ONE transaction.
+   *
+   * Credits go first, then the new receipt: the receipt's allocation (or its
+   * oldest-due-first sweep) then sees what the credits left, so an invoice is
+   * never paid twice over and overdue invoices are settled before current
+   * ones. If any part is refused — a credit spent elsewhere meanwhile, an
+   * over-payment, a closed period — nothing moves. Doing the same as separate
+   * requests could leave a credit spent behind a refused receipt.
+   *
+   * Each advance is applied through applyInTransaction, dated the settlement
+   * date, so its checks hold unchanged: not before the money arrived, not in
+   * the future, not an advance still held for an open delivery.
+   */
+  async settle(companyId: string, userId: string, dto: SettleInvoicesDto): Promise<InvoiceSettlement> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
+      if (!customer) {
+        throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      }
+      const credits = Array.isArray(dto.credits) ? dto.credits : [];
+      const cashAmount = dto.cash ? toDecimal(dto.cash.amount) : new Decimal(0);
+      if (dto.cash && !isPositive(cashAmount)) {
+        throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount received must be positive' });
+      }
+      if (credits.length === 0 && !dto.cash) {
+        throw new BadRequestException({
+          code: 'NOTHING_TO_SETTLE',
+          message: 'Choose credit on account to use, or enter the amount received.',
+        });
+      }
+
+      const used: SettledCustomerCredit[] = [];
+      // Advances, one receipt at a time, in the order asked.
+      const byReceipt = new Map<string, CustomerCreditUseDto[]>();
+      for (const c of credits.filter((x) => x.kind === 'advance')) {
+        byReceipt.set(c.id, [...(byReceipt.get(c.id) ?? []), c]);
+      }
+      for (const [paymentId, uses] of byReceipt) {
+        const receipt = await manager.findOne(Payment, { where: { id: paymentId, companyId } });
+        if (!receipt) {
+          throw new NotFoundException({ code: 'PAYMENT_NOT_FOUND', message: 'That advance was not found.' });
+        }
+        if (receipt.customerId !== customer.id) {
+          throw new BadRequestException({
+            code: 'CUSTOMER_MISMATCH',
+            message: `${receipt.paymentNumber ?? 'That receipt'} is another customer’s money.`,
+          });
+        }
+        await this.applyInTransaction(manager, companyId, userId, paymentId, {
+          applications: uses.map((u) => ({ invoiceId: u.invoiceId, amount: u.amount })),
+          date: dto.paymentDate,
+        });
+        for (const u of uses) {
+          used.push({ kind: 'advance', id: paymentId, reference: receipt.paymentNumber, invoiceId: u.invoiceId, amount: toDecimal(u.amount).toFixed(4) });
+        }
+      }
+      // Credit memos.
+      for (const c of credits.filter((x) => x.kind === 'credit_memo')) {
+        await this.assertInvoiceBelongsToCustomer(manager, companyId, c.invoiceId, customer.id);
+        const memo = await this.creditMemos.applyInTransaction(manager, companyId, c.id, c.invoiceId, c.amount);
+        used.push({ kind: 'credit_memo', id: memo.id, reference: memo.creditMemoNumber, invoiceId: c.invoiceId, amount: toDecimal(c.amount).toFixed(4) });
+      }
+
+      // Then the new money, over what the credits left.
+      const payment = dto.cash
+        ? await this.receiveInTransaction(manager, companyId, userId, {
+            customerId: customer.id,
+            paymentDate: dto.paymentDate,
+            paymentMethod: dto.cash.paymentMethod,
+            amount: dto.cash.amount,
+            bankAccountId: dto.cash.bankAccountId,
+            reference: dto.cash.reference,
+            memo: dto.cash.memo,
+            applications: dto.cash.applications,
+            holdAsAdvance: dto.cash.holdAsAdvance,
+          })
+        : null;
+
+      const invoiceIds = [
+        ...new Set([...credits.map((c) => c.invoiceId), ...(payment?.applications ?? []).map((a) => a.invoiceId)]),
+      ];
+      const invoices = invoiceIds.length
+        ? await manager.find(Invoice, { where: { id: In(invoiceIds), companyId } })
+        : [];
+      return {
+        paymentId: payment?.id ?? null,
+        credits: used,
+        creditTotal: used.reduce((t, c) => t.plus(c.amount), new Decimal(0)).toFixed(4),
+        cashTotal: payment ? toDecimal(payment.amount).toFixed(4) : '0.0000',
+        invoices: invoices.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber, balance: i.balance, status: i.status })),
+      };
+    });
+
+    // Read back after the commit, with the names and unapplied figure a
+    // receipt page shows.
+    const { paymentId, ...rest } = result;
+    return { payment: paymentId ? await this.getById(companyId, paymentId) : null, ...rest };
   }
 
   /**

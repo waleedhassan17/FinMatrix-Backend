@@ -8,6 +8,7 @@ import { PaymentsController } from './payments.controller';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { AccountsModule } from '../accounts/accounts.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { CreditMemosModule } from '../credit-memos/credit-memos.module';
 import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
@@ -16,6 +17,8 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     JournalEntriesModule,
     AccountsModule,
     InvoicesModule,
+    // Credit memos spent in a settlement, inside the same transaction.
+    CreditMemosModule,
     // The gate for receiving a payment lives in this controller. Core, not
     // ApprovalsModule: that one imports every domain module, and importing it
     // back would be the cycle ApprovalsCoreModule exists to avoid.

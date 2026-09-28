@@ -13,6 +13,7 @@ import { BillPaymentApplication } from './entities/bill-payment-application.enti
 import { BillPaymentProof } from './entities/bill-payment-proof.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { VendorCredit } from '../vendor-credits/entities/vendor-credit.entity';
 import { Company } from '../companies/entities/company.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import {
@@ -20,12 +21,14 @@ import {
   CreateBillDto,
   ListBillsQueryDto,
   PayBillsDto,
+  SettleBillsDto,
   UpdateBillDto,
 } from './dto/bill.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import {
   addMoney,
   isPositive,
+  MONEY_TOLERANCE,
   moneyEquals,
   subtractMoney,
   toDecimal,
@@ -40,6 +43,7 @@ import { BillStatus } from '../../types';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { businessToday } from '../../common/utils/business-date.util';
+import { assertMoneyAccount } from '../../common/utils/money-account.util';
 
 /** What a bill line raised from a purchase order bills (see createInTransaction). */
 export interface PoBillLineLink {
@@ -61,6 +65,28 @@ interface BillTotals {
     taxAmount: string;
     lineOrder: number;
   }[];
+}
+
+/** One vendor credit spent in a settlement. */
+export interface SettledVendorCredit {
+  vendorCreditId: string;
+  vendorCreditNumber: string | null;
+  billId: string;
+  billNumber: string | null;
+  amount: string;
+}
+
+/**
+ * What a settlement did. `payment` is null when credit covered everything —
+ * no money moved, so there is no payment to record. Never `data`: the
+ * envelope interceptor would lift it and drop its siblings.
+ */
+export interface BillSettlement {
+  payment: BillPayment | null;
+  credits: SettledVendorCredit[];
+  creditTotal: string;
+  cashTotal: string;
+  bills: Array<{ id: string; billNumber: string | null; balance: string; status: string }>;
 }
 
 @Injectable()
@@ -448,166 +474,316 @@ export class BillsService {
     userId: string,
     dto: PayBillsDto,
   ): Promise<BillPayment> {
+    return this.dataSource.transaction((manager) =>
+      this.payInTransaction(manager, companyId, userId, dto),
+    );
+  }
+
+  /**
+   * pay(), inside the caller's transaction — so a settlement that uses vendor
+   * credit and cash together lands whole or not at all.
+   */
+  async payInTransaction(
+    manager: EntityManager,
+    companyId: string,
+    userId: string,
+    dto: PayBillsDto,
+  ): Promise<BillPayment> {
+    // The DTO insists on at least one application, but an approval replays
+    // its stored payload without the DTO: the service holds the rule too.
+    if (!Array.isArray(dto.applications) || dto.applications.length === 0) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Choose at least one bill to pay.',
+      });
+    }
+
+    const vendor = await manager.findOne(Vendor, {
+      where: { id: dto.vendorId, companyId },
+    });
+    if (!vendor) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+    const bank = await manager.findOne(Account, {
+      where: { id: dto.bankAccountId, companyId },
+    });
+    if (!bank) {
+      throw new NotFoundException({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: 'Bank account not found',
+      });
+    }
+    assertMoneyAccount(bank);
+
+    let total = toDecimal(0);
+    for (const app of dto.applications) {
+      total = total.plus(toDecimal(app.amount));
+    }
+
+    // Resolve the proof BEFORE anything is written. The surrounding
+    // transaction would roll a bad one back anyway, but failing here means a
+    // rejected payment never touches a row.
+    //
+    // Scoped by companyId, not just id: bill_payment_proofs carries a tenant
+    // so a guessed or replayed id from another company cannot be attached.
+    // (stored_files has no company_id, which is why the proof is its own
+    // record rather than a bare storage key.)
+    const proof = await manager.findOne(BillPaymentProof, {
+      where: { id: dto.proofId, companyId },
+    });
+    if (!proof) {
+      throw new BadRequestException({
+        code: 'PAYMENT_PROOF_NOT_FOUND',
+        message:
+          'A payment proof (receipt or screenshot) is required to record a bill payment.',
+      });
+    }
+    if (proof.consumedByPaymentId) {
+      throw new BadRequestException({
+        code: 'PAYMENT_PROOF_ALREADY_USED',
+        message:
+          'That payment proof has already been attached to another payment. Upload it again for this one.',
+      });
+    }
+
+    const payment = manager.create(BillPayment, {
+      companyId,
+      vendorId: vendor.id,
+      bankAccountId: dto.bankAccountId,
+      paymentDate: dto.paymentDate,
+      paymentMethod: dto.paymentMethod,
+      reference: dto.reference ?? null,
+      totalAmount: total.toFixed(4),
+      journalEntryId: null,
+      proofStorageKey: proof.storageKey,
+      proofUrl: proof.url,
+    });
+    await manager.save(payment);
+
+    // Claim it, so one upload cannot back two payments.
+    proof.consumedByPaymentId = payment.id;
+    await manager.save(proof);
+
+    const apps: BillPaymentApplication[] = [];
+    for (const app of dto.applications) {
+      // Lock the bill row (SELECT ... FOR UPDATE) so concurrent payments
+      // cannot both read the same balance and over-apply (M1).
+      const bill = await manager.findOne(Bill, {
+        where: { id: app.billId, companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!bill) {
+        throw new NotFoundException({
+          code: 'BILL_NOT_FOUND',
+          message: `Bill ${app.billId} not found`,
+        });
+      }
+      if (bill.vendorId !== vendor.id) {
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'Bill belongs to a different vendor',
+        });
+      }
+      if (bill.status === 'draft' || bill.status === 'void') {
+        throw new BadRequestException({
+          code: 'BILL_NOT_POSTED',
+          message: `Bill ${bill.billNumber} is ${bill.status} — it is not owed yet, so it cannot be paid.`,
+        });
+      }
+      const amt = toDecimal(app.amount);
+      if (!isPositive(amt)) {
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'Application amount must be positive',
+        });
+      }
+      if (amt.greaterThan(toDecimal(bill.balance))) {
+        throw new BadRequestException({
+          code: 'PAYMENT_EXCEEDS_BALANCE',
+          message: `Application (${amt.toFixed(4)}) exceeds bill balance (${bill.balance})`,
+        });
+      }
+      bill.amountPaid = addMoney(bill.amountPaid, amt).toFixed(4);
+      bill.balance = subtractMoney(bill.total, bill.amountPaid).toFixed(4);
+      bill.status = moneyEquals(bill.amountPaid, bill.total)
+        ? 'paid'
+        : isPositive(bill.amountPaid)
+          ? 'partial'
+          : bill.status;
+      await manager.save(bill);
+
+      apps.push(
+        manager.create(BillPaymentApplication, {
+          billPaymentId: payment.id,
+          billId: bill.id,
+          amount: amt.toFixed(4),
+        }),
+      );
+    }
+    await manager.save(apps);
+    payment.applications = apps;
+
+    vendor.balance = subtractMoney(vendor.balance, total).toFixed(4);
+    await manager.save(vendor);
+
+    // Journal entry: DR AP, CR Bank
+    const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
+    const entry = await this.posting.createEntry(manager, {
+      companyId,
+      createdBy: userId,
+      date: dto.paymentDate,
+      memo: `Bill payment to ${vendor.companyName}`,
+      status: 'posted',
+      sourceType: 'bill_payment',
+      sourceId: payment.id,
+      lines: [
+        {
+          accountId: ap.id,
+          debit: total.toFixed(4),
+          credit: '0',
+          lineOrder: 0,
+        },
+        {
+          accountId: bank.id,
+          debit: '0',
+          credit: total.toFixed(4),
+          lineOrder: 1,
+        },
+      ],
+    });
+    payment.journalEntryId = entry.id;
+    await manager.save(payment);
+
+    return payment;
+  }
+
+  /**
+   * Spend a vendor credit on one of that vendor's bills, inside the caller's
+   * transaction. The one implementation behind both "apply this credit" on
+   * the credit's own page and a settlement that uses credit and cash together.
+   *
+   * Posts nothing: the credit's creation already debited A/P. The bill's
+   * balance and the credit's balance move by the same amount, so the vendor's
+   * balance does not move at all.
+   */
+  async applyVendorCredit(
+    manager: EntityManager,
+    companyId: string,
+    vendorCreditId: string,
+    billId: string,
+    amount: string,
+    expectedVendorId?: string,
+  ): Promise<{ credit: VendorCredit; bill: Bill }> {
+    // Lock the credit, not just the bill: two concurrent applies of the same
+    // credit would otherwise both read the same balance and both pass (M1).
+    const vc = await manager.findOne(VendorCredit, {
+      where: { id: vendorCreditId, companyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!vc) {
+      throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
+    }
+    if (expectedVendorId && vc.vendorId !== expectedVendorId) {
+      throw new BadRequestException({
+        code: 'VENDOR_MISMATCH',
+        message: `${vc.vendorCreditNumber ?? 'That vendor credit'} belongs to a different vendor.`,
+      });
+    }
+    if (vc.status === 'void' || vc.status === 'closed') {
+      throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Vendor credit is ${vc.status}` });
+    }
+    const amt = toDecimal(amount);
+    if (!isPositive(amt)) {
+      throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount applied must be positive' });
+    }
+    if (amt.greaterThan(toDecimal(vc.balance).plus(MONEY_TOLERANCE))) {
+      throw new BadRequestException({
+        code: 'EXCEEDS_CREDIT',
+        message: `Only ${toDecimal(vc.balance).toFixed(2)} is left on ${vc.vendorCreditNumber ?? 'that vendor credit'}.`,
+      });
+    }
+    // A vendor's credit can only settle that vendor's bill.
+    const target = await manager.findOne(Bill, { where: { id: billId, companyId } });
+    if (!target) {
+      throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+    }
+    if (target.vendorId !== vc.vendorId) {
+      throw new BadRequestException({
+        code: 'VENDOR_MISMATCH',
+        message: 'That bill belongs to a different vendor.',
+      });
+    }
+    const bill = await this.applyCredit(manager, companyId, billId, amt.toFixed(4));
+    vc.amountApplied = addMoney(vc.amountApplied, amt).toFixed(4);
+    vc.balance = toDecimal(vc.total).minus(toDecimal(vc.amountApplied)).toFixed(4);
+    vc.status = toDecimal(vc.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
+    await manager.save(vc);
+    return { credit: vc, bill };
+  }
+
+  /**
+   * Settle a vendor's bills from their credits and/or cash, in one transaction.
+   *
+   * Credits go first, then cash — so the cash leg is checked against what the
+   * credits left, and a bill cannot be paid twice over. If any part is refused
+   * (a credit spent elsewhere meanwhile, a missing proof, a closed period) the
+   * whole settlement rolls back and no credit moves. Paying the credit leg and
+   * the cash leg as separate requests used to leave credits applied behind a
+   * failed payment, and a retry spent them a second time.
+   */
+  async settle(companyId: string, userId: string, dto: SettleBillsDto): Promise<BillSettlement> {
     return this.dataSource.transaction(async (manager) => {
-      const vendor = await manager.findOne(Vendor, {
-        where: { id: dto.vendorId, companyId },
-      });
+      const vendor = await manager.findOne(Vendor, { where: { id: dto.vendorId, companyId } });
       if (!vendor) {
-        throw new NotFoundException({
-          code: 'VENDOR_NOT_FOUND',
-          message: 'Vendor not found',
-        });
+        throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
       }
-      const bank = await manager.findOne(Account, {
-        where: { id: dto.bankAccountId, companyId },
-      });
-      if (!bank) {
-        throw new NotFoundException({
-          code: 'ACCOUNT_NOT_FOUND',
-          message: 'Bank account not found',
-        });
-      }
-
-      let total = toDecimal(0);
-      for (const app of dto.applications) {
-        total = total.plus(toDecimal(app.amount));
-      }
-
-      // Resolve the proof BEFORE anything is written. The surrounding
-      // transaction would roll a bad one back anyway, but failing here means a
-      // rejected payment never touches a row.
-      //
-      // Scoped by companyId, not just id: bill_payment_proofs carries a tenant
-      // so a guessed or replayed id from another company cannot be attached.
-      // (stored_files has no company_id, which is why the proof is its own
-      // record rather than a bare storage key.)
-      const proof = await manager.findOne(BillPaymentProof, {
-        where: { id: dto.proofId, companyId },
-      });
-      if (!proof) {
+      const credits = Array.isArray(dto.credits) ? dto.credits : [];
+      const cashApps = dto.cash && Array.isArray(dto.cash.applications) ? dto.cash.applications : [];
+      if (credits.length === 0 && cashApps.length === 0) {
         throw new BadRequestException({
-          code: 'PAYMENT_PROOF_NOT_FOUND',
-          message:
-            'A payment proof (receipt or screenshot) is required to record a bill payment.',
-        });
-      }
-      if (proof.consumedByPaymentId) {
-        throw new BadRequestException({
-          code: 'PAYMENT_PROOF_ALREADY_USED',
-          message:
-            'That payment proof has already been attached to another payment. Upload it again for this one.',
+          code: 'NOTHING_TO_SETTLE',
+          message: 'Choose vendor credit to use, or bills to pay in cash.',
         });
       }
 
-      const payment = manager.create(BillPayment, {
-        companyId,
-        vendorId: vendor.id,
-        bankAccountId: dto.bankAccountId,
-        paymentDate: dto.paymentDate,
-        paymentMethod: dto.paymentMethod,
-        reference: dto.reference ?? null,
-        totalAmount: total.toFixed(4),
-        journalEntryId: null,
-        proofStorageKey: proof.storageKey,
-        proofUrl: proof.url,
-      });
-      await manager.save(payment);
-
-      // Claim it, so one upload cannot back two payments.
-      proof.consumedByPaymentId = payment.id;
-      await manager.save(proof);
-
-      const apps: BillPaymentApplication[] = [];
-      for (const app of dto.applications) {
-        // Lock the bill row (SELECT ... FOR UPDATE) so concurrent payments
-        // cannot both read the same balance and over-apply (M1).
-        const bill = await manager.findOne(Bill, {
-          where: { id: app.billId, companyId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!bill) {
-          throw new NotFoundException({
-            code: 'BILL_NOT_FOUND',
-            message: `Bill ${app.billId} not found`,
-          });
-        }
-        if (bill.vendorId !== vendor.id) {
-          throw new BadRequestException({
-            code: 'VALIDATION_FAILED',
-            message: 'Bill belongs to a different vendor',
-          });
-        }
-        if (bill.status === 'draft' || bill.status === 'void') {
-          throw new BadRequestException({
-            code: 'BILL_NOT_POSTED',
-            message: `Bill ${bill.billNumber} is ${bill.status} — it is not owed yet, so it cannot be paid.`,
-          });
-        }
-        const amt = toDecimal(app.amount);
-        if (!isPositive(amt)) {
-          throw new BadRequestException({
-            code: 'VALIDATION_FAILED',
-            message: 'Application amount must be positive',
-          });
-        }
-        if (amt.greaterThan(toDecimal(bill.balance))) {
-          throw new BadRequestException({
-            code: 'PAYMENT_EXCEEDS_BALANCE',
-            message: `Application (${amt.toFixed(4)}) exceeds bill balance (${bill.balance})`,
-          });
-        }
-        bill.amountPaid = addMoney(bill.amountPaid, amt).toFixed(4);
-        bill.balance = subtractMoney(bill.total, bill.amountPaid).toFixed(4);
-        bill.status = moneyEquals(bill.amountPaid, bill.total)
-          ? 'paid'
-          : isPositive(bill.amountPaid)
-            ? 'partial'
-            : bill.status;
-        await manager.save(bill);
-
-        apps.push(
-          manager.create(BillPaymentApplication, {
-            billPaymentId: payment.id,
-            billId: bill.id,
-            amount: amt.toFixed(4),
-          }),
+      const used: SettledVendorCredit[] = [];
+      for (const c of credits) {
+        const { credit, bill } = await this.applyVendorCredit(
+          manager, companyId, c.vendorCreditId, c.billId, c.amount, vendor.id,
         );
+        used.push({
+          vendorCreditId: credit.id,
+          vendorCreditNumber: credit.vendorCreditNumber,
+          billId: bill.id,
+          billNumber: bill.billNumber,
+          amount: toDecimal(c.amount).toFixed(4),
+        });
       }
-      await manager.save(apps);
-      payment.applications = apps;
 
-      vendor.balance = subtractMoney(vendor.balance, total).toFixed(4);
-      await manager.save(vendor);
+      const payment = cashApps.length
+        ? await this.payInTransaction(manager, companyId, userId, {
+            vendorId: vendor.id,
+            paymentDate: dto.paymentDate,
+            paymentMethod: dto.cash!.paymentMethod,
+            bankAccountId: dto.cash!.bankAccountId,
+            reference: dto.cash!.reference,
+            proofId: dto.cash!.proofId,
+            applications: cashApps,
+          })
+        : null;
 
-      // Journal entry: DR AP, CR Bank
-      const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
-      const entry = await this.posting.createEntry(manager, {
-        companyId,
-        createdBy: userId,
-        date: dto.paymentDate,
-        memo: `Bill payment to ${vendor.companyName}`,
-        status: 'posted',
-        sourceType: 'bill_payment',
-        sourceId: payment.id,
-        lines: [
-          {
-            accountId: ap.id,
-            debit: total.toFixed(4),
-            credit: '0',
-            lineOrder: 0,
-          },
-          {
-            accountId: bank.id,
-            debit: '0',
-            credit: total.toFixed(4),
-            lineOrder: 1,
-          },
-        ],
-      });
-      payment.journalEntryId = entry.id;
-      await manager.save(payment);
-
-      return payment;
+      const billIds = [...new Set([...credits.map((c) => c.billId), ...cashApps.map((a) => a.billId)])];
+      const bills = await manager.find(Bill, { where: { id: In(billIds), companyId } });
+      return {
+        payment,
+        credits: used,
+        creditTotal: used.reduce((t, c) => t.plus(c.amount), new Decimal(0)).toFixed(4),
+        cashTotal: payment ? toDecimal(payment.totalAmount).toFixed(4) : '0.0000',
+        bills: bills.map((b) => ({ id: b.id, billNumber: b.billNumber, balance: b.balance, status: b.status })),
+      };
     });
   }
 
@@ -645,6 +821,14 @@ export class BillsService {
       });
     }
     const amt = toDecimal(amount);
+    // A negative credit would push amountPaid below zero and hand the credit
+    // back more than it ever held.
+    if (!isPositive(amt)) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The amount applied to a bill must be positive',
+      });
+    }
     if (amt.greaterThan(toDecimal(bill.balance))) {
       throw new BadRequestException({
         code: 'PAYMENT_EXCEEDS_BALANCE',

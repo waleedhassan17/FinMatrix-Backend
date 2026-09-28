@@ -108,3 +108,59 @@ export class PayBillsDto {
   @Type(() => BillPaymentApplicationDto)
   applications!: BillPaymentApplicationDto[];
 }
+
+/** Vendor credit to spend on one bill, as part of a settlement. */
+export class VendorCreditUseDto {
+  @ApiProperty() @IsUUID() vendorCreditId!: string;
+  @ApiProperty() @IsUUID() billId!: string;
+  @ApiProperty({ example: '100' }) @IsNumberString() amount!: string;
+}
+
+/** The cash leg of a settlement: what leaves the bank, and the proof of it. */
+export class SettleBillsCashDto {
+  @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
+  @ApiProperty() @IsUUID() bankAccountId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
+
+  @ApiProperty({ description: 'Id returned by POST /bill-payments/proofs' })
+  @IsNotEmpty({
+    message: 'A payment proof (receipt or screenshot) is required to record a bill payment.',
+  })
+  @IsUUID(undefined, {
+    message: 'A payment proof (receipt or screenshot) is required to record a bill payment.',
+  })
+  proofId!: string;
+
+  @ApiProperty({ type: [BillPaymentApplicationDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => BillPaymentApplicationDto)
+  applications!: BillPaymentApplicationDto[];
+}
+
+/**
+ * Settle a vendor's bills from their credits and/or cash, in one step.
+ *
+ * Credits are spent first, then cash; all of it in one transaction, so a
+ * refused cash leg leaves every credit where it was. A settlement paid wholly
+ * from credit moves no money and needs no proof.
+ */
+export class SettleBillsDto {
+  @ApiProperty() @IsUUID() vendorId!: string;
+  @ApiProperty() @IsDateString() paymentDate!: string;
+
+  @ApiPropertyOptional({ type: [VendorCreditUseDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VendorCreditUseDto)
+  credits?: VendorCreditUseDto[];
+
+  @ApiPropertyOptional({ type: SettleBillsCashDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SettleBillsCashDto)
+  cash?: SettleBillsCashDto;
+}
+

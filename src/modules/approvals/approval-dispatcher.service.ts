@@ -192,6 +192,15 @@ export class ApprovalDispatcher {
 
       // ── Cash out: Dr Accounts Payable / Cr Bank ──────────────────────────
       case 'bill_payment': {
+        // Credit and cash together, all or nothing — replayed as asked. settle
+        // reads only its named fields, so the `action` marker rides along.
+        if (payload.action === 'settle') {
+          const settled = await this.bills.settle(companyId, reviewerId, payload as any);
+          return {
+            id: settled.payment?.id ?? settled.credits[0]?.vendorCreditId ?? null,
+            journalEntryId: settled.payment?.journalEntryId ?? null,
+          };
+        }
         const payment = await this.bills.pay(companyId, reviewerId, payload as any);
         return {
           id: payment.id,
@@ -255,6 +264,14 @@ export class ApprovalDispatcher {
       // claim and records it on lastError for the owner to read, rather than
       // forcing a payment that no longer fits.
       case 'invoice_payment': {
+        // Credit on account and new money together, all or nothing.
+        if (payload.action === 'settle') {
+          const settled = await this.payments.settle(companyId, reviewerId, payload as any);
+          return {
+            id: settled.payment?.id ?? settled.credits[0]?.id ?? null,
+            journalEntryId: settled.payment?.journalEntryId ?? null,
+          };
+        }
         // Applying an advance a receipt already holds: Dr Customer Advances /
         // Cr A/R, no cash. Same type as receiving because it is the same
         // decision for the owner — money settling a customer's invoices.

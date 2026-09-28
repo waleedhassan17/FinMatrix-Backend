@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
@@ -24,6 +25,7 @@ import {
   ApplyPaymentDto,
   ListPaymentsQueryDto,
   ReceivePaymentDto,
+  SettleInvoicesDto,
 } from './dto/payment.dto';
 import { Delete } from '@nestjs/common';
 import {
@@ -73,6 +75,35 @@ export class PaymentsController {
       'invoice_payment',
       dto as unknown as Record<string, unknown>,
       `Customer payment of ${dto.amount} by ${dto.paymentMethod} dated ${dto.paymentDate}`,
+      user,
+      companyId,
+    );
+  }
+
+  /**
+   * Settle a customer's invoices from credit on account (advances, credit
+   * memos) and/or new money, in one step — credit first, then the receipt,
+   * all or nothing. Staff ask and the owner signs off, as for any receipt.
+   */
+  @Post('settle')
+  @Roles('admin', 'staff')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Settle invoices from advances, credit memos and/or new money, atomically.' })
+  settle(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SettleInvoicesDto,
+  ) {
+    if (user.role === 'admin') return this.payments.settle(companyId, user.id, dto);
+    const credit = (dto.credits ?? []).reduce((t, c) => t + (Number(c.amount) || 0), 0);
+    const parts = [
+      credit > 0 ? `${credit.toFixed(2)} from credit on account` : '',
+      dto.cash ? `${Number(dto.cash.amount).toFixed(2)} received by ${dto.cash.paymentMethod}` : '',
+    ].filter(Boolean);
+    return this.approvals.createRequest(
+      'invoice_payment',
+      { action: 'settle', ...dto } as unknown as Record<string, unknown>,
+      `Customer settlement dated ${dto.paymentDate}: ${parts.join(' + ')}`,
       user,
       companyId,
     );
