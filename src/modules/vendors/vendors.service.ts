@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { toDecimal } from '../../common/utils/money.util';
+import { inPeriod, statementBalances } from '../../common/utils/statement.util';
 import { Vendor } from './entities/vendor.entity';
 import { Bill } from '../bills/entities/bill.entity';
 import { BillPayment } from '../bills/entities/bill-payment.entity';
@@ -170,58 +171,71 @@ export class VendorsService {
   }
 
   /** Period statement: opening + activity + closing (mirrors customers). */
+  /**
+   * The vendor's account over a period, as the customer statement reads it:
+   * bills up — not drafts and not voided ones, which never became owed —
+   * payments and vendor credits down. Vendor credits used to be left out and
+   * drafts and voids counted, so the balance read higher than the books.
+   */
   async statement(
     companyId: string,
     id: string,
     query: { startDate: string; endDate: string },
   ) {
     const vendor = await this.getById(companyId, id);
-
-    const openingBills = await this.billRepo
-      .createQueryBuilder('b')
-      .select('COALESCE(SUM(b.total), 0)', 'total')
-      .where('b.companyId = :companyId AND b.vendorId = :id', { companyId, id })
-      .andWhere('b.billDate < :start', { start: query.startDate })
-      .getRawOne<{ total: string }>();
-    const openingPayments = await this.paymentRepo
-      .createQueryBuilder('p')
-      .select('COALESCE(SUM(p.totalAmount), 0)', 'total')
-      .where('p.companyId = :companyId AND p.vendorId = :id', { companyId, id })
-      .andWhere('p.paymentDate < :start', { start: query.startDate })
-      .getRawOne<{ total: string }>();
-
-    const openingBalance = toDecimal(openingBills?.total ?? 0)
-      .minus(toDecimal(openingPayments?.total ?? 0))
-      .toFixed(4);
+    const { startDate, endDate } = query;
 
     const bills = await this.billRepo
       .createQueryBuilder('b')
       .where('b.companyId = :companyId AND b.vendorId = :id', { companyId, id })
-      .andWhere('b.billDate BETWEEN :start AND :end', { start: query.startDate, end: query.endDate })
+      .andWhere("b.status NOT IN ('draft', 'void')")
       .orderBy('b.billDate', 'ASC')
+      .addOrderBy('b.billNumber', 'ASC')
       .getMany();
     const payments = await this.paymentRepo
       .createQueryBuilder('p')
       .where('p.companyId = :companyId AND p.vendorId = :id', { companyId, id })
-      .andWhere('p.paymentDate BETWEEN :start AND :end', { start: query.startDate, end: query.endDate })
       .orderBy('p.paymentDate', 'ASC')
       .getMany();
+    const vendorCredits: Array<{ id: string; vendorCreditNumber: string | null; date: string; total: string; status: string }> =
+      await this.billRepo.manager.query(
+        `SELECT vc.id, vc.vendor_credit_number AS "vendorCreditNumber", vc.date::text AS date,
+                vc.total::numeric AS total, vc.status
+           FROM vendor_credits vc
+          WHERE vc.company_id = $1 AND vc.vendor_id = $2 AND vc.status <> 'void'
+          ORDER BY vc.date ASC, vc.vendor_credit_number ASC`,
+        [companyId, id],
+      );
 
-    const billTotal = bills.reduce((acc, b) => acc.plus(toDecimal(b.total)), toDecimal(0));
-    const payTotal = payments.reduce((acc, p) => acc.plus(toDecimal(p.totalAmount)), toDecimal(0));
-    const closingBalance = toDecimal(openingBalance).plus(billTotal).minus(payTotal).toFixed(4);
+    const { opening, closing } = statementBalances(
+      [
+        ...bills.map((b) => ({ date: b.billDate, amount: toDecimal(b.total) })),
+        ...payments.map((p) => ({ date: p.paymentDate, amount: toDecimal(p.totalAmount).negated() })),
+        ...vendorCredits.map((c) => ({ date: c.date, amount: toDecimal(c.total).negated() })),
+      ],
+      startDate,
+      endDate,
+    );
+
+    const inRangeBills = bills.filter((b) => inPeriod(b.billDate, startDate, endDate));
+    const inRangePayments = payments.filter((p) => inPeriod(p.paymentDate, startDate, endDate));
+    const inRangeCredits = vendorCredits.filter((c) => inPeriod(c.date, startDate, endDate));
+    const sum = (values: Array<string | number>) =>
+      values.reduce((acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)), toDecimal(0));
 
     return {
       vendor: { id: vendor.id, name: vendor.companyName, email: vendor.email },
-      period: { startDate: query.startDate, endDate: query.endDate },
-      openingBalance,
-      bills,
-      payments,
+      period: { startDate, endDate },
+      openingBalance: opening.toFixed(4),
+      bills: inRangeBills,
+      payments: inRangePayments,
+      vendorCredits: inRangeCredits.map((c) => ({ ...c, total: toDecimal(c.total).toFixed(4) })),
       totals: {
-        billed: billTotal.toFixed(4),
-        paid: payTotal.toFixed(4),
+        billed: sum(inRangeBills.map((b) => b.total)).toFixed(4),
+        paid: sum(inRangePayments.map((p) => p.totalAmount)).toFixed(4),
+        credited: sum(inRangeCredits.map((c) => c.total)).toFixed(4),
       },
-      closingBalance,
+      closingBalance: closing.toFixed(4),
     };
   }
 }

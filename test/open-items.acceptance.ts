@@ -281,6 +281,43 @@ async function main() {
     && payables.party?.phone === vendor.phone, payables.party);
 
   // ═══════════════════════════════════════════════════════════════
+  // F. Statements agree with the summaries
+  // ═══════════════════════════════════════════════════════════════
+  console.log('\n— F. a statement closing today says what the summary says');
+  // A credit refunded in cash on the spot: it comes off and goes back on,
+  // so it must show on the statement and change nothing it closes on.
+  const refunded = await req('POST', '/credit-memos', {
+    customerId: customer.id,
+    date: TODAY,
+    reason: 'summary acceptance — refunded',
+    refundRemainderToCash: true,
+    lines: [{ description: 'Refunded return', quantity: '1', unitPrice: '70', taxRate: '0' }],
+  });
+  ok('a credit memo refunded in cash', refunded.status < 400 && data(refunded)?.status === 'refunded', refunded.body);
+
+  const stmt = data(await req('GET', `/customers/${customer.id}/statement?startDate=${day(-90)}&endDate=${TODAY}`)) as any;
+  const stmtInvoiceIds = (stmt?.invoices ?? []).map((i: any) => i.id);
+  ok('F1 the statement leaves out the draft and the voided invoice',
+    !stmtInvoiceIds.includes(draft.id) && !stmtInvoiceIds.includes(voided.id)
+      && [overdue.id, partPaid.id, settled.id].every((id) => stmtInvoiceIds.includes(id)),
+    stmtInvoiceIds);
+  ok('F2 invoiced 1,850 — no draft 400, no void 600', near(n(stmt?.totals?.invoiced), 1850), stmt?.totals);
+  ok('F3 credit memos come off: 150 and the refunded 70', near(n(stmt?.totals?.credited), 220), stmt?.totals);
+  ok('F4 the cash refund goes back on', near(n(stmt?.totals?.refunded), 70) && (stmt?.refunds ?? []).length === 1, stmt?.refunds);
+  ok('F5 it closes on what the summary asks for (900)', near(n(stmt?.closingBalance), 900) && near(n(stmt?.closingBalance), n(data(await req('GET', `/reports/ar-aging/customers/${customer.id}/summary`))?.netDue)),
+    { closing: stmt?.closingBalance });
+  const later = data(await req('GET', `/customers/${customer.id}/statement?startDate=${day(-20)}&endDate=${TODAY}`)) as any;
+  ok('F6 a later period opens on what came before it (the overdue 1,000)', near(n(later?.openingBalance), 1000) && near(n(later?.closingBalance), 900),
+    { opening: later?.openingBalance, closing: later?.closingBalance });
+
+  const vstmt = data(await req('GET', `/vendors/${vendor.id}/statement?startDate=${day(-90)}&endDate=${TODAY}`)) as any;
+  const vBillIds = (vstmt?.bills ?? []).map((b: any) => b.id);
+  ok('F7 the vendor statement leaves out the draft bill', !vBillIds.includes(draftBill.id) && vBillIds.length === 2, vBillIds);
+  ok('F8 vendor credits come off, and it closes on the payables summary (880)',
+    near(n(vstmt?.totals?.credited), 120) && near(n(vstmt?.closingBalance), 880) && near(n(vstmt?.closingBalance), payables.netDue),
+    { totals: vstmt?.totals, closing: vstmt?.closingBalance });
+
+  // ═══════════════════════════════════════════════════════════════
   // E. Refusals
   // ═══════════════════════════════════════════════════════════════
   console.log('\n— E. refusals');

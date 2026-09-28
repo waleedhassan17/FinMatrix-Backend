@@ -11,7 +11,8 @@ import {
   UpdateCustomerDto,
 } from './dto/customer.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
-import { addMoney, subtractMoney, toDecimal } from '../../common/utils/money.util';
+import { subtractMoney, toDecimal } from '../../common/utils/money.util';
+import { inPeriod, statementBalances } from '../../common/utils/statement.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
 import { Address } from './entities/customer.entity';
@@ -305,67 +306,98 @@ export class CustomersService {
     return this.repo.save(c);
   }
 
+  /**
+   * The customer's account over a period: every event that moved it, with the
+   * balance before and after.
+   *
+   * What moves it: invoices — not drafts, which nobody owes yet, and not voided
+   * ones, which never happened — payments, credit memos, and the cash refunds
+   * of credit memos. Drafts and voids used to be counted and credit memos left
+   * out, so a customer who had returned goods, or had an invoice cancelled, was
+   * sent a statement saying they owed more than they did. The closing balance
+   * is now what the customer really owes: open invoices, less payments not yet
+   * applied and open credit memos.
+   *
+   * `invoices` and `payments` keep their shape for clients that read only
+   * those; `creditMemos` and `refunds` are new beside them.
+   */
   async statement(companyId: string, id: string, query: StatementQueryDto) {
     const customer = await this.getById(companyId, id);
+    const { startDate, endDate } = query;
+    const q = this.invoiceRepo.manager;
 
-    const openingInvoices = await this.invoiceRepo
+    const invoices = await this.invoiceRepo
       .createQueryBuilder('i')
-      .select('COALESCE(SUM(i.total), 0)', 'total')
-      .where('i.companyId = :companyId', { companyId })
-      .andWhere('i.customerId = :id', { id })
-      .andWhere('i.invoiceDate < :start', { start: query.startDate })
-      .getRawOne<{ total: string }>();
-    const openingPayments = await this.paymentRepo
-      .createQueryBuilder('p')
-      .select('COALESCE(SUM(p.amount), 0)', 'total')
-      .where('p.companyId = :companyId', { companyId })
-      .andWhere('p.customerId = :id', { id })
-      .andWhere('p.paymentDate < :start', { start: query.startDate })
-      .getRawOne<{ total: string }>();
-
-    const openingBalance = subtractMoney(
-      openingInvoices?.total ?? 0,
-      openingPayments?.total ?? 0,
-    ).toFixed(4);
-
-    const invoices = await this.invoiceRepo.find({
-      where: { companyId, customerId: id },
-      order: { invoiceDate: 'ASC' },
-    });
-    const inRangeInvoices = invoices.filter(
-      (i) => i.invoiceDate >= query.startDate && i.invoiceDate <= query.endDate,
-    );
+      .where('i.companyId = :companyId AND i.customerId = :id', { companyId, id })
+      .andWhere("i.status NOT IN ('draft', 'void')")
+      .orderBy('i.invoiceDate', 'ASC')
+      .addOrderBy('i.invoiceNumber', 'ASC')
+      .getMany();
     const payments = await this.paymentRepo.find({
       where: { companyId, customerId: id },
       order: { paymentDate: 'ASC' },
     });
-    const inRangePayments = payments.filter(
-      (p) => p.paymentDate >= query.startDate && p.paymentDate <= query.endDate,
+    const creditMemos: Array<{ id: string; creditMemoNumber: string | null; date: string; total: string; status: string }> =
+      await q.query(
+        `SELECT m.id, m.credit_memo_number AS "creditMemoNumber", m.date::text AS date,
+                m.total::numeric AS total, m.status
+           FROM credit_memos m
+          WHERE m.company_id = $1 AND m.customer_id = $2 AND m.status NOT IN ('draft', 'void')
+          ORDER BY m.date ASC, m.credit_memo_number ASC`,
+        [companyId, id],
+      );
+    // A refund pays a credit back out in cash, so it puts the customer's
+    // balance back up. The ledger holds it: A/R debited, dated the day it was
+    // paid, against the memo it came from.
+    const refunds: Array<{ id: string; creditMemoId: string; creditMemoNumber: string | null; date: string; amount: string }> =
+      await q.query(
+        `SELECT g.id, m.id AS "creditMemoId", m.credit_memo_number AS "creditMemoNumber",
+                g.date::text AS date, g.debit::numeric AS amount
+           FROM general_ledger g
+           JOIN accounts a ON a.id = g.account_id
+           JOIN credit_memos m ON m.id = g.source_id
+          WHERE g.company_id = $1 AND m.customer_id = $2
+            AND g.source_type = 'credit_memo_refund' AND a.account_number = '1100'
+            AND g.debit > 0 AND m.status NOT IN ('draft', 'void')
+          ORDER BY g.date ASC`,
+        [companyId, id],
+      );
+
+    const { opening, closing } = statementBalances(
+      [
+        ...invoices.map((i) => ({ date: i.invoiceDate, amount: toDecimal(i.total) })),
+        ...payments.map((p) => ({ date: p.paymentDate, amount: toDecimal(p.amount).negated() })),
+        ...creditMemos.map((m) => ({ date: m.date, amount: toDecimal(m.total).negated() })),
+        ...refunds.map((r) => ({ date: r.date, amount: toDecimal(r.amount) })),
+      ],
+      startDate,
+      endDate,
     );
 
-    const invTotal = inRangeInvoices.reduce(
-      (acc, i) => addMoney(acc, i.total),
-      toDecimal(0),
-    );
-    const payTotal = inRangePayments.reduce(
-      (acc, p) => addMoney(acc, p.amount),
-      toDecimal(0),
-    );
-    const closingBalance = addMoney(openingBalance, invTotal)
-      .minus(payTotal)
-      .toFixed(4);
+    const within = <T>(rows: T[], dateOf: (row: T) => string) =>
+      rows.filter((row) => inPeriod(dateOf(row), startDate, endDate));
+    const inRangeInvoices = within(invoices, (i) => i.invoiceDate);
+    const inRangePayments = within(payments, (p) => p.paymentDate);
+    const inRangeMemos = within(creditMemos, (m) => m.date);
+    const inRangeRefunds = within(refunds, (r) => r.date);
+    const sum = (values: Array<string | number>) =>
+      values.reduce((acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)), toDecimal(0));
 
     return {
       customer: { id: customer.id, name: customer.name, email: customer.email },
-      period: { startDate: query.startDate, endDate: query.endDate },
-      openingBalance,
+      period: { startDate, endDate },
+      openingBalance: opening.toFixed(4),
       invoices: inRangeInvoices,
       payments: inRangePayments,
+      creditMemos: inRangeMemos.map((m) => ({ ...m, total: toDecimal(m.total).toFixed(4) })),
+      refunds: inRangeRefunds.map((r) => ({ ...r, amount: toDecimal(r.amount).toFixed(4) })),
       totals: {
-        invoiced: invTotal.toFixed(4),
-        received: payTotal.toFixed(4),
+        invoiced: sum(inRangeInvoices.map((i) => i.total)).toFixed(4),
+        received: sum(inRangePayments.map((p) => p.amount)).toFixed(4),
+        credited: sum(inRangeMemos.map((m) => m.total)).toFixed(4),
+        refunded: sum(inRangeRefunds.map((r) => r.amount)).toFixed(4),
       },
-      closingBalance,
+      closingBalance: closing.toFixed(4),
     };
   }
 }
