@@ -25,10 +25,16 @@ import {
   bucketKeyFor,
   buildBucketSpec,
   resolveAgingSpec,
+  type AgingBucketDef,
   type AgingSpecRequest,
   type ResolvedAgingSpec,
 } from './aging-buckets';
 import { businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
+import { MONEY_TOLERANCE } from '../../common/utils/money.util';
+import {
+  UNAPPLIED_RECEIPTS_SQL,
+  type UnappliedReceiptRow,
+} from '../payments/unapplied-receipts.sql';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -55,6 +61,71 @@ const num = (v: any) => parseFloat(v ?? '0') || 0;
  */
 const openDocPredicate = (alias: string) =>
   `${alias}.balance::numeric > 0 AND ${alias}.status NOT IN ('paid','void','draft')`;
+
+/** One customer's open invoices, soonest due first. `$1` company, `$2` customer. */
+const OPEN_INVOICES_SQL = `
+  SELECT i.id AS "documentId", i.invoice_number AS "documentNumber",
+         i.invoice_date::text AS "issueDate", i.due_date::text AS "dueDate",
+         i.total::numeric AS total, i.amount_paid::numeric AS "amountPaid",
+         i.balance::numeric AS balance, i.status
+    FROM invoices i
+   WHERE i.company_id = $1 AND i.customer_id = $2 AND ${openDocPredicate('i')}
+   ORDER BY i.due_date ASC, i.invoice_number ASC`;
+
+/** One vendor's open bills, soonest due first. `$1` company, `$2` vendor. */
+const OPEN_BILLS_SQL = `
+  SELECT b.id AS "documentId", b.bill_number AS "documentNumber",
+         b.bill_date::text AS "issueDate", b.due_date::text AS "dueDate",
+         b.total::numeric AS total, b.amount_paid::numeric AS "amountPaid",
+         b.balance::numeric AS balance, b.status
+    FROM bills b
+   WHERE b.company_id = $1 AND b.vendor_id = $2 AND ${openDocPredicate('b')}
+   ORDER BY b.due_date ASC, b.bill_number ASC`;
+
+/** An open invoice or bill, aged against today. */
+export interface OpenAgingDocument {
+  documentId: string;
+  documentType: 'invoice' | 'bill';
+  documentNumber: string | null;
+  issueDate: string | null;
+  dueDate: string | null;
+  /** Signed: below zero is "due in N days". */
+  daysOverdue: number;
+  bucketKey: string;
+  bucketLabel: string;
+  total: number;
+  amountPaid: number;
+  balance: number;
+  status: string;
+}
+
+/**
+ * Money on a party's account that no document has used yet: an unapplied
+ * customer receipt, an open credit memo, or an open vendor credit.
+ */
+export interface PartyCredit {
+  kind: 'payment' | 'credit_memo' | 'vendor_credit';
+  id: string;
+  reference: string | null;
+  date: string | null;
+  amount: number;
+  /** What is left to apply — the part that reduces what is due. */
+  available: number;
+}
+
+/** Summed from the rounded balances, so a printed column foots to its total. */
+const sumBalances = (docs: OpenAgingDocument[]): number =>
+  r2(docs.reduce((t, d) => t + d.balance, 0));
+
+/** A stored address (jsonb) as one line; null when it holds nothing. */
+const addressLine = (a: any): string | null => {
+  if (!a || typeof a !== 'object') return null;
+  const line = [a.street, a.city, a.state, a.postalCode ?? a.zipCode, a.country]
+    .map((p) => (typeof p === 'string' ? p.trim() : ''))
+    .filter(Boolean)
+    .join(', ');
+  return line || null;
+};
 
 const MONTH_LABELS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -620,14 +691,7 @@ export class ReportsService {
       partyId: customerId,
       partyType: 'customer',
       partyQuery: `SELECT c.name AS name FROM customers c WHERE c.id = $1 AND c.company_id = $2 LIMIT 1`,
-      docQuery:
-        `SELECT i.id AS "documentId", i.invoice_number AS "documentNumber",
-                i.invoice_date::text AS "issueDate", i.due_date::text AS "dueDate",
-                i.total::numeric AS total, i.amount_paid::numeric AS "amountPaid",
-                i.balance::numeric AS balance, i.status
-           FROM invoices i
-          WHERE i.company_id = $1 AND i.customer_id = $2 AND ${openDocPredicate('i')}
-          ORDER BY i.due_date ASC, i.invoice_number ASC`,
+      docQuery: OPEN_INVOICES_SQL,
       documentType: 'invoice',
       request,
       bucket,
@@ -650,14 +714,7 @@ export class ReportsService {
       partyId: vendorId,
       partyType: 'vendor',
       partyQuery: `SELECT v.company_name AS name FROM vendors v WHERE v.id = $1 AND v.company_id = $2 LIMIT 1`,
-      docQuery:
-        `SELECT b.id AS "documentId", b.bill_number AS "documentNumber",
-                b.bill_date::text AS "issueDate", b.due_date::text AS "dueDate",
-                b.total::numeric AS total, b.amount_paid::numeric AS "amountPaid",
-                b.balance::numeric AS balance, b.status
-           FROM bills b
-          WHERE b.company_id = $1 AND b.vendor_id = $2 AND ${openDocPredicate('b')}
-          ORDER BY b.due_date ASC, b.bill_number ASC`,
+      docQuery: OPEN_BILLS_SQL,
       documentType: 'bill',
       request,
       bucket,
@@ -725,22 +782,81 @@ export class ReportsService {
       });
     }
 
-    const partyRows = await this.dataSource.query(partyQuery, [partyId, companyId]);
-    const partyName = partyRows?.[0]?.name;
-    if (partyName === undefined) {
-      // An empty document list would read as "this party owes nothing", a
-      // materially more reassuring claim than "there is no such party".
+    const party = await this.findAgingParty(partyQuery, partyId, companyId, partyType);
+    const { asOfDate, documents: all } = await this.loadOpenDocuments(
+      companyId, partyId, docQuery, documentType, spec,
+    );
+
+    const matching = bucket ? all.filter((d) => d.bucketKey === bucket) : all;
+    // Over every matching document, not just this page — this is the figure
+    // that has to foot to the aging row.
+    const outstandingTotal = sumBalances(matching);
+
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+    const safePage = Math.max(Math.trunc(page) || 1, 1);
+    const start = (safePage - 1) * safeLimit;
+
+    return {
+      partyType,
+      partyId,
+      partyName: party.name,
+      asOfDate,
+      preset: resolved.preset,
+      buckets: spec,
+      bucket: bucket ?? null,
+      outstandingTotal,
+      // NOT `data`: ResponseEnvelopeInterceptor lifts a `data` key into the
+      // envelope slot and discards every sibling, which is how the P&L
+      // drill-down shipped without its metadata for months. NOT `entries`
+      // either — that means posted ledger rows everywhere else in this
+      // codebase, and these are open source documents.
+      documents: matching.slice(start, start + safeLimit),
+      total: matching.length,
+      page: safePage,
+      limit: safeLimit,
+    };
+  }
+
+  /**
+   * The party an aging request names, or a 404.
+   *
+   * An empty document list would read as "this party owes nothing", a
+   * materially more reassuring claim than "there is no such party".
+   */
+  private async findAgingParty(
+    partyQuery: string,
+    partyId: string,
+    companyId: string,
+    partyType: 'customer' | 'vendor',
+  ): Promise<Record<string, any>> {
+    const rows = await this.dataSource.query(partyQuery, [partyId, companyId]);
+    const party = rows?.[0];
+    if (party?.name === undefined) {
       throw new NotFoundException({
         code: partyType === 'customer' ? 'CUSTOMER_NOT_FOUND' : 'VENDOR_NOT_FOUND',
         message: `No ${partyType} with id ${partyId} in this company.`,
       });
     }
+    return party;
+  }
 
+  /**
+   * One party's open documents, each aged against today and placed in its
+   * bucket. The drill-down and the party summary both list from here, so a
+   * document's lateness and bucket cannot differ between the two.
+   */
+  private async loadOpenDocuments(
+    companyId: string,
+    partyId: string,
+    docQuery: string,
+    documentType: 'invoice' | 'bill',
+    spec: AgingBucketDef[],
+  ): Promise<{ asOfDate: string; documents: OpenAgingDocument[] }> {
     const raw: any[] = await this.dataSource.query(docQuery, [companyId, partyId]);
     const asOfDate = businessToday();
     const labelFor = new Map(spec.map((b) => [b.key, b.label]));
 
-    const all = raw.map((r) => {
+    const documents = raw.map((r): OpenAgingDocument => {
       // Identical to bucketAging: calendar days in the business zone, off the
       // stored date, never elapsed milliseconds.
       const due = toIsoDay(r.dueDate);
@@ -761,34 +877,196 @@ export class ReportsService {
         status: r.status,
       };
     });
+    return { asOfDate, documents };
+  }
 
-    const matching = bucket ? all.filter((d) => d.bucketKey === bucket) : all;
-    // Over every matching document, not just this page — this is the figure
-    // that has to foot to the aging row.
-    const outstandingTotal = r2(matching.reduce((t, d) => t + d.balance, 0));
+  /**
+   * Everything one customer still owes, as of today — the "outstanding
+   * invoices" summary a business sends its customer.
+   *
+   * Its documents are the aging drill-down's, so `totals.outstanding` is this
+   * customer's A/R aging row and the two can be opened side by side. What
+   * aging leaves out, this adds: receipts and credit memos not yet used against
+   * any invoice. That is money the customer will rightly point to, so a
+   * summary that ignored it would overstate what they owe — `netDue` is the
+   * figure to ask for.
+   */
+  async arPartySummary(companyId: string, customerId: string) {
+    return this.partySummary({
+      companyId,
+      partyId: customerId,
+      partyType: 'customer',
+      documentType: 'invoice',
+      partyQuery:
+        `SELECT c.name, c.contact_person AS "contactPerson", c.email, c.phone,
+                c.billing_address AS address, c.payment_terms AS "paymentTerms",
+                c.tax_id AS "taxId"
+           FROM customers c WHERE c.id = $1 AND c.company_id = $2 LIMIT 1`,
+      docQuery: OPEN_INVOICES_SQL,
+      loadCredits: async () => {
+        // The receive-payment flow's own query, advances held for a delivery
+        // still on the road excluded: those belong to that delivery's invoice,
+        // which does not exist yet.
+        const receipts: UnappliedReceiptRow[] = await this.dataSource.query(
+          UNAPPLIED_RECEIPTS_SQL,
+          [companyId, customerId, MONEY_TOLERANCE.toFixed(4)],
+        );
+        const memos: any[] = await this.dataSource.query(
+          `SELECT m.id, m.credit_memo_number AS reference, m.date::text AS date,
+                  m.total::numeric AS amount, m.balance::numeric AS available
+             FROM credit_memos m
+            WHERE m.company_id = $1 AND m.customer_id = $2
+              AND m.balance::numeric > 0 AND m.status NOT IN ('draft', 'void')
+            ORDER BY m.date ASC, m.credit_memo_number ASC`,
+          [companyId, customerId],
+        );
+        return [
+          ...receipts.map((p): PartyCredit => ({
+            kind: 'payment',
+            id: p.id,
+            reference: p.payment_number ?? null,
+            date: p.payment_date ?? null,
+            amount: r2(num(p.amount)),
+            available: r2(num(p.unapplied)),
+          })),
+          ...memos.map((m): PartyCredit => ({
+            kind: 'credit_memo',
+            id: m.id,
+            reference: m.reference ?? null,
+            date: m.date ?? null,
+            amount: r2(num(m.amount)),
+            available: r2(num(m.available)),
+          })),
+        ];
+      },
+      lastPaymentQuery:
+        `SELECT p.payment_date::text AS date, p.amount::numeric AS amount,
+                COALESCE(p.payment_number, p.reference) AS reference
+           FROM payments p
+          WHERE p.company_id = $1 AND p.customer_id = $2
+          ORDER BY p.payment_date DESC, p.created_at DESC
+          LIMIT 1`,
+    });
+  }
 
-    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
-    const safePage = Math.max(Math.trunc(page) || 1, 1);
-    const start = (safePage - 1) * safeLimit;
+  /**
+   * Everything the business still owes one vendor, as of today — the
+   * payables summary. The A/P twin of {@link arPartySummary}: its total is the
+   * vendor's A/P aging row, and open vendor credits come off it.
+   */
+  async apPartySummary(companyId: string, vendorId: string) {
+    return this.partySummary({
+      companyId,
+      partyId: vendorId,
+      partyType: 'vendor',
+      documentType: 'bill',
+      partyQuery:
+        `SELECT v.company_name AS name, v.contact_person AS "contactPerson", v.email, v.phone,
+                v.address, v.payment_terms AS "paymentTerms", v.tax_id AS "taxId"
+           FROM vendors v WHERE v.id = $1 AND v.company_id = $2 LIMIT 1`,
+      docQuery: OPEN_BILLS_SQL,
+      loadCredits: async () => {
+        // The dashboard's pending-A/P figure nets the same credits.
+        const credits: any[] = await this.dataSource.query(
+          `SELECT vc.id, vc.vendor_credit_number AS reference, vc.date::text AS date,
+                  vc.total::numeric AS amount, vc.balance::numeric AS available
+             FROM vendor_credits vc
+            WHERE vc.company_id = $1 AND vc.vendor_id = $2
+              AND vc.balance::numeric > 0 AND vc.status NOT IN ('void', 'closed')
+            ORDER BY vc.date ASC, vc.vendor_credit_number ASC`,
+          [companyId, vendorId],
+        );
+        return credits.map((c): PartyCredit => ({
+          kind: 'vendor_credit',
+          id: c.id,
+          reference: c.reference ?? null,
+          date: c.date ?? null,
+          amount: r2(num(c.amount)),
+          available: r2(num(c.available)),
+        }));
+      },
+      lastPaymentQuery:
+        `SELECT bp.payment_date::text AS date, bp.total_amount::numeric AS amount,
+                bp.reference
+           FROM bill_payments bp
+          WHERE bp.company_id = $1 AND bp.vendor_id = $2
+          ORDER BY bp.payment_date DESC, bp.created_at DESC
+          LIMIT 1`,
+    });
+  }
+
+  /**
+   * One party's open documents with the figures a summary leads with.
+   *
+   * Buckets are the company's saved aging preference — the ones its aging
+   * report shows — and each carries its amount and count, so a client draws
+   * the strip without re-bucketing anything. Every total is summed from the
+   * rounded document balances, so a printed column foots to its total.
+   */
+  private async partySummary(args: {
+    companyId: string;
+    partyId: string;
+    partyType: 'customer' | 'vendor';
+    documentType: 'invoice' | 'bill';
+    partyQuery: string;
+    docQuery: string;
+    loadCredits: () => Promise<PartyCredit[]>;
+    lastPaymentQuery: string;
+  }) {
+    const { companyId, partyId, partyType, documentType, partyQuery, docQuery } = args;
+
+    const resolved = await this.resolveSpecFor(companyId);
+    const party = await this.findAgingParty(partyQuery, partyId, companyId, partyType);
+    const { asOfDate, documents } = await this.loadOpenDocuments(
+      companyId, partyId, docQuery, documentType, resolved.spec,
+    );
+
+    const buckets = resolved.spec.map((b) => {
+      const inBucket = documents.filter((d) => d.bucketKey === b.key);
+      return { ...b, amount: sumBalances(inBucket), count: inBucket.length };
+    });
+    const overdueDocs = documents.filter((d) => d.daysOverdue > 0);
+    const outstanding = sumBalances(documents);
+    const overdue = sumBalances(overdueDocs);
+
+    const creditItems = (await args.loadCredits()).sort((a, b) =>
+      (a.date ?? '').localeCompare(b.date ?? ''),
+    );
+    const creditTotal = r2(creditItems.reduce((t, c) => t + c.available, 0));
+
+    const [last] = await this.dataSource.query(args.lastPaymentQuery, [companyId, partyId]);
 
     return {
       partyType,
-      partyId,
-      partyName,
+      party: {
+        id: partyId,
+        name: party.name,
+        contactPerson: party.contactPerson ?? null,
+        email: party.email ?? null,
+        phone: party.phone ?? null,
+        address: addressLine(party.address),
+        paymentTerms: party.paymentTerms ?? null,
+        taxId: party.taxId ?? null,
+      },
       asOfDate,
       preset: resolved.preset,
-      buckets: spec,
-      bucket: bucket ?? null,
-      outstandingTotal,
-      // NOT `data`: ResponseEnvelopeInterceptor lifts a `data` key into the
-      // envelope slot and discards every sibling, which is how the P&L
-      // drill-down shipped without its metadata for months. NOT `entries`
-      // either — that means posted ledger rows everywhere else in this
-      // codebase, and these are open source documents.
-      documents: matching.slice(start, start + safeLimit),
-      total: matching.length,
-      page: safePage,
-      limit: safeLimit,
+      buckets,
+      // NOT `data` — see agingPartyDocuments.
+      documents,
+      totals: {
+        count: documents.length,
+        outstanding,
+        overdue,
+        overdueCount: overdueDocs.length,
+        notYetDue: r2(outstanding - overdue),
+      },
+      credits: { total: creditTotal, items: creditItems },
+      // Can be zero or below: credits larger than the open documents mean the
+      // business owes the customer (or the vendor owes the business).
+      netDue: r2(outstanding - creditTotal),
+      lastPayment: last
+        ? { date: last.date ?? null, amount: r2(num(last.amount)), reference: last.reference ?? null }
+        : null,
     };
   }
 

@@ -209,6 +209,34 @@ export class ReportsController {
     );
   }
 
+  /**
+   * Everything one customer still owes, as of today: every open invoice aged,
+   * the aging strip, unapplied receipts and credit memos, and the net due.
+   * What the "Outstanding invoices" summary a business sends is built from.
+   *
+   * Beside the drill-down because it is the same documents — its total is the
+   * customer's aging row. Buckets are the company's saved preference, the ones
+   * its aging report opens with. Envelope, no `@Res()`, like the drill-down.
+   */
+  @Get('ar-aging/customers/:customerId/summary')
+  @Roles('admin', 'staff')
+  async arAgingCustomerSummary(
+    @CurrentCompany() companyId: string,
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+  ) {
+    return this.svc.arPartySummary(companyId, customerId);
+  }
+
+  /** Everything owed to one vendor, as of today — the payables summary. */
+  @Get('ap-aging/vendors/:vendorId/summary')
+  @Roles('admin', 'staff')
+  async apAgingVendorSummary(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+  ) {
+    return this.svc.apPartySummary(companyId, vendorId);
+  }
+
   @Get('inventory-valuation')
   @Roles('admin', 'staff')
   async inventoryValuation(

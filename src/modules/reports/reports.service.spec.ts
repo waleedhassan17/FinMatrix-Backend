@@ -16,6 +16,7 @@ import {
   addDaysIso,
   businessToday,
 } from '../../common/utils/business-date.util';
+import { UNAPPLIED_RECEIPTS_SQL } from '../payments/unapplied-receipts.sql';
 
 /**
  * The statements are pure functions of what the GL returns, so these drive the
@@ -1108,6 +1109,280 @@ describe('ReportsService — aging party documents', () => {
     expect(enveloped.data).toEqual([1, 2]);
     expect(enveloped.outstandingTotal).toBeUndefined();
     expect(enveloped.data.outstandingTotal).toBeUndefined();
+  });
+});
+
+/**
+ * Party summary — the "outstanding invoices" / payables summary a business
+ * sends. Its documents are the drill-down's, so the property that matters is
+ * the same: the figures add up to the aging row the report shows for that
+ * party, bucket by bucket. Beyond that it nets off money the party has on
+ * account, and that netting has to be the receive-payment flow's own idea of
+ * which receipts are free.
+ */
+describe('ReportsService — party summary', () => {
+  const dueDaysAgo = (days: number): string => addDaysIso(businessToday(), -days);
+
+  type Doc = { id: string; number: string; days: number; balance: string; total?: string };
+
+  const sqlSeen: Array<{ sql: string; params: unknown[] }> = [];
+
+  const CUSTOMER = {
+    name: 'Acme Traders',
+    contactPerson: 'Bilal',
+    email: 'accounts@acme.pk',
+    phone: '0300 1234567',
+    address: { street: '12 Mall Road', city: 'Lahore', zipCode: '54000', country: 'Pakistan' },
+    paymentTerms: 'net30',
+    taxId: 'NTN-42',
+  };
+
+  const makeQuery = (opts: {
+    docs?: Doc[];
+    party?: unknown;
+    prefs?: unknown;
+    receipts?: unknown[];
+    memos?: unknown[];
+    vendorCredits?: unknown[];
+    lastPayment?: unknown[];
+  } = {}) => {
+    const docs = opts.docs ?? [];
+    const toDocRow = (d: Doc) => ({
+      documentId: d.id,
+      documentNumber: d.number,
+      issueDate: dueDaysAgo(d.days + 30),
+      dueDate: dueDaysAgo(d.days),
+      total: d.total ?? d.balance,
+      amountPaid: String(Number(d.total ?? d.balance) - Number(d.balance)),
+      balance: d.balance,
+      status: 'sent',
+    });
+    const toAgingRow = (d: Doc) => ({
+      customerId: 'party-1',
+      customerName: 'Acme Traders',
+      balance: d.balance,
+      dueDate: dueDaysAgo(d.days),
+    });
+    return jest.fn(async (sql: string, params: unknown[] = []) => {
+      sqlSeen.push({ sql, params });
+      if (sql.includes('report_preferences')) return opts.prefs ? [{ prefs: opts.prefs }] : [];
+      if (sql.includes('FROM customers c WHERE c.id') || sql.includes('FROM vendors v WHERE v.id')) {
+        const party = opts.party === undefined ? CUSTOMER : opts.party;
+        return party === null ? [] : [party];
+      }
+      if (sql.includes('i.customer_id = $2') || sql.includes('b.vendor_id = $2')) return docs.map(toDocRow);
+      if (sql.includes('FROM invoices i JOIN customers c') || sql.includes('FROM bills b JOIN vendors v')) {
+        return docs.map(toAgingRow);
+      }
+      if (sql.includes('payment_applications')) return opts.receipts ?? [];
+      if (sql.includes('FROM credit_memos m')) return opts.memos ?? [];
+      if (sql.includes('FROM vendor_credits vc')) return opts.vendorCredits ?? [];
+      if (sql.includes('FROM payments p') || sql.includes('FROM bill_payments bp')) {
+        return opts.lastPayment ?? [];
+      }
+      return [];
+    });
+  };
+
+  beforeEach(() => {
+    sqlSeen.length = 0;
+  });
+
+  const SPREAD: Doc[] = [
+    { id: 'i1', number: 'INV-1', days: -5, balance: '100' }, // not yet due
+    { id: 'i2', number: 'INV-2', days: 10, balance: '200', total: '500' }, // 1–30, part paid
+    { id: 'i3', number: 'INV-3', days: 20, balance: '50' }, // 1–30
+    { id: 'i4', number: 'INV-4', days: 45, balance: '300' }, // 31–60
+    { id: 'i5', number: 'INV-5', days: 200, balance: '25.5' }, // 91+
+  ];
+
+  it("foots to the customer's A/R aging row, bucket by bucket", async () => {
+    const svc = await makeService(makeQuery({ docs: SPREAD }));
+    const aging: any = await svc.arAging('c1');
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    const row = aging.rows[0];
+
+    expect(summary.totals.outstanding).toBe(row.total);
+    for (const b of summary.buckets) expect(b.amount).toBe(row.amounts[b.key]);
+    expect(summary.buckets.reduce((n: number, b: any) => n + b.count, 0)).toBe(SPREAD.length);
+    // The same buckets the report opens with, labels and all.
+    expect(summary.buckets.map(({ amount, count, ...b }: any) => b)).toEqual(aging.buckets);
+    expect(summary.asOfDate).toBe(aging.asOfDate);
+  });
+
+  it('lists the documents exactly as the drill-down does', async () => {
+    const svc = await makeService(makeQuery({ docs: SPREAD }));
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    const detail: any = await svc.arAgingPartyDocuments('c1', 'party-1');
+    expect(summary.documents).toEqual(detail.documents);
+    expect(summary.documents[1]).toMatchObject({ total: 500, amountPaid: 300, balance: 200 });
+  });
+
+  it('splits overdue from not yet due on the signed days overdue', async () => {
+    const svc = await makeService(
+      makeQuery({ docs: [...SPREAD, { id: 'i6', number: 'INV-6', days: 0, balance: '10' }] }),
+    );
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    // Due today is not overdue yet: INV-1 (due in 5 days) and INV-6.
+    expect(summary.totals).toEqual({
+      count: 6,
+      outstanding: 685.5,
+      overdue: 575.5,
+      overdueCount: 4,
+      notYetDue: 110,
+    });
+  });
+
+  it('nets unapplied receipts and open credit memos off what is due', async () => {
+    const svc = await makeService(
+      makeQuery({
+        docs: SPREAD,
+        receipts: [
+          { id: 'p1', payment_number: 'PAY-2026-0009', payment_date: '2026-09-01', amount: '500.0000', advance_posted: true, unapplied: '150.0000' },
+        ],
+        memos: [{ id: 'm1', reference: 'CM-2026-0003', date: '2026-08-14', amount: '80', available: '80' }],
+      }),
+    );
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+
+    expect(summary.credits.total).toBe(230);
+    expect(summary.netDue).toBe(445.5);
+    // Oldest first, whatever kind.
+    expect(summary.credits.items).toEqual([
+      { kind: 'credit_memo', id: 'm1', reference: 'CM-2026-0003', date: '2026-08-14', amount: 80, available: 80 },
+      { kind: 'payment', id: 'p1', reference: 'PAY-2026-0009', date: '2026-09-01', amount: 500, available: 150 },
+    ]);
+  });
+
+  it("finds free receipts with the receive-payment flow's own query", async () => {
+    // Character-identical, so an advance held for a delivery still on the road
+    // is left out here exactly as it is when a payment is recorded.
+    const svc = await makeService(makeQuery({ docs: SPREAD }));
+    await svc.arPartySummary('c1', 'party-1');
+    const receipts = sqlSeen.find((s) => s.sql.includes('payment_applications'))!;
+    expect(receipts.sql).toBe(UNAPPLIED_RECEIPTS_SQL);
+    expect(receipts.params).toEqual(['c1', 'party-1', '0.0001']);
+    const memos = sqlSeen.find((s) => s.sql.includes('FROM credit_memos m'))!;
+    expect(memos.sql).toMatch(/m\.balance::numeric > 0 AND m\.status NOT IN \('draft', 'void'\)/);
+  });
+
+  it('can owe the customer: net due goes below zero when credits exceed the open invoices', async () => {
+    const svc = await makeService(
+      makeQuery({
+        docs: [{ id: 'i1', number: 'INV-1', days: 3, balance: '100' }],
+        memos: [{ id: 'm1', reference: 'CM-1', date: '2026-08-14', amount: '250', available: '250' }],
+      }),
+    );
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    expect(summary.netDue).toBe(-150);
+  });
+
+  it('carries the contact details a sent document needs, the address on one line', async () => {
+    const svc = await makeService(makeQuery({ docs: SPREAD }));
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    expect(summary.partyType).toBe('customer');
+    expect(summary.party).toEqual({
+      id: 'party-1',
+      name: 'Acme Traders',
+      contactPerson: 'Bilal',
+      email: 'accounts@acme.pk',
+      phone: '0300 1234567',
+      address: '12 Mall Road, Lahore, 54000, Pakistan',
+      paymentTerms: 'net30',
+      taxId: 'NTN-42',
+    });
+  });
+
+  it('leaves missing contact details null rather than inventing them', async () => {
+    const svc = await makeService(makeQuery({ party: { name: 'Walk-in', address: {} } }));
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    expect(summary.party).toMatchObject({
+      name: 'Walk-in', email: null, phone: null, address: null, paymentTerms: null, taxId: null,
+    });
+  });
+
+  it('reports the latest payment, or none', async () => {
+    const paid = await makeService(
+      makeQuery({ lastPayment: [{ date: '2026-09-20', amount: '1234.5000', reference: 'PAY-2026-0011' }] }),
+    );
+    expect(((await paid.arPartySummary('c1', 'party-1')) as any).lastPayment).toEqual({
+      date: '2026-09-20', amount: 1234.5, reference: 'PAY-2026-0011',
+    });
+    const never = await makeService(makeQuery());
+    expect(((await never.arPartySummary('c1', 'party-1')) as any).lastPayment).toBeNull();
+  });
+
+  it("buckets with the company's saved preference", async () => {
+    const svc = await makeService(makeQuery({ docs: SPREAD, prefs: { aging: { preset: 'weekly' } } }));
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    expect(summary.preset).toBe('weekly');
+    expect(summary.buckets.map((b: any) => b.key)).toEqual([
+      'current', 'd1to7', 'd8to14', 'd15to21', 'd22to28', 'd29plus',
+    ]);
+  });
+
+  it('is empty, not broken, for a party with nothing open', async () => {
+    const svc = await makeService(makeQuery());
+    const summary: any = await svc.arPartySummary('c1', 'party-1');
+    expect(summary.documents).toEqual([]);
+    expect(summary.totals).toEqual({ count: 0, outstanding: 0, overdue: 0, overdueCount: 0, notYetDue: 0 });
+    expect(summary.buckets.every((b: any) => b.amount === 0 && b.count === 0)).toBe(true);
+    expect(summary.credits).toEqual({ total: 0, items: [] });
+    expect(summary.netDue).toBe(0);
+  });
+
+  it('refuses an unknown customer or vendor rather than reporting no debt', async () => {
+    const svc = await makeService(makeQuery({ party: null }));
+    await expect(svc.arPartySummary('c1', 'nobody')).rejects.toMatchObject({
+      response: { code: 'CUSTOMER_NOT_FOUND' },
+    });
+    await expect(svc.apPartySummary('c1', 'nobody')).rejects.toMatchObject({
+      response: { code: 'VENDOR_NOT_FOUND' },
+    });
+  });
+
+  it("foots to the vendor's A/P aging row and nets open vendor credits", async () => {
+    const svc = await makeService(
+      makeQuery({
+        docs: SPREAD,
+        party: { name: 'Supplier Co', address: null },
+        vendorCredits: [{ id: 'vc1', reference: 'VC-2026-0002', date: '2026-07-01', amount: '60', available: '40' }],
+        lastPayment: [{ date: '2026-09-02', amount: '700', reference: 'CHQ 1182' }],
+      }),
+    );
+    const aging: any = await svc.apAging('c1');
+    const summary: any = await svc.apPartySummary('c1', 'vend-1');
+
+    expect(summary.partyType).toBe('vendor');
+    expect(summary.party.name).toBe('Supplier Co');
+    expect(summary.totals.outstanding).toBe(aging.rows[0].total);
+    expect(summary.documents.every((d: any) => d.documentType === 'bill')).toBe(true);
+    expect(summary.credits).toEqual({
+      total: 40,
+      items: [{ kind: 'vendor_credit', id: 'vc1', reference: 'VC-2026-0002', date: '2026-07-01', amount: 60, available: 40 }],
+    });
+    expect(summary.netDue).toBe(635.5);
+    expect(summary.lastPayment).toEqual({ date: '2026-09-02', amount: 700, reference: 'CHQ 1182' });
+    const credits = sqlSeen.find((s) => s.sql.includes('FROM vendor_credits vc'))!;
+    expect(credits.sql).toMatch(/vc\.status NOT IN \('void', 'closed'\)/);
+    // No customer receipts or credit memos on the payables side.
+    expect(sqlSeen.some((s) => s.sql.includes('payment_applications'))).toBe(false);
+  });
+
+  it('survives the response envelope with every figure beside the documents', async () => {
+    const svc = await makeService(makeQuery({ docs: SPREAD }));
+    const payload = await svc.arPartySummary('c1', 'party-1');
+    expect(payload).not.toHaveProperty('data');
+
+    const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
+    const enveloped: any = await firstValueFrom(
+      interceptor.intercept({} as ExecutionContext, { handle: () => of(payload) } as CallHandler),
+    );
+    expect(enveloped.data.documents).toHaveLength(SPREAD.length);
+    expect(enveloped.data.totals.outstanding).toBe(675.5);
+    expect(enveloped.data.party.name).toBe('Acme Traders');
+    expect(enveloped.data.buckets).toHaveLength(5);
+    expect(enveloped.data.netDue).toBe(675.5);
   });
 });
 
