@@ -260,9 +260,17 @@ export class DeliveryPersonnelService {
     }
   }
 
-  async toggleAvailability(companyId: string, userId: string) {
+  /**
+   * Set a rider on or off duty. `isAvailable` omitted toggles, for the older
+   * apps that send no body.
+   */
+  async setAvailability(
+    companyId: string,
+    userId: string,
+    isAvailable?: boolean,
+  ) {
     const p = await this.getById(companyId, userId);
-    p.isAvailable = !p.isAvailable;
+    p.isAvailable = isAvailable ?? !p.isAvailable;
     return this.repo.save(p);
   }
 

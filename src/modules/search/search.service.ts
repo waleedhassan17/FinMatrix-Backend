@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, ObjectLiteral, Repository } from 'typeorm';
+import { DataSource, EntityTarget, In, ObjectLiteral, Repository } from 'typeorm';
 import { Customer } from '../customers/entities/customer.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
@@ -13,10 +13,16 @@ import { Payment } from '../payments/entities/payment.entity';
 import { CreditMemo } from '../credit-memos/entities/credit-memo.entity';
 import { VendorCredit } from '../vendor-credits/entities/vendor-credit.entity';
 import { JournalEntry } from '../journal-entries/entities/journal-entry.entity';
+import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
+import { BillPayment } from '../bills/entities/bill-payment.entity';
 import { FeatureKey } from '../../common/features/feature-map';
 import { companyFeatures } from '../../common/features/company-features.util';
 import { MIN_SEARCH_LENGTH } from '../../common/utils/like.util';
-import { applyTextSearch } from '../../common/utils/search-query.util';
+import {
+  applyTextSearch,
+  customerIdsMatching,
+  vendorIdsMatching,
+} from '../../common/utils/search-query.util';
 
 /**
  * Every document a user can look up by its number.
@@ -220,7 +226,50 @@ export class SearchService {
         .getRepository(JournalEntry)
         .createQueryBuilder('j')
         .where('j.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['j.reference', 'j.memo'] });
+      // An entry carries no party of its own, and the entries documents post
+      // are memo'd by number ("Invoice INV-2026-0012"), so searching a
+      // customer's name found almost none of theirs (QA). Entries also match
+      // on their lines' descriptions, and when they were posted by a document
+      // whose customer or vendor matches.
+      const customers = customerIdsMatching(qb);
+      const vendors = vendorIdsMatching(qb);
+      const postedBy = (
+        entity: EntityTarget<ObjectLiteral>,
+        alias: string,
+        partyColumn: 'customerId' | 'vendorId',
+        parties: string,
+      ) =>
+        `j.id IN ${qb
+          .subQuery()
+          .select(`${alias}.journalEntryId`)
+          .from(entity, alias)
+          .where(`${alias}.companyId = :searchCompanyId`)
+          .andWhere(`${alias}.journalEntryId IS NOT NULL`)
+          .andWhere(`${alias}.${partyColumn} IN ${parties}`)
+          .getQuery()}`;
+      const lineDescriptions = `j.id IN ${qb
+        .subQuery()
+        .select('search_line.entryId')
+        .from(JournalEntryLine, 'search_line')
+        .innerJoin(
+          JournalEntry,
+          'search_line_entry',
+          'search_line_entry.id = search_line.entryId AND search_line_entry.companyId = :searchCompanyId',
+        )
+        .where('search_line.description ILIKE :search')
+        .getQuery()}`;
+      applyTextSearch(qb, query, companyId, {
+        columns: ['j.reference', 'j.memo'],
+        extraClauses: [
+          lineDescriptions,
+          postedBy(Invoice, 'search_invoice', 'customerId', customers),
+          postedBy(Payment, 'search_payment', 'customerId', customers),
+          postedBy(CreditMemo, 'search_credit_memo', 'customerId', customers),
+          postedBy(Bill, 'search_bill', 'vendorId', vendors),
+          postedBy(BillPayment, 'search_bill_payment', 'vendorId', vendors),
+          postedBy(VendorCredit, 'search_vendor_credit', 'vendorId', vendors),
+        ],
+      });
       results.journalEntries = await qb
         .orderBy('j.date', 'DESC')
         .addOrderBy('j.createdAt', 'DESC')

@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body, Controller, ForbiddenException, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -8,8 +8,28 @@ import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { DeliveryPersonnelService } from './delivery-personnel.service';
-import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
+import {
+  CreatePersonnelDto,
+  SetAvailabilityDto,
+  UpdatePersonnelDto,
+  UpdateLocationDto,
+} from './dto/delivery-personnel.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
+
+/**
+ * A rider reaches the personnel routes for their OWN record only. The routes
+ * below allow the delivery role so the rider app can read and set its duty
+ * status, but they took any rider's id — so any rider could read another's
+ * profile or take them off duty.
+ */
+const assertOwnRecord = (user: AuthenticatedUser, userId: string): void => {
+  if (user.role === 'delivery' && user.id !== userId) {
+    throw new ForbiddenException({
+      code: 'FORBIDDEN',
+      message: 'Riders can only view and change their own record.',
+    });
+  }
+};
 
 @ApiTags('Delivery Personnel')
 @ApiBearerAuth()
@@ -66,8 +86,10 @@ export class DeliveryPersonnelController {
   @Roles('admin', 'staff', 'delivery')
   get(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('userId', ParseUUIDPipe) userId: string,
   ) {
+    assertOwnRecord(user, userId);
     return this.svc.getById(companyId, userId);
   }
 
@@ -82,13 +104,20 @@ export class DeliveryPersonnelController {
     return this.svc.update(companyId, userId, dto, user.id);
   }
 
+  /**
+   * On or off duty. With `isAvailable` it sets that state; with no body — what
+   * older apps send — it toggles, as before.
+   */
   @Patch(':userId/availability')
   @Roles('admin', 'staff', 'delivery')
-  toggle(
+  setAvailability(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: SetAvailabilityDto,
   ) {
-    return this.svc.toggleAvailability(companyId, userId);
+    assertOwnRecord(user, userId);
+    return this.svc.setAvailability(companyId, userId, dto?.isAvailable);
   }
 
   /**

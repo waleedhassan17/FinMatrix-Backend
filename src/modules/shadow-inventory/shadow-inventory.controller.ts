@@ -53,8 +53,12 @@ export class ShadowInventoryController {
   @Roles('admin', 'staff', 'delivery')
   sync(
     @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('personnelId', ParseUUIDPipe) personnelId: string,
   ) {
-    return this.svc.syncAll(companyId, personnelId);
+    // A rider syncs their own van stock, whatever id the path names — the
+    // same rule as the list above.
+    const pid = user.role === 'delivery' ? user.id : personnelId;
+    return this.svc.syncAll(companyId, pid);
   }
 }

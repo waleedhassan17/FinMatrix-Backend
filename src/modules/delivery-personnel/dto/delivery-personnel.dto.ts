@@ -57,6 +57,20 @@ export class UpdatePersonnelDto {
   @ApiPropertyOptional() @IsOptional() @IsEnum(['active', 'on_leave', 'inactive'] as DeliveryPersonnelStatus[]) status?: DeliveryPersonnelStatus;
 }
 
+/**
+ * On or off duty. Optional so the older apps, which send no body and expect a
+ * toggle, keep working; the current app says which state it wants, so a
+ * retried or doubled tap cannot flip the rider back.
+ */
+export class SetAvailabilityDto {
+  @ApiPropertyOptional({
+    description: 'true = on duty, false = off duty; omitted = toggle',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
+}
+
 export class UpdateLocationDto {
   @ApiProperty({ description: 'GPS latitude' }) @IsNumber() lat!: number;
   @ApiProperty({ description: 'GPS longitude' }) @IsNumber() lng!: number;

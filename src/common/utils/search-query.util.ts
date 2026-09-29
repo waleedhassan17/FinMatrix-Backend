@@ -10,6 +10,42 @@ export interface TextSearchOptions {
   customerColumn?: string;
   /** Also match documents whose vendor's company or contact name contains the term. */
   vendorColumn?: string;
+  /**
+   * Further conditions OR-ed into the same group, for matches that are not a
+   * column of the row itself (a journal entry posted by a matching customer's
+   * invoice). They may use `:search` and `:searchCompanyId`.
+   */
+  extraClauses?: string[];
+}
+
+/** Ids of this company's customers whose name or company contains `:search`. */
+export function customerIdsMatching<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
+): string {
+  return qb
+    .subQuery()
+    .select('search_customer.id')
+    .from(Customer, 'search_customer')
+    .where('search_customer.companyId = :searchCompanyId')
+    .andWhere(
+      '(search_customer.name ILIKE :search OR search_customer.company ILIKE :search)',
+    )
+    .getQuery();
+}
+
+/** Ids of this company's vendors whose company or contact name contains `:search`. */
+export function vendorIdsMatching<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
+): string {
+  return qb
+    .subQuery()
+    .select('search_vendor.id')
+    .from(Vendor, 'search_vendor')
+    .where('search_vendor.companyId = :searchCompanyId')
+    .andWhere(
+      '(search_vendor.companyName ILIKE :search OR search_vendor.contactPerson ILIKE :search)',
+    )
+    .getQuery();
 }
 
 /**
@@ -36,30 +72,14 @@ export function applyTextSearch<T extends ObjectLiteral>(
   const clauses = options.columns.map((column) => `${column} ILIKE :search`);
 
   if (options.customerColumn) {
-    const customers = qb
-      .subQuery()
-      .select('search_customer.id')
-      .from(Customer, 'search_customer')
-      .where('search_customer.companyId = :searchCompanyId')
-      .andWhere(
-        '(search_customer.name ILIKE :search OR search_customer.company ILIKE :search)',
-      )
-      .getQuery();
-    clauses.push(`${options.customerColumn} IN ${customers}`);
+    clauses.push(`${options.customerColumn} IN ${customerIdsMatching(qb)}`);
   }
 
   if (options.vendorColumn) {
-    const vendors = qb
-      .subQuery()
-      .select('search_vendor.id')
-      .from(Vendor, 'search_vendor')
-      .where('search_vendor.companyId = :searchCompanyId')
-      .andWhere(
-        '(search_vendor.companyName ILIKE :search OR search_vendor.contactPerson ILIKE :search)',
-      )
-      .getQuery();
-    clauses.push(`${options.vendorColumn} IN ${vendors}`);
+    clauses.push(`${options.vendorColumn} IN ${vendorIdsMatching(qb)}`);
   }
+
+  clauses.push(...(options.extraClauses ?? []));
 
   qb.andWhere(`(${clauses.join(' OR ')})`, {
     search: likeContains(term),
