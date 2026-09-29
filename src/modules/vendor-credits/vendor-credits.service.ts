@@ -21,6 +21,7 @@ import { InventoryMovement } from '../inventory/entities/inventory-movement.enti
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { businessToday } from '../../common/utils/business-date.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class VendorCreditsService {
@@ -34,23 +35,37 @@ export class VendorCreditsService {
   ) {}
 
   async list(companyId: string, query: ListVendorCreditsQueryDto, pagination: PaginationParams) {
-    const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
+      if (query.vendorId) qb.andWhere('c.vendorId = :v', { v: query.vendorId });
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['c.vendorCreditNumber'],
+        vendorColumn: 'c.vendorId',
+      });
+      return qb;
+    };
+    const qb = filtered();
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
-    if (query.vendorId) qb.andWhere('c.vendorId = :v', { v: query.vendorId });
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['c.vendorCreditNumber'],
-      vendorColumn: 'c.vendorId',
-    });
     qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
     const ids = [...new Set(data.map((c) => c.vendorId))];
     const vendors = ids.length ? await this.vendorRepo.findByIds(ids) : [];
     const nameMap = Object.fromEntries(vendors.map((v) => [v.id, v.companyName]));
-    return {
-      data: data.map((c) => ({ ...c, vendorName: nameMap[c.vendorId] ?? '' })),
-      pagination: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.max(1, Math.ceil(total / pagination.limit)) },
-    };
+
+    // Over everything the search matches: counts per tab, and what the open
+    // and part-used credits still hold.
+    const byStatus = await statusSummary(filtered(), 'c', { total: 'c.total', balance: 'c.balance' });
+    const openBalance = ['open', 'applied']
+      .reduce((sum, s) => sum + Number(byStatus.byStatus[s]?.balance ?? 0), 0)
+      .toFixed(4);
+
+    return pagedResponse(
+      data.map((c) => ({ ...c, vendorName: nameMap[c.vendorId] ?? '' })),
+      { page: pagination.page, limit: pagination.limit, total },
+      { ...byStatus, openBalance },
+    );
   }
 
   async getById(companyId: string, id: string): Promise<VendorCredit> {

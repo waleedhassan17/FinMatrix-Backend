@@ -41,6 +41,7 @@ import {
   ACCT_OPENING_BALANCE_EQUITY,
   ADJUSTMENT_REASON_ACCOUNTS,
 } from '../accounts/accounts.constants';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class InventoryService {
@@ -66,10 +67,11 @@ export class InventoryService {
     if (query.locationId) qb.andWhere('i.locationId = :lid', { lid: query.locationId });
     if (query.isActive !== undefined) qb.andWhere('i.isActive = :a', { a: query.isActive });
     if (query.lowStock) qb.andWhere('i.quantityOnHand::numeric <= i.reorderPoint::numeric');
-    qb.orderBy('i.createdAt', 'DESC');
+    // With a tie-break, so a page boundary cannot skip or repeat an item.
+    qb.orderBy('i.createdAt', 'DESC').addOrderBy('i.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getItem(companyId: string, id: string) {
@@ -816,19 +818,22 @@ export class InventoryService {
     if (query.type) qb.andWhere('m.type = :t', { t: query.type });
     if (query.startDate) qb.andWhere('m.date >= :s', { s: query.startDate });
     if (query.endDate) qb.andWhere('m.date <= :e', { e: query.endDate });
-    qb.orderBy('m.date', 'DESC');
+    // With tie-breaks: movements on one date must keep one order across pages.
+    qb.orderBy('m.date', 'DESC').addOrderBy('m.createdAt', 'DESC').addOrderBy('m.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   // Item movements
   async itemMovements(companyId: string, itemId: string, page: number, limit: number) {
     const qb = this.moveRepo.createQueryBuilder('m')
       .where('m.companyId = :cid AND m.itemId = :iid', { cid: companyId, iid: itemId })
-      .orderBy('m.date', 'DESC');
+      .orderBy('m.date', 'DESC')
+      .addOrderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 }

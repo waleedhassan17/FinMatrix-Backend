@@ -33,6 +33,7 @@ import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { PurchaseOrderStatus } from '../../types';
 import { addDaysIso, businessToday, termsDays } from '../../common/utils/business-date.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 
 const round4 = (d: Decimal) => d.toDecimalPlaces(4, Decimal.ROUND_HALF_UP);
 
@@ -62,19 +63,33 @@ export class PurchaseOrdersService {
     query: ListPurchaseOrdersQueryDto,
     pagination: PaginationParams,
   ) {
-    const qb = this.repo
-      .createQueryBuilder('o')
+    // Everything but the status tab, and no join: the summary counts every tab
+    // of these, and joined lines would multiply its sums.
+    const filtered = () => {
+      const qb = this.repo
+        .createQueryBuilder('o')
+        .where('o.companyId = :companyId', { companyId });
+      if (query.vendorId) qb.andWhere('o.vendorId = :v', { v: query.vendorId });
+      // An item's own orders, asked of the server: the item page used to scan
+      // the latest orders for its lines, so older ones never showed.
+      if (query.itemId) {
+        qb.andWhere(
+          `o.id IN (SELECT pol.order_id FROM purchase_order_lines pol WHERE pol.item_id = :itemId)`,
+          { itemId: query.itemId },
+        );
+      }
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['o.poNumber', 'o.notes'],
+        vendorColumn: 'o.vendorId',
+      });
+      return qb;
+    };
+    const qb = filtered()
       // Lines are what the list's received-vs-ordered progress is computed
       // from; without them every row reads 0 / 0.
-      .leftJoinAndSelect('o.lines', 'lines')
-      .where('o.companyId = :companyId', { companyId });
+      .leftJoinAndSelect('o.lines', 'lines');
     if (query.status) qb.andWhere('o.status = :s', { s: query.status });
-    if (query.vendorId) qb.andWhere('o.vendorId = :v', { v: query.vendorId });
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['o.poNumber', 'o.notes'],
-      vendorColumn: 'o.vendorId',
-    });
-    qb.orderBy('o.orderDate', 'DESC');
+    qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
 
@@ -84,19 +99,23 @@ export class PurchaseOrdersService {
       : [];
     const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
 
-    return {
-      data: data.map((o) => ({
+    // Over everything the search matches. "On order": sent, or received in
+    // part — ordered and not yet in.
+    const byStatus = await statusSummary(filtered(), 'o', { total: 'o.total' });
+    const onOrder = ['sent', 'partial']
+      .reduce((sum, s) => sum + Number(byStatus.byStatus[s]?.total ?? 0), 0)
+      .toFixed(4);
+
+    // pagedResponse: the envelope used to drop the pagination.
+    return pagedResponse(
+      data.map((o) => ({
         ...o,
         ...this.valueSummary(o.lines ?? []),
         vendorName: vendorNameMap[o.vendorId] ?? '',
       })),
-      pagination: {
-        page: pagination.page,
-        limit: pagination.limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      },
-    };
+      { page: pagination.page, limit: pagination.limit, total },
+      { ...byStatus, onOrder },
+    );
   }
 
   async getById(companyId: string, id: string, manager?: EntityManager) {

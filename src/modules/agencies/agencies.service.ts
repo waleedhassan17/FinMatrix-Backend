@@ -9,6 +9,7 @@ import { Agency } from './entities/agency.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { recordMovementAtAverage } from '../../common/utils/inventory-movement.util';
 import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto, AddAgencyItemDto } from './dto/agency.dto';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class AgenciesService {
@@ -26,10 +27,10 @@ export class AgenciesService {
     if (query.type) qb.andWhere('a.type = :t', { t: query.type });
     if (query.isConnected !== undefined) qb.andWhere('a.isConnected = :c', { c: query.isConnected });
     if (query.q) qb.andWhere('(a.name ILIKE :q)', { q: `%${query.q}%` });
-    qb.orderBy('a.createdAt', 'DESC');
+    qb.orderBy('a.createdAt', 'DESC').addOrderBy('a.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getById(companyId: string, id: string) {

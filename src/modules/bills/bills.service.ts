@@ -52,6 +52,7 @@ import {
 /** Stored statuses a bill owes money under before it is overdue. */
 const BILL_OPEN_STATUSES = ['open', 'partial'] as const;
 import { assertMoneyAccount } from '../../common/utils/money-account.util';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 /** What a bill line raised from a purchase order bills (see createInTransaction). */
 export interface PoBillLineLink {
@@ -1014,10 +1015,10 @@ export class BillsService {
   async listPayments(companyId: string, billId: string | undefined, page: number, limit: number) {
     const qb = this.paymentRepo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
     if (billId) qb.andWhere('p.id IN (SELECT bill_payment_id FROM bill_payment_applications WHERE bill_id = :bid)', { bid: billId });
-    qb.orderBy('p.paymentDate', 'DESC');
+    qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC').addOrderBy('p.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   /**

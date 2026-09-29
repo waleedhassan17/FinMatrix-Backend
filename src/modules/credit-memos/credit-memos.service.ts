@@ -25,6 +25,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { ACCT_AR, ACCT_CASH, ACCT_COGS, ACCT_INVENTORY, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
 import { businessToday } from '../../common/utils/business-date.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class CreditMemosService {
@@ -38,23 +39,37 @@ export class CreditMemosService {
   ) {}
 
   async list(companyId: string, query: ListCreditMemosQueryDto, pagination: PaginationParams) {
-    const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
+      if (query.customerId) qb.andWhere('c.customerId = :cust', { cust: query.customerId });
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['c.creditMemoNumber'],
+        customerColumn: 'c.customerId',
+      });
+      return qb;
+    };
+    const qb = filtered();
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
-    if (query.customerId) qb.andWhere('c.customerId = :cust', { cust: query.customerId });
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['c.creditMemoNumber'],
-      customerColumn: 'c.customerId',
-    });
     qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
     const ids = [...new Set(data.map((c) => c.customerId))];
     const customers = ids.length ? await this.customerRepo.findByIds(ids) : [];
     const nameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
-    return {
-      data: data.map((c) => ({ ...c, customerName: nameMap[c.customerId] ?? '' })),
-      pagination: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.max(1, Math.ceil(total / pagination.limit)) },
-    };
+
+    // Over everything the search matches: counts per tab, and what the open
+    // and part-used memos still hold.
+    const byStatus = await statusSummary(filtered(), 'c', { total: 'c.total', balance: 'c.balance' });
+    const openBalance = ['open', 'applied']
+      .reduce((sum, s) => sum + Number(byStatus.byStatus[s]?.balance ?? 0), 0)
+      .toFixed(4);
+
+    return pagedResponse(
+      data.map((c) => ({ ...c, customerName: nameMap[c.customerId] ?? '' })),
+      { page: pagination.page, limit: pagination.limit, total },
+      { ...byStatus, openBalance },
+    );
   }
 
   async getById(companyId: string, id: string): Promise<CreditMemo> {

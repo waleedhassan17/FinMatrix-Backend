@@ -9,6 +9,7 @@ import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_CASH, ACCT_TAX_PAYABLE, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class TaxService {
@@ -23,10 +24,10 @@ export class TaxService {
   async listRates(companyId: string, page: number, limit: number, isActive?: boolean) {
     const qb = this.rateRepo.createQueryBuilder('r').where('r.companyId = :cid', { cid: companyId });
     if (isActive !== undefined) qb.andWhere('r.isActive = :a', { a: isActive });
-    qb.orderBy('r.createdAt', 'DESC');
+    qb.orderBy('r.createdAt', 'DESC').addOrderBy('r.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getRate(companyId: string, id: string) {
@@ -89,10 +90,10 @@ export class TaxService {
   async listPayments(companyId: string, taxRateId: string | undefined, page: number, limit: number) {
     const qb = this.paymentRepo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
     if (taxRateId) qb.andWhere('p.taxRateId = :tid', { tid: taxRateId });
-    qb.orderBy('p.paymentDate', 'DESC');
+    qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC').addOrderBy('p.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async createPayment(

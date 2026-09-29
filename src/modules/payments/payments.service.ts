@@ -51,6 +51,7 @@ import {
   UNAPPLIED_RECEIPTS_SQL,
   type UnappliedReceiptRow,
 } from './unapplied-receipts.sql';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 /** A receipt still holding money that has not been applied to an invoice. */
 export interface CustomerAdvance {
@@ -140,36 +141,56 @@ export class PaymentsService {
     query: ListPaymentsQueryDto,
     pagination: PaginationParams,
   ) {
-    const qb = this.repo
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.applications', 'app')
-      .where('p.companyId = :companyId', { companyId });
-    if (query.customerId) qb.andWhere('p.customerId = :c', { c: query.customerId });
-    if (query.invoiceId)
-      qb.andWhere(
-        `p.id IN (SELECT pa."payment_id" FROM payment_applications pa WHERE pa."invoice_id" = :invId)`,
-        { invId: query.invoiceId },
-      );
-    if (query.startDate && query.endDate)
-      qb.andWhere('p.paymentDate BETWEEN :s AND :e', {
-        s: query.startDate,
-        e: query.endDate,
-      });
-    if (query.paymentMethod)
-      qb.andWhere('p.paymentMethod = :pm', { pm: query.paymentMethod });
-    qb.orderBy('p.paymentDate', 'DESC');
-    qb.take(pagination.limit).skip(pagination.skip);
-
-    const [data, total] = await qb.getManyAndCount();
-    return {
-      data: await this.withNames(companyId, data),
-      pagination: {
-        page: pagination.page,
-        limit: pagination.limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      },
+    // The filters, without the applications join: the summary sums payments,
+    // and joined applications would multiply them.
+    const filtered = () => {
+      const qb = this.repo
+        .createQueryBuilder('p')
+        .where('p.companyId = :companyId', { companyId });
+      if (query.customerId) qb.andWhere('p.customerId = :c', { c: query.customerId });
+      if (query.invoiceId)
+        qb.andWhere(
+          `p.id IN (SELECT pa."payment_id" FROM payment_applications pa WHERE pa."invoice_id" = :invId)`,
+          { invId: query.invoiceId },
+        );
+      if (query.startDate && query.endDate)
+        qb.andWhere('p.paymentDate BETWEEN :s AND :e', {
+          s: query.startDate,
+          e: query.endDate,
+        });
+      if (query.paymentMethod)
+        qb.andWhere('p.paymentMethod = :pm', { pm: query.paymentMethod });
+      return qb;
     };
+
+    const qb = filtered().leftJoinAndSelect('p.applications', 'app');
+    // Date, then entry order: receipts sharing a date keep one order across
+    // pages, so paging neither skips nor repeats one.
+    qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC');
+    qb.take(pagination.limit).skip(pagination.skip);
+    const [data, total] = await qb.getManyAndCount();
+
+    // Over every payment the filters match, not the page: what was received,
+    // and what of it no invoice has taken — the rows' own `unapplied`, summed.
+    const totals = await filtered()
+      .select('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'amount')
+      .addSelect(
+        `COALESCE(SUM(GREATEST(p.amount - COALESCE((SELECT SUM(pa2."amount_applied") FROM payment_applications pa2 WHERE pa2."payment_id" = p.id), 0), 0)), 0)`,
+        'unapplied',
+      )
+      .getRawOne<{ count: string; amount: string; unapplied: string }>();
+
+    return pagedResponse(
+      await this.withNames(companyId, data),
+      { page: pagination.page, limit: pagination.limit, total },
+      {
+        count: parseInt(totals?.count ?? '0', 10) || 0,
+        byStatus: {},
+        amount: toDecimal(totals?.amount ?? 0).toFixed(4),
+        unapplied: toDecimal(totals?.unapplied ?? 0).toFixed(4),
+      },
+    );
   }
 
   async getById(companyId: string, id: string) {

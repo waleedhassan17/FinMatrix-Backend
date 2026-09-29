@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditTrailEntry } from './audit-trail.entity';
+import { pagedResponse } from '../utils/paged-response.util';
 
 export interface ListAuditQuery {
   module?: string;
@@ -52,17 +53,13 @@ export class FinancialAuditService {
     }
 
     qb.orderBy('a.createdAt', 'DESC')
+      .addOrderBy('a.id', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
-    };
+    // Through pagedResponse so the page count survives the response envelope.
+    return pagedResponse(data, { page, limit, total });
   }
 
   /** Full change history for one document, oldest first. */

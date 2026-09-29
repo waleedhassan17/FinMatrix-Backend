@@ -43,6 +43,13 @@ import {
   grossOf,
   resolveCollection,
 } from './delivery-collection.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import { likeContains } from '../../common/utils/like.util';
+
+const DELIVERY_STATUSES = ['unassigned', 'pending', 'picked_up', 'in_transit', 'arrived', 'delivered', 'failed', 'returned', 'cancelled'];
+/** `statuses=a,b` → the known ones; unknown words are ignored, not an error. */
+const parseStatusList = (raw?: string): string[] =>
+  (raw ?? '').split(',').map((x) => x.trim()).filter((x) => DELIVERY_STATUSES.includes(x));
 
 /**
  * The advance a new delivery asks for: `advanceAmount` when given, the whole
@@ -142,19 +149,34 @@ export class DeliveriesService {
   }
 
   async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
-    const qb = this.repo.createQueryBuilder('d')
-      .leftJoinAndSelect('d.items', 'items')
-      .where('d.companyId = :cid', { cid: companyId });
+    // Everything but the status tab, and no join: the summary counts every
+    // tab of these, and joined items would multiply its rows.
+    const filtered = () => {
+      const qb = this.repo.createQueryBuilder('d').where('d.companyId = :cid', { cid: companyId });
+      // Role-based filtering: delivery personnel only see their own
+      if (user && (user.role === 'delivery' || user.role === 'delivery_personnel')) {
+        qb.andWhere('d.personnelId = :uid', { uid: user.id });
+      }
+      if (query.personnelId) qb.andWhere('d.personnelId = :pid', { pid: query.personnelId });
+      if (query.customerId) qb.andWhere('d.customerId = :cust', { cust: query.customerId });
+      // `q` was declared and never applied, so a search matched every delivery.
+      const q = query.q?.trim();
+      if (q) {
+        qb.andWhere(
+          `(d.referenceNo ILIKE :dq OR d.customerName ILIKE :dq OR d.address ILIKE :dq
+            OR d.personnelId IN (SELECT u.id FROM users u WHERE u.display_name ILIKE :dq OR u.username ILIKE :dq))`,
+          { dq: likeContains(q) },
+        );
+      }
+      return qb;
+    };
 
-    // Role-based filtering: delivery personnel only see their own
-    if (user && (user.role === 'delivery' || user.role === 'delivery_personnel')) {
-      qb.andWhere('d.personnelId = :uid', { uid: user.id });
-    }
-
+    const qb = filtered().leftJoinAndSelect('d.items', 'items');
     if (query.status) qb.andWhere('d.status = :s', { s: query.status });
-    if (query.personnelId) qb.andWhere('d.personnelId = :pid', { pid: query.personnelId });
-    if (query.customerId) qb.andWhere('d.customerId = :cust', { cust: query.customerId });
-    qb.orderBy('d.createdAt', 'DESC');
+    // A tab can be a group of statuses ("on the road" = several).
+    const statuses = parseStatusList(query.statuses);
+    if (statuses.length) qb.andWhere('d.status IN (:...sts)', { sts: statuses });
+    qb.orderBy('d.createdAt', 'DESC').addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [rawData, total] = await qb.getManyAndCount();
 
@@ -164,7 +186,9 @@ export class DeliveriesService {
       scheduledDate: d.preferredDate,
     }));
 
-    return { data, total, page, limit };
+    // Per status over everything the filters match — what the tabs count.
+    const summary = await statusSummary(filtered(), 'd');
+    return pagedResponse(data, { page, limit, total }, summary);
   }
 
   async getById(companyId: string, id: string) {
@@ -747,10 +771,11 @@ export class DeliveriesService {
     const qb = this.historyRepo.createQueryBuilder('h')
       .innerJoin(Delivery, 'd', 'd.id = h.deliveryId')
       .where('d.companyId = :cid AND h.deliveryId = :did', { cid: companyId, did: deliveryId })
-      .orderBy('h.timestamp', 'DESC');
+      .orderBy('h.timestamp', 'DESC')
+      .addOrderBy('h.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async reportIssue(companyId: string, deliveryId: string, dto: DeliveryIssueDto, userId: string) {
@@ -770,20 +795,22 @@ export class DeliveriesService {
     const qb = this.issueRepo.createQueryBuilder('i')
       .innerJoin(Delivery, 'd', 'd.id = i.deliveryId')
       .where('d.companyId = :cid AND i.deliveryId = :did', { cid: companyId, did: deliveryId })
-      .orderBy('i.createdAt', 'DESC');
+      .orderBy('i.createdAt', 'DESC')
+      .addOrderBy('i.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async myDeliveries(companyId: string, personnelId: string, page: number, limit: number) {
     const qb = this.repo.createQueryBuilder('d')
       .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
       .andWhere('d.status IN (:...statuses)', { statuses: ['pending', 'picked_up', 'in_transit', 'arrived'] })
-      .orderBy('d.createdAt', 'DESC');
+      .orderBy('d.createdAt', 'DESC')
+      .addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async myDashboard(companyId: string, personnelId: string) {
@@ -923,10 +950,11 @@ export class DeliveriesService {
     const qb = this.repo.createQueryBuilder('d')
       .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
       .andWhere('d.status IN (:...statuses)', { statuses: ['delivered', 'failed', 'returned', 'cancelled'] })
-      .orderBy('d.completedAt', 'DESC');
+      .orderBy('d.completedAt', 'DESC')
+      .addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getLocationHistory(companyId: string, deliveryId: string) {

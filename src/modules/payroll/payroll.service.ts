@@ -20,6 +20,7 @@ import {
   ACCT_PAYROLL_LIABILITIES,
   ACCT_SALARY_EXPENSE,
 } from '../accounts/accounts.constants';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
 @Injectable()
@@ -39,9 +40,11 @@ export class PayrollService {
     if (query.status) qb.andWhere('e.status = :s', { s: query.status });
     if (query.department) qb.andWhere('e.department = :d', { d: query.department });
     if (query.search) qb.andWhere("(e.firstName ILIKE :q OR e.lastName ILIKE :q)", { q: `%${query.search}%` });
-    qb.orderBy('e.firstName', 'ASC').take(pagination.limit).skip(pagination.skip);
+    // With tie-breaks: two employees named alike must not swap between pages.
+    qb.orderBy('e.firstName', 'ASC').addOrderBy('e.lastName', 'ASC').addOrderBy('e.id', 'ASC')
+      .take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
-    return { data, pagination: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.max(1, Math.ceil(total / pagination.limit)) } };
+    return pagedResponse(data, { page: pagination.page, limit: pagination.limit, total });
   }
 
   async getEmployee(companyId: string, id: string): Promise<Employee> {

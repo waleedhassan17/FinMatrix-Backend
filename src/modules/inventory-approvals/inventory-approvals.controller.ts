@@ -25,8 +25,13 @@ export class InventoryApprovalsController {
     @Query('page', new ParseIntPipe({ optional: true })) page = 1,
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
-    const items = await this.svc.list(companyId, status, page, limit);
-    return { success: true, data: { requests: items } };
+    const found = await this.svc.list(companyId, status, page, limit);
+    // `requests` stays the array it always was; the pagination beside it says
+    // whether there is more — the rows alone could not.
+    return {
+      success: true,
+      data: { requests: found.data, pagination: found.pagination },
+    };
   }
 
   @Post()

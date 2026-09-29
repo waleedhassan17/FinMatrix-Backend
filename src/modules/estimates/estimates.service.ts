@@ -24,6 +24,7 @@ import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
 import { assertSalesLinesClassified, lineKindOf } from '../../common/utils/sales-lines.util';
 import { CreditOverride } from '../../common/utils/credit-control.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 
 interface LineCalc {
   description: string;
@@ -48,17 +49,22 @@ export class EstimatesService {
   ) {}
 
   async list(companyId: string, query: ListEstimatesQueryDto, pagination: PaginationParams) {
-    const qb = this.repo.createQueryBuilder('e').where('e.companyId = :companyId', { companyId });
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.repo.createQueryBuilder('e').where('e.companyId = :companyId', { companyId });
+      if (query.customerId) qb.andWhere('e.customerId = :c', { c: query.customerId });
+      if (query.startDate && query.endDate) {
+        // Named apart from the status's `:s`: one name holds one value per query.
+        qb.andWhere('e.estimateDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
+      }
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['e.estimateNumber', 'e.notes'],
+        customerColumn: 'e.customerId',
+      });
+      return qb;
+    };
+    const qb = filtered();
     if (query.status) qb.andWhere('e.status = :s', { s: query.status });
-    if (query.customerId) qb.andWhere('e.customerId = :c', { c: query.customerId });
-    if (query.startDate && query.endDate) {
-      // Named apart from the status's `:s`: one name holds one value per query.
-      qb.andWhere('e.estimateDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
-    }
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['e.estimateNumber', 'e.notes'],
-      customerColumn: 'e.customerId',
-    });
     qb.orderBy('e.estimateDate', 'DESC').addOrderBy('e.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 
@@ -67,21 +73,15 @@ export class EstimatesService {
     const customers = customerIds.length ? await this.customerRepo.findByIds(customerIds) : [];
     const nameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
 
-    const statusCounts = await this.repo.createQueryBuilder('e')
-      .select('e.status', 'status').addSelect('COUNT(*)', 'count')
-      .addSelect('COALESCE(SUM(e.total), 0)', 'total')
-      .where('e.companyId = :companyId', { companyId }).groupBy('e.status').getRawMany();
+    // Over everything the search matches — the tabs' counts — not the page.
+    const summary = await statusSummary(filtered(), 'e', { total: 'e.total' });
 
-    return {
-      data: data.map((e) => ({ ...e, customerName: nameMap[e.customerId] ?? '' })),
-      summary: Object.fromEntries(statusCounts.map((r) => [r.status, {
-        count: parseInt(r.count, 10), total: toDecimal(r.total).toFixed(4),
-      }])),
-      pagination: {
-        page: pagination.page, limit: pagination.limit, total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      },
-    };
+    // pagedResponse: the envelope used to drop the summary and pagination.
+    return pagedResponse(
+      data.map((e) => ({ ...e, customerName: nameMap[e.customerId] ?? '' })),
+      { page: pagination.page, limit: pagination.limit, total },
+      summary,
+    );
   }
 
   async getById(companyId: string, id: string): Promise<Estimate> {

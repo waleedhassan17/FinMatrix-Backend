@@ -36,7 +36,9 @@ export class VendorsService {
     applyTextSearch(qb, query.search, companyId, {
       columns: ['v.companyName', 'v.email', 'v.contactPerson', 'v.phone'],
     });
-    qb.orderBy('v.createdAt', 'DESC');
+    // id breaks ties, so paging (and the pickers that walk every page) sees
+    // each vendor exactly once.
+    qb.orderBy('v.createdAt', 'DESC').addOrderBy('v.id', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
     return {
@@ -132,7 +134,8 @@ export class VendorsService {
     await this.getById(companyId, id);
     const [data, total] = await this.billRepo.findAndCount({
       where: { companyId, vendorId: id },
-      order: { billDate: 'DESC' },
+      // Same-day documents need a fixed order, or they swap across pages.
+      order: { billDate: 'DESC', createdAt: 'DESC', id: 'DESC' },
       take: pagination.limit,
       skip: pagination.skip,
     });
@@ -153,7 +156,7 @@ export class VendorsService {
     await this.getById(companyId, id);
     const [data, total] = await this.paymentRepo.findAndCount({
       where: { companyId, vendorId: id },
-      order: { paymentDate: 'DESC' },
+      order: { paymentDate: 'DESC', createdAt: 'DESC', id: 'DESC' },
       take: pagination.limit,
       skip: pagination.skip,
     });

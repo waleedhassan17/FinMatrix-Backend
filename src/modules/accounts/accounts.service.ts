@@ -82,6 +82,7 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { businessToday } from '../../common/utils/business-date.util';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class AccountsService {
@@ -356,19 +357,20 @@ export class AccountsService {
     await this.getById(companyId, accountId);
     const [data, total] = await this.glRepo.findAndCount({
       where: { companyId, accountId },
-      order: { date: 'DESC', createdAt: 'DESC' },
+      // id breaks ties: one posting writes its lines with one timestamp, and
+      // page 2 must continue page 1 exactly.
+      order: { date: 'DESC', createdAt: 'DESC', id: 'DESC' },
       take: pagination.limit,
       skip: pagination.skip,
     });
-    return {
-      data,
-      pagination: {
-        page: pagination.page,
-        limit: pagination.limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      },
-    };
+    // pagedResponse, not `{ data, pagination }`: the response envelope keeps
+    // only `data` from the latter, so every client saw one page of the
+    // ledger and could not tell there was more.
+    return pagedResponse(data, {
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+    });
   }
 
   /**

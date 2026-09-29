@@ -58,7 +58,10 @@ export class CustomersService {
     applyTextSearch(qb, query.search, companyId, {
       columns: ['c.name', 'c.email', 'c.company', 'c.phone'],
     });
+    // id breaks ties, so paging (and the pickers that walk every page) sees
+    // each customer exactly once.
     qb.orderBy('c.createdAt', 'DESC')
+      .addOrderBy('c.id', 'DESC')
       .take(pagination.limit)
       .skip(pagination.skip);
 
@@ -242,7 +245,8 @@ export class CustomersService {
     await this.getById(companyId, id);
     const [data, total] = await this.invoiceRepo.findAndCount({
       where: { companyId, customerId: id },
-      order: { invoiceDate: 'DESC' },
+      // Same-day documents need a fixed order, or they swap across pages.
+      order: { invoiceDate: 'DESC', createdAt: 'DESC', id: 'DESC' },
       take: pagination.limit,
       skip: pagination.skip,
     });
@@ -263,7 +267,7 @@ export class CustomersService {
     await this.getById(companyId, id);
     const [data, total] = await this.paymentRepo.findAndCount({
       where: { companyId, customerId: id },
-      order: { paymentDate: 'DESC' },
+      order: { paymentDate: 'DESC', createdAt: 'DESC', id: 'DESC' },
       take: pagination.limit,
       skip: pagination.skip,
     });

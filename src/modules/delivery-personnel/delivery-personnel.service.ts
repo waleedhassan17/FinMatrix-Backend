@@ -11,6 +11,7 @@ import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
 import { getPlanConfig, isTrialPlan, riderSeatLimit } from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class DeliveryPersonnelService {
@@ -34,7 +35,7 @@ export class DeliveryPersonnelService {
       .addSelect('u.phone', 'u_phone')
       .where('p.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('p.status = :s', { s: status });
-    qb.orderBy('p.createdAt', 'DESC');
+    qb.orderBy('p.createdAt', 'DESC').addOrderBy('p.userId', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
 
     const { entities, raw } = await qb.getRawAndEntities();
@@ -48,7 +49,7 @@ export class DeliveryPersonnelService {
       phone: raw[i]?.u_phone ?? null,
     }));
 
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getById(companyId: string, userId: string) {

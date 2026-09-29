@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity';
 import { NotificationQueryDto } from './dto/notification.dto';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class NotificationsService {
@@ -14,10 +15,10 @@ export class NotificationsService {
     const qb = this.repo.createQueryBuilder('n').where('n.userId = :uid', { uid: userId });
     if (query.isRead !== undefined) qb.andWhere('n.isRead = :r', { r: query.isRead });
     if (query.type) qb.andWhere('n.type = :t', { t: query.type });
-    qb.orderBy('n.createdAt', 'DESC');
+    qb.orderBy('n.createdAt', 'DESC').addOrderBy('n.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async markRead(userId: string, id: string) {

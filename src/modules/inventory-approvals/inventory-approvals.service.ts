@@ -51,6 +51,7 @@ import {
 import { validate } from 'class-validator';
 import Decimal from 'decimal.js';
 import { plainToInstance } from 'class-transformer';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'all';
 
@@ -87,10 +88,14 @@ export class InventoryApprovalsService {
       .leftJoinAndMapMany('r.lines', InventoryUpdateRequestLine, 'l', 'l.request_id = r.id')
       .where('r.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('r.status = :s', { s: status });
-    qb.orderBy('r.submittedAt', 'DESC');
+    qb.orderBy('r.submittedAt', 'DESC').addOrderBy('r.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [rows, total] = await qb.getManyAndCount();
-    return this.enrichWithDelivery(companyId, rows.map((r) => this.formatRequest(r)));
+    // With its total: the rows alone could not say a second page exists.
+    return pagedResponse(
+      await this.enrichWithDelivery(companyId, rows.map((r) => this.formatRequest(r))),
+      { page, limit, total },
+    );
   }
 
   async getById(companyId: string, id: string) {
@@ -457,7 +462,7 @@ export class InventoryApprovalsService {
     if (status && status !== 'all') {
       qb.andWhere('r.status = :s', { s: status });
     }
-    qb.orderBy('r.submittedAt', 'DESC');
+    qb.orderBy('r.submittedAt', 'DESC').addOrderBy('r.id', 'DESC');
     qb.skip((page - 1) * pageSize).take(pageSize);
     const [rows, total] = await qb.getManyAndCount();
     return {

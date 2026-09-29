@@ -1270,7 +1270,9 @@ export class ReportsService {
          LEFT JOIN invoices dinv      ON dinv.id = dl.invoice_id
          LEFT JOIN customers dc       ON dc.id = dl.customer_id
         WHERE ${where}
-        ORDER BY g.date DESC, g.created_at DESC
+        -- id breaks ties: one posting writes its lines with one timestamp,
+        -- and page 2 must continue page 1 exactly.
+        ORDER BY g.date DESC, g.created_at DESC, g.id DESC
         LIMIT $5 OFFSET $6`,
       [...params, safeLimit, (safePage - 1) * safeLimit],
     );

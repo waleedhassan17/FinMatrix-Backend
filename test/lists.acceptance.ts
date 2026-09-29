@@ -318,9 +318,326 @@ async function main() {
   const opened2 = data(await req('GET', `/bills/${lateBill.id}`));
   ok(
     'E6 a bill opened on its own names its vendor, and shows as overdue',
-    opened2?.vendorName === `Lists Vendor ${RUN}` && opened2?.status === 'overdue',
+    opened2?.vendorName === `Lists Vendor ${RUN}` &&
+      opened2?.status === 'overdue',
     { vendorName: opened2?.vendorName, status: opened2?.status },
   );
+
+  // ── F. Every paged list ───────────────────────────────────────
+  // The invoice list stopping at 50 was one instance of a pattern: a list's
+  // pagination and summary were dropped on the way out, so a client could
+  // only ever see and count its first page. Each list here must hand out
+  // every row exactly once across its pages, say how many there are, and —
+  // where a client counts tabs — count them over everything, not a page.
+  console.log('\n— F. every paged list reaches every row');
+  const walk = async (path: string) => {
+    const sep = path.includes('?') ? '&' : '?';
+    const first = await req('GET', `${path}${sep}limit=50&page=1`);
+    if (first.status === 403) return { skipped: true as const };
+    const body = first.body ?? {};
+    const pages: any[][] = [Array.isArray(body.data) ? body.data : []];
+    const totalPages = body.pagination?.totalPages ?? 1;
+    for (let pg = 2; pg <= Math.min(totalPages, 60); pg++) {
+      const r = await req('GET', `${path}${sep}limit=50&page=${pg}`);
+      pages.push(Array.isArray(r.body?.data) ? r.body.data : []);
+    }
+    const rows = pages.flat();
+    return {
+      skipped: false as const,
+      body,
+      rows, // Riders are keyed by the user they are.
+      ids: rows.map((r) => r.id ?? r.userId),
+    };
+  };
+  const lists: Array<{
+    path: string;
+    label: string;
+    number?: string;
+    summary?: boolean;
+  }> = [
+    {
+      path: '/invoices',
+      label: 'invoices',
+      number: 'invoiceNumber',
+      summary: true,
+    },
+    { path: '/bills', label: 'bills', number: 'billNumber', summary: true },
+    {
+      path: '/estimates',
+      label: 'estimates',
+      number: 'estimateNumber',
+      summary: true,
+    },
+    {
+      path: '/sales-orders',
+      label: 'sales orders',
+      number: 'orderNumber',
+      summary: true,
+    },
+    {
+      path: '/purchase-orders',
+      label: 'purchase orders',
+      number: 'poNumber',
+      summary: true,
+    },
+    {
+      path: '/credit-memos',
+      label: 'credit memos',
+      number: 'creditMemoNumber',
+      summary: true,
+    },
+    {
+      path: '/vendor-credits',
+      label: 'vendor credits',
+      number: 'vendorCreditNumber',
+      summary: true,
+    },
+    { path: '/payments', label: 'payments', summary: true },
+    { path: '/deliveries', label: 'deliveries', summary: true },
+    { path: '/employees', label: 'employees' },
+    { path: '/inventory/items', label: 'inventory items' },
+    { path: '/inventory/movements', label: 'stock movements' },
+    { path: '/delivery-personnel', label: 'riders' },
+    { path: '/agencies', label: 'agencies' },
+    { path: '/shadow-inventory', label: 'shadow inventory' },
+    { path: '/taxes/payments', label: 'tax payments' },
+    { path: '/taxes/rates', label: 'tax rates' },
+    { path: '/notifications', label: 'notifications' },
+  ];
+  for (const l of lists) {
+    const w = await walk(l.path);
+    if (w.skipped) {
+      console.log(
+        `    (${l.label}: feature not enabled for this company — skipped)`,
+      );
+      continue;
+    }
+    const total = w.body.pagination?.total;
+    ok(
+      `F ${l.label}: rows and pagination arrive (${total ?? '?'} in all)`,
+      Array.isArray(w.body.data) && typeof total === 'number',
+      { keys: Object.keys(w.body) },
+    );
+    ok(
+      `F ${l.label}: every page walked hands out each row once — ${w.ids.length} of ${total}`,
+      w.ids.length === total && new Set(w.ids).size === w.ids.length,
+      { got: w.ids.length, distinct: new Set(w.ids).size, total },
+    );
+    if (l.summary) {
+      ok(
+        `F ${l.label}: the summary counts all of them, not a page`,
+        w.body.summary?.count === total,
+        { summary: w.body.summary?.count, total },
+      );
+      const byStatus = w.body.summary?.byStatus ?? {};
+      const [st, info] =
+        (Object.entries(byStatus) as [string, any][]).find(
+          ([, v]) => v.count > 0,
+        ) ?? [];
+      if (st && l.path !== '/payments') {
+        const tab = await walk(`${l.path}?status=${st}`);
+        ok(
+          `F ${l.label}: the "${st}" tab holds exactly its ${info.count}`,
+          !tab.skipped &&
+            tab.rows.length === info.count &&
+            tab.rows.every((r: any) => r.status === st),
+          {
+            got: tab.skipped ? 'skipped' : tab.rows.length,
+            expected: info.count,
+          },
+        );
+      }
+    }
+    if (l.number && w.rows.length > 0) {
+      const oldest = w.rows[w.rows.length - 1];
+      const found = await req(
+        'GET',
+        `${l.path}?search=${encodeURIComponent(oldest[l.number])}&limit=50`,
+      );
+      ok(
+        `F ${l.label}: search reaches the oldest, ${oldest[l.number]}`,
+        (found.body?.data ?? []).some((r: any) => r.id === oldest.id),
+        found.body?.data?.length,
+      );
+    }
+  }
+  const payWalk = await walk('/payments');
+  if (!payWalk.skipped) {
+    const sum = payWalk.rows.reduce((t: number, p: any) => t + n(p.amount), 0);
+    const held = payWalk.rows.reduce(
+      (t: number, p: any) => t + n(p.unapplied),
+      0,
+    );
+    ok(
+      'F payments: the summary sums every receipt and what is held as credit',
+      near(n(payWalk.body.summary?.amount), sum) &&
+        near(n(payWalk.body.summary?.unapplied), held),
+      { summary: payWalk.body.summary, sum, held },
+    );
+  }
+  const onRoad = await walk(
+    '/deliveries?statuses=pending,picked_up,in_transit,arrived',
+  );
+  if (!onRoad.skipped) {
+    const expected = ['pending', 'picked_up', 'in_transit', 'arrived'].reduce(
+      (t, s) => t + (onRoad.body.summary?.byStatus?.[s]?.count ?? 0),
+      0,
+    );
+    ok(
+      `F deliveries: a tab of several statuses holds exactly their ${expected}`,
+      onRoad.rows.length === expected,
+      { got: onRoad.rows.length, expected },
+    );
+  }
+  // An item's own purchase orders, filtered by the server (the item page's
+  // tab used to search the latest 100 orders' lines on the client).
+  const poWalk = await walk('/purchase-orders');
+  if (!poWalk.skipped) {
+    const itemIds = new Map<string, number>();
+    for (const po of poWalk.rows) {
+      for (const id of new Set<string>(
+        (po.lines ?? []).map((l: any) => l.itemId).filter(Boolean),
+      )) {
+        itemIds.set(id, (itemIds.get(id) ?? 0) + 1);
+      }
+    }
+    const [itemId, expected] =
+      [...itemIds.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (itemId) {
+      const forItem = await walk(`/purchase-orders?itemId=${itemId}`);
+      ok(
+        `F purchase orders: ?itemId= returns every order with that item — ${expected}`,
+        !forItem.skipped &&
+          forItem.rows.length === expected &&
+          forItem.rows.every((po: any) =>
+            (po.lines ?? []).some((l: any) => l.itemId === itemId),
+          ),
+        { got: forItem.skipped ? 'skipped' : forItem.rows.length, expected },
+      );
+    }
+  }
+
+  // Delivery search on the server — the monitor's search box.
+  const delWalk = await walk('/deliveries');
+  const oldestDelivery = delWalk.skipped
+    ? null
+    : delWalk.rows[delWalk.rows.length - 1];
+  if (oldestDelivery?.referenceNo) {
+    const found = await req(
+      'GET',
+      `/deliveries?q=${encodeURIComponent(oldestDelivery.referenceNo)}&limit=50`,
+    );
+    ok(
+      `F deliveries: search reaches the oldest, ${oldestDelivery.referenceNo}`,
+      (found.body?.data ?? []).some((d: any) => d.id === oldestDelivery.id) &&
+        found.body?.summary?.count === found.body?.pagination?.total,
+      found.body?.pagination,
+    );
+  }
+
+  // Report drill-downs page to the end: P&L line entries and aging documents.
+  const drill = async (path: string, key: string) => {
+    const seen: string[] = [];
+    let total = -1;
+    for (let pg = 1; pg <= 200; pg++) {
+      const sep = path.includes('?') ? '&' : '?';
+      const r = data(await req('GET', `${path}${sep}limit=7&page=${pg}`));
+      total = r?.total ?? 0;
+      const got: any[] = r?.[key] ?? [];
+      seen.push(...got.map((e) => e.id ?? e.documentId));
+      if (!got.length || seen.length >= total) break;
+    }
+    return { seen, total };
+  };
+  const pl = await drill(
+    `/reports/profit-loss/lines/4000/entries?startDate=2000-01-01&endDate=${day(0)}`,
+    'entries',
+  );
+  ok(
+    `F P&L drill-down: pages of 7 reach all ${pl.total} entries, each once`,
+    pl.total > 7 &&
+      pl.seen.length === pl.total &&
+      new Set(pl.seen).size === pl.total,
+    { got: pl.seen.length, distinct: new Set(pl.seen).size, total: pl.total },
+  );
+  const aging = data(await req('GET', '/reports/ar-aging'));
+  const busiest = ((aging?.rows ?? []) as any[])[0];
+  if (busiest) {
+    const docs = await drill(
+      `/reports/ar-aging/customers/${busiest.customerId}/documents`,
+      'documents',
+    );
+    ok(
+      `F aging drill-down: pages reach all ${docs.total} open invoices of ${busiest.customerName}`,
+      docs.seen.length === docs.total && new Set(docs.seen).size === docs.total,
+      { got: docs.seen.length, total: docs.total },
+    );
+  }
+
+  // The account ledger and the audit log came back `{ data, pagination }`,
+  // which the envelope cut to `data`: one page, no way to know of a second.
+  const accounts = data(await req('GET', '/accounts'))?.accounts ?? [];
+  const busiestAccount = accounts.find((a: any) => a.accountNumber === '4000');
+  if (busiestAccount) {
+    const ledger = await walk(`/accounts/${busiestAccount.id}/transactions`);
+    const total = ledger.skipped ? -1 : ledger.body.pagination?.total;
+    ok(
+      `F account ledger: pagination arrives and every entry comes once — ${ledger.skipped ? 0 : ledger.ids.length} of ${total}`,
+      !ledger.skipped &&
+        typeof total === 'number' &&
+        ledger.ids.length === total &&
+        new Set(ledger.ids).size === total,
+      { got: ledger.skipped ? 'skipped' : ledger.ids.length, total },
+    );
+  }
+  const audit = await walk('/audit');
+  if (!audit.skipped && audit.body.pagination) {
+    ok(
+      `F audit log: every entry comes once — ${audit.ids.length} of ${audit.body.pagination.total}`,
+      audit.ids.length === audit.body.pagination.total &&
+        new Set(audit.ids).size === audit.ids.length,
+      { got: audit.ids.length, total: audit.body.pagination.total },
+    );
+  }
+
+  // Customers and vendors nest their page under `data` (it survives the
+  // envelope); a picker walks every page, so each row must come exactly once.
+  const walkNested = async (path: string) => {
+    const sep = path.includes('?') ? '&' : '?';
+    const first = data(await req('GET', `${path}${sep}limit=50&page=1`));
+    const rows: any[] = [...(first?.data ?? [])];
+    const tp = first?.pagination?.totalPages ?? 1;
+    for (let pg = 2; pg <= Math.min(tp, 60); pg++) {
+      rows.push(
+        ...(data(await req('GET', `${path}${sep}limit=50&page=${pg}`))?.data ??
+          []),
+      );
+    }
+    return { rows, total: first?.pagination?.total };
+  };
+  for (const path of ['/customers', '/vendors']) {
+    const w = await walkNested(path);
+    ok(
+      `F ${path}: every page walked hands out each one once — ${w.rows.length} of ${w.total}`,
+      w.rows.length === w.total &&
+        new Set(w.rows.map((r: any) => r.id)).size === w.total,
+      {
+        got: w.rows.length,
+        distinct: new Set(w.rows.map((r: any) => r.id)).size,
+        total: w.total,
+      },
+    );
+  }
+
+  const approvals = await req('GET', '/inventory-approvals?limit=2');
+  if (approvals.status !== 403) {
+    ok(
+      'F inventory approvals: `requests` is still the array, with its pagination beside it',
+      Array.isArray(approvals.body?.data?.requests) &&
+        typeof approvals.body?.data?.pagination?.total === 'number',
+      approvals.body?.data && Object.keys(approvals.body.data),
+    );
+  }
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);
   process.exit(fail ? 1 : 0);

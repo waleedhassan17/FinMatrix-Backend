@@ -153,6 +153,8 @@ export class DeliveryQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() customerId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() q?: string;
+  /** Several statuses at once, comma-separated — a tab that groups them. */
+  @ApiPropertyOptional() @IsOptional() @IsString() statuses?: string;
 }
 
 export class DeliveryIssueDto {

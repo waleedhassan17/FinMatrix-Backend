@@ -127,4 +127,7 @@ export class ListPurchaseOrdersQueryDto {
 
   /** Order number, notes or vendor name. Undeclared, the whitelist stripped it. */
   @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
+
+  /** Orders with a line for this inventory item — an item's own PO history. */
+  @ApiPropertyOptional() @IsOptional() @IsUUID() itemId?: string;
 }

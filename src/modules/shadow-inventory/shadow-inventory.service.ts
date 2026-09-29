@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ShadowInventorySnapshot } from './entities/shadow-inventory-snapshot.entity';
 import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
+import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class ShadowInventoryService {
@@ -14,7 +15,7 @@ export class ShadowInventoryService {
   async list(companyId: string, personnelId: string | undefined, page: number, limit: number) {
     const qb = this.repo.createQueryBuilder('s').where('s.companyId = :cid', { cid: companyId });
     if (personnelId) qb.andWhere('s.personnelId = :pid', { pid: personnelId });
-    qb.orderBy('s.createdAt', 'DESC');
+    qb.orderBy('s.createdAt', 'DESC').addOrderBy('s.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [rows, total] = await qb.getManyAndCount();
     const data = rows.map((s) => ({
@@ -28,7 +29,7 @@ export class ShadowInventoryService {
       syncStatus: s.syncStatus,
       updatedAt: s.lastSyncAt ?? s.updatedAt,
     }));
-    return { data, total, page, limit };
+    return pagedResponse(data, { page, limit, total });
   }
 
   async getById(companyId: string, id: string) {

@@ -35,6 +35,7 @@ import {
   enforceCreditLimit,
   grossValue,
 } from '../../common/utils/credit-control.util';
+import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 
 /** Options for sales orders created by the system rather than typed by a user. */
 export interface CreateSalesOrderOptions {
@@ -61,17 +62,22 @@ export class SalesOrdersService {
   ) {}
 
   async list(companyId: string, query: ListSalesOrdersQueryDto, pagination: PaginationParams) {
-    const qb = this.repo.createQueryBuilder('o').where('o.companyId = :companyId', { companyId });
+    // Everything but the status tab: the summary counts every tab of these.
+    const filtered = () => {
+      const qb = this.repo.createQueryBuilder('o').where('o.companyId = :companyId', { companyId });
+      if (query.customerId) qb.andWhere('o.customerId = :c', { c: query.customerId });
+      if (query.startDate && query.endDate) {
+        // Named apart from the status's `:s`: one name holds one value per query.
+        qb.andWhere('o.orderDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
+      }
+      applyTextSearch(qb, query.search, companyId, {
+        columns: ['o.orderNumber', 'o.notes'],
+        customerColumn: 'o.customerId',
+      });
+      return qb;
+    };
+    const qb = filtered();
     if (query.status) qb.andWhere('o.status = :s', { s: query.status });
-    if (query.customerId) qb.andWhere('o.customerId = :c', { c: query.customerId });
-    if (query.startDate && query.endDate) {
-      // Named apart from the status's `:s`: one name holds one value per query.
-      qb.andWhere('o.orderDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
-    }
-    applyTextSearch(qb, query.search, companyId, {
-      columns: ['o.orderNumber', 'o.notes'],
-      customerColumn: 'o.customerId',
-    });
     qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 
@@ -80,21 +86,15 @@ export class SalesOrdersService {
     const customers = customerIds.length ? await this.customerRepo.findByIds(customerIds) : [];
     const nameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
 
-    const statusCounts = await this.repo.createQueryBuilder('o')
-      .select('o.status', 'status').addSelect('COUNT(*)', 'count')
-      .addSelect('COALESCE(SUM(o.total), 0)', 'total')
-      .where('o.companyId = :companyId', { companyId }).groupBy('o.status').getRawMany();
+    // Over everything the search matches — the tabs' counts — not the page.
+    const summary = await statusSummary(filtered(), 'o', { total: 'o.total' });
 
-    return {
-      data: data.map((o) => ({ ...o, customerName: nameMap[o.customerId] ?? '' })),
-      summary: Object.fromEntries(statusCounts.map((r) => [r.status, {
-        count: parseInt(r.count, 10), total: toDecimal(r.total).toFixed(4),
-      }])),
-      pagination: {
-        page: pagination.page, limit: pagination.limit, total,
-        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      },
-    };
+    // pagedResponse: the envelope used to drop the summary and pagination.
+    return pagedResponse(
+      data.map((o) => ({ ...o, customerName: nameMap[o.customerId] ?? '' })),
+      { page: pagination.page, limit: pagination.limit, total },
+      summary,
+    );
   }
 
   async getById(companyId: string, id: string): Promise<SalesOrder> {
