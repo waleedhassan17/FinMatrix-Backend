@@ -889,14 +889,20 @@ export class BillsService {
    */
   async post(companyId: string, id: string, userId: string): Promise<Bill> {
     return this.dataSource.transaction(async (manager) => {
+      // Lock the bill row on its own, then read its lines. Postgres refuses
+      // FOR UPDATE across the LEFT JOIN that `relations` adds ("FOR UPDATE
+      // cannot be applied to the nullable side of an outer join"), so with the
+      // lines joined in, every post failed with a 500.
       const bill = await manager.findOne(Bill, {
         where: { id, companyId },
-        relations: { lines: true },
         lock: { mode: 'pessimistic_write' },
       });
       if (!bill) {
         throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
       }
+      bill.lines = await manager.find(BillLineItem, {
+        where: { billId: bill.id },
+      });
       if (bill.status !== 'draft') {
         throw new BadRequestException({
           code: 'ALREADY_POSTED',
