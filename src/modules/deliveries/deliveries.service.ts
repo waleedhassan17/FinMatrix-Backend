@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager, IsNull } from 'typeorm';
+import { isLocationLive } from './presence.constants';
 import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
 import { DeliveryStatusHistory } from './entities/delivery-status-history.entity';
@@ -980,7 +981,6 @@ export class DeliveriesService {
 
   async getMapData(companyId: string) {
     const now = Date.now();
-    const ONLINE_THRESHOLD = 2 * 60 * 1000;
 
     // All active (non-terminal) deliveries
     const activeDeliveries = await this.repo
@@ -1027,9 +1027,10 @@ export class DeliveriesService {
               speed: personnel.speed,
               accuracy: personnel.accuracy,
               locationUpdatedAt: personnel.locationUpdatedAt,
-              isOnline:
-                !!personnel.locationUpdatedAt &&
-                now - personnel.locationUpdatedAt.getTime() < ONLINE_THRESHOLD,
+                // GPS recency, NOT duty. `isAvailable` above is the duty state;
+              // the monitor reads that for "who is working" and this for "whose
+              // phone is reporting". See presence.constants.
+              isOnline: isLocationLive(personnel.locationUpdatedAt, now),
             }
           : null,
       };

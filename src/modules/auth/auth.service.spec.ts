@@ -501,6 +501,39 @@ describe('AuthService', () => {
       expect(otpRepo.save).toHaveBeenCalled();
       expect(mail.sendOtpEmail).toHaveBeenCalled();
     });
+
+    /**
+     * A rider signs in with a username and a password issued by the office, and
+     * recovery is the office's job. A rider who happened to also have an email
+     * used to slip through this gate — and self-resetting changed
+     * users.password_hash without touching the encrypted copy, so the office
+     * then read out a stale password that no longer worked. That was a second,
+     * independent way for "the rider's credentials don't work" to be true.
+     */
+    it('refuses a rider even when they have an email', async () => {
+      users.findByEmail.mockResolvedValue({
+        id: 'u9',
+        email: 'rider@company.pk',
+        displayName: 'Saim',
+        role: 'delivery',
+      });
+      const res = await service.forgotPassword({ email: 'rider@company.pk' });
+      // Same shape as an unknown address, so this does not confirm the account
+      // exists to whoever asked.
+      expect(res).toEqual({ delivered: true });
+      expect(mail.sendOtpEmail).not.toHaveBeenCalled();
+      expect(otpRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('still refuses staff, and anyone with no inbox', async () => {
+      users.findByEmail.mockResolvedValue({ id: 'u8', email: 's@c.pk', role: 'staff' });
+      await service.forgotPassword({ email: 's@c.pk' });
+      expect(mail.sendOtpEmail).not.toHaveBeenCalled();
+
+      users.findByEmail.mockResolvedValue({ id: 'u7', email: null, role: 'admin' });
+      await service.forgotPassword({ email: 'x@y.z' });
+      expect(mail.sendOtpEmail).not.toHaveBeenCalled();
+    });
   });
 
   describe('verifyOtp', () => {

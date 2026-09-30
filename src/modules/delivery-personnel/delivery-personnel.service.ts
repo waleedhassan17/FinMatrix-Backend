@@ -7,8 +7,11 @@ import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
 import { User } from '../users/entities/user.entity';
+import { Company } from '../companies/entities/company.entity';
 import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
+import { ensureRiderUsername } from './rider-username';
+import { isLocationLive } from '../deliveries/presence.constants';
 import { getPlanConfig, isTrialPlan, riderSeatLimit } from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 import { pagedResponse } from '../../common/utils/paged-response.util';
@@ -142,6 +145,17 @@ export class DeliveryPersonnelService {
         throw new BadRequestException(
           'Either userId, or a username plus a password, must be provided',
         );
+      }
+
+      // The attach path: a profile is being hung on an account that already
+      // exists. That account may have no username — self-signup with an invite
+      // code and companies.join both create one without. A rider signs in with
+      // a username and nothing else, so leaving it null is an account nobody
+      // can enter and an office with nothing to hand over.
+      const attachUser = await em.getRepository(User).findOne({ where: { id: userId } });
+      if (attachUser && !attachUser.username) {
+        const company = await em.getRepository(Company).findOne({ where: { id: companyId } });
+        await ensureRiderUsername(em, attachUser, company?.inviteCode ?? null);
       }
 
       const profileRepo = em.getRepository(DeliveryPersonnelProfile);
@@ -312,9 +326,6 @@ export class DeliveryPersonnelService {
 
   async getLocation(companyId: string, userId: string) {
     const p = await this.getById(companyId, userId);
-    const isOnline =
-      !!p.locationUpdatedAt &&
-      Date.now() - p.locationUpdatedAt.getTime() < 2 * 60 * 1000;
     return {
       lat: p.currentLat ? parseFloat(p.currentLat) : null,
       lng: p.currentLng ? parseFloat(p.currentLng) : null,
@@ -322,7 +333,13 @@ export class DeliveryPersonnelService {
       speed: p.speed,
       accuracy: p.accuracy,
       locationUpdatedAt: p.locationUpdatedAt,
-      isOnline,
+      // `isOnline` here has only ever meant "the phone is reporting GPS". Kept
+      // under that name because a shipped app build reads it; `isLocationLive`
+      // is the same value said honestly, and `isOnDuty` is the thing a
+      // dispatcher actually wants. See presence.constants.
+      isOnline: isLocationLive(p.locationUpdatedAt),
+      isLocationLive: isLocationLive(p.locationUpdatedAt),
+      isOnDuty: p.isAvailable,
     };
   }
 

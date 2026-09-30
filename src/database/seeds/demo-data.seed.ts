@@ -9,6 +9,10 @@
  *   - 5 customers, 5 vendors, 10 invoices, 5 bills, a handful of payments
  */
 import 'reflect-metadata';
+import {
+  allocateRiderUsername,
+  buildRiderUsernameBase,
+} from '../../modules/delivery-personnel/rider-username';
 import { config as loadEnv } from 'dotenv';
 import * as bcrypt from 'bcrypt';
 import { DataSource } from 'typeorm';
@@ -80,10 +84,17 @@ async function run() {
     }
 
     let delivery = await m.findOneBy(User, { email: 'imran@finmatrix.pk' });
+    // A rider signs in by username only, so a seeded rider needs one or the
+    // account cannot be entered. Backfilled on the existing-user branch too,
+    // so a database seeded before this heals on the next run.
     if (!delivery) {
       delivery = await m.save(
         m.create(User, {
           email: 'imran@finmatrix.pk',
+          username: await allocateRiderUsername(
+            m,
+            buildRiderUsernameBase({ inviteCode: 'demo', displayName: 'Imran Delivery' }),
+          ),
           passwordHash: delivHash,
           displayName: 'Imran Delivery',
           phone: '+92-301-7654321',
@@ -92,6 +103,12 @@ async function run() {
           defaultCompanyId: null,
         }),
       );
+    } else if (!delivery.username) {
+      delivery.username = await allocateRiderUsername(
+        m,
+        buildRiderUsernameBase({ inviteCode: 'demo', displayName: 'Imran Delivery' }),
+      );
+      await m.save(delivery);
     }
 
     // --- Company

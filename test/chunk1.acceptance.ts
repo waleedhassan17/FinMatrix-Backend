@@ -389,9 +389,15 @@ async function main() {
   console.log('\n— Personnel reset-password / deactivate (audited)');
   const reset = await req('POST', `/delivery-personnel/${rider2Id}/reset-password`, { token: A.token, companyId: A.companyId });
   const creds = data(reset)?.credentials;
-  check('reset-password returns temp credentials with real email', reset.status === 201 && creds?.email === rider2Email && !!creds?.temporaryPassword, data(reset));
-  const reLogin = await signin(rider2Email, creds?.temporaryPassword);
-  check('rider signs in with temp password', !!data(reLogin)?.tokens?.accessToken, reLogin.status);
+  // The service returns { username, password } — it stopped returning
+  // { email, temporaryPassword } when riders moved to username sign-in, and this
+  // assertion was never updated, so it recorded a contract that no longer
+  // existed. A rider signs in by USERNAME, so that is what the office hands over
+  // and what this must re-login with.
+  check('reset-password returns the rider username and a new password',
+    reset.status === 201 && !!creds?.username && !!creds?.password, data(reset));
+  const reLogin = await signin(creds?.username, creds?.password);
+  check('rider signs in with the reissued credentials', !!data(reLogin)?.tokens?.accessToken, reLogin.status);
 
   const deactivate = await req('PATCH', `/delivery-personnel/${rider2Id}`, {
     token: A.token, companyId: A.companyId, json: { status: 'inactive' },

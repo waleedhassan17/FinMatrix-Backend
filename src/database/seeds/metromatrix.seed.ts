@@ -19,6 +19,10 @@
  * MetroMatrix only.
  */
 import 'reflect-metadata';
+import {
+  allocateRiderUsername,
+  buildRiderUsernameBase,
+} from '../../modules/delivery-personnel/rider-username';
 import { config as loadEnv } from 'dotenv';
 import * as bcrypt from 'bcrypt';
 import { DataSource } from 'typeorm';
@@ -170,19 +174,29 @@ async function run() {
       console.log(`  ✓ Admin user updated: ${ADMIN_EMAIL}`);
     }
 
+    // Riders sign in with a username and nothing else, so a seeded rider
+    // without one cannot be signed into — and CI reseeds after every migration,
+    // which would quietly manufacture the very accounts the backfill just
+    // repaired. Named on create AND on update, so an already-seeded database
+    // heals on the next run.
     const upsertDP = async (email: string, name: string, phone: string) => {
       let u = await m.findOneBy(User, { email });
+      const username = await allocateRiderUsername(
+        m,
+        buildRiderUsernameBase({ inviteCode: 'metro', displayName: name, email }),
+      );
       if (!u) {
         u = await m.save(m.create(User, {
-          email, passwordHash: dpHash, displayName: name, phone,
+          email, username, passwordHash: dpHash, displayName: name, phone,
           role: 'delivery', isActive: true, isEmailVerified: true,
           emailVerifiedAt: new Date(), defaultCompanyId: null,
         }));
-        console.log(`  ✓ Delivery user created: ${email}`);
+        console.log(`  ✓ Delivery user created: ${email} (${username})`);
       } else {
         u.passwordHash = dpHash; u.isActive = true; (u as any).role = 'delivery';
+        if (!u.username) u.username = username;
         await m.save(u);
-        console.log(`  ✓ Delivery user updated: ${email}`);
+        console.log(`  ✓ Delivery user updated: ${email} (${u.username})`);
       }
       return u;
     };

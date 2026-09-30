@@ -8,8 +8,8 @@ import { IsPkPhone } from '../../../common/validation/phone';
  * because that character is what AuthService uses to tell a username from an
  * email when resolving a sign-in handle.
  */
-const RIDER_USERNAME_REGEX = /^[a-z0-9][a-z0-9._-]{2,63}$/;
-const RIDER_USERNAME_RULE =
+export const RIDER_USERNAME_REGEX = /^[a-z0-9][a-z0-9._-]{2,63}$/;
+export const RIDER_USERNAME_RULE =
   'Username must be 3-64 characters: lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit.';
 
 /**

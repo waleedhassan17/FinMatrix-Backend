@@ -38,6 +38,10 @@ import { MailService } from '../mail/mail.service';
 import { computeFeatures } from '../../common/features/feature-map';
 import { getPlanConfig, normalizePlan } from '../billing/plan-config';
 import { RIDER_SEAT_LOCKED_MESSAGE } from '../delivery-personnel/rider-seats';
+import {
+  allocateRiderUsername,
+  buildRiderUsernameBase,
+} from '../delivery-personnel/rider-username';
 
 export interface TokenPair {
   accessToken: string;
@@ -182,6 +186,20 @@ export class AuthService {
         );
         companyId = company.id;
         user.defaultCompanyId = company.id;
+        // A rider signs in with a username and nothing else, and there is no
+        // self-service recovery — so an account created here without one is an
+        // account nobody can ever enter. Named from the invite code they just
+        // used, which is also what the admin form and the backfill produce.
+        if (!user.username) {
+          user.username = await allocateRiderUsername(
+            manager,
+            buildRiderUsernameBase({
+              inviteCode: company.inviteCode,
+              displayName: dto.displayName,
+              email: dto.email,
+            }),
+          );
+        }
         await manager.save(user);
       }
 
@@ -646,7 +664,13 @@ export class AuthService {
 
     // Owner-created accounts have no self-service recovery: no inbox to send
     // an OTP to, and recovery is deliberately the owner's job.
-    if (user.role === 'staff' || !user.email) {
+    // Riders are owner-managed in exactly the way staff are: the office issues
+    // the username and password and resets them on request. Before this, a
+    // rider who happened to have an email could self-reset — which changed
+    // users.password_hash without touching the encrypted copy, so the office
+    // then read out a stale password that no longer worked. That was a second,
+    // independent way for "the credentials don't work" to be true.
+    if (user.role === 'staff' || user.role === 'delivery' || !user.email) {
       this.logger.warn(
         `Password reset refused (owner-managed account): ${user.username ?? user.id}`,
       );
@@ -741,6 +765,15 @@ export class AuthService {
     const cost = this.config.get<number>('app.bcryptCost', 12);
     user.passwordHash = await bcrypt.hash(dto.password, cost);
     await this.users.save(user);
+
+    // Any owner-readable copy of the old password is now wrong. Riders can no
+    // longer reach this path at all (see forgotPassword), so this is
+    // belt-and-braces — but it costs one statement and makes a stale credential
+    // structurally impossible rather than merely unreachable. `revealCredential`
+    // then reports "nothing stored", and the screen offers a reset.
+    await this.dataSource.query('DELETE FROM managed_credentials WHERE user_id = $1', [
+      user.id,
+    ]);
 
     record.usedAt = new Date();
     await this.otpRepo.save(record);
