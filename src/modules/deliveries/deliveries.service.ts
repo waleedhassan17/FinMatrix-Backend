@@ -814,28 +814,6 @@ export class DeliveriesService {
     return pagedResponse(data, { page, limit, total });
   }
 
-  async myDashboard(companyId: string, personnelId: string) {
-    const today = new Date().toISOString().split('T')[0];
-    const all = await this.repo.find({
-      where: { companyId, personnelId },
-    });
-    const todayDeliveries = all.filter(
-      (d) => d.createdAt && d.createdAt.toISOString().split('T')[0] === today,
-    );
-    const assigned = todayDeliveries.length;
-    const completed = todayDeliveries.filter((d) => d.status === 'delivered').length;
-    const inTransit = todayDeliveries.filter((d) => d.status === 'in_transit').length;
-    const remaining = assigned - completed;
-    const progress = assigned > 0 ? Math.round((completed / assigned) * 100) : 0;
-    const nextDelivery = all.find((d) =>
-      ['pending', 'picked_up', 'in_transit', 'arrived'].includes(d.status),
-    );
-    return {
-      today: { assigned, completed, inTransit, remaining, progress },
-      nextDelivery: nextDelivery ?? null,
-    };
-  }
-
   async captureSignature(companyId: string, deliveryId: string, dto: CaptureSignatureDto) {
     const d = await this.getById(companyId, deliveryId);
     const sig = this.signatureRepo.create({

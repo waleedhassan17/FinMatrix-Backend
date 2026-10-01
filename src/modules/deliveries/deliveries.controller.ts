@@ -87,15 +87,6 @@ export class DeliveriesController {
     return this.svc.myDeliveries(companyId, user.id, page, limit);
   }
 
-  @Get('my/dashboard')
-  @Roles('delivery')
-  myDashboard(
-    @CurrentCompany() companyId: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    return this.svc.myDashboard(companyId, user.id);
-  }
-
   @Get('my/history')
   @Roles('delivery')
   myHistory(
