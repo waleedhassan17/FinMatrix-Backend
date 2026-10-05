@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { GeneralLedgerEntry } from './entities/general-ledger.entity';
 import { LedgerService } from './ledger.service';
 import { LedgerController } from './ledger.controller';
+import { PartyLedgerService } from './party-ledger.service';
+import { PartyHistoryService } from './party-history.service';
 
 /**
  * General Ledger browse / drill-down. LedgerService derives chronological
@@ -13,7 +15,7 @@ import { LedgerController } from './ledger.controller';
 @Module({
   imports: [TypeOrmModule.forFeature([GeneralLedgerEntry])],
   controllers: [LedgerController],
-  providers: [LedgerService],
-  exports: [TypeOrmModule, LedgerService],
+  providers: [LedgerService, PartyLedgerService, PartyHistoryService],
+  exports: [TypeOrmModule, LedgerService, PartyLedgerService, PartyHistoryService],
 })
 export class LedgerModule {}

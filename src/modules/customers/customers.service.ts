@@ -14,6 +14,17 @@ import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { subtractMoney, toDecimal } from '../../common/utils/money.util';
 import { inPeriod, statementBalances } from '../../common/utils/statement.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
+import {
+  assertPartyCodeFree,
+  assertValidPartyCode,
+  isUniqueViolation,
+  nextPartyCode,
+  normalizePartyCode,
+  partyCodeHolder,
+  partyCodeTaken,
+  peekNextPartyCode,
+} from '../../common/utils/party-code.util';
+import { activeFilterOf, orderPartyList } from '../../common/utils/party-list.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
 import { Address } from './entities/customer.entity';
 import { assessCredit } from '../../common/utils/credit-control.util';
@@ -52,18 +63,15 @@ export class CustomersService {
       .createQueryBuilder('c')
       .where('c.companyId = :companyId', { companyId });
 
-    if (query.isActive !== undefined) {
-      qb.andWhere('c.isActive = :a', { a: query.isActive });
+    const active = activeFilterOf(query);
+    if (active !== undefined) {
+      qb.andWhere('c.isActive = :a', { a: active });
     }
     applyTextSearch(qb, query.search, companyId, {
-      columns: ['c.name', 'c.email', 'c.company', 'c.phone'],
+      columns: ['c.code', 'c.name', 'c.email', 'c.company', 'c.phone'],
     });
-    // id breaks ties, so paging (and the pickers that walk every page) sees
-    // each customer exactly once.
-    qb.orderBy('c.createdAt', 'DESC')
-      .addOrderBy('c.id', 'DESC')
-      .take(pagination.limit)
-      .skip(pagination.skip);
+    orderPartyList(qb, 'c', { sort: query.sort, nameProperty: 'name', search: query.search });
+    qb.take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
 
@@ -172,6 +180,8 @@ export class CustomersService {
       dto.shippingAddress?.sameAsBilling && billing
         ? billing
         : normalizeAddress(dto.shippingAddress);
+    const typed = normalizePartyCode(dto.code);
+    if (typed) assertValidPartyCode('customer', typed);
 
     const entity = this.repo.create({
       companyId,
@@ -189,8 +199,40 @@ export class CustomersService {
       contactPerson: dto.contactPerson ?? null,
       taxId: dto.taxId ?? null,
     });
+    // Geocoding is a network call; it runs before the transaction so the
+    // number taken below is held only for the moment the row is written.
     await this.applyShippingGeocode(entity);
-    return this.repo.save(entity);
+    return this.saveWithCode(companyId, entity, typed);
+  }
+
+  /** The ID a new customer would get now, for the form's placeholder. */
+  async nextCode(companyId: string) {
+    return { code: await peekNextPartyCode(this.repo.manager, companyId, 'customer') };
+  }
+
+  /**
+   * Save with the typed ID, or the next one in the series, in one transaction:
+   * the series number is held until the row is written, and given back if the
+   * save fails. A typed ID someone else already has is refused by name.
+   */
+  private async saveWithCode(companyId: string, entity: Customer, typed: string | null): Promise<Customer> {
+    try {
+      return await this.repo.manager.transaction(async (m) => {
+        if (typed) await assertPartyCodeFree(m, companyId, 'customer', typed, entity.id);
+        entity.code = typed ?? (await nextPartyCode(m, companyId, 'customer'));
+        return m.getRepository(Customer).save(entity);
+      });
+    } catch (err) {
+      // Two people typing the same ID at once: the unique index decides.
+      if (isUniqueViolation(err) && entity.code) {
+        throw partyCodeTaken(
+          'customer',
+          entity.code,
+          await partyCodeHolder(this.repo.manager, companyId, 'customer', entity.code, entity.id),
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -238,6 +280,13 @@ export class CustomersService {
     if (dto.contactPerson !== undefined) c.contactPerson = dto.contactPerson;
     if (dto.taxId !== undefined) c.taxId = dto.taxId;
     if (addressChanged) await this.applyShippingGeocode(c);
+    // An empty ID on an edit keeps the one the customer has: every customer
+    // keeps an ID once given one.
+    const typed = normalizePartyCode(dto.code);
+    if (typed && typed !== c.code) {
+      assertValidPartyCode('customer', typed);
+      return this.saveWithCode(companyId, c, typed);
+    }
     return this.repo.save(c);
   }
 

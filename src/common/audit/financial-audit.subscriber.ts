@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { AuditAction, AuditTrailEntry } from './audit-trail.entity';
 import { currentActor } from '../context/request-context';
+import { sameAuditValue } from './audit-diff.util';
 
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
@@ -19,14 +20,34 @@ import { VendorCredit } from '../../modules/vendor-credits/entities/vendor-credi
 import { InventoryAdjustment } from '../../modules/inventory/entities/inventory-adjustment.entity';
 import { TaxPayment } from '../../modules/tax/entities/tax-payment.entity';
 import { JournalEntry } from '../../modules/journal-entries/entities/journal-entry.entity';
+import { Customer } from '../../modules/customers/entities/customer.entity';
+import { Vendor } from '../../modules/vendors/entities/vendor.entity';
+
+interface Watched {
+  module: string;
+  resourceType: string;
+  /**
+   * Columns that change as a side effect, not as an edit: a customer's balance
+   * moves with every invoice and receipt. An update that changes only these is
+   * not recorded — the record's history would otherwise be one line per posting.
+   */
+  ignore?: string[];
+  /** JSON columns (addresses) kept in the snapshot, which otherwise drops objects. */
+  json?: string[];
+  /** Decimal columns, compared as numbers: "50000" is "50000.0000". */
+  numeric?: string[];
+}
 
 /**
- * The financial documents worth an audit row, mapped to the module name
- * recorded alongside. Anything not listed here is ignored, so line-item and
- * join tables do not each produce their own row — the parent document is the
- * logical unit of change.
+ * The records worth an audit row, mapped to the module name recorded
+ * alongside. Anything not listed here is ignored, so line-item and join tables
+ * do not each produce their own row — the parent document is the logical unit
+ * of change.
+ *
+ * Customers and vendors are here for their History tab: who changed the credit
+ * limit, the terms, the phone number, and when.
  */
-const WATCHED = new Map<Function, { module: string; resourceType: string }>([
+const WATCHED = new Map<Function, Watched>([
   [Invoice, { module: 'invoices', resourceType: 'invoice' }],
   [Bill, { module: 'bills', resourceType: 'bill' }],
   [BillPayment, { module: 'bills', resourceType: 'bill_payment' }],
@@ -36,7 +57,29 @@ const WATCHED = new Map<Function, { module: string; resourceType: string }>([
   [InventoryAdjustment, { module: 'inventory', resourceType: 'inventory_adjustment' }],
   [TaxPayment, { module: 'tax', resourceType: 'tax_payment' }],
   [JournalEntry, { module: 'journal_entries', resourceType: 'journal_entry' }],
+  [
+    Customer,
+    {
+      module: 'customers',
+      resourceType: 'customer',
+      ignore: ['balance', 'updatedAt', 'shippingLat', 'shippingLng', 'shippingGeocodedAt'],
+      json: ['billingAddress', 'shippingAddress'],
+      numeric: ['creditLimit'],
+    },
+  ],
+  [
+    Vendor,
+    {
+      module: 'vendors',
+      resourceType: 'vendor',
+      ignore: ['balance', 'updatedAt'],
+      json: ['address'],
+    },
+  ],
 ]);
+
+/** The same settings, by resource type, for the flush. */
+const BY_RESOURCE = new Map([...WATCHED.values()].map((w) => [w.resourceType, w]));
 
 interface PendingAudit {
   action: AuditAction;
@@ -136,8 +179,8 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
         resourceType: watched.resourceType,
         resourceId: (source?.id as string) ?? null,
         companyId: (source?.companyId as string) ?? actor.companyId,
-        before: this.snapshot(before),
-        after: this.snapshot(after),
+        before: this.snapshot(before, watched.json),
+        after: this.snapshot(after, watched.json),
         userId: actor.userId,
         ipAddress: actor.ipAddress,
         userAgent: actor.userAgent,
@@ -164,7 +207,7 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
    */
   private async flush(rows: PendingAudit[]): Promise<void> {
     try {
-      const collapsed = this.collapse(rows).filter((r) => r.companyId);
+      const collapsed = this.collapse(rows).filter((r) => r.companyId && this.meaningful(r));
       if (collapsed.length === 0) return;
 
       const repo = this.dataSource.getRepository(AuditTrailEntry);
@@ -221,9 +264,9 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
    * Plain-object copy of the document's own columns. Relations are dropped —
    * they are separately audited or irrelevant, and a loaded graph would bloat
    * every row. Nothing financial is redacted; this is the record of what
-   * changed.
+   * changed. `json` names object columns kept as values (a customer's address).
    */
-  private snapshot(entity: unknown): Record<string, unknown> | null {
+  private snapshot(entity: unknown, json: string[] = []): Record<string, unknown> | null {
     if (!entity || typeof entity !== 'object') return null;
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(entity)) {
@@ -233,10 +276,30 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
         out[key] = value.toISOString();
       } else if (typeof value !== 'object') {
         out[key] = value;
+      } else if (json.includes(key) && !Array.isArray(value)) {
+        out[key] = JSON.parse(JSON.stringify(value));
       }
       // Arrays and nested entities (loaded relations) are intentionally skipped.
     }
     return Object.keys(out).length ? out : null;
+  }
+
+  /**
+   * Whether an update changed anything a person changed. A save that only moved
+   * a watched record's side-effect columns (a customer's balance) is dropped.
+   */
+  private meaningful(row: PendingAudit): boolean {
+    if (row.action !== 'update') return true;
+    const watched = BY_RESOURCE.get(row.resourceType);
+    if (!watched?.ignore?.length) return true;
+    const before = row.before ?? {};
+    const after = row.after ?? {};
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const key of keys) {
+      if (watched.ignore.includes(key)) continue;
+      if (!sameAuditValue(before[key], after[key], watched.numeric?.includes(key))) return true;
+    }
+    return false;
   }
 
   private statusOf(entity: unknown): string | null {

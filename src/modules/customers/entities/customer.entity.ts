@@ -13,7 +13,17 @@ export interface Address {
 @Entity('customers')
 @Index(['companyId', 'createdAt'])
 @Index(['companyId', 'isActive'])
+@Index('UQ_customers_company_code', ['companyId', 'code'], { unique: true })
 export class Customer extends BaseCompanyEntity {
+  /**
+   * The customer's ID as people use it: C-0001 unless someone typed their own
+   * (a Peachtree ID carried over, say). Stored upper-case, unique per company
+   * (common/utils/party-code.util.ts). Every create path assigns one; NULL is
+   * only possible for a row inserted outside TypeORM.
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  code!: string | null;
+
   @Column({ type: 'varchar', length: 200 })
   name!: string;
 

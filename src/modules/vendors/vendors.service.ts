@@ -13,6 +13,17 @@ import {
 } from './dto/vendor.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { applyTextSearch } from '../../common/utils/search-query.util';
+import {
+  assertPartyCodeFree,
+  assertValidPartyCode,
+  isUniqueViolation,
+  nextPartyCode,
+  normalizePartyCode,
+  partyCodeHolder,
+  partyCodeTaken,
+  peekNextPartyCode,
+} from '../../common/utils/party-code.util';
+import { activeFilterOf, orderPartyList } from '../../common/utils/party-list.util';
 
 @Injectable()
 export class VendorsService {
@@ -31,14 +42,12 @@ export class VendorsService {
     const qb = this.repo
       .createQueryBuilder('v')
       .where('v.companyId = :companyId', { companyId });
-    if (query.isActive !== undefined)
-      qb.andWhere('v.isActive = :a', { a: query.isActive });
+    const active = activeFilterOf(query);
+    if (active !== undefined) qb.andWhere('v.isActive = :a', { a: active });
     applyTextSearch(qb, query.search, companyId, {
-      columns: ['v.companyName', 'v.email', 'v.contactPerson', 'v.phone'],
+      columns: ['v.code', 'v.companyName', 'v.email', 'v.contactPerson', 'v.phone'],
     });
-    // id breaks ties, so paging (and the pickers that walk every page) sees
-    // each vendor exactly once.
-    qb.orderBy('v.createdAt', 'DESC').addOrderBy('v.id', 'DESC');
+    orderPartyList(qb, 'v', { sort: query.sort, nameProperty: 'companyName', search: query.search });
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
     return {
@@ -66,7 +75,10 @@ export class VendorsService {
   }
 
   create(companyId: string, dto: CreateVendorDto): Promise<Vendor> {
-    return this.repo.save(
+    const typed = normalizePartyCode(dto.code);
+    if (typed) assertValidPartyCode('vendor', typed);
+    return this.saveWithCode(
+      companyId,
       this.repo.create({
         companyId,
         companyName: dto.companyName,
@@ -81,7 +93,36 @@ export class VendorsService {
         isActive: true,
         notes: dto.notes ?? null,
       }),
+      typed,
     );
+  }
+
+  /** The ID a new vendor would get now, for the form's placeholder. */
+  async nextCode(companyId: string) {
+    return { code: await peekNextPartyCode(this.repo.manager, companyId, 'vendor') };
+  }
+
+  /**
+   * Save with the typed ID, or the next one in the series, in one transaction
+   * (see CustomersService.saveWithCode).
+   */
+  private async saveWithCode(companyId: string, entity: Vendor, typed: string | null): Promise<Vendor> {
+    try {
+      return await this.repo.manager.transaction(async (m) => {
+        if (typed) await assertPartyCodeFree(m, companyId, 'vendor', typed, entity.id);
+        entity.code = typed ?? (await nextPartyCode(m, companyId, 'vendor'));
+        return m.getRepository(Vendor).save(entity);
+      });
+    } catch (err) {
+      if (isUniqueViolation(err) && entity.code) {
+        throw partyCodeTaken(
+          'vendor',
+          entity.code,
+          await partyCodeHolder(this.repo.manager, companyId, 'vendor', entity.code, entity.id),
+        );
+      }
+      throw err;
+    }
   }
 
   async update(
@@ -101,6 +142,12 @@ export class VendorsService {
       v.defaultExpenseAccountId = dto.defaultExpenseAccountId;
     if (dto.notes !== undefined) v.notes = dto.notes;
     if (dto.isActive !== undefined) v.isActive = dto.isActive;
+    // An empty ID on an edit keeps the vendor's current one.
+    const typed = normalizePartyCode(dto.code);
+    if (typed && typed !== v.code) {
+      assertValidPartyCode('vendor', typed);
+      return this.saveWithCode(companyId, v, typed);
+    }
     return this.repo.save(v);
   }
 

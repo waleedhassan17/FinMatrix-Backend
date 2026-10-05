@@ -58,6 +58,7 @@
     "test:open-items": "ts-node -r tsconfig-paths/register test/open-items.acceptance.ts",
     "test:settlement": "ts-node -r tsconfig-paths/register test/settlement.acceptance.ts",
     "test:lists": "ts-node -r tsconfig-paths/register test/lists.acceptance.ts",
+    "test:party-ledger": "ts-node -r tsconfig-paths/register test/party-ledger.acceptance.ts",
     "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close && npm run test:reports-reflect",
     "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
     "qa": "npm run qa:scenario && npm run test:qa",

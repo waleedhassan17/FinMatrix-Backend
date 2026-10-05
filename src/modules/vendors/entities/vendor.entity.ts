@@ -6,7 +6,15 @@ import { Address } from '../../customers/entities/customer.entity';
 @Entity('vendors')
 @Index(['companyId', 'createdAt'])
 @Index(['companyId', 'isActive'])
+@Index('UQ_vendors_company_code', ['companyId', 'code'], { unique: true })
 export class Vendor extends BaseCompanyEntity {
+  /**
+   * The vendor's ID as people use it: V-0001 unless someone typed their own.
+   * Stored upper-case, unique per company (common/utils/party-code.util.ts).
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  code!: string | null;
+
   @Column({ type: 'varchar', length: 200, name: 'company_name' })
   companyName!: string;
 

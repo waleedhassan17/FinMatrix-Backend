@@ -9,6 +9,7 @@
  *   - 5 customers, 5 vendors, 10 invoices, 5 bills, a handful of payments
  */
 import 'reflect-metadata';
+import { formatPartyCode } from '../../common/utils/party-code.util';
 import {
   allocateRiderUsername,
   buildRiderUsernameBase,
@@ -194,9 +195,11 @@ async function run() {
         'Shaheen Cafe',
       ];
       await m.save(
-        customerNames.map((n) =>
+        customerNames.map((n, i) =>
           m.create(Customer, {
             companyId: company!.id,
+            // The company has no customers yet, so the series starts at 1.
+            code: formatPartyCode('customer', i + 1),
             name: n,
             company: n,
             email: `${n.toLowerCase().replace(/\s+/g, '.')}@example.pk`,
@@ -224,9 +227,10 @@ async function run() {
         'Sindh Stationery',
       ];
       await m.save(
-        vendorNames.map((n) =>
+        vendorNames.map((n, i) =>
           m.create(Vendor, {
             companyId: company!.id,
+            code: formatPartyCode('vendor', i + 1),
             companyName: n,
             contactPerson: 'Mr. Saleh',
             email: `${n.toLowerCase().replace(/\s+/g, '.')}@vendor.pk`,

@@ -4,6 +4,8 @@ import { AuditTrailEntry } from './audit-trail.entity';
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { CreditMemo } from '../../modules/credit-memos/entities/credit-memo.entity';
 import { InvoiceLineItem } from '../../modules/invoices/entities/invoice-line-item.entity';
+import { Customer } from '../../modules/customers/entities/customer.entity';
+import { Vendor } from '../../modules/vendors/entities/vendor.entity';
 
 /**
  * The two properties that matter more than completeness (audit gap G2):
@@ -124,5 +126,70 @@ describe('FinancialAuditSubscriber', () => {
     await commit();
 
     expect(saved).toHaveLength(0);
+  });
+
+  describe('customers and vendors (their History tab)', () => {
+    const CUSTOMER = '33333333-3333-3333-3333-333333333333';
+    const base = {
+      id: CUSTOMER,
+      companyId: COMPANY,
+      code: 'C-0007',
+      name: 'Ali Traders',
+      phone: null,
+      creditLimit: '50000.0000',
+      balance: '1200.0000',
+      billingAddress: { city: 'Lahore', country: 'Pakistan' },
+    };
+
+    it('records an edit, with the address kept as a value', async () => {
+      subscriber.afterUpdate(
+        updateEvent(Customer, base, {
+          ...base,
+          creditLimit: '100000',
+          billingAddress: { city: 'Karachi', country: 'Pakistan' },
+        }),
+      );
+      await commit();
+
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ resourceType: 'customer', module: 'customers', action: 'update' });
+      expect(saved[0].afterValues).toMatchObject({
+        creditLimit: '100000',
+        billingAddress: { city: 'Karachi', country: 'Pakistan' },
+      });
+    });
+
+    it('drops a save that only moved the balance — one line per posting is not history', async () => {
+      subscriber.afterUpdate(
+        updateEvent(Customer, base, { ...base, balance: '1800.0000', updatedAt: new Date() }),
+      );
+      await commit();
+
+      expect(saved).toHaveLength(0);
+    });
+
+    it('drops a form re-save that changes nothing a person would see', async () => {
+      // "50000" for "50000.0000", "" for NULL, an address with empty parts.
+      subscriber.afterUpdate(
+        updateEvent(Customer, base, {
+          ...base,
+          creditLimit: '50000',
+          phone: '',
+          billingAddress: { country: 'Pakistan', city: 'Lahore', street: '' },
+        }),
+      );
+      await commit();
+
+      expect(saved).toHaveLength(0);
+    });
+
+    it('records a vendor being deactivated', async () => {
+      const vendor = { id: CUSTOMER, companyId: COMPANY, companyName: 'Habib Oil', isActive: true, balance: '0' };
+      subscriber.afterUpdate(updateEvent(Vendor, vendor, { ...vendor, isActive: false }));
+      await commit();
+
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ resourceType: 'vendor', action: 'update' });
+    });
   });
 });

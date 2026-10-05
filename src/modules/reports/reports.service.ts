@@ -62,7 +62,12 @@ const num = (v: any) => parseFloat(v ?? '0') || 0;
 const openDocPredicate = (alias: string) =>
   `${alias}.balance::numeric > 0 AND ${alias}.status NOT IN ('paid','void','draft')`;
 
-/** One customer's open invoices, soonest due first. `$1` company, `$2` customer. */
+/**
+ * One customer's open invoices, soonest due first — in the same order the
+ * server applies a receipt oldest-first (InvoicesService.outstandingForCustomer:
+ * due date, then invoice date, then number), so a split previewed from the
+ * summary is the split the server would make. `$1` company, `$2` customer.
+ */
 const OPEN_INVOICES_SQL = `
   SELECT i.id AS "documentId", i.invoice_number AS "documentNumber",
          i.invoice_date::text AS "issueDate", i.due_date::text AS "dueDate",
@@ -70,7 +75,7 @@ const OPEN_INVOICES_SQL = `
          i.balance::numeric AS balance, i.status
     FROM invoices i
    WHERE i.company_id = $1 AND i.customer_id = $2 AND ${openDocPredicate('i')}
-   ORDER BY i.due_date ASC, i.invoice_number ASC`;
+   ORDER BY i.due_date ASC, i.invoice_date ASC, i.invoice_number ASC, i.id ASC`;
 
 /** One vendor's open bills, soonest due first. `$1` company, `$2` vendor. */
 const OPEN_BILLS_SQL = `
@@ -80,7 +85,7 @@ const OPEN_BILLS_SQL = `
          b.balance::numeric AS balance, b.status
     FROM bills b
    WHERE b.company_id = $1 AND b.vendor_id = $2 AND ${openDocPredicate('b')}
-   ORDER BY b.due_date ASC, b.bill_number ASC`;
+   ORDER BY b.due_date ASC, b.bill_date ASC, b.bill_number ASC, b.id ASC`;
 
 /** An open invoice or bill, aged against today. */
 export interface OpenAgingDocument {
@@ -898,7 +903,7 @@ export class ReportsService {
       partyType: 'customer',
       documentType: 'invoice',
       partyQuery:
-        `SELECT c.name, c.contact_person AS "contactPerson", c.email, c.phone,
+        `SELECT c.name, c.code, c.contact_person AS "contactPerson", c.email, c.phone,
                 c.billing_address AS address, c.payment_terms AS "paymentTerms",
                 c.tax_id AS "taxId"
            FROM customers c WHERE c.id = $1 AND c.company_id = $2 LIMIT 1`,
@@ -961,7 +966,7 @@ export class ReportsService {
       partyType: 'vendor',
       documentType: 'bill',
       partyQuery:
-        `SELECT v.company_name AS name, v.contact_person AS "contactPerson", v.email, v.phone,
+        `SELECT v.company_name AS name, v.code, v.contact_person AS "contactPerson", v.email, v.phone,
                 v.address, v.payment_terms AS "paymentTerms", v.tax_id AS "taxId"
            FROM vendors v WHERE v.id = $1 AND v.company_id = $2 LIMIT 1`,
       docQuery: OPEN_BILLS_SQL,
@@ -1040,6 +1045,7 @@ export class ReportsService {
       partyType,
       party: {
         id: partyId,
+        code: party.code ?? null,
         name: party.name,
         contactPerson: party.contactPerson ?? null,
         email: party.email ?? null,

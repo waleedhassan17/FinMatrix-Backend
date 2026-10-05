@@ -113,13 +113,13 @@ export class SearchService {
 
     if (targetEntities.includes('customers')) {
       const qb = this.customerRepo.createQueryBuilder('c').where('c.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['c.name', 'c.company', 'c.email', 'c.phone'] });
+      applyTextSearch(qb, query, companyId, { columns: ['c.code', 'c.name', 'c.company', 'c.email', 'c.phone'] });
       results.customers = await qb.orderBy('c.name', 'ASC').take(PER_BUCKET).getMany();
     }
 
     if (targetEntities.includes('vendors')) {
       const qb = this.vendorRepo.createQueryBuilder('v').where('v.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['v.companyName', 'v.contactPerson', 'v.email', 'v.phone'] });
+      applyTextSearch(qb, query, companyId, { columns: ['v.code', 'v.companyName', 'v.contactPerson', 'v.email', 'v.phone'] });
       results.vendors = await qb.orderBy('v.companyName', 'ASC').take(PER_BUCKET).getMany();
     }
 

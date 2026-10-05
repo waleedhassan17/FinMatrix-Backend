@@ -6,9 +6,10 @@ import { Payment } from '../payments/entities/payment.entity';
 import { CustomersService } from './customers.service';
 import { CustomersController } from './customers.controller';
 import { GeocodingService } from '../deliveries/geocoding.service';
+import { LedgerModule } from '../ledger/ledger.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Customer, Invoice, Payment])],
+  imports: [TypeOrmModule.forFeature([Customer, Invoice, Payment]), LedgerModule],
   controllers: [CustomersController],
   providers: [CustomersService, GeocodingService],
   exports: [CustomersService, TypeOrmModule],

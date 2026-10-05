@@ -19,6 +19,7 @@
  * MetroMatrix only.
  */
 import 'reflect-metadata';
+import { formatPartyCode } from '../../common/utils/party-code.util';
 import {
   allocateRiderUsername,
   buildRiderUsernameBase,
@@ -257,8 +258,8 @@ async function run() {
         { name: 'Noor Enterprises', city: 'Sialkot', phone: '+92-306-4447777', email: 'noor.ent@gmail.com' },
         { name: 'Punjab Mart', city: 'Lahore', phone: '+92-307-4448888', email: 'punjab.mart@gmail.com' },
       ];
-      await m.save(customers.map((c) => m.create(Customer, {
-        companyId: company!.id, name: c.name, company: c.name, email: c.email, phone: c.phone,
+      await m.save(customers.map((c, i) => m.create(Customer, {
+        companyId: company!.id, code: formatPartyCode('customer', i + 1), name: c.name, company: c.name, email: c.email, phone: c.phone,
         billingAddress: { city: c.city, country: 'Pakistan' }, shippingAddress: { city: c.city, country: 'Pakistan' },
         creditLimit: '100000', paymentTerms: 'net30', balance: '0', isActive: true, notes: null,
       })));
@@ -275,7 +276,7 @@ async function run() {
         { name: 'National Packaging Co', contact: 'Mr. Yousaf', email: 'orders@natpack.pk', product: 'Packaging materials' },
       ];
       await m.save(vendors.map((v, i) => m.create(Vendor, {
-        companyId: company!.id, companyName: v.name, contactPerson: v.contact, email: v.email,
+        companyId: company!.id, code: formatPartyCode('vendor', i + 1), companyName: v.name, contactPerson: v.contact, email: v.email,
         phone: '+92-42-3576' + (1000 + i * 137), address: { city: 'Lahore', country: 'Pakistan' },
         paymentTerms: 'net30', taxId: null, defaultExpenseAccountId: null, balance: '0', isActive: true, notes: v.product,
       })));

@@ -6,9 +6,9 @@ import { likeContains } from './like.util';
 export interface TextSearchOptions {
   /** Property paths matched with ILIKE, e.g. `['i.invoiceNumber', 'i.notes']`. */
   columns: string[];
-  /** Also match documents whose customer's name or company contains the term. */
+  /** Also match documents whose customer's ID, name or company contains the term. */
   customerColumn?: string;
-  /** Also match documents whose vendor's company or contact name contains the term. */
+  /** Also match documents whose vendor's ID, company or contact name contains the term. */
   vendorColumn?: string;
   /**
    * Further conditions OR-ed into the same group, for matches that are not a
@@ -18,7 +18,7 @@ export interface TextSearchOptions {
   extraClauses?: string[];
 }
 
-/** Ids of this company's customers whose name or company contains `:search`. */
+/** Ids of this company's customers whose ID, name or company contains `:search`. */
 export function customerIdsMatching<T extends ObjectLiteral>(
   qb: SelectQueryBuilder<T>,
 ): string {
@@ -28,12 +28,12 @@ export function customerIdsMatching<T extends ObjectLiteral>(
     .from(Customer, 'search_customer')
     .where('search_customer.companyId = :searchCompanyId')
     .andWhere(
-      '(search_customer.name ILIKE :search OR search_customer.company ILIKE :search)',
+      '(search_customer.code ILIKE :search OR search_customer.name ILIKE :search OR search_customer.company ILIKE :search)',
     )
     .getQuery();
 }
 
-/** Ids of this company's vendors whose company or contact name contains `:search`. */
+/** Ids of this company's vendors whose ID, company or contact name contains `:search`. */
 export function vendorIdsMatching<T extends ObjectLiteral>(
   qb: SelectQueryBuilder<T>,
 ): string {
@@ -43,7 +43,7 @@ export function vendorIdsMatching<T extends ObjectLiteral>(
     .from(Vendor, 'search_vendor')
     .where('search_vendor.companyId = :searchCompanyId')
     .andWhere(
-      '(search_vendor.companyName ILIKE :search OR search_vendor.contactPerson ILIKE :search)',
+      '(search_vendor.code ILIKE :search OR search_vendor.companyName ILIKE :search OR search_vendor.contactPerson ILIKE :search)',
     )
     .getQuery();
 }

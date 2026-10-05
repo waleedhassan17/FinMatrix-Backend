@@ -1128,6 +1128,7 @@ describe('ReportsService — party summary', () => {
   const sqlSeen: Array<{ sql: string; params: unknown[] }> = [];
 
   const CUSTOMER = {
+    code: 'C-0007',
     name: 'Acme Traders',
     contactPerson: 'Bilal',
     email: 'accounts@acme.pk',
@@ -1283,6 +1284,7 @@ describe('ReportsService — party summary', () => {
     expect(summary.partyType).toBe('customer');
     expect(summary.party).toEqual({
       id: 'party-1',
+      code: 'C-0007',
       name: 'Acme Traders',
       contactPerson: 'Bilal',
       email: 'accounts@acme.pk',
@@ -1297,7 +1299,7 @@ describe('ReportsService — party summary', () => {
     const svc = await makeService(makeQuery({ party: { name: 'Walk-in', address: {} } }));
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     expect(summary.party).toMatchObject({
-      name: 'Walk-in', email: null, phone: null, address: null, paymentTerms: null, taxId: null,
+      name: 'Walk-in', code: null, email: null, phone: null, address: null, paymentTerms: null, taxId: null,
     });
   });
 

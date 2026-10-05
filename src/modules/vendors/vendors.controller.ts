@@ -9,13 +9,16 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
+import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { VendorsService } from './vendors.service';
+import { PartyLedgerService } from '../ledger/party-ledger.service';
+import { PartyHistoryService } from '../ledger/party-history.service';
 import {
   CreateVendorDto,
   ListVendorsQueryDto,
@@ -39,7 +42,11 @@ import {
 @Roles('admin', 'staff')
 @Controller('vendors')
 export class VendorsController {
-  constructor(private readonly vendors: VendorsService) {}
+  constructor(
+    private readonly vendors: VendorsService,
+    private readonly partyLedger: PartyLedgerService,
+    private readonly partyHistory: PartyHistoryService,
+  ) {}
 
   @Get()
   list(
@@ -48,6 +55,12 @@ export class VendorsController {
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
     return this.vendors.list(companyId, query, pagination);
+  }
+
+  // Literal paths sit above ':vendorId', whose UUID pipe would refuse them.
+  @Get('next-code')
+  nextCode(@CurrentCompany() companyId: string) {
+    return this.vendors.nextCode(companyId);
   }
 
   @Get(':vendorId')
@@ -99,6 +112,34 @@ export class VendorsController {
     @Query() query: VendorStatementQueryDto,
   ) {
     return this.vendors.statement(companyId, vendorId, query);
+  }
+
+  /** The statement read from the books (see CustomersController.ledgerStatement). */
+  @Get(':vendorId/ledger-statement')
+  @ApiOperation({ summary: 'Period statement from the ledger: opening + lines + closing.' })
+  ledgerStatement(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @Query() query: VendorStatementQueryDto,
+  ) {
+    return this.partyLedger.statement(companyId, 'vendor', vendorId, query.startDate, query.endDate);
+  }
+
+  @Get(':vendorId/history')
+  @ApiOperation({ summary: 'History: since, last bill/payment, months of the fiscal year, edit log (owner).' })
+  history(
+    @CurrentCompany() companyId: string,
+    @Param('vendorId', ParseUUIDPipe) vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('year') year?: string,
+  ) {
+    return this.partyHistory.history(
+      companyId,
+      'vendor',
+      vendorId,
+      { role: user?.role ?? 'staff' },
+      year ? parseInt(year, 10) : undefined,
+    );
   }
 
   @Delete(':vendorId')

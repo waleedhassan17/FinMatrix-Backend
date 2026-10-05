@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
@@ -9,11 +9,18 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
 import { PaymentTerms } from '../../../types';
-import { PAYMENT_TERMS } from '../../customers/dto/customer.dto';
+import {
+  PARTY_SORTS,
+  PARTY_STATUSES,
+  PAYMENT_TERMS,
+  queryBoolean,
+  type PartySort,
+} from '../../customers/dto/customer.dto';
 
 class AddressDto {
   @ApiPropertyOptional() @IsOptional() @IsString() street?: string;
@@ -25,6 +32,15 @@ class AddressDto {
 
 export class CreateVendorDto {
   @ApiProperty() @IsString() @MinLength(1) companyName!: string;
+
+  @ApiPropertyOptional({
+    example: 'V-0003',
+    description: 'Vendor ID. Left out or empty, the next one in the series is assigned.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  code?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() contactPerson?: string;
   @ApiPropertyOptional() @IsOptional() @IsEmail() email?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
@@ -52,7 +68,22 @@ export class UpdateVendorDto extends PartialType(CreateVendorDto) {
 
 export class ListVendorsQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(queryBoolean)
+  @IsBoolean()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ enum: PARTY_STATUSES })
+  @IsOptional()
+  @IsIn(PARTY_STATUSES)
+  status?: (typeof PARTY_STATUSES)[number];
+
+  @ApiPropertyOptional({ enum: PARTY_SORTS, default: 'recent' })
+  @IsOptional()
+  @IsIn(PARTY_SORTS)
+  sort?: PartySort;
 }
 
 export class VendorStatementQueryDto {
