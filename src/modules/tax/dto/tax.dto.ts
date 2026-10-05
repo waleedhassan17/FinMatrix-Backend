@@ -32,4 +32,9 @@ export class CreateTaxPaymentDto {
   @ApiProperty() @IsNumberString() amount!: string;
   @ApiProperty() @IsString() paymentDate!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
+  /**
+   * The cash or bank account the tax is paid from. Omitted, it is 1000 Cash —
+   * where every tax payment went before there was a choice.
+   */
+  @ApiPropertyOptional() @IsOptional() @IsUUID() bankAccountId?: string;
 }

@@ -211,7 +211,12 @@ export class PayrollService {
     });
   }
 
-  async processRun(companyId: string, id: string, userId: string): Promise<PayrollRun> {
+  async processRun(
+    companyId: string,
+    id: string,
+    userId: string,
+    bankAccountId?: string,
+  ): Promise<PayrollRun> {
     return this.dataSource.transaction(async (manager) => {
       // Row-lock the run: two concurrent process calls (double-tap, retry
       // after timeout) serialize here, and the second one sees status='paid'
@@ -227,7 +232,14 @@ export class PayrollService {
       if (run.journalEntryId) throw new BadRequestException({ code: 'ALREADY_POSTED', message: 'This payroll run already posted a journal entry.' });
 
       const expense = await this.accounts.getByNumberOrFail(companyId, ACCT_SALARY_EXPENSE, manager);
-      const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, manager);
+      // Net pay leaves from the account chosen — a bank transfer from MCB, or
+      // notes from the cash box — and 1000 Cash when none is.
+      const cash = await this.accounts.resolveMoneyAccount(
+        manager,
+        companyId,
+        bankAccountId,
+        ACCT_CASH,
+      );
       const lines = [
         { accountId: expense.id, description: 'Payroll gross wages', debit: run.totalGross, credit: '0', lineOrder: 0 },
         { accountId: cash.id, description: 'Net pay', debit: '0', credit: run.totalNet, lineOrder: 1 },
@@ -248,6 +260,7 @@ export class PayrollService {
         status: 'posted', lines, sourceType: 'payroll', sourceId: run.id,
       });
       run.journalEntryId = entry.id;
+      run.bankAccountId = cash.id;
       run.status = 'paid';
       await manager.save(run);
       return run;

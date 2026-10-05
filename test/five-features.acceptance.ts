@@ -95,6 +95,8 @@ async function main() {
   });
   const token0 = data(signup)?.tokens?.accessToken;
   const userId = data(signup)?.user?.id;
+  // A company can only be created from a verified email (EMAIL_NOT_VERIFIED).
+  await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [userId]);
   const createCo = await req('POST', '/companies', {
     token: token0,
     json: { name: `QA P3 Books ${Date.now()}`, industry: 'Retail', companyType: 'warehouse' },
@@ -102,7 +104,6 @@ async function main() {
   const cid = data(createCo)?.id;
   await req('POST', `/companies/${cid}/submit`, { token: token0, companyId: cid });
   await req('PATCH', `/admin/companies/${cid}/approve`, { token: superToken });
-  await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [userId]);
   const relogin = await signin(email, 'Qa@12345');
   const T = data(relogin)?.tokens?.accessToken;
   ok('company admin ready', !!T && !!cid);

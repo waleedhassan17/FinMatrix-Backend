@@ -10,7 +10,12 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { CreditMemosService } from './credit-memos.service';
-import { ApplyCreditMemoDto, CreateCreditMemoDto, ListCreditMemosQueryDto } from './dto/credit-memo.dto';
+import {
+  ApplyCreditMemoDto,
+  CreateCreditMemoDto,
+  ListCreditMemosQueryDto,
+  RefundCreditMemoDto,
+} from './dto/credit-memo.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
@@ -22,10 +27,14 @@ import { RequiresFeature } from '../../common/features/requires-feature.decorato
  * costs the business nothing it had not already lost, while a refund takes
  * cash out of the bank. Both arrive here as "a credit memo".
  */
-const buildCreditMemoSummary = (dto: CreateCreditMemoDto & {
-  refundRemainderToCash?: boolean;
-  reversesDeliveryRequestId?: string;
-}): string => {
+const buildCreditMemoSummary = (
+  dto: CreateCreditMemoDto & {
+    refundRemainderToCash?: boolean;
+    reversesDeliveryRequestId?: string;
+  },
+  /** "1020 · Meezan Bank" — where a refund would come from. */
+  refundFrom = '1000 · Cash',
+): string => {
   const total = (dto.lines ?? []).reduce(
     (sum, l) => sum + Number(l.quantity ?? 0) * Number(l.unitPrice ?? 0),
     0,
@@ -35,7 +44,7 @@ const buildCreditMemoSummary = (dto: CreateCreditMemoDto & {
     ? 'Reverse a delivery'
     : 'Credit memo';
   const effect = dto.refundRemainderToCash
-    ? ' — refunds the customer in CASH'
+    ? ` — refunds the customer from ${refundFrom}`
     : ' — settles against their invoice';
   return `${what}${amount}${effect}. ${dto.reason ?? ''}`.trim();
 };
@@ -75,7 +84,7 @@ export class CreditMemosController {
    */
   @Post()
   @Roles('admin', 'staff')
-  create(
+  async create(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateCreditMemoDto,
@@ -84,13 +93,17 @@ export class CreditMemosController {
     // set, so this one call covers both an ordinary credit memo and a delivery
     // reversal — and staff's approved request runs the very same method.
     if (user.role === 'admin') return this.svc.createAndApply(companyId, user.id, dto);
+    // A refund's account is checked now, not when the owner approves.
+    const refundFrom = dto.refundRemainderToCash
+      ? await this.svc.refundAccountLabel(companyId, dto.refundAccountId)
+      : undefined;
     return this.approvals.createRequest(
       'credit_memo',
       { action: 'create', ...dto },
       // Say what approving will DO, not just what the document is. A refund
-      // moves cash out of the business, and an owner should not have to open
-      // the payload to discover that.
-      buildCreditMemoSummary(dto),
+      // moves money out of the business, and an owner should not have to open
+      // the payload to discover that — or which account it leaves from.
+      buildCreditMemoSummary(dto, refundFrom),
       user,
       companyId,
     );
@@ -120,17 +133,24 @@ export class CreditMemosController {
   @Post(':id/refund')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Refund the remaining credit balance to the customer (cash).' })
-  refund(
+  @ApiOperation({ summary: 'Refund the remaining credit balance to the customer, from a cash or bank account (1000 Cash by default).' })
+  async refund(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    // Optional so a client that sends no body keeps refunding from Cash.
+    @Body() dto: RefundCreditMemoDto = {},
   ) {
-    if (user.role === 'admin') return this.svc.refund(companyId, id, user.id);
+    if (user.role === 'admin') return this.svc.refund(companyId, id, user.id, dto.bankAccountId);
+    const from = await this.svc.refundAccountLabel(companyId, dto.bankAccountId);
     return this.approvals.createRequest(
       'credit_memo',
-      { action: 'refund', creditMemoId: id },
-      'Refund a credit memo balance in cash',
+      {
+        action: 'refund',
+        creditMemoId: id,
+        ...(dto.bankAccountId ? { bankAccountId: dto.bankAccountId } : {}),
+      },
+      `Refund a credit memo balance from ${from}`,
       user,
       companyId,
     );

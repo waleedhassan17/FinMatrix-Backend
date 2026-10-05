@@ -36,7 +36,6 @@ import {
   ACCT_CASH,
   ACCT_CUSTOMER_ADVANCES,
 } from '../accounts/accounts.constants';
-import { Account } from '../accounts/entities/account.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
@@ -45,7 +44,6 @@ import { invoicePaidStatus } from '../deliveries/delivery-collection.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { businessToday } from '../../common/utils/business-date.util';
 import { assertNotFutureDate } from '../../common/utils/date.util';
-import { assertMoneyAccount } from '../../common/utils/money-account.util';
 import {
   OPEN_DELIVERY_ADVANCE_SQL,
   UNAPPLIED_RECEIPTS_SQL,
@@ -334,32 +332,16 @@ export class PaymentsService {
       applications = await this.autoApply(manager, companyId, customer.id, amount.toFixed(4));
     }
 
-    // Resolve the GL account to debit. If the caller supplied an explicit
-    // account, validate it; otherwise fall back to the company's Cash account
-    // (cash payments) or Business Checking account (everything else) so the
+    // Resolve the GL account to debit: the account the caller chose, checked
+    // to be one of this company's cash or bank accounts — or, with none chosen,
+    // Cash for a cash payment and Business Checking for anything else, so the
     // mobile client doesn't have to know GL account ids.
-    let bank: Account;
-    if (dto.bankAccountId) {
-      const found = await manager.findOne(Account, {
-        where: { id: dto.bankAccountId, companyId },
-      });
-      if (!found) {
-        throw new NotFoundException({
-          code: 'ACCOUNT_NOT_FOUND',
-          message: 'Bank/Cash account not found',
-        });
-      }
-      assertMoneyAccount(found);
-      bank = found;
-    } else {
-      const defaultNumber =
-        dto.paymentMethod === 'cash' ? ACCT_CASH : ACCT_BANK;
-      bank = await this.accounts.getByNumberOrFail(
-        companyId,
-        defaultNumber,
-        manager,
-      );
-    }
+    const bank = await this.accounts.resolveMoneyAccount(
+      manager,
+      companyId,
+      dto.bankAccountId,
+      dto.paymentMethod === 'cash' ? ACCT_CASH : ACCT_BANK,
+    );
 
     const paymentNumber = await nextDocumentNumber(
       manager,

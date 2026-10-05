@@ -21,4 +21,11 @@ export class TaxPayment extends BaseCompanyEntity {
 
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
+
+  /**
+   * The cash or bank account the tax was paid from. NULL on payments recorded
+   * before the choice existed — all of which were paid from 1000 Cash.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'bank_account_id' })
+  bankAccountId!: string | null;
 }

@@ -6,6 +6,7 @@ import { TaxPayment } from './entities/tax-payment.entity';
 import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
+import { Account } from '../accounts/entities/account.entity';
 import { ACCT_CASH, ACCT_TAX_PAYABLE, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
@@ -102,11 +103,24 @@ export class TaxService {
     userId: string,
   ) {
     // Per FinMatrixGuide §3.9: remitting tax relieves the liability and pays
-    // cash — DR Sales Tax Payable (2300) / CR Cash (1000) — atomically with
-    // the payment record.
+    // it out — DR Sales Tax Payable (2300) / CR the cash or bank account it was
+    // paid from (1000 Cash unless another was chosen) — atomically with the
+    // payment record.
     return this.dataSource.transaction(async (em) => {
+      // Checked before anything is written, and stored, so a deleted payment
+      // puts the money back in the account it came out of.
+      const bank = await this.accounts.resolveMoneyAccount(
+        em,
+        companyId,
+        dto.bankAccountId,
+        ACCT_CASH,
+      );
       const payRepo = em.getRepository(TaxPayment);
-      const payment = payRepo.create({ ...dto, companyId } as any);
+      const payment = payRepo.create({
+        ...dto,
+        companyId,
+        bankAccountId: bank.id,
+      } as any);
       const saved = (await payRepo.save(payment)) as unknown as TaxPayment;
 
       const amount = toDecimal(dto.amount);
@@ -114,11 +128,6 @@ export class TaxService {
         const taxPayable = await this.accounts.getByNumberOrFail(
           companyId,
           ACCT_TAX_PAYABLE,
-          em,
-        );
-        const cash = await this.accounts.getByNumberOrFail(
-          companyId,
-          ACCT_CASH,
           em,
         );
         const amt = amount.toFixed(4);
@@ -130,7 +139,7 @@ export class TaxService {
           status: 'posted',
           lines: [
             { accountId: taxPayable.id, debit: amt, credit: '0', lineOrder: 0 },
-            { accountId: cash.id, debit: '0', credit: amt, lineOrder: 1 },
+            { accountId: bank.id, debit: '0', credit: amt, lineOrder: 1 },
           ],
           sourceType: 'tax_payment',
           sourceId: saved.id,
@@ -172,7 +181,19 @@ export class TaxService {
           ACCT_TAX_PAYABLE,
           em,
         );
-        const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
+        // Back into the account it was paid from. A payment recorded before
+        // the choice existed has none stored, and was paid from Cash.
+        const cash = payment.bankAccountId
+          ? await em.findOne(Account, {
+              where: { id: payment.bankAccountId, companyId },
+            })
+          : await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
+        if (!cash) {
+          throw new NotFoundException({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: 'The account this tax was paid from no longer exists.',
+          });
+        }
         await this.posting.createEntry(em, {
           companyId,
           createdBy: userId,

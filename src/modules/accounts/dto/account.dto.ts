@@ -48,7 +48,9 @@ export class CreateAccountDto {
 }
 
 export class UpdateAccountDto extends PartialType(CreateAccountDto) {
-  // accountNumber and type are immutable per spec — ignore if present.
+  // accountNumber and type may change only while nothing refers to the account
+  // (AccountsService.update); openingBalance is never read here — it posted its
+  // journal entry when the account was created.
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()

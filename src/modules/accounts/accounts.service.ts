@@ -80,6 +80,15 @@ export const isSystemAccountNumber = (accountNumber: string): boolean =>
   SYSTEM_ACCOUNT_NUMBERS.has(accountNumber);
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
+import { assertMoneyAccount } from '../../common/utils/money-account.util';
+import {
+  ACCOUNT_USAGE_SQL,
+  AccountUsage,
+  describeUsage,
+  EMPTY_USAGE,
+  structureOf,
+  usageTotal,
+} from './account-structure.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { businessToday } from '../../common/utils/business-date.util';
 import { pagedResponse } from '../../common/utils/paged-response.util';
@@ -148,7 +157,54 @@ export class AccountsService {
       order: { date: 'DESC', createdAt: 'DESC' },
       take: 10,
     });
-    return { account: this.withSystemFlag(account), recentEntries };
+    const usage = await this.usage(this.dataSource.manager, companyId, id);
+    return {
+      account: this.withSystemFlag(account),
+      recentEntries,
+      // Whether the edit form may unlock Type and Number, and why not.
+      usage,
+      structure: structureOf(SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber), usage),
+    };
+  }
+
+  /** What refers to this account — see account-structure.util.ts. */
+  async usage(
+    manager: EntityManager,
+    companyId: string,
+    id: string,
+  ): Promise<AccountUsage> {
+    const [row] = await manager.query(ACCOUNT_USAGE_SQL, [companyId, id]);
+    return { ...EMPTY_USAGE, ...(row ?? {}) };
+  }
+
+  /**
+   * The cash or bank account money moves through: the one chosen, checked to
+   * be this company's, an asset of kind Cash or Bank, and active — or, when
+   * none was chosen, the account it has always defaulted to.
+   *
+   * One place for the rule, so a receipt, a refund, a tax payment and a
+   * payroll run cannot drift into accepting different things.
+   */
+  async resolveMoneyAccount(
+    manager: EntityManager,
+    companyId: string,
+    accountId: string | null | undefined,
+    fallbackNumber: string,
+  ): Promise<Account> {
+    if (!accountId) {
+      return this.getByNumberOrFail(companyId, fallbackNumber, manager);
+    }
+    const found = await manager.findOne(Account, {
+      where: { id: accountId, companyId },
+    });
+    if (!found) {
+      throw new NotFoundException({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: 'Bank/Cash account not found',
+      });
+    }
+    assertMoneyAccount(found);
+    return found;
   }
 
   async create(
@@ -287,33 +343,147 @@ export class AccountsService {
     return repo.save(created);
   }
 
+  /**
+   * Edit an account.
+   *
+   * Name, kind, parent, description and active can change as before. Type and
+   * number can change too, but only while nothing refers to the account (see
+   * account-structure.util.ts) — which is what lets "Meezan Bank", saved by
+   * mistake as an Other Expense, become the bank account it was meant to be.
+   *
+   * The account row is locked first. Posting moves an account's balance, so a
+   * posting racing this edit waits for it, and one that committed first is
+   * counted below.
+   */
   async update(
     companyId: string,
     id: string,
     dto: UpdateAccountDto,
   ): Promise<Account> {
-    const account = await this.getById(companyId, id);
-    // accountNumber and type are IMMUTABLE per spec
-    if (dto.name !== undefined) account.name = dto.name;
-    if (dto.subType !== undefined) {
-      if (!isValidSubType(account.type, dto.subType)) {
-        throw new BadRequestException({
-          code: 'INVALID_SUB_TYPE',
-          message: `subType '${dto.subType}' is not valid for type '${account.type}'`,
+    return this.dataSource.transaction(async (manager) => {
+      const account = await manager
+        .getRepository(Account)
+        .createQueryBuilder('a')
+        .setLock('pessimistic_write')
+        .where('a.id = :id AND a.companyId = :companyId', { id, companyId })
+        .getOne();
+      if (!account) {
+        throw new NotFoundException({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: 'Account not found',
         });
       }
-      account.subType = dto.subType;
-    }
-    if (dto.description !== undefined) account.description = dto.description;
-    if (dto.parentId !== undefined) {
-      if (dto.parentId) await this.getById(companyId, dto.parentId);
-      account.parentId = dto.parentId ?? null;
-    }
-    if (dto.isActive !== undefined) {
-      if (account.isActive && !dto.isActive) this.assertCanDeactivate(account);
-      account.isActive = dto.isActive;
-    }
-    return this.repo.save(account);
+
+      const label = `${account.accountNumber} · ${account.name}`;
+      const nextNumber =
+        dto.accountNumber !== undefined ? dto.accountNumber.trim() : account.accountNumber;
+      const nextType = dto.type ?? account.type;
+      const nextSubType = dto.subType ?? account.subType;
+      const typeChanges = nextType !== account.type;
+      const numberChanges = nextNumber !== account.accountNumber;
+
+      if (isSystemAccountNumber(account.accountNumber)) {
+        // Renaming is fine; what automatic posting relies on is not.
+        if (typeChanges || numberChanges || nextSubType !== account.subType) {
+          throw new BadRequestException({
+            code: 'SYSTEM_ACCOUNT_FIXED',
+            message:
+              `${label} is a system account — invoices, payments and bills post to it ` +
+              'automatically by its number and kind, so those are fixed. You can rename it.',
+          });
+        }
+      }
+
+      if (typeChanges || numberChanges) {
+        const usage = await this.usage(manager, companyId, id);
+        if (usageTotal(usage) > 0) {
+          throw new BadRequestException({
+            code: 'ACCOUNT_IN_USE',
+            message:
+              `${label} is already in use (${describeUsage(usage)}), so its type and number ` +
+              'are fixed. Create the account you need, move anything on this one across ' +
+              'with a journal entry, then deactivate it.',
+          });
+        }
+        if (typeChanges && usage.children > 0) {
+          throw new BadRequestException({
+            code: 'ACCOUNT_HAS_CHILDREN',
+            message: `${label} has sub-accounts. Move them first to change its type.`,
+          });
+        }
+        if (numberChanges) {
+          if (nextNumber.length < 2) {
+            throw new BadRequestException({
+              code: 'VALIDATION_FAILED',
+              message: 'An account number needs at least 2 characters.',
+            });
+          }
+          const taken = await manager.findOne(Account, {
+            where: { companyId, accountNumber: nextNumber },
+          });
+          if (taken) {
+            throw new ConflictException({
+              code: 'DUPLICATE_ACCOUNT_NUMBER',
+              message: `${nextNumber} is already ${taken.name}. Choose another number.`,
+            });
+          }
+        }
+      }
+
+      if (!isValidSubType(nextType, nextSubType)) {
+        throw new BadRequestException({
+          code: 'INVALID_SUB_TYPE',
+          message: `subType '${nextSubType}' is not valid for type '${nextType}'`,
+        });
+      }
+
+      // The parent must be of the same type, or the account is drawn in one
+      // section of the chart and rolls up into another. A parent the account
+      // had before a type change is let go; one chosen now must match.
+      let nextParentId =
+        dto.parentId !== undefined ? dto.parentId || null : account.parentId;
+      if (nextParentId) {
+        if (nextParentId === account.id) {
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'An account cannot be its own parent.',
+          });
+        }
+        const parent = await manager.findOne(Account, {
+          where: { id: nextParentId, companyId },
+        });
+        if (!parent) {
+          throw new NotFoundException({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: 'Parent account not found',
+          });
+        }
+        if (parent.type !== nextType) {
+          const chosenNow =
+            dto.parentId !== undefined && dto.parentId !== account.parentId;
+          if (chosenNow) {
+            throw new BadRequestException({
+              code: 'PARENT_TYPE_MISMATCH',
+              message: `${parent.accountNumber} · ${parent.name} is a ${parent.type} account, so it cannot hold a ${nextType} account.`,
+            });
+          }
+          nextParentId = null;
+        }
+      }
+
+      account.accountNumber = nextNumber;
+      account.type = nextType;
+      account.subType = nextSubType;
+      account.parentId = nextParentId;
+      if (dto.name !== undefined) account.name = dto.name;
+      if (dto.description !== undefined) account.description = dto.description;
+      if (dto.isActive !== undefined) {
+        if (account.isActive && !dto.isActive) this.assertCanDeactivate(account);
+        account.isActive = dto.isActive;
+      }
+      const saved = await manager.save(account);
+      return this.withSystemFlag(saved) as Account;
+    });
   }
 
   /**

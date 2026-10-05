@@ -113,10 +113,15 @@ export class ApprovalDispatcher {
           return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
         }
         if (action === 'refund') {
+          // The account the staff member chose; absent on requests raised
+          // before there was a choice, which refund from Cash as they always did.
+          const bankAccountId =
+            typeof rest.bankAccountId === 'string' ? rest.bankAccountId : undefined;
           const memo = await this.creditMemos.refund(
             companyId,
             this.requireId(creditMemoId, 'creditMemoId'),
             reviewerId,
+            bankAccountId,
           );
           return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
         }

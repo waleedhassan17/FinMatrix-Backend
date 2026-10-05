@@ -38,6 +38,14 @@ export class PayrollItemInputDto {
   @ApiPropertyOptional({ example: '160' }) @IsOptional() @IsNumberString() hours?: string;
 }
 
+export class ProcessPayrollRunDto {
+  /**
+   * The cash or bank account net pay leaves from. Omitted, it is 1000 Cash —
+   * where every payroll went before there was a choice.
+   */
+  @ApiPropertyOptional() @IsOptional() @IsUUID() bankAccountId?: string;
+}
+
 export class CreatePayrollRunDto {
   @ApiProperty({ example: 'June 2026' }) @IsString() payPeriod!: string;
   @ApiProperty({ example: '2026-06-01' }) @IsDateString() periodStart!: string;

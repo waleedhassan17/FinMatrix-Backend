@@ -34,6 +34,14 @@ export class PayrollRun extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
+  /**
+   * The cash or bank account net pay left from, set when the run is processed.
+   * NULL on a draft, and on runs processed before the choice existed — all of
+   * which were paid from 1000 Cash.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'bank_account_id' })
+  bankAccountId!: string | null;
+
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
 

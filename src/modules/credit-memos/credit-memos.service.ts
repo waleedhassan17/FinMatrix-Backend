@@ -72,6 +72,22 @@ export class CreditMemosService {
     );
   }
 
+  /**
+   * "1020 · Meezan Bank" — the account a refund would be paid from, checked
+   * the way the refund itself will check it. Used when staff ask for a refund,
+   * so a wrong account is refused when the request is raised rather than when
+   * the owner approves it, and the owner reads where the money will go.
+   */
+  async refundAccountLabel(companyId: string, accountId?: string): Promise<string> {
+    const account = await this.accounts.resolveMoneyAccount(
+      this.dataSource.manager,
+      companyId,
+      accountId,
+      ACCT_CASH,
+    );
+    return `${account.accountNumber} · ${account.name}`;
+  }
+
   async getById(companyId: string, id: string): Promise<CreditMemo> {
     const cm = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
     if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
@@ -132,12 +148,14 @@ export class CreditMemosService {
     dto: CreateCreditMemoDto & {
       applyToInvoiceId?: string;
       refundRemainderToCash?: boolean;
+      refundAccountId?: string;
       reversesDeliveryRequestId?: string;
     },
   ): Promise<CreditMemo> {
     const {
       applyToInvoiceId,
       refundRemainderToCash,
+      refundAccountId,
       reversesDeliveryRequestId,
       ...createDto
     } = dto;
@@ -171,7 +189,7 @@ export class CreditMemosService {
     // Whatever the invoice could not absorb goes back as cash, so a prepaid
     // reversal is one approval and never parks a negative receivable.
     if (refundRemainderToCash && toDecimal(memo.balance).greaterThan(0)) {
-      memo = await this.refund(companyId, memo.id, userId);
+      memo = await this.refund(companyId, memo.id, userId, refundAccountId);
     }
 
     if (reversesDeliveryRequestId) {
@@ -345,7 +363,17 @@ export class CreditMemosService {
     return cm;
   }
 
-  async refund(companyId: string, id: string, userId: string): Promise<CreditMemo> {
+  /**
+   * Pay a memo's remaining balance back to the customer, from the cash or bank
+   * account chosen — 1000 Cash when none is. The account is stored on the memo
+   * ("Refunded from"), so the refund can always be traced to the money.
+   */
+  async refund(
+    companyId: string,
+    id: string,
+    userId: string,
+    bankAccountId?: string,
+  ): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) => {
       const cm = await manager.findOne(CreditMemo, { where: { id, companyId } });
       if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
@@ -354,7 +382,7 @@ export class CreditMemosService {
         throw new BadRequestException({ code: 'NO_BALANCE', message: 'No remaining balance to refund' });
       }
       const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
-      const cash = await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, manager);
+      const cash = await this.accounts.resolveMoneyAccount(manager, companyId, bankAccountId, ACCT_CASH);
       await this.posting.createEntry(manager, {
         companyId, createdBy: userId, date: businessToday(),
         memo: `Refund credit memo ${cm.creditMemoNumber}`, status: 'posted',
@@ -368,6 +396,7 @@ export class CreditMemosService {
       if (customer) { customer.balance = addMoney(customer.balance, remaining.toFixed(4)).toFixed(4); await manager.save(customer); }
       cm.balance = '0';
       cm.status = 'refunded';
+      cm.refundAccountId = cash.id;
       await manager.save(cm);
       return cm;
     });

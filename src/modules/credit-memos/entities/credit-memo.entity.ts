@@ -44,6 +44,14 @@ export class CreditMemo extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
+  /**
+   * The cash or bank account a refund was paid from. NULL until the memo is
+   * refunded, and on refunds made before the choice existed — all of which
+   * were paid from 1000 Cash.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'refund_account_id' })
+  refundAccountId!: string | null;
+
   @Column({ type: 'uuid', name: 'created_by', nullable: true })
   createdBy!: string | null;
 

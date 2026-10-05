@@ -15,7 +15,7 @@ import { CurrentCompany } from '../../common/decorators/current-company.decorato
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { PayrollService } from './payroll.service';
 import {
-  CreateEmployeeDto, CreatePayrollRunDto, ListEmployeesQueryDto, UpdateEmployeeDto,
+  CreateEmployeeDto, CreatePayrollRunDto, ListEmployeesQueryDto, ProcessPayrollRunDto, UpdateEmployeeDto,
 } from './dto/payroll.dto';
 import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
@@ -90,9 +90,15 @@ export class PayrollController {
   @Post('payroll/runs/:id/process')
   @Roles('admin')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Process payroll: post JE (DR wages, CR cash + deductions), mark paid.' })
-  processRun(@CurrentCompany() companyId: string, @CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.svc.processRun(companyId, id, user.id);
+  @ApiOperation({ summary: 'Process payroll: post JE (DR wages, CR the bank or cash account + deductions), mark paid.' })
+  processRun(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    // Optional so a client that sends no body keeps paying from Cash.
+    @Body() dto: ProcessPayrollRunDto = {},
+  ) {
+    return this.svc.processRun(companyId, id, user.id, dto.bankAccountId);
   }
 
   @Delete('payroll/runs/:id')

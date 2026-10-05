@@ -55,6 +55,12 @@ export class CreateCreditMemoDto {
   @ApiPropertyOptional({ description: 'Refund any unapplied remainder to cash.' })
   @IsOptional() @IsBoolean() refundRemainderToCash?: boolean;
   /**
+   * The cash or bank account that remainder is refunded from. Omitted, it is
+   * 1000 Cash — where every refund went before there was a choice.
+   */
+  @ApiPropertyOptional({ description: 'Cash or bank account the remainder is refunded from.' })
+  @IsOptional() @IsUUID() refundAccountId?: string;
+  /**
    * The approved delivery this credit reverses. Recorded on that delivery so a
    * second reversal can be refused, and so the two are linked for audit.
    */
@@ -65,6 +71,15 @@ export class CreateCreditMemoDto {
   @ApiProperty({ type: [CreditMemoLineDto] })
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => CreditMemoLineDto)
   lines!: CreditMemoLineDto[];
+}
+
+export class RefundCreditMemoDto {
+  /**
+   * The cash or bank account the refund is paid from. Omitted, it is 1000
+   * Cash — where every refund went before there was a choice.
+   */
+  @ApiPropertyOptional({ description: 'Cash or bank account the refund is paid from.' })
+  @IsOptional() @IsUUID() bankAccountId?: string;
 }
 
 export class ListCreditMemosQueryDto {
