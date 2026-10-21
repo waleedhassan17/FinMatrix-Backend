@@ -753,6 +753,68 @@ export class InventoryService {
   }
 
   /**
+   * Opening stock for many items at once — an Excel import — as ONE entry:
+   * a Dr 1200 line per item and a single Cr 3900 line for the total.
+   *
+   * One entry rather than postOpeningStockJe per item because each entry takes
+   * a company-row lock, a COUNT over journal_entries and a balance update; a
+   * thousand of them would outlast the request, and a thousand near-identical
+   * lines in the Journal help nobody. The per-item trail is not lost: every
+   * item still gets its own `opening_stock` movement, which is what the item's
+   * history shows, and each debit line names the SKU.
+   *
+   * The GL rows' sourceId is the entry itself rather than an item, since the
+   * entry spans many. Nothing reads opening-stock GL rows by item id.
+   *
+   * Line amounts are `(qty × unitCost).toFixed(4)` — the very value
+   * recordMovementAtAverage stores — so the movements and GL 1200 tie to the
+   * paisa (invariants I13 and I23).
+   */
+  async postOpeningStockBatchJe(
+    em: import('typeorm').EntityManager,
+    companyId: string,
+    userId: string,
+    entries: Array<{ item: InventoryItem; quantity: Decimal }>,
+    date: string,
+    memo: string,
+  ): Promise<{ id: string; reference: string } | null> {
+    const lines = entries
+      .map(({ item, quantity }) => ({ item, quantity, amount: quantity.times(toDecimal(item.unitCost)).toFixed(4) }))
+      .filter((l) => toDecimal(l.amount).greaterThan(0));
+    if (lines.length === 0) return null;
+
+    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    const obe = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_OPENING_BALANCE_EQUITY);
+    const total = lines.reduce((sum, l) => sum.plus(l.amount), new Decimal(0)).toFixed(4);
+
+    const entry = await this.posting.createEntry(em, {
+      companyId,
+      createdBy: userId,
+      date,
+      memo,
+      status: 'posted',
+      lines: [
+        ...lines.map((l, i) => ({
+          accountId: inventoryAcct.id,
+          description: `Opening stock: ${l.item.sku} ${l.item.name} — ${l.quantity.toFixed()} × ${toDecimal(l.item.unitCost).toFixed()}`,
+          debit: l.amount,
+          credit: '0',
+          lineOrder: i,
+        })),
+        {
+          accountId: obe.id,
+          description: 'Opening balance equity',
+          debit: '0',
+          credit: total,
+          lineOrder: lines.length,
+        },
+      ],
+      sourceType: 'opening_stock',
+    });
+    return { id: entry.id, reference: entry.reference };
+  }
+
+  /**
    * Post the balanced inventory-adjustment journal entry for a quantity
    * variance valued at the item's unit cost. Returns the entry id (or null
    * when the value is zero). Shared by adjust() and physical count.

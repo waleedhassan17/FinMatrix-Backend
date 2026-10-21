@@ -1,6 +1,8 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -8,9 +10,14 @@ import {
   Patch,
   Post,
   Query,
+  UnsupportedMediaTypeException,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { isUUID } from 'class-validator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -29,16 +36,27 @@ import {
 } from './dto/inventory.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
+import { InventoryImagesService, UploadedImageFile } from './images/inventory-images.service';
+import { ItemImageUrlsInterceptor } from './images/item-image-urls.interceptor';
+
+const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_BYTES = Number(process.env.ITEM_IMAGE_MAX_SIZE_MB ?? 10) * 1024 * 1024;
+/** One batch of photo URLs — a quotation has far fewer lines than this. */
+const MAX_IMAGE_IDS = 200;
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
 @UseGuards(CompanyGuard, RolesGuard)
 @RequiresFeature('inventory') // tier gate (FinMatrix.md) — 403 when the company's type lacks this feature
+// Every item this controller returns, in whatever shape, leaves with signed
+// imageUrl / thumbnailUrl — see the interceptor for why that lives here.
+@UseInterceptors(ItemImageUrlsInterceptor)
 @Controller('inventory')
 export class InventoryController {
   constructor(
     private readonly svc: InventoryService,
     private readonly approvals: ApprovalRequestsService,
+    private readonly images: InventoryImagesService,
   ) {}
 
   // Items
@@ -79,6 +97,86 @@ export class InventoryController {
     @Body() dto: UpdateInventoryItemDto,
   ) {
     return this.svc.updateItem(companyId, id, dto);
+  }
+
+  /**
+   * Give an item its photo (replacing any it had). Any JPG/PNG/WEBP; the
+   * server straightens, strips location data and resizes it. Staff as well as
+   * the owner: a photo is catalogue data, like the name, and posts nothing.
+   */
+  @Post('items/:id/image')
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Upload the item photo; returns the item with imageUrl/thumbnailUrl.' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['image'],
+      properties: { image: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: { fileSize: MAX_IMAGE_BYTES },
+      fileFilter: (_req, file, cb) => {
+        if (!IMAGE_MIMES.includes(file.mimetype)) {
+          cb(
+            new UnsupportedMediaTypeException({
+              code: 'IMAGE_UNSUPPORTED_TYPE',
+              message: 'Item photos must be JPG, PNG or WEBP images.',
+            }),
+            false,
+          );
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  setImage(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file?: UploadedImageFile,
+  ) {
+    if (!file) {
+      throw new BadRequestException({ code: 'IMAGE_REQUIRED', message: 'Choose a photo to upload.' });
+    }
+    return this.images.setImage(companyId, id, user.id, file);
+  }
+
+  @Delete('items/:id/image')
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Remove the item photo; returns the item.' })
+  removeImage(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.images.removeImage(companyId, id, user.id);
+  }
+
+  /**
+   * Photo URLs for many items at once, keyed by item id — for quotation PDFs,
+   * which hold document lines rather than items. `?ids=a,b,c`. Items without
+   * a photo are absent from the answer.
+   *
+   * Not `items/images`: that would be read as `items/:id` and fail its UUID
+   * check. And the map sits under `images`, never a top-level `data`, which
+   * the response envelope would keep while dropping everything beside it.
+   */
+  @Get('item-images')
+  @Roles('admin', 'staff')
+  @ApiOperation({ summary: 'Signed photo URLs for up to 200 items (?ids=a,b,c).' })
+  async itemImages(@CurrentCompany() companyId: string, @Query('ids') ids: string | undefined) {
+    const list = [...new Set((ids ?? '').split(',').map((s) => s.trim()).filter(Boolean))];
+    if (list.length > MAX_IMAGE_IDS || list.some((id) => !isUUID(id))) {
+      throw new BadRequestException({
+        code: 'INVALID_IDS',
+        message: `ids must be up to ${MAX_IMAGE_IDS} comma-separated item ids.`,
+      });
+    }
+    return { images: await this.images.imageUrlsFor(companyId, list) };
   }
 
   @Patch('items/:id/toggle')

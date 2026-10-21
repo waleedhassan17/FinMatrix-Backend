@@ -10,6 +10,13 @@ import { PhysicalCount } from './entities/physical-count.entity';
 import { PhysicalCountLine } from './entities/physical-count-line.entity';
 import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
+import { InventoryItemImage } from './images/inventory-item-image.entity';
+import { InventoryImagesService } from './images/inventory-images.service';
+import { ItemImageUrlsInterceptor } from './images/item-image-urls.interceptor';
+import { ItemMediaController } from './images/item-media.controller';
+import { MediaUrlSigner } from './images/media-url.signer';
+import { InventoryImportService } from './import/inventory-import.service';
+import { InventoryImportController } from './import/inventory-import.controller';
 import { AccountsModule } from '../accounts/accounts.module';
 import { JournalEntriesModule } from '../journal-entries/journal-entries.module';
 import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
@@ -28,12 +35,19 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
       StockTransferLine,
       PhysicalCount,
       PhysicalCountLine,
+      InventoryItemImage,
     ]),
     AccountsModule,
     JournalEntriesModule,
   ],
-  providers: [InventoryService],
-  controllers: [InventoryController],
-  exports: [InventoryService],
+  providers: [
+    InventoryService,
+    MediaUrlSigner,
+    InventoryImagesService,
+    ItemImageUrlsInterceptor,
+    InventoryImportService,
+  ],
+  controllers: [InventoryController, InventoryImportController, ItemMediaController],
+  exports: [InventoryService, MediaUrlSigner],
 })
 export class InventoryModule {}

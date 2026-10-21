@@ -62,6 +62,12 @@ export const envValidationSchema = Joi.object({
 
   UPLOAD_MAX_SIZE_MB: Joi.number().default(5),
   UPLOAD_STORAGE_PATH: Joi.string().default('./storage'),
+  // Largest item photo accepted before processing; every photo is stored
+  // downsized, so this only bounds what a phone may send.
+  ITEM_IMAGE_MAX_SIZE_MB: Joi.number().default(10),
+  // Signs item-photo URLs (MediaUrlSigner). Optional: without it a key is
+  // derived from JWT_SECRET. Setting it lets the signing key rotate on its own.
+  MEDIA_URL_SECRET: Joi.string().min(32).optional(),
 
   EMAIL_ENABLED: Joi.boolean().default(false),
   SMTP_HOST: Joi.string().when('EMAIL_ENABLED', { is: true, then: Joi.required() }),

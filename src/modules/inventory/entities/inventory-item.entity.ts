@@ -79,4 +79,14 @@ export class InventoryItem extends BaseCompanyEntity {
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })
   isActive!: boolean;
+
+  /**
+   * The item's current photo (an inventory_item_images row), or null.
+   *
+   * Set only by InventoryImagesService — no DTO declares it, so the global
+   * whitelist strips it from a PATCH. Clients never see the id on its own;
+   * ItemImageUrlsInterceptor turns it into signed `imageUrl` / `thumbnailUrl`.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'image_id' })
+  imageId!: string | null;
 }
