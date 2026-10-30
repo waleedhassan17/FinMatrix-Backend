@@ -4,6 +4,9 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 @Entity('general_ledger')
 @Index(['companyId', 'date'])
 @Index(['companyId', 'accountId', 'date'])
+// A posting's rows, together: migration GeneralLedgerReferenceIndex. Named
+// to match it, so a synchronized database keeps the same index.
+@Index('IDX_general_ledger_company_reference', ['companyId', 'reference'])
 export class GeneralLedgerEntry extends BaseCompanyEntity {
   @Column({ type: 'date' })
   date!: string;

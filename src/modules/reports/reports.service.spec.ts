@@ -292,7 +292,11 @@ describe('ReportsService — cashFlow indirect operating', () => {
       end: END,
       opening: [gl('1200', 'Inventory', 'asset', 'Inventory', 400, 0)],
       closing: [gl('1200', 'Inventory', 'asset', 'Inventory', 400, 400)],
+      // The period's own movements — the sale, its cost, and the stock that
+      // cost came out of. The indirect method reads balance changes from
+      // these, so they must tell the same story as opening → closing.
       period: [
+        gl('1200', 'Inventory', 'asset', 'Inventory', 0, 400),
         gl('4000', 'Sales Revenue', 'revenue', 'Sales', 0, 1000),
         gl('5000', 'Cost of Goods Sold', 'expense', 'Cost of Goods', 400, 0),
       ],
@@ -350,7 +354,8 @@ describe('ReportsService — cashFlow indirect operating', () => {
       end: END,
       opening: [gl('1250', 'Goods in Transit', 'asset', 'Inventory', 0, 0)],
       closing: [gl('1250', 'Goods in Transit', 'asset', 'Inventory', 500, 0)],
-      period: [],
+      // The 500 that went into transit is the period's movement.
+      period: [gl('1250', 'Goods in Transit', 'asset', 'Inventory', 500, 0)],
     });
     const svc = await makeService(query);
     const r = await svc.cashFlow('c1', START, END);

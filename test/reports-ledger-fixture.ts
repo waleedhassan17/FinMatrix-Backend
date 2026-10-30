@@ -315,24 +315,18 @@ export function ledgerQuery(
 
     if (
       sql.includes("to_char(g.date, 'YYYY-MM') AS period") &&
-      sql.includes('all_v')
+      sql.includes("a.sub_type IN ('Cash','Bank')")
     ) {
+      // The month-by-month cash movement within the range.
       const [, s, e] = params;
-      const m = new Map<string, { v: number; all_v: number }>();
-      for (const r of rows.filter((x) => isCash(x) && x.date <= e)) {
+      const m = new Map<string, number>();
+      for (const r of rows.filter((x) => isCash(x) && inRange(x.date, s, e))) {
         const k = r.date.slice(0, 7);
-        const cur = m.get(k) ?? { v: 0, all_v: 0 };
-        cur.all_v += r.debit - r.credit;
-        if (r.date >= s) cur.v += r.debit - r.credit;
-        m.set(k, cur);
+        m.set(k, (m.get(k) ?? 0) + r.debit - r.credit);
       }
       return [...m.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([period, x]) => ({
-          period,
-          v: String(x.v),
-          all_v: String(x.all_v),
-        }));
+        .map(([period, v]) => ({ period, v: String(v) }));
     }
 
     if (

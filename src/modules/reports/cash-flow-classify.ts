@@ -17,16 +17,21 @@
  *
  * The rules, per posting:
  *
- *  1. netCash = Σ(debit − credit) over its Cash/Bank rows. A posting with no
- *     non-cash rows is a TRANSFER between the company's own accounts: it nets
- *     to zero and appears in no section.
- *  2. netCash is allocated across the non-cash rows on the OPPOSITE side to it
- *     — what the cash paid for, or came from — in proportion to their amounts.
- *     Non-cash rows on the SAME side as the cash are the non-cash part of the
- *     transaction (IAS 7.43): payroll's withheld tax, the part of a machine the
- *     bank financed directly. They receive no cash. Allocating across every
- *     sibling instead would send a positive figure to "tax" for every payroll
- *     run.
+ *  1. A posting with no non-cash rows is a TRANSFER between the company's own
+ *     accounts: it nets to zero and appears in no section.
+ *  2. Cash is matched GROSS. Cash coming in (debits to Cash/Bank) came from
+ *     the posting's non-cash CREDIT rows; cash going out (credits to Cash/Bank)
+ *     went to its non-cash DEBIT rows — each in proportion to the rows'
+ *     amounts, up to what those rows can absorb. Netting first and allocating
+ *     the net would be exact only while cash sits on one side; a compound
+ *     journal — a day's bank book with receipts, payments and a loan
+ *     instalment in one entry — has it on both, and netting mixes unrelated
+ *     receipts and payments. Whatever of a non-cash row is not matched to cash
+ *     is the non-cash part of the transaction (IAS 7.43): payroll's withheld
+ *     tax, the part of a machine the bank financed directly. It receives no
+ *     cash. Cash in beyond what the credit rows can absorb is matched by cash
+ *     out on the other side: money moved between the company's own accounts
+ *     inside the entry, in no section.
  *  3. Each receiving row is classified by its account: fixed assets →
  *     investing; Notes Payable → financing (loans); owner/other/opening-balance
  *     equity → financing (contributions); Owner Draws and Retained Earnings →
@@ -162,11 +167,24 @@ export interface LookThroughWeight {
 
 export interface CashAllocation {
   lineKey: CashFlowLineKey;
-  /** Signed cash, full precision. Σ over a posting = its netCash. */
+  /** Signed cash, full precision: inflow less outflow. Σ over a posting = its netCash. */
   amount: number;
-  /** 0..1 share of the posting's netCash. */
-  pct: number;
+  /** 0..1 share of the posting's cash IN (its debit Cash/Bank rows) matched to this line. */
+  inPct: number;
+  /** 0..1 share of the posting's cash OUT (its credit Cash/Bank rows) matched to this line. */
+  outPct: number;
 }
+
+/**
+ * The share of one cash row that a line received: a receipt row shares in
+ * what came in, a payment row in what went out. A row's allocated cash is
+ * `row.amount × cashRowShare(row, allocation)`, and those add up, over every
+ * cash row of every posting, to the line's amount.
+ */
+export const cashRowShare = (
+  row: { amount: number },
+  a: CashAllocation,
+): number => (row.amount >= 0 ? a.inPct : a.outPct);
 
 export interface PostingCashFlow {
   reference: string;
@@ -213,7 +231,15 @@ export function classifyPosting(
 ): PostingCashFlow {
   const cashRows = p.rows.filter((r) => r.isCash);
   const nonCash = p.rows.filter((r) => !r.isCash);
-  const netCash = cashRows.reduce((t, r) => t + r.amount, 0);
+  const cashIn = cashRows.reduce(
+    (t, r) => (r.amount > 0 ? t + r.amount : t),
+    0,
+  );
+  const cashOut = cashRows.reduce(
+    (t, r) => (r.amount < 0 ? t - r.amount : t),
+    0,
+  );
+  const netCash = cashIn - cashOut;
   const base = {
     reference: p.reference,
     date: p.date,
@@ -222,9 +248,9 @@ export function classifyPosting(
     netCash,
     cashRows,
   };
-
-  if (!nonCash.length || Math.abs(netCash) < EPS) {
-    return { ...base, transfer: !nonCash.length, allocations: [] };
+  if (!nonCash.length) return { ...base, transfer: true, allocations: [] };
+  if (cashIn <= EPS && cashOut <= EPS) {
+    return { ...base, transfer: false, allocations: [] };
   }
 
   const opLine = operatingLineFor(p.sourceType);
@@ -233,82 +259,126 @@ export function classifyPosting(
       ...base,
       transfer: false,
       allocations: [
-        { lineKey: 'fin.opening_balance', amount: netCash, pct: 1 },
+        {
+          lineKey: 'fin.opening_balance',
+          amount: netCash,
+          inPct: cashIn > EPS ? 1 : 0,
+          outPct: cashOut > EPS ? 1 : 0,
+        },
       ],
     };
   }
 
-  // What the cash paid for, or came from: the non-cash rows on the other side.
-  const sign = Math.sign(netCash);
-  let receiving = nonCash.filter(
-    (r) => Math.sign(r.amount) === -sign && Math.abs(r.amount) > EPS,
-  );
-  // An unbalanced posting should not exist, but if one does its cash must
-  // still land somewhere, or the sections stop adding up to the net change.
-  if (!receiving.length)
-    receiving = nonCash.filter((r) => Math.abs(r.amount) > EPS);
+  const debits = nonCash.filter((r) => r.amount > EPS);
+  const credits = nonCash.filter((r) => r.amount < -EPS);
+  const debitTotal = debits.reduce((t, r) => t + r.amount, 0);
+  const creditTotal = credits.reduce((t, r) => t - r.amount, 0);
+  // What each side can absorb: cash in is matched to the credit rows, cash
+  // out to the debit rows. In a balanced posting the excess of each is the
+  // same figure — money that moved between the company's own accounts.
+  const inflow = Math.min(cashIn, creditTotal);
+  const outflow = Math.min(cashOut, debitTotal);
 
-  const weights: Array<{ lineKey: CashFlowLineKey; weight: number }> = [];
-  for (const r of receiving) {
-    const size = Math.abs(r.amount);
-    if (
-      lookThrough &&
-      p.sourceType === 'bill_payment' &&
-      r.subType === 'Accounts Payable'
-    ) {
-      const covered = lookThrough.reduce((t, w) => t + w.weight, 0);
-      if (covered > EPS) {
-        // Applications can never exceed the payment; scale down defensively.
-        const scale = covered > size ? size / covered : 1;
-        for (const w of lookThrough) {
-          weights.push({
-            lineKey: nonOperatingLineFor(w) ?? opLine,
-            weight: w.weight * scale,
-          });
+  /** Weights per line for one side's rows; a bill payment's AP is looked through. */
+  const weigh = (rows: LedgerRow[]) => {
+    const w = new Map<CashFlowLineKey, number>();
+    const add = (k: CashFlowLineKey, v: number) =>
+      w.set(k, (w.get(k) ?? 0) + v);
+    for (const r of rows) {
+      const size = Math.abs(r.amount);
+      if (
+        lookThrough &&
+        p.sourceType === 'bill_payment' &&
+        r.subType === 'Accounts Payable'
+      ) {
+        const covered = lookThrough.reduce((t, x) => t + x.weight, 0);
+        if (covered > EPS) {
+          // Applications can never exceed the payment; scale down defensively.
+          const scale = covered > size ? size / covered : 1;
+          for (const x of lookThrough)
+            add(nonOperatingLineFor(x) ?? opLine, x.weight * scale);
+          const unapplied = size - covered * scale;
+          if (unapplied > EPS) add(opLine, unapplied);
+          continue;
         }
-        const unapplied = size - covered * scale;
-        if (unapplied > EPS)
-          weights.push({ lineKey: opLine, weight: unapplied });
-        continue;
       }
+      add(nonOperatingLineFor(r) ?? opLine, size);
     }
-    weights.push({ lineKey: nonOperatingLineFor(r) ?? opLine, weight: size });
+    return w;
+  };
+  const spread = (w: Map<CashFlowLineKey, number>, cash: number) => {
+    const total = [...w.values()].reduce((t, v) => t + v, 0);
+    return new Map(
+      [...w.entries()].map(([k, v]) => [
+        k,
+        total > EPS ? cash * (v / total) : 0,
+      ]),
+    );
+  };
+  const lineIn = spread(weigh(credits), inflow);
+  const lineOut = spread(weigh(debits), outflow);
+
+  const keys = new Set<CashFlowLineKey>([...lineIn.keys(), ...lineOut.keys()]);
+  const allocations: CashAllocation[] = [...keys].map((lineKey) => {
+    const i = lineIn.get(lineKey) ?? 0;
+    const o = lineOut.get(lineKey) ?? 0;
+    return {
+      lineKey,
+      amount: i - o,
+      inPct: cashIn > EPS ? i / cashIn : 0,
+      outPct: cashOut > EPS ? o / cashOut : 0,
+    };
+  });
+
+  // A balanced posting is fully explained above. An unbalanced one should not
+  // exist, but if it does its cash must still land somewhere, or the sections
+  // stop adding up to the net change: the remainder goes to the operating line.
+  const explained = allocations.reduce((t, a) => t + a.amount, 0);
+  const remainder = netCash - explained;
+  if (Math.abs(remainder) > EPS) {
+    let a = allocations.find((x) => x.lineKey === opLine);
+    if (!a)
+      allocations.push(
+        (a = { lineKey: opLine, amount: 0, inPct: 0, outPct: 0 }),
+      );
+    a.amount += remainder;
+    if (remainder > 0) a.inPct += cashIn > EPS ? remainder / cashIn : 0;
+    else a.outPct += cashOut > EPS ? -remainder / cashOut : 0;
   }
 
-  const total = weights.reduce((t, w) => t + w.weight, 0);
-  const byLine = new Map<CashFlowLineKey, number>();
-  for (const w of weights)
-    byLine.set(w.lineKey, (byLine.get(w.lineKey) ?? 0) + w.weight);
-
-  const allocations: CashAllocation[] =
-    total > EPS
-      ? [...byLine.entries()].map(([lineKey, weight]) => ({
-          lineKey,
-          amount: netCash * (weight / total),
-          pct: weight / total,
-        }))
-      : [{ lineKey: opLine, amount: netCash, pct: 1 }];
-
-  return { ...base, transfer: false, allocations };
+  return {
+    ...base,
+    transfer: false,
+    allocations: allocations.filter(
+      (a) => Math.abs(a.amount) > EPS || a.inPct > 0 || a.outPct > 0,
+    ),
+  };
 }
 
 /**
- * For the INDIRECT method: the share of each non-cash row in a posting that is
- * NOT an operating cash event, so working capital and net income can be
- * cleansed of it (IAS 7.43 — investing and financing transactions that use no
- * cash are excluded from the statement).
+ * For the INDIRECT method: the share of each operating non-cash row (working
+ * capital, revenue, expense) in a posting that is NOT an operating cash event,
+ * so working capital and net income can be cleansed of it (IAS 7.43 —
+ * investing and financing transactions that use no cash are excluded).
  *
  *  - Opening positions (opening balances, opening stock) entered in the period
  *    are not period activity at all: share 1. Entering 150,000 of opening
  *    stock is not 150,000 of cash spent on inventory.
- *  - Otherwise a row's share is the non-operating part of what is on the
- *    other side of it: Σ|opposite rows that are fixed assets, long-term loans
- *    or equity| ÷ Σ|all opposite rows|, cash rows included as operating. A
- *    machine bought on credit (Dr Fixed Asset / Cr AP) takes the AP increase
- *    out of working capital; inventory bought half with cash and half with a
- *    direct loan keeps only the cash half.
- *  - A bill payment's AP row takes the look-through's non-operating share: paying
- *    the supplier of a machine is investing, so the AP it clears is too.
+ *  - Otherwise each row splits as classifyPosting splits it: the part matched
+ *    to cash, and the non-cash rest. The cash part is an operating cash event
+ *    and stays. The non-cash rests of a posting form a balanced transaction of
+ *    their own; a row's non-cash rest is excluded in the proportion that the
+ *    other side of THAT transaction is a fixed asset, a long-term loan or
+ *    equity. A machine bought on credit (Dr Fixed Asset / Cr AP) takes the AP
+ *    increase out of working capital; inventory bought half with cash and half
+ *    with a direct loan keeps only the cash half.
+ *  - A bill payment's AP row: its cash part takes the look-through's
+ *    non-operating share — paying the supplier of a machine is investing, so
+ *    the AP it clears is too.
+ *
+ * Because the two methods read each posting through the same split, the
+ * indirect walk reaches the direct operating figure exactly, posting by
+ * posting — compound entries included.
  *
  * Rows that are themselves cash or non-operating are not returned; they never
  * feed the indirect method's working capital.
@@ -318,40 +388,65 @@ export function nonCashShares(
   flow?: PostingCashFlow,
 ): Map<string, number> {
   const out = new Map<string, number>();
-  const candidates = p.rows.filter(
+  const operating = p.rows.filter(
     (r) => !r.isCash && nonOperatingLineFor(r) === null,
   );
 
   if (OPENING_SOURCE_TYPES.has(p.sourceType)) {
-    for (const r of candidates) out.set(r.id, 1);
+    for (const r of operating) out.set(r.id, 1);
     return out;
   }
 
-  for (const r of candidates) {
+  const cash = p.rows.filter((r) => r.isCash);
+  const nonCash = p.rows.filter((r) => !r.isCash);
+  const cashIn = cash.reduce((t, r) => (r.amount > 0 ? t + r.amount : t), 0);
+  const cashOut = cash.reduce((t, r) => (r.amount < 0 ? t - r.amount : t), 0);
+  const debitTotal = nonCash.reduce(
+    (t, r) => (r.amount > EPS ? t + r.amount : t),
+    0,
+  );
+  const creditTotal = nonCash.reduce(
+    (t, r) => (r.amount < -EPS ? t - r.amount : t),
+    0,
+  );
+  /** The share of a non-cash row that was matched to cash. */
+  const matched = (r: LedgerRow) =>
+    r.amount > 0
+      ? debitTotal > EPS
+        ? Math.min(1, cashOut / debitTotal)
+        : 0
+      : creditTotal > EPS
+        ? Math.min(1, cashIn / creditTotal)
+        : 0;
+
+  // A looked-through bill payment: the non-operating share of its cash out.
+  const lookedThrough =
+    flow && p.sourceType === 'bill_payment' && cashOut > EPS
+      ? flow.allocations
+          .filter((a) => CASH_FLOW_LINES[a.lineKey].section !== 'operating')
+          .reduce((t, a) => t + a.outPct, 0) *
+        (cashOut / Math.max(Math.min(cashOut, debitTotal), EPS))
+      : 0;
+
+  for (const r of operating) {
     if (Math.abs(r.amount) <= EPS) continue;
-    if (
-      flow &&
-      p.sourceType === 'bill_payment' &&
-      r.subType === 'Accounts Payable'
-    ) {
-      const nonOp = flow.allocations
-        .filter((a) => CASH_FLOW_LINES[a.lineKey].section !== 'operating')
-        .reduce((t, a) => t + a.pct, 0);
-      if (nonOp > 0) out.set(r.id, Math.min(1, nonOp));
-      continue;
-    }
-    const opposite = p.rows.filter(
+    const m = matched(r);
+    // The other side of the posting's non-cash transaction.
+    const opposite = nonCash.filter(
       (o) =>
         o !== r &&
         Math.sign(o.amount) === -Math.sign(r.amount) &&
         Math.abs(o.amount) > EPS,
     );
-    const all = opposite.reduce((t, o) => t + Math.abs(o.amount), 0);
-    if (all <= EPS) continue;
+    const rest = (o: LedgerRow) => (1 - matched(o)) * Math.abs(o.amount);
+    const all = opposite.reduce((t, o) => t + rest(o), 0);
     const nonOp = opposite
-      .filter((o) => !o.isCash && nonOperatingLineFor(o) !== null)
-      .reduce((t, o) => t + Math.abs(o.amount), 0);
-    if (nonOp > EPS) out.set(r.id, nonOp / all);
+      .filter((o) => nonOperatingLineFor(o) !== null)
+      .reduce((t, o) => t + rest(o), 0);
+    let share = all > EPS ? (1 - m) * (nonOp / all) : 0;
+    if (lookedThrough > 0 && r.subType === 'Accounts Payable')
+      share += m * Math.min(1, lookedThrough);
+    if (share > EPS) out.set(r.id, Math.min(1, share));
   }
   return out;
 }

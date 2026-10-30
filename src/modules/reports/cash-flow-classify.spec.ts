@@ -2,6 +2,7 @@ import {
   CASH_FLOW_LINES,
   classifyPosting,
   nonCashShares,
+  cashRowShare,
   type LedgerRow,
   type Posting,
 } from './cash-flow-classify';
@@ -302,5 +303,99 @@ describe('nonCashShares — what the indirect method must leave out', () => {
       },
     ]);
     expect(nonCashShares(p, flow).get(ap.id)).toBeCloseTo(0.6, 10);
+  });
+});
+
+describe('compound postings — cash on both sides', () => {
+  it('matches a receipt and payments in one journal to their own counterparts', () => {
+    // A day's bank book: a customer's 3,000 in; a 15,000 loan instalment and a
+    // 500 expense out — one journal entry.
+    const p = posting('journal_entry', [
+      row('2700', 'liability', 'Notes Payable', 15000),
+      row('6000', 'expense', 'Operating', 500),
+      BANK(3000),
+      row('1100', 'asset', 'Accounts Receivable', -3000),
+      BANK(-15500),
+    ]);
+    const r = classifyPosting(p);
+    // Netting first would have smeared the receipt across the loan; matched
+    // gross, the loan is exactly the instalment.
+    expect(byLine(r)).toEqual({ 'fin.loans': -15000, 'op.other': 2500 });
+    expect(sum(r)).toBeCloseTo(-12500, 9);
+  });
+
+  it('leaves money moved between own accounts inside an entry in no section', () => {
+    // 1,000 from bank to cash and a 200 sale in cash, in one entry.
+    const r = classifyPosting(
+      posting('journal_entry', [
+        CASH(1200),
+        BANK(-1000),
+        row('4000', 'revenue', 'Sales', -200),
+      ]),
+    );
+    expect(byLine(r)).toEqual({ 'op.other': 200 });
+  });
+
+  /** Deterministic pseudo-random numbers, so a failure is reproducible. */
+  const rng = (seed: number) => () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const ACCOUNTS: Array<[string, string, string]> = [
+    ['1100', 'asset', 'Accounts Receivable'],
+    ['1200', 'asset', 'Inventory'],
+    ['1500', 'asset', 'Fixed Asset'],
+    ['2000', 'liability', 'Accounts Payable'],
+    ['2310', 'liability', 'Other Liability'],
+    ['2700', 'liability', 'Notes Payable'],
+    ['3000', 'equity', 'Owner Equity'],
+    ['3200', 'equity', 'Owner Draws'],
+    ['4000', 'revenue', 'Sales'],
+    ['6000', 'expense', 'Operating'],
+  ];
+
+  it('reconciles the indirect walk to the direct figure for any balanced posting', () => {
+    const next = rng(20261030);
+    for (let n = 0; n < 500; n++) {
+      const rows: LedgerRow[] = [];
+      const lines = 2 + Math.floor(next() * 9);
+      for (let i = 0; i < lines; i++) {
+        const amount = Math.round((next() * 20000 - 10000) * 100) / 100 || 1;
+        if (next() < 0.4) rows.push(next() < 0.5 ? CASH(amount) : BANK(amount));
+        else {
+          const [code, type, subType] = ACCOUNTS[Math.floor(next() * ACCOUNTS.length)];
+          rows.push(row(code, type, subType, amount));
+        }
+      }
+      // Balance it on a random account, cash or not.
+      const imbalance = rows.reduce((t, r) => t + r.amount, 0);
+      if (Math.abs(imbalance) > 0.001) {
+        const [code, type, subType] = ACCOUNTS[Math.floor(next() * ACCOUNTS.length)];
+        rows.push(next() < 0.3 ? CASH(-imbalance) : row(code, type, subType, -imbalance));
+      }
+      const p = posting('journal_entry', rows);
+      const flow = classifyPosting(p);
+      const shares = nonCashShares(p, flow);
+
+      const direct = flow.allocations
+        .filter((a) => CASH_FLOW_LINES[a.lineKey].section === 'operating')
+        .reduce((t, a) => t + a.amount, 0);
+      // What the indirect method reads from this posting: every operating
+      // non-cash row's movement, less what was excluded as non-cash.
+      const indirect = rows
+        .filter((r) => !r.isCash && ['Accounts Receivable', 'Inventory', 'Accounts Payable', 'Other Liability', 'Sales', 'Operating'].includes(r.subType!))
+        .reduce((t, r) => t - r.amount * (1 - (shares.get(r.id) ?? 0)), 0);
+      expect(indirect).toBeCloseTo(direct, 6);
+
+      // Every section together is exactly the posting's net cash.
+      const net = rows.filter((r) => r.isCash).reduce((t, r) => t + r.amount, 0);
+      expect(sum(flow)).toBeCloseTo(flow.transfer ? 0 : net, 6);
+
+      // The cash rows' shares add up to each line — the drill-down contract.
+      for (const a of flow.allocations) {
+        const fromRows = flow.cashRows.reduce((t, r) => t + r.amount * cashRowShare(r, a), 0);
+        expect(fromRows).toBeCloseTo(a.amount, 6);
+      }
+    }
   });
 });

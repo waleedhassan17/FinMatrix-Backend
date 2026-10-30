@@ -48,6 +48,7 @@ import {
 import {
   CASH_FLOW_LINES,
   EPS,
+  cashRowShare,
   OPENING_SOURCE_TYPES,
   classifyPosting,
   isCashFlowLineKey,
@@ -517,6 +518,26 @@ export class ReportsService {
    * anything that has to tie. See the note in balanceSheetCore for why the
    * two differ.
    */
+  /**
+   * The GL before a fiscal year, as all-time less the year itself, account by
+   * account. Same figures as a second pass over everything before the year,
+   * without that pass: on a ledger with a long history it is the slowest query
+   * a statement runs, and the balance sheet already has both halves.
+   */
+  private priorWindowRows<
+    T extends { accountNumber: string; type: string; subType: string; dr: string; cr: string },
+  >(allRows: T[], currentRows: T[]): T[] {
+    const current = new Map(currentRows.map((r) => [r.accountNumber, r]));
+    return allRows.map((r) => {
+      const c = current.get(r.accountNumber);
+      return {
+        ...r,
+        dr: String(num(r.dr) - num(c?.dr)),
+        cr: String(num(r.cr) - num(c?.cr)),
+      };
+    });
+  }
+
   private earningsOf(
     rows: Array<{ type: string; dr: string; cr: string; accountNumber: string; subType: string }>,
   ): { raw: number; display: number } {
@@ -568,30 +589,6 @@ export class ReportsService {
     }>,
   ): number {
     return this.earningsOf(rows).display;
-  }
-
-  /**
-   * Closing balance per account code as of a date, normal-balance aware:
-   * positive means a debit balance for assets/expenses and a credit balance
-   * for liabilities/equity/revenue.
-   */
-  private async balancesAsOf(
-    companyId: string,
-    asOf: string,
-  ): Promise<Map<string, { type: string; subType: string; balance: number }>> {
-    const rows = await this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf);
-    const out = new Map<
-      string,
-      { type: string; subType: string; balance: number }
-    >();
-    for (const r of rows) {
-      const dr = num(r.dr);
-      const cr = num(r.cr);
-      const balance =
-        r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
-      out.set(r.accountNumber, { type: r.type, subType: r.subType, balance });
-    }
-    return out;
   }
 
   // ── Profit & Loss (ledger-derived) ───────────────────────────────
@@ -708,10 +705,8 @@ export class ReportsService {
     const rows = await this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf);
     const startMonth = await this.fiscalYearStartMonth(companyId);
     const fyStart = fiscalYearStart(startMonth, asOf);
-    const [priorRows, currentRows] = await Promise.all([
-      this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, dayBefore(fyStart)),
-      this.glByAccount(companyId, fyStart, asOf),
-    ]);
+    const currentRows = await this.glByAccount(companyId, fyStart, asOf);
+    const priorRows = this.priorWindowRows(rows, currentRows);
 
     const assets: { accountCode: string; accountName: string; amount: number }[] = [];
     const liabilities: { accountCode: string; accountName: string; amount: number }[] = [];
@@ -2061,9 +2056,9 @@ export class ReportsService {
     const fyStart = fiscalYearStart(startMonth, asOf);
     const priorEnd = dayBefore(fyStart);
 
-    const [allRows, priorRows, byYear] = await Promise.all([
+    const [allRows, currentRows, byYear] = await Promise.all([
       this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf),
-      this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, priorEnd),
+      this.glByAccount(companyId, fyStart, asOf),
       this.dataSource.query(
         `SELECT EXTRACT(YEAR FROM (g.date - make_interval(months => $3::int - 1)))::int AS fy,
                 a.account_number AS "accountNumber", a.type, a.sub_type AS "subType",
@@ -2078,7 +2073,8 @@ export class ReportsService {
 
     const reAccount = allRows.find((r) => r.type === 'equity' && r.subType === 'Retained Earnings');
     const posted = reAccount ? num(reAccount.cr) - num(reAccount.dr) : 0;
-    const priorYears = this.earningsOf(priorRows);
+    // Derived exactly as balanceSheetCore derives it, so `total` is that line.
+    const priorYears = this.earningsOf(this.priorWindowRows(allRows, currentRows));
 
     const years = new Map<number, any[]>();
     for (const r of byYear ?? []) {
@@ -2149,7 +2145,11 @@ export class ReportsService {
       const alloc = f.allocations.find((a) => a.lineKey === lineKey);
       if (!alloc) continue;
       for (const row of [...f.cashRows].reverse()) {
-        items.push({ row, allocated: row.amount * alloc.pct, pct: alloc.pct });
+        // A receipt row shares in what came in, a payment row in what went
+        // out; a row that gave this line nothing is not listed.
+        const pct = cashRowShare(row, alloc);
+        if (pct <= 0) continue;
+        items.push({ row, allocated: row.amount * pct, pct });
       }
     }
     const rawLine = items.reduce((t, i) => t + i.allocated, 0);
@@ -4046,7 +4046,7 @@ export class ReportsService {
     const endingCash = r2(rawBeginning + rawNetChange);
 
     const [monthlyTrend, accounts] = await Promise.all([
-      this.cashMonthlyTrend(companyId, s, e),
+      this.cashMonthlyTrend(companyId, s, e, 12, rawBeginning),
       this.cashAccountBalances(companyId, s, e),
     ]);
     // The tie to the balance sheet, stated rather than assumed: the cash the
@@ -4324,27 +4324,53 @@ export class ReportsService {
    * quiet month is a zero bar rather than a missing one. Each point also
    * carries the cash held at that month's end, so a chart needs no running sum.
    */
-  async cashMonthlyTrend(companyId: string, s: string, e: string, maxMonths = 12) {
-    const rows = await this.dataSource.query(
-      `SELECT to_char(g.date, 'YYYY-MM') AS period,
-              COALESCE(SUM(g.debit::numeric - g.credit::numeric)
-                       FILTER (WHERE g.date >= $2), 0) AS v,
-              COALESCE(SUM(g.debit::numeric - g.credit::numeric), 0) AS all_v
-         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
-        WHERE g.company_id = $1 AND a.sub_type IN ('Cash','Bank') AND g.date <= $3
-        GROUP BY period
-        ORDER BY period`,
-      [companyId, s, e],
-    );
+  /**
+   * @param beginning cash before `s` at full precision, when the caller has it
+   *   (cashFlow does); otherwise it is read here. Only the range itself is
+   *   scanned month by month — the history before it is one figure.
+   */
+  async cashMonthlyTrend(
+    companyId: string,
+    s: string,
+    e: string,
+    maxMonths = 12,
+    beginning?: number,
+  ) {
+    const [rows, opening] = await Promise.all([
+      this.dataSource.query(
+        `SELECT to_char(g.date, 'YYYY-MM') AS period,
+                COALESCE(SUM(g.debit::numeric - g.credit::numeric), 0) AS v
+           FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+          WHERE g.company_id = $1 AND a.sub_type IN ('Cash','Bank')
+            AND g.date >= $2 AND g.date <= $3
+          GROUP BY period
+          ORDER BY period`,
+        [companyId, s, e],
+      ),
+      beginning !== undefined ? Promise.resolve(beginning) : this.cashBefore(companyId, s),
+    ]);
     const window = monthWindow(e, Math.min(Math.max(monthSpan(s, e), 1), maxMonths));
     const byPeriod = new Map<string, any>((rows ?? []).map((r: any) => [r.period as string, r]));
-    let running = 0;
-    for (const r of rows ?? []) if ((r.period as string) < window[0].period) running += num(r.all_v);
+    // Cash at the window's start: everything before the range, plus the
+    // range's months that fall before the window.
+    let running = opening;
+    for (const r of rows ?? []) if ((r.period as string) < window[0].period) running += num(r.v);
     return window.map((slot) => {
       const r = byPeriod.get(slot.period);
-      running += num(r?.all_v);
+      running += num(r?.v);
       return { label: slot.label, value: r2(num(r?.v)), endingCash: r2(running), period: slot.period, rawValue: num(r?.v) };
     });
+  }
+
+  /** Cash + Bank before a date, at full precision. */
+  private async cashBefore(companyId: string, s: string): Promise<number> {
+    const rows = await this.dataSource.query(
+      `SELECT COALESCE(SUM(g.debit::numeric - g.credit::numeric),0) AS v
+         FROM general_ledger g JOIN accounts a ON a.id = g.account_id
+        WHERE g.company_id=$1 AND a.sub_type IN ('Cash','Bank') AND g.date < $2`,
+      [companyId, s],
+    );
+    return num(rows?.[0]?.v);
   }
 
   /** Each cash and bank account at the start and end of the range. */
@@ -4406,14 +4432,22 @@ export class ReportsService {
     directOperatingRaw: number,
     cash: { postings: Map<string, Posting>; flows: PostingCashFlow[] },
   ): Promise<OperatingIndirect> {
-    // The opening side is the day BEFORE the period starts, so the first day's
-    // activity counts as movement.
-    const [openingBal, closingBal, periodRows, nonCash] = await Promise.all([
-      this.balancesAsOf(companyId, dayBefore(s)),
-      this.balancesAsOf(companyId, e),
+    // A balance's change over the period is its movement in the period —
+    // closing less opening, without reading either: two passes over the whole
+    // history, on a ledger with years of it, cost more than everything else
+    // here together. glByAccount lists every account, moved or not.
+    const [periodRows, nonCash] = await Promise.all([
       this.glByAccount(companyId, s, e),
       this.nonCashMovements(companyId, s, e, cash),
     ]);
+    const movement = new Map(
+      periodRows.map((r) => {
+        const dr = num(r.dr);
+        const cr = num(r.cr);
+        const moved = r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
+        return [r.accountNumber, { type: r.type, subType: r.subType, moved }] as const;
+      }),
+    );
 
     const netIncome = this.netIncomeFrom(periodRows);
     const rawNetIncome = this.earningsOf(periodRows).raw;
@@ -4423,12 +4457,12 @@ export class ReportsService {
       pick: (code: string, meta: { type: string; subType: string }) => boolean,
     ): number => {
       let d = 0;
-      for (const [code, meta] of closingBal) {
+      for (const [code, meta] of movement) {
         if (!pick(code, meta)) continue;
-        // `excluded` is debit-positive; balances are normal-balance signed.
+        // `excluded` is debit-positive; movements are normal-balance signed.
         const moved = nonCash.excluded.get(code) ?? 0;
         const movedNormal = meta.type === 'asset' || meta.type === 'expense' ? moved : -moved;
-        d += meta.balance - (openingBal.get(code)?.balance ?? 0) - movedNormal;
+        d += meta.moved - movedNormal;
       }
       return d;
     };
