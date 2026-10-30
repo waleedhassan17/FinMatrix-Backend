@@ -885,6 +885,153 @@ async function main() {
     ok('I12 an item sold today says so', row?.lastSoldDate === TODAY, { lastSoldDate: row?.lastSoldDate });
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // V. Reports v2 — capex, a loan, owner money and a transfer land in the
+  //    right cash-flow sections, the statements still tie, and every drill-
+  //    down adds up to the line it was opened from.
+  // ═══════════════════════════════════════════════════════════════
+  console.log('\n— V. investing and financing cash, and every drill-down ties');
+  {
+    const freeNumber = async (min: number, max: number) => {
+      const { rows } = await db.query(`SELECT account_number FROM accounts WHERE company_id = $1`, [COMPANY]);
+      const used = new Set(rows.map((r: any) => r.account_number));
+      for (let v = min; v <= max; v++) if (!used.has(String(v))) return String(v);
+      throw new Error(`no free account number in ${min}–${max}`);
+    };
+    const chart = ((data(await req('GET', '/accounts?limit=500')) as any)?.accounts ?? []) as any[];
+    const byNum = new Map(chart.map((a: any) => [a.accountNumber, a]));
+    /** The chart's account of a subtype, or a new one in the given range. */
+    const ensure = async (subType: string, type: string, name: string, min: number, max: number) =>
+      chart.find((a: any) => a.subType === subType && a.isActive !== false) ??
+      data(await req('POST', '/accounts', { accountNumber: await freeNumber(min, max), name, type, subType }));
+    const equipment = await ensure('Fixed Asset', 'asset', `Equipment ${RUN}`, 1500, 1599);
+    const loan = await ensure('Notes Payable', 'liability', `Bank Loan ${RUN}`, 2700, 2799);
+    const draws = await ensure('Owner Draws', 'equity', `Owner Drawings ${RUN}`, 3200, 3299);
+    const cashAcct: any = byNum.get('1000');
+    const bankAcct: any = byNum.get('1010');
+    const ownerEq: any = byNum.get('3000');
+    ok('V0 accounts for capex, loan and drawings exist', !!equipment?.id && !!loan?.id && !!draws?.id && !!cashAcct && !!bankAcct && !!ownerEq);
+
+    const je = async (memo: string, lines: Array<[string, number, number]>) => {
+      const r = await req('POST', '/journal-entries', {
+        date: TODAY,
+        memo,
+        status: 'posted',
+        lines: lines.map(([accountId, debit, credit], lineOrder) => ({
+          accountId, debit: debit.toFixed(4), credit: credit.toFixed(4), lineOrder,
+        })),
+      });
+      return r.status < 400;
+    };
+    const PNG_PROOF = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const uploadProof = async () => {
+      const fd = new FormData();
+      fd.append('proof', new Blob([PNG_PROOF as unknown as BlobPart], { type: 'image/png' }), 'proof.png');
+      const r = await fetch(`${API}/bill-payments/proofs`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'x-company-id': COMPANY },
+        body: fd as any,
+      }).then((x) => x.json()).catch(() => null);
+      return (r?.data ?? r)?.id as string;
+    };
+
+    const window = `startDate=${TODAY}&endDate=${TODAY}`;
+    const cashFlow = async () => data(await req('GET', `/reports/cash-flow?${window}`)) as any;
+    const lineOf = (cf: any, key: string) =>
+      [...cf.operating.lines, ...cf.investing.lines, ...cf.financing.lines].find((l: any) => l.lineKey === key)?.amount ?? 0;
+    const residualOf = (cf: any) =>
+      (cf.operatingIndirect?.adjustments ?? []).find((a: any) => a.label === 'Other operating adjustments')?.amount ?? 0;
+    const before = await cashFlow();
+
+    // A machine bought on a bill and paid from the bank.
+    const capexBill = data(await req('POST', '/bills', {
+      vendorId: vendor.id,
+      billNumber: `V2-CAPEX-${RUN}`,
+      billDate: TODAY,
+      dueDate: TODAY,
+      status: 'open',
+      lines: [{ description: 'Delivery van', amount: '80000', taxRate: '0', accountId: equipment.id }],
+    })) as any;
+    const paid = await req('POST', '/bills/pay', {
+      vendorId: vendor.id,
+      paymentDate: TODAY,
+      paymentMethod: 'bank_transfer',
+      bankAccountId: bankAcct.id,
+      reference: `V2-PAY-${RUN}`,
+      proofId: await uploadProof(),
+      applications: [{ billId: capexBill?.id, amount: '80000.00' }],
+    });
+    const posted = [
+      paid.status < 400,
+      await je(`V2 loan ${RUN}`, [[bankAcct.id, 250000, 0], [loan.id, 0, 250000]]),
+      await je(`V2 owner capital ${RUN}`, [[cashAcct.id, 60000, 0], [ownerEq.id, 0, 60000]]),
+      await je(`V2 owner drawing ${RUN}`, [[draws.id, 15000, 0], [cashAcct.id, 0, 15000]]),
+      await je(`V2 cash to bank ${RUN}`, [[bankAcct.id, 20000, 0], [cashAcct.id, 0, 20000]]),
+    ];
+    ok('V1 capex bill, its payment and four journals post', posted.every(Boolean), posted);
+
+    const after = await cashFlow();
+    const delta = (key: string) => lineOf(after, key) - lineOf(before, key);
+    ok('V2 the capex payment is investing, not "paid to suppliers"', near(delta('inv.fixed_assets'), -80000) && near(delta('op.suppliers'), 0), {
+      investing: delta('inv.fixed_assets'), suppliers: delta('op.suppliers'),
+    });
+    ok('V3 the loan is financing', near(delta('fin.loans'), 250000), delta('fin.loans'));
+    ok('V4 the owner capital is financing', near(delta('fin.owner_contributions'), 60000), delta('fin.owner_contributions'));
+    ok('V5 the owner drawing is financing', near(delta('fin.owner_drawings'), -15000), delta('fin.owner_drawings'));
+    ok('V6 operating cash is untouched by all of it', near(after.operating.total, before.operating.total), {
+      before: before.operating.total, after: after.operating.total,
+    });
+    ok('V7 the transfer is in no section: net change moved by exactly the rest',
+      near(after.netChange - before.netChange, -80000 + 250000 + 60000 - 15000), after.netChange - before.netChange);
+    ok('V8 sections sum to the net change', near(after.operating.total + after.investing.total + after.financing.total, after.netChange));
+    ok('V9 ending cash is the balance sheet Cash + Bank', after.cashTie?.ties === true, after.cashTie);
+    ok('V10 none of it leaves an unexplained residual', near(residualOf(after), residualOf(before)), {
+      before: residualOf(before), after: residualOf(after),
+    });
+
+    // The statements still tie, in every trial-balance mode.
+    const bs = data(await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`)) as any;
+    ok('V11 A = L + E with no gap', bs?.isBalanced === true && near(n(bs?.gap), 0), { gap: bs?.gap });
+    const codes = (bs?.equity ?? []).map((l: any) => l.accountCode).filter(Boolean);
+    ok('V12 no equity account code appears twice', new Set(codes).size === codes.length, codes);
+    for (const mode of ['closing', 'working'] as const) {
+      const tb = data(await req('GET', `/reports/trial-balance?mode=${mode}&startDate=${TODAY.slice(0, 4)}-01-01&endDate=${TODAY}`)) as any;
+      ok(`V13 the ${mode} trial balance balances`, tb?.isBalanced === true, tb?.balanced ?? tb?.totalDebits);
+    }
+
+    // Every drill-down adds up to the line it came from.
+    for (const l of [...after.operating.lines, ...after.investing.lines, ...after.financing.lines]) {
+      let page = 1;
+      let sum = 0;
+      for (;;) {
+        const r = data(await req('GET', `/reports/cash-flow/lines/${l.lineKey}/entries?${window}&page=${page}&limit=200`)) as any;
+        sum += (r?.entries ?? []).reduce((t: number, x: any) => t + n(x.allocatedAmount), 0);
+        if (page * 200 >= n(r?.total)) break;
+        page++;
+      }
+      ok(`V14 ${l.lineKey} rows add up to the line`, near(sum, l.amount, 0.05), { line: l.amount, rows: sum });
+    }
+    const loanLine = (bs?.liabilities ?? []).find((x: any) => x.accountCode === loan.accountNumber);
+    const reg = data(await req('GET', `/reports/accounts/${loan.accountNumber}/register?startDate=1970-01-01&endDate=${TODAY}&limit=200`)) as any;
+    const regSum = (reg?.entries ?? []).reduce((t: number, x: any) => t + n(x.amount), 0);
+    ok('V15 the loan register foots and closes on the balance sheet line',
+      near(n(reg?.openingBalance) + regSum, n(reg?.closingBalance)) && near(n(reg?.closingBalance), n(loanLine?.amount)), {
+        opening: reg?.openingBalance, sum: regSum, closing: reg?.closingBalance, bs: loanLine?.amount,
+      });
+    const mv = data(await req('GET', `/reports/accounts/${equipment.accountNumber}/movement?startDate=${TODAY}&endDate=${TODAY}`)) as any;
+    ok('V16 the equipment movement breaks down completely',
+      near((mv?.byCounterparty ?? []).reduce((t: number, x: any) => t + n(x.change), 0), n(mv?.change)) &&
+        near(n(mv?.change), n(mv?.current) - n(mv?.prior)) && n(mv?.current) >= 80000, mv);
+    const re = data(await req('GET', `/reports/balance-sheet/retained-earnings?asOfDate=${TODAY}`)) as any;
+    const reLine = (bs?.equity ?? []).find((l: any) => l.composite || l.synthetic === 'retainedEarnings');
+    ok('V17 the retained-earnings breakdown totals to its balance-sheet line', near(n(re?.total), n(reLine?.amount ?? 0)), {
+      total: re?.total, line: reLine?.amount,
+    });
+  }
+
   // ── Books still sound ──────────────────────────────────────────
   const tbFinal = await trialBalance();
   ok('F1 trial balance balances at the end', tbFinal?.isBalanced === true, {

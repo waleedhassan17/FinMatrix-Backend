@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { businessToday } from '../../common/utils/business-date.util';
+import { clampMonth } from '../reports/fiscal-year';
 import { companyFeatures } from '../../common/features/company-features.util';
 import {
   normalizeAuditValue,
@@ -189,16 +190,17 @@ export class PartyHistoryService {
    * starts its year in July has fiscal 2026 run July 2026 – June 2027.
    */
   private async fiscalYear(companyId: string, year?: number) {
+    // One source of truth for the fiscal year: the company's start month
+    // (NULL = January). company_settings.fiscal_year_start is derived from it
+    // and is no longer read — see SettingsService.
     const [row] = await this.dataSource.query(
-      `SELECT c.fiscal_year_start_month AS month, s.fiscal_year_start AS start
+      `SELECT c.fiscal_year_start_month AS month
          FROM companies c
-         LEFT JOIN company_settings s ON s.company_id = c.id
         WHERE c.id = $1
         LIMIT 1`,
       [companyId],
     );
-    const fromSettings = parseInt(String(row?.start ?? '').slice(0, 2), 10);
-    const startMonth = clampMonth(num(row?.month) || fromSettings || 1);
+    const startMonth = clampMonth(row?.month);
 
     const today = businessToday();
     const [ty, tm] = [
@@ -456,10 +458,6 @@ function actionOf(
   if (before.isActive === false && after.isActive === true)
     return 'reactivated';
   return 'updated';
-}
-
-function clampMonth(m: number): number {
-  return Math.min(12, Math.max(1, Math.round(m)));
 }
 
 function earliest(a: string | null, b: string | null): string | null {

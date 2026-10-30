@@ -1,0 +1,140 @@
+{
+  "capturedAt": "2026-10-26",
+  "fiscalYearStart": "2026-01-01",
+  "companies": {
+    "MetroMatrix": {
+      "balanceSheet": {
+        "asOfDate": "2026-10-26",
+        "totalAssets": 1866121.67,
+        "totalLiabilities": 242255,
+        "totalEquity": 1623866.67,
+        "isBalanced": true
+      },
+      "trialBalance": {
+        "allTime": {
+          "totalDebits": 2039455,
+          "totalCredits": 2039455,
+          "isBalanced": true
+        },
+        "currentFy": {
+          "totalDebits": 1639255,
+          "totalCredits": 1639255,
+          "isBalanced": true
+        }
+      },
+      "profitLoss": {
+        "allTime": {
+          "revenue": 1357200,
+          "expenses": 173333.33,
+          "netIncome": 1183866.67
+        },
+        "currentFy": {
+          "revenue": 1357000,
+          "expenses": 173333.33,
+          "netIncome": 1183666.67
+        }
+      },
+      "cashFlow": {
+        "allTime": {
+          "operating": 1214821.67,
+          "investing": 0,
+          "financing": 440000,
+          "netChange": 1654821.67,
+          "beginningCash": 0,
+          "endingCash": 1654821.67,
+          "residual": 0,
+          "lines": {
+            "operating:Cash received from customers": 1375655,
+            "operating:Cash paid to suppliers": -150000,
+            "operating:Payroll paid": -8333.33,
+            "operating:Tax payments": -2500,
+            "financing:Opening balance / owner funding": 440000
+          }
+        },
+        "currentFy": {
+          "operating": 1214821.67,
+          "investing": 0,
+          "financing": 40000,
+          "netChange": 1254821.67,
+          "beginningCash": 400000,
+          "endingCash": 1654821.67,
+          "residual": 0,
+          "lines": {
+            "operating:Cash received from customers": 1375655,
+            "operating:Cash paid to suppliers": -150000,
+            "operating:Payroll paid": -8333.33,
+            "operating:Tax payments": -2500,
+            "financing:Opening balance / owner funding": 40000
+          }
+        }
+      }
+    },
+    "Warehouse Co": {
+      "balanceSheet": {
+        "asOfDate": "2026-10-26",
+        "totalAssets": 1526382.41,
+        "totalLiabilities": 829881.8,
+        "totalEquity": 696500.61,
+        "isBalanced": true
+      },
+      "trialBalance": {
+        "allTime": {
+          "totalDebits": 1809333.54,
+          "totalCredits": 1809333.54,
+          "isBalanced": true
+        },
+        "currentFy": {
+          "totalDebits": 1612748.34,
+          "totalCredits": 1612748.34,
+          "isBalanced": true
+        }
+      },
+      "profitLoss": {
+        "allTime": {
+          "revenue": 412569,
+          "expenses": -4470.39,
+          "netIncome": 208743.61
+        },
+        "currentFy": {
+          "revenue": 412569,
+          "expenses": -4470.39,
+          "netIncome": 208743.61
+        }
+      },
+      "cashFlow": {
+        "allTime": {
+          "operating": -147192.8,
+          "investing": 0,
+          "financing": 337777,
+          "netChange": 190584.2,
+          "beginningCash": 0,
+          "endingCash": 190584.2,
+          "residual": 149980,
+          "lines": {
+            "operating:Cash paid to suppliers": -400001,
+            "operating:Cash received from customers": 285318.2,
+            "operating:Tax payments": -17325,
+            "operating:Other cash movements": -15185,
+            "financing:Opening balance / owner funding": 337777
+          }
+        },
+        "currentFy": {
+          "operating": -147192.8,
+          "investing": 0,
+          "financing": 37777,
+          "netChange": -109415.8,
+          "beginningCash": 300000,
+          "endingCash": 190584.2,
+          "residual": 149980,
+          "lines": {
+            "operating:Cash paid to suppliers": -400001,
+            "operating:Cash received from customers": 285318.2,
+            "operating:Tax payments": -17325,
+            "operating:Other cash movements": -15185,
+            "financing:Opening balance / owner funding": 37777
+          }
+        }
+      }
+    }
+  }
+}

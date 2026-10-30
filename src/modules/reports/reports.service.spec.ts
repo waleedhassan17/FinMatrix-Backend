@@ -17,6 +17,9 @@ import {
   businessToday,
 } from '../../common/utils/business-date.util';
 import { UNAPPLIED_RECEIPTS_SQL } from '../payments/unapplied-receipts.sql';
+import { MediaUrlSigner } from '../inventory/images/media-url.signer';
+import { assessKpi } from './kpi-benchmarks';
+import { daysOfCover } from './item-stock';
 
 /**
  * The statements are pure functions of what the GL returns, so these drive the
@@ -220,11 +223,22 @@ describe('ReportsService — profitLoss', () => {
 
 describe('ReportsService — cashFlow indirect operating', () => {
   /**
-   * cashFlow issues four queries in order: beginning cash, cash by source
-   * type, the monthly trend, then (inside buildOperatingIndirect) opening
-   * balances, closing balances and the period rows.
+   * cashFlow issues, in order: beginning cash, every posting that moved cash
+   * (the counterpart classification), the monthly trend and per-account cash,
+   * then (inside buildOperatingIndirect) opening balances, closing balances,
+   * the period rows and the non-cash candidates.
+   *
+   * `sources` is the old per-source-type shorthand. Each becomes ONE posting:
+   * its cash row plus the counterpart a document of that type posts against
+   * (a receipt against AR, an opening balance against OBE, a manual journal
+   * against an operating liability), which is what the classification reads.
    */
   /** Distinguishes the three glByAccount calls by their date arguments. */
+  const COUNTERPART: Record<string, [string, string, string]> = {
+    payment: ['1100', 'asset', 'Accounts Receivable'],
+    opening_balance: ['3900', 'equity', 'Opening Balance Equity'],
+    journal_entry: ['2310', 'liability', 'Other Liability'],
+  };
   function makeQuery(opts: {
     beginningCash: number;
     sources: Array<{ src: string; inflow: number; outflow: number }>;
@@ -236,16 +250,24 @@ describe('ReportsService — cashFlow indirect operating', () => {
     dayBefore: string;
   }) {
     return jest.fn(async (sql: string, params: unknown[]) => {
-      if (sql.includes('g.date < $2'))
+      if (sql.includes('g.date < $2') && !sql.includes('FILTER'))
         return [{ v: String(opts.beginningCash) }];
-      if (sql.includes('GROUP BY g.source_type')) {
-        return opts.sources.map((s) => ({
-          src: s.src,
-          inflow: String(s.inflow),
-          outflow: String(s.outflow),
-        }));
+      if (sql.includes('cash_refs')) {
+        return opts.sources.flatMap((s, i) => {
+          const net = s.inflow - s.outflow;
+          const [code, type, subType] = COUNTERPART[s.src];
+          const base = {
+            reference: `JE-${i}`,
+            date: opts.start,
+            sourceType: s.src,
+            sourceId: `doc-${i}`,
+          };
+          return [
+            { ...base, id: `c${i}`, accountCode: '1000', accountName: 'Cash', type: 'asset', subType: 'Cash', amount: String(net) },
+            { ...base, id: `x${i}`, accountCode: code, accountName: code, type, subType, amount: String(-net) },
+          ];
+        });
       }
-      if (sql.includes('EXTRACT(YEAR FROM g.date)')) return [];
       if (sql.includes('FROM accounts a')) {
         const [, from, to] = params as string[];
         if (to === opts.dayBefore) return opts.opening;
@@ -1779,9 +1801,14 @@ describe('ReportsService — item explorer', () => {
       return [];
     });
 
-  async function makeItemService(query: jest.Mock, found = true) {
+  async function makeItemService(
+    query: jest.Mock,
+    found = true,
+    opts: { item?: Record<string, unknown>; signer?: Partial<MediaUrlSigner> } = {},
+  ) {
     const repo = {} as never;
-    const itemRepo = { find: jest.fn(async () => (found ? [ITEM] : [])) };
+    const item = { ...ITEM, ...opts.item };
+    const itemRepo = { find: jest.fn(async () => (found ? [item] : [])) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         ReportsService,
@@ -1792,6 +1819,7 @@ describe('ReportsService — item explorer', () => {
         { provide: getRepositoryToken(InventoryMovement), useValue: repo },
         { provide: getRepositoryToken(Delivery), useValue: repo },
         { provide: getRepositoryToken(TaxPayment), useValue: repo },
+        ...(opts.signer ? [{ provide: MediaUrlSigner, useValue: opts.signer }] : []),
       ],
     }).compile();
     return moduleRef.get(ReportsService);
@@ -1923,17 +1951,30 @@ describe('ReportsService — item explorer', () => {
       { customerId: 'k6', customerName: '', units: '0.2', revenue: '20', cogs: '10' },
     ];
 
-    const makeQuery = () =>
+    // The same lines as MONTH, by document type: 500 + 160 − 60 = 600.
+    const CHANNELS = [
+      { docType: 'invoice', documents: 4, units: '5', revenue: '500', cogs: '300' },
+      { docType: 'delivery', documents: 1, units: '2', revenue: '160', cogs: '90' },
+      { docType: 'credit_memo', documents: 1, units: '-1', revenue: '-60', cogs: '-30' },
+    ];
+    // Stock last went out a month ago: not dead stock.
+    const LAST_OUT = `${monthsAgo(1)}-15`;
+
+    const makeQuery = (lastOut: string | null = LAST_OUT, channels: unknown[] = CHANNELS) =>
       routed([
         [/GROUP BY period\s/, [MONTH]],
         [/"customerName"/, CUSTOMERS],
         [/last_sold/, [{ since: '2026-04-08', last_sold: '2026-09-21' }]],
+        [/GROUP BY l\.doc_type/, channels],
+        [/AS last_out/, [{ location: 'Main store', last_out: lastOut }]],
       ]);
 
     it('states the item as it stands today', async () => {
       const svc = await makeItemService(makeQuery());
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const start = `${monthsAgo(0)}-01`;
+      const r: any = await svc.itemPerformance('c1', 'i1', start, businessToday());
 
+      const cover = daysOfCover(25, 6, start, businessToday(), businessToday());
       expect(r.item).toEqual({
         category: 'Lubricants',
         unitOfMeasure: 'can',
@@ -1944,9 +1985,80 @@ describe('ReportsService — item explorer', () => {
         reorderPoint: 30,
         isActive: true,
         lastSoldDate: '2026-09-21',
+        // No signer in this module: no photo, rather than a broken link.
+        imageUrl: null,
+        thumbnailUrl: null,
+        location: 'Main store',
+        // 25 on hand against a reorder point of 30: the reorder list's rule.
+        stockStatus: 'low',
+        suggestedOrderQty: 5,
+        daysOfCover: cover,
+        cover: assessKpi('daysOfCover', cover),
+        deadStock: false,
+        lastOutboundDate: LAST_OUT,
       });
       expect(r.costHistoryFrom).toBe('2026-04-08');
       expect(r.totals.revenue).toBe(600);
+    });
+
+    it('signs the item photo like the inventory list does', async () => {
+      const urlsFor = jest.fn((id: string | null) => ({
+        imageUrl: id ? `https://api.test/media/item-images/${id}/display.jpg?sig=x` : null,
+        thumbnailUrl: id ? `https://api.test/media/item-images/${id}/thumb.jpg?sig=x` : null,
+      }));
+      const svc = await makeItemService(makeQuery(), true, { item: { imageId: 'img9' }, signer: { urlsFor } as never });
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      expect(urlsFor).toHaveBeenCalledWith('img9');
+      expect(r.item.imageUrl).toBe('https://api.test/media/item-images/img9/display.jpg?sig=x');
+      expect(r.item.thumbnailUrl).toBe('https://api.test/media/item-images/img9/thumb.jpg?sig=x');
+    });
+
+    it('calls stock with nothing ever sent out dead stock, as the Health tab does', async () => {
+      const query = makeQuery(null);
+      const svc = await makeItemService(query);
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      expect(r.item.deadStock).toBe(true);
+      expect(r.item.lastOutboundDate).toBeNull();
+      // By the Health tab's outbound rule: sales and deliveries going out.
+      const stockSql = query.mock.calls.find(([sql]) => /AS last_out/.test(sql))![0];
+      expect(stockSql).toMatch(/m\.type IN \('sale', 'delivery'\)/);
+    });
+
+    it('splits the sales by channel, and the channels add up to the totals', async () => {
+      const svc = await makeItemService(makeQuery());
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+
+      expect(r.channels).toEqual([
+        { key: 'invoice', unitsSold: 5, revenue: 500, grossProfit: 200, documents: 4, sharePct: 75.76 },
+        { key: 'delivery', unitsSold: 2, revenue: 160, grossProfit: 70, documents: 1, sharePct: 24.24 },
+      ]);
+      expect(r.returns).toEqual({ unitsSold: -1, revenue: -60, grossProfit: -30, documents: 1 });
+      const sum = (k: 'unitsSold' | 'revenue') =>
+        r.channels.reduce((t: number, c: any) => t + c[k], 0) + r.returns[k];
+      expect(sum('revenue')).toBe(r.totals.revenue);
+      expect(sum('unitsSold')).toBe(r.totals.unitsSold);
+    });
+
+    it('reads customers and channels over the same sixty months as the points', async () => {
+      const query = makeQuery();
+      const svc = await makeItemService(query);
+      // Twenty-five years asked for; the monthly series stops at sixty months.
+      await svc.itemPerformance('c1', 'i1', '2001-01-01', businessToday());
+
+      const firstPoint = `${monthsAgo(59)}-01`;
+      const paramsOf = (re: RegExp) => query.mock.calls.find(([sql]) => re.test(sql))![1] as unknown[];
+      expect(paramsOf(/GROUP BY period\s/)[1]).toBe('2001-01-01');
+      expect(paramsOf(/"customerName"/)[1]).toBe(firstPoint);
+      expect(paramsOf(/GROUP BY l\.doc_type/)[1]).toBe(firstPoint);
+    });
+
+    it('has no channels and no returns for an item that did not sell', async () => {
+      const svc = await makeItemService(makeQuery(LAST_OUT, []));
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      expect(r.channels).toEqual([]);
+      expect(r.returns).toBeNull();
     });
 
     it('names the top five customers and folds the rest', async () => {
@@ -1960,8 +2072,22 @@ describe('ReportsService — item explorer', () => {
         'Delta',
         'Epsilon',
       ]);
-      expect(r.customers[0]).toMatchObject({ unitsSold: 3, revenue: 300, grossProfit: 120 });
-      expect(r.otherCustomers).toEqual({ count: 1, unitsSold: 0.2, revenue: 20, grossProfit: 10 });
+      expect(r.customers[0]).toMatchObject({ unitsSold: 3, revenue: 300, grossProfit: 120, sharePct: 50 });
+      expect(r.otherCustomers).toEqual({ count: 1, unitsSold: 0.2, revenue: 20, grossProfit: 10, sharePct: 3.33 });
+    });
+
+    it('gives a customer who returned more than they bought no share', async () => {
+      const query = routed([
+        [/GROUP BY period\s/, [MONTH]],
+        [/"customerName"/, [
+          { customerId: 'k1', customerName: 'Acme Ltd', units: '7', revenue: '700', cogs: '420' },
+          { customerId: 'k2', customerName: 'Beta', units: '-1', revenue: '-100', cogs: '-60' },
+        ]],
+      ]);
+      const svc = await makeItemService(query);
+      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      expect(r.customers.map((c: any) => c.sharePct)).toEqual([116.67, null]);
+      expect(r.otherCustomers.sharePct).toBeNull();
     });
 
     it('asks for revenue net of the invoice discount', async () => {
