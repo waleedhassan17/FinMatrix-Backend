@@ -1,3 +1,4 @@
+import { messagingWorker, sendingAvailable } from './messaging-env.util';
 import { createHmac } from 'crypto';
 import {
   inboundIntent,
@@ -259,5 +260,75 @@ describe('formatRupees', () => {
     expect(formatRupees('0.005')).toBe('Rs 0.01');
     expect(formatRupees('-80')).toBe('-Rs 80.00');
     expect(formatRupees(null)).toBe('Rs 0.00');
+  });
+});
+
+/**
+ * Meta's template rules, as its API enforced them on 5 Nov 2026:
+ * - 2388299 "Variables can't be at the start or end of the template";
+ * - 2388293 "too many variables for its length": it accepted 12 words for 5
+ *   variables and refused 10 for 5 and 6 for 4, so keep more than 2 words of
+ *   text per variable.
+ */
+describe("every template passes Meta's body rules (both languages)", () => {
+  const words = (body: string) =>
+    body
+      .replace(/\{\{\d+\}\}/g, ' ')
+      .split(/[\s،,.:;!?()۔-]+/u)
+      .filter(Boolean).length;
+  for (const t of TEMPLATES) {
+    for (const lang of ['en', 'ur'] as const) {
+      const body = t.text[lang].body;
+      it(`${t.name}/${lang}`, () => {
+        expect(body.trim()).not.toMatch(/^\{\{\d+\}\}/);
+        expect(body.trim()).not.toMatch(/\{\{\d+\}\}[\s.،۔!?:;)]*$/u);
+        const vars = (body.match(/\{\{\d+\}\}/g) ?? []).length;
+        if (vars > 0) expect(words(body) / vars).toBeGreaterThan(2);
+      });
+    }
+  }
+});
+
+describe('the simulated sender never runs on a production server', () => {
+  const keys = [
+    'NODE_ENV',
+    'DYNO',
+    'WHATSAPP_ENABLED',
+    'MESSAGING_WORKER_ENABLED',
+  ];
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('development and tests may simulate', () => {
+    process.env.NODE_ENV = 'development';
+    expect(sendingAvailable(null)).toBe(true);
+    expect(messagingWorker(null)).toBe(true);
+  });
+
+  it('production without WHATSAPP_ENABLED: nothing may send, the worker idles', () => {
+    process.env.NODE_ENV = 'production';
+    expect(sendingAvailable(null)).toBe(false);
+    expect(messagingWorker(null)).toBe(false);
+  });
+
+  it('a Heroku dyno counts as production even without NODE_ENV', () => {
+    process.env.DYNO = 'web.1';
+    expect(sendingAvailable(null)).toBe(false);
+  });
+
+  it('production with WHATSAPP_ENABLED=true sends for real', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WHATSAPP_ENABLED = 'true';
+    expect(sendingAvailable(null)).toBe(true);
+    expect(messagingWorker(null)).toBe(true);
   });
 });

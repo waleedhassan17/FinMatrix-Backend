@@ -139,7 +139,6 @@ async function main() {
   }
   const dry = env('DRY_RUN') === '1';
   const waba = env('WHATSAPP_WABA_ID');
-  const handle = await sampleDocumentHandle(dry);
   // e.g. English first while the Urdu texts wait for a native speaker's check.
   const languages = (env('TEMPLATE_LANGUAGES') || 'en,ur')
     .split(',')
@@ -160,6 +159,14 @@ async function main() {
     const after = page.paging?.next ? new URL(page.paging.next) : null;
     next = after ? `${waba}/message_templates${after.search}` : null;
   }
+
+  // Upload the sample PDF only when a template that needs it is missing.
+  const needsSample = TEMPLATES.some(
+    (t) =>
+      t.header === 'DOCUMENT' &&
+      languages.some((l) => !existing.has(`${t.name}/${l}`)),
+  );
+  const handle = needsSample ? await sampleDocumentHandle(dry) : null;
 
   let created = 0;
   let problems = 0;

@@ -28,6 +28,7 @@ import {
   MessageStatus,
 } from './messaging.constants';
 import { eventLabel } from './message-status.service';
+import { sendingAvailable } from './messaging-env.util';
 import { renderPreview, templateByName } from './templates/template-registry';
 import { zonedPeriod } from './quiet-hours.util';
 import { zonedToday } from './collections.util';
@@ -790,6 +791,13 @@ export class MessagesService {
 
   /** settings test: fm_test to the caller's own number. */
   async sendTest(companyId: string, userId: string): Promise<EnqueueResult> {
+    if (!sendingAvailable(null)) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_NOT_READY',
+        message:
+          'WhatsApp sending is still being set up, so no test can be sent yet.',
+      });
+    }
     const u = rowsOf(
       await this.dataSource.query(`SELECT phone FROM users WHERE id = $1`, [
         userId,

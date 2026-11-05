@@ -200,11 +200,11 @@ export const TEMPLATES: TemplateDef[] = [
     footer: FOOTER,
     text: {
       en: {
-        body: 'Dear {{2}}, your statement from {{1}} for {{3}} is attached. Balance at the end of the period: {{4}}.',
+        body: 'Dear {{2}}, your statement from {{1}} for {{3}} is attached. The balance at the end of the period is {{4}}, as shown in the statement.',
       },
       ur: {
         // NEEDS NATIVE REVIEW
-        body: 'محترم {{2}}، {{1}} کی طرف سے {{3}} کا آپ کا اسٹیٹمنٹ منسلک ہے۔ مدت کے اختتام پر بقایا: {{4}}۔',
+        body: 'محترم {{2}}، {{1}} کی طرف سے {{3}} کا آپ کا اسٹیٹمنٹ منسلک ہے۔ مدت کے اختتام پر بقایا {{4}} ہے، جیسا کہ اسٹیٹمنٹ میں درج ہے۔',
       },
     },
     example: {
@@ -269,11 +269,11 @@ export const TEMPLATES: TemplateDef[] = [
     footer: FOOTER,
     text: {
       en: {
-        body: 'Dear {{2}}, {{1}} has settled {{3}} against {{4}} (reference {{5}}). The remittance advice is attached.',
+        body: 'Dear {{2}}, {{1}} has sent you a payment of {{3}} for {{4}}, with payment reference {{5}}. The remittance advice with the details of this payment is attached for your records.',
       },
       ur: {
         // NEEDS NATIVE REVIEW
-        body: 'محترم {{2}}، {{1}} نے {{4}} کے عوض {{3}} ادا کر دیے ہیں (حوالہ {{5}})۔ ادائیگی کی تفصیل منسلک ہے۔',
+        body: 'محترم {{2}}، {{1}} نے {{4}} کے عوض آپ کو {{3}} کی ادائیگی کر دی ہے، جس کا حوالہ {{5}} ہے۔ اس ادائیگی کی تفصیل آپ کے ریکارڈ کے لیے منسلک ہے۔',
       },
     },
     example: {
@@ -297,12 +297,12 @@ export const TEMPLATES: TemplateDef[] = [
     footer: FOOTER,
     text: {
       en: {
-        body: '{{1}}: a request from {{2}} is waiting for your approval: {{3}}.',
+        body: 'A request from {{2}} at {{1}} is waiting for your approval: {{3}}. Please review it in FinMatrix with the button below.',
         button: 'Review request',
       },
       ur: {
         // NEEDS NATIVE REVIEW
-        body: '{{1}}: {{2}} کی درخواست آپ کی منظوری کی منتظر ہے: {{3}}۔',
+        body: 'آپ کی منظوری کے لیے {{1}} میں {{2}} کی ایک درخواست موجود ہے: {{3}}۔ براہ کرم نیچے دیے گئے بٹن سے FinMatrix میں اس کا جائزہ لیں۔',
         button: 'درخواست دیکھیں',
       },
     },
@@ -322,11 +322,11 @@ export const TEMPLATES: TemplateDef[] = [
     footer: FOOTER,
     text: {
       en: {
-        body: 'Dear {{2}}, an update from {{1}} on delivery {{3}}: {{4}}.',
+        body: 'Dear {{2}}, here is an update from {{1}} about your delivery {{3}}: {{4}}. Please keep this message for your reference.',
       },
       ur: {
         // NEEDS NATIVE REVIEW
-        body: 'محترم {{2}}، {{1}} کی طرف سے ڈیلیوری {{3}} کے بارے میں اطلاع: {{4}}۔',
+        body: 'محترم {{2}}، {{1}} کی طرف سے آپ کی ڈیلیوری {{3}} کے بارے میں اطلاع: {{4}}۔ براہ کرم یہ پیغام اپنے ریکارڈ کے لیے محفوظ رکھیں۔',
       },
     },
     example: {

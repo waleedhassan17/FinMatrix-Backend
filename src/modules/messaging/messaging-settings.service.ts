@@ -22,7 +22,7 @@ import {
   maskToken,
   messagingKey,
 } from './token-crypto.util';
-import { whatsappLive } from './messaging-env.util';
+import { sendingAvailable, whatsappLive } from './messaging-env.util';
 import { getPlanConfig, whatsappAllowance } from '../billing/plan-config';
 import { zonedPeriod } from './quiet-hours.util';
 
@@ -183,6 +183,8 @@ export class MessagingSettingsService {
       contactsOptInConfirmedAt: s.contactsOptInConfirmedAt,
       timezone: s.timezone,
       providerMode: whatsappLive(this.config) ? 'live' : 'simulated',
+      /** False on a production server that cannot send yet (Connect cannot be switched on). */
+      available: sendingAvailable(this.config),
       updatedAt: s.updatedAt,
     };
   }
@@ -195,6 +197,13 @@ export class MessagingSettingsService {
     const patch: Partial<CompanyMessagingSettings> = {};
 
     if (input.enabled !== undefined) {
+      if (input.enabled && !sendingAvailable(this.config)) {
+        throw new BadRequestException({
+          code: 'WHATSAPP_NOT_READY',
+          message:
+            'WhatsApp sending is still being set up, so it cannot be switched on yet.',
+        });
+      }
       patch.enabled = Boolean(input.enabled);
       if (patch.enabled && !current.enabledAt) patch.enabledAt = new Date();
     }
