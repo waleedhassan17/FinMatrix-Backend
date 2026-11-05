@@ -1,3 +1,5 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
+import { InvoiceDocumentRenderer } from './invoice-document.renderer';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Invoice } from './entities/invoice.entity';
@@ -13,13 +15,14 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    MessagingCoreModule,
     ApprovalsCoreModule,
     TypeOrmModule.forFeature([Invoice, InvoiceLineItem, Customer, Company]),
     JournalEntriesModule,
     AccountsModule,
   ],
   controllers: [InvoicesController],
-  providers: [InvoicesService, InvoicePdfService],
+  providers: [InvoicesService, InvoicePdfService, InvoiceDocumentRenderer],
   exports: [InvoicesService, TypeOrmModule],
 })
 export class InvoicesModule {}

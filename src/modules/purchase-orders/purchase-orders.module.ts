@@ -1,3 +1,5 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
+import { PurchaseOrderPdfService } from './purchase-order-pdf.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PurchaseOrder } from './entities/purchase-order.entity';
@@ -11,6 +13,7 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    MessagingCoreModule,
     ApprovalsCoreModule,
     TypeOrmModule.forFeature([PurchaseOrder, PurchaseOrderLine]),
     BillsModule,
@@ -18,7 +21,7 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     JournalEntriesModule,
   ],
   controllers: [PurchaseOrdersController],
-  providers: [PurchaseOrdersService],
+  providers: [PurchaseOrdersService, PurchaseOrderPdfService],
   // Exported for the approvals dispatcher: a staff PO is committed only when
   // the owner approves it.
   exports: [PurchaseOrdersService],

@@ -1,3 +1,5 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
+import { PaymentReceiptPdfService } from './payment-receipt-pdf.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Payment } from './entities/payment.entity';
@@ -13,6 +15,7 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
 
 @Module({
   imports: [
+    MessagingCoreModule,
     TypeOrmModule.forFeature([Payment, PaymentApplication, Customer]),
     JournalEntriesModule,
     AccountsModule,
@@ -25,7 +28,7 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     ApprovalsCoreModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
+  providers: [PaymentsService, PaymentReceiptPdfService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

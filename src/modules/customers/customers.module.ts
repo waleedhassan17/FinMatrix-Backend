@@ -1,3 +1,5 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
+import { CustomerStatementPdfService } from './customer-statement-pdf.service';
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity';
@@ -9,9 +11,13 @@ import { GeocodingService } from '../deliveries/geocoding.service';
 import { LedgerModule } from '../ledger/ledger.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Customer, Invoice, Payment]), LedgerModule],
+  imports: [
+    MessagingCoreModule,
+    TypeOrmModule.forFeature([Customer, Invoice, Payment]),
+    LedgerModule,
+  ],
   controllers: [CustomersController],
-  providers: [CustomersService, GeocodingService],
+  providers: [CustomersService, GeocodingService, CustomerStatementPdfService],
   exports: [CustomersService, TypeOrmModule],
 })
 export class CustomersModule {}
