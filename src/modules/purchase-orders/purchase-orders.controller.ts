@@ -23,6 +23,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { PurchaseOrdersService } from './purchase-orders.service';
+import { MessagingService } from '../messaging/messaging.service';
 import {
   CreateBillFromPoDto,
   CreatePurchaseOrderDto,
@@ -48,23 +49,32 @@ export class PurchaseOrdersController {
   constructor(
     private readonly service: PurchaseOrdersService,
     private readonly approvals: ApprovalRequestsService,
+    private readonly messaging: MessagingService,
   ) {}
 
   @Get()
-  list(
+  async list(
     @CurrentCompany() companyId: string,
     @Query() query: ListPurchaseOrdersQueryDto,
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.service.list(companyId, query, pagination);
+    return this.messaging.withLastStatus(
+      companyId,
+      'purchase_order',
+      await this.service.list(companyId, query, pagination),
+    );
   }
 
   @Get(':poId')
-  get(
+  async get(
     @CurrentCompany() companyId: string,
     @Param('poId', ParseUUIDPipe) poId: string,
   ) {
-    return this.service.getById(companyId, poId);
+    return this.messaging.withLastStatus(
+      companyId,
+      'purchase_order',
+      await this.service.getById(companyId, poId),
+    );
   }
 
   /**

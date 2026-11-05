@@ -23,6 +23,7 @@ import {
 import { Delete } from '@nestjs/common';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { BillsService } from './bills.service';
+import { MessagingService } from '../messaging/messaging.service';
 import {
   CreateBillDto,
   ListBillsQueryDto,
@@ -48,6 +49,7 @@ export class BillsController {
   constructor(
     private readonly bills: BillsService,
     private readonly approvals: ApprovalRequestsService,
+    private readonly messaging: MessagingService,
   ) {}
 
   @Get()
@@ -62,11 +64,17 @@ export class BillsController {
   // Payment history for a single bill. The app's bill-detail screen requests
   // GET /bills/:billId/payments; declared before `:billId` so it matches first.
   @Get(':billId/payments')
-  payments(
+  async payments(
     @CurrentCompany() companyId: string,
     @Param('billId', ParseUUIDPipe) billId: string,
   ) {
-    return this.bills.getBillPaymentHistory(companyId, billId);
+    const history = await this.bills.getBillPaymentHistory(companyId, billId);
+    await this.messaging.withLastStatus(
+      companyId,
+      'bill_payment',
+      history.payments,
+    );
+    return history;
   }
 
   @Get(':billId')

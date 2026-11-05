@@ -62,6 +62,8 @@
     "test:bank-accounts": "ts-node -r tsconfig-paths/register test/bank-accounts.acceptance.ts",
     "test:inventory-media": "ts-node -r tsconfig-paths/register test/inventory-media-import.acceptance.ts",
     "messaging:render-samples": "ts-node -r tsconfig-paths/register scripts/messaging-render-samples.ts",
+    "messaging:templates:sync": "ts-node -r tsconfig-paths/register scripts/messaging-templates-sync.ts",
+    "test:messaging": "ts-node -r tsconfig-paths/register test/messaging.acceptance.ts",
     "test:accounting": "npm run test:corrections && npm run test:voids && npm run test:period-close && npm run test:reports-reflect",
     "qa:scenario": "ts-node -r tsconfig-paths/register qa/seed-scenario.ts",
     "qa": "npm run qa:scenario && npm run test:qa",

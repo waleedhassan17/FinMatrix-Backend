@@ -102,8 +102,8 @@ export class MessageStatusService {
       const updated = rowsOf(
         await this.dataSource.query(
           `UPDATE outbound_messages
-              SET status = $2,
-                  last_error = CASE WHEN $2 = 'failed' THEN $3 ELSE last_error END,
+              SET status = $2::varchar,
+                  last_error = CASE WHEN $2::varchar = 'failed' THEN $3::text ELSE last_error END,
                   updated_at = now()
             WHERE id = $1 AND status = ANY($4::text[])
           RETURNING id`,

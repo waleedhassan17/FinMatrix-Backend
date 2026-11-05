@@ -36,6 +36,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { BillsService } from './bills.service';
+import { MessagingService } from '../messaging/messaging.service';
 import { PayBillsDto } from './dto/bill.dto';
 
 /**
@@ -63,17 +64,22 @@ export class BillPaymentsController {
   constructor(
     private readonly bills: BillsService,
     private readonly approvals: ApprovalRequestsService,
+    private readonly messaging: MessagingService,
   ) {}
 
   @Get()
   @Roles('admin', 'staff')
-  list(
+  async list(
     @CurrentCompany() companyId: string,
     @Query('billId') billId: string,
     @Query('page', new ParseIntPipe({ optional: true })) page = 1,
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
-    return this.bills.listPayments(companyId, billId, page, limit);
+    return this.messaging.withLastStatus(
+      companyId,
+      'bill_payment',
+      await this.bills.listPayments(companyId, billId, page, limit),
+    );
   }
 
   /**

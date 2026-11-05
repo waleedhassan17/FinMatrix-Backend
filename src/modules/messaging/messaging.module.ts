@@ -12,14 +12,27 @@ import { whatsappLive } from './messaging-env.util';
 import { LedgerModule } from '../ledger/ledger.module';
 import { DunningCronService } from './dunning-cron.service';
 import { StatementCronService } from './statement-cron.service';
+import { ReportsModule } from '../reports/reports.module';
+import { MessagesService } from './messages.service';
+import { MessagesController } from './messages.controller';
+import { MessagingSettingsController } from './messaging-settings.controller';
 
 /**
  * FinMatrix Connect: dispatcher, providers, webhook, collections crons and the
  * API. Imported only by AppModule; domain modules import MessagingCoreModule.
  */
 @Module({
-  imports: [MessagingCoreModule, NotificationsModule, LedgerModule],
-  controllers: [WhatsAppWebhookController],
+  imports: [
+    MessagingCoreModule,
+    NotificationsModule,
+    LedgerModule,
+    ReportsModule,
+  ],
+  controllers: [
+    WhatsAppWebhookController,
+    MessagingSettingsController,
+    MessagesController,
+  ],
   providers: [
     MessageStatusService,
     MetaCloudProvider,
@@ -36,6 +49,7 @@ import { StatementCronService } from './statement-cron.service';
     MessagingDispatcherService,
     DunningCronService,
     StatementCronService,
+    MessagesService,
   ],
   exports: [
     MessageStatusService,

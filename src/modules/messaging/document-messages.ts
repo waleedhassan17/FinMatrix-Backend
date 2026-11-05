@@ -141,6 +141,30 @@ export function isPoWithdrawal(
   );
 }
 
+/** The PO itself, to its vendor (greeted by contact person). */
+export function poIssuedMessage(
+  po: PoLike,
+  userId: string | null,
+): EnqueueInput {
+  return {
+    companyId: po.companyId,
+    event: 'po_issued',
+    docType: 'purchase_order',
+    docId: po.id,
+    recipient: { type: 'vendor', id: po.vendorId },
+    params: {
+      poNumber: po.poNumber,
+      total: formatRupees(po.total),
+      expectedDate: pdfDate(po.expectedDate) || 'as agreed',
+    },
+    attachment: {
+      renderer: 'purchase_order',
+      args: { purchaseOrderId: po.id, filename: `${po.poNumber}.pdf` },
+    },
+    createdBy: userId,
+  };
+}
+
 export function purchaseOrderStatusMessage(
   po: PoLike,
   previousStatus: string,
@@ -150,21 +174,7 @@ export function purchaseOrderStatusMessage(
   if (opts.deliver?.whatsapp === false) return null;
   if (isPoIssue(previousStatus, po.status)) {
     return {
-      companyId: po.companyId,
-      event: 'po_issued',
-      docType: 'purchase_order',
-      docId: po.id,
-      recipient: { type: 'vendor', id: po.vendorId },
-      params: {
-        poNumber: po.poNumber,
-        total: formatRupees(po.total),
-        expectedDate: pdfDate(po.expectedDate) || 'as agreed',
-      },
-      attachment: {
-        renderer: 'purchase_order',
-        args: { purchaseOrderId: po.id, filename: `${po.poNumber}.pdf` },
-      },
-      createdBy: opts.userId ?? null,
+      ...poIssuedMessage(po, opts.userId ?? null),
       explicit: opts.deliver?.whatsapp === true,
       // Sent, withdrawn and sent again is a second PO to the vendor.
       autoVersion: true,

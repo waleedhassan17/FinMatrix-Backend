@@ -37,7 +37,7 @@ export class MessagingFoundation1790500000000 implements MigrationInterface {
         "access_token_enc" text,
         "default_language" character varying(2) NOT NULL DEFAULT 'en',
         "event_rules" jsonb NOT NULL DEFAULT '${JSON.stringify(DEFAULT_EVENT_RULES)}'::jsonb,
-        "quiet_hours" jsonb NOT NULL DEFAULT '{"start":"21:00","end":"09:00"}'::jsonb,
+        "quiet_hours" jsonb DEFAULT '{"start":"21:00","end":"09:00"}'::jsonb,
         "reminder_schedule" jsonb NOT NULL DEFAULT '{"beforeDue":[3],"afterDue":[0,7,15,30]}'::jsonb,
         "monthly_cap" integer,
         "contacts_opt_in_confirmed_at" TIMESTAMP WITH TIME ZONE,

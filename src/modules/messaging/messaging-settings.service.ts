@@ -246,6 +246,14 @@ export class MessagingSettingsService {
     }
 
     await this.upsert(companyId, patch);
+    if (input.quietHours !== undefined) {
+      // Messages held for the old window are looked at again under the new one.
+      await this.dataSource.query(
+        `UPDATE outbound_messages SET scheduled_for = NULL, last_error = NULL, updated_at = now()
+          WHERE company_id = $1 AND status = 'queued' AND last_error = 'quiet_hours'`,
+        [companyId],
+      );
+    }
     return this.resolve(companyId);
   }
 

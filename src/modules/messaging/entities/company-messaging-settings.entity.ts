@@ -59,7 +59,8 @@ export class CompanyMessagingSettings {
   @Column({ type: 'jsonb', name: 'event_rules' })
   eventRules!: Partial<EventRules>;
 
-  @Column({ type: 'jsonb', name: 'quiet_hours' })
+  /** Null means no quiet hours (send at any hour). */
+  @Column({ type: 'jsonb', name: 'quiet_hours', nullable: true })
   quietHours!: QuietHours | null;
 
   @Column({ type: 'jsonb', name: 'reminder_schedule' })

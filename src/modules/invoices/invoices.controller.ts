@@ -64,20 +64,29 @@ export class InvoicesController {
   ) {}
 
   @Get()
-  list(
+  async list(
     @CurrentCompany() companyId: string,
     @Query() query: ListInvoicesQueryDto,
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
-    return this.invoices.list(companyId, query, pagination);
+    // lastMessageStatus: one batched query for the page (FinMatrix Connect).
+    return this.messaging.withLastStatus(
+      companyId,
+      'invoice',
+      await this.invoices.list(companyId, query, pagination),
+    );
   }
 
   @Get(':invoiceId')
-  get(
+  async get(
     @CurrentCompany() companyId: string,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
   ) {
-    return this.invoices.getById(companyId, invoiceId);
+    return this.messaging.withLastStatus(
+      companyId,
+      'invoice',
+      await this.invoices.getById(companyId, invoiceId),
+    );
   }
 
   /**

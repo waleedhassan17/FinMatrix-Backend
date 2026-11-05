@@ -188,7 +188,8 @@ export class MessagingDispatcherService {
       const until = deferUntil(now, s.timezone, s.quietHours);
       if (until) {
         await this.dataSource.query(
-          `UPDATE outbound_messages SET status = 'queued', scheduled_for = $2, updated_at = now()
+          `UPDATE outbound_messages
+              SET status = 'queued', scheduled_for = $2, last_error = 'quiet_hours', updated_at = now()
             WHERE id = $1 AND status = 'sending'`,
           [row.id, until],
         );
