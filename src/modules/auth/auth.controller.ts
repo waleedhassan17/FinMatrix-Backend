@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Patch,
   Post,
   Query,
   Res,
@@ -23,6 +24,7 @@ import {
   VerifyOtpDto,
 } from './dto/signin.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { PublicRoute } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import {
@@ -95,6 +97,21 @@ export class AuthController {
   @ApiOperation({ summary: 'Return current user profile + company memberships.' })
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.auth.getMe(user.id);
+  }
+
+  // The caller's own name and phone, from My account. Answers with the same
+  // payload as GET /auth/me so the client swaps its session identity in one
+  // step. Owners and team members only — a rider's name and phone also live on
+  // their delivery-personnel record, which the office keeps.
+  @Patch('me')
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Update your own display name and phone.' })
+  updateMe(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.auth.updateProfile(user.id, dto);
   }
 
   // Public + self-authenticating (the service verifies the bearer token) so
