@@ -89,6 +89,27 @@ export const envValidationSchema = Joi.object({
   OTP_MAX_ATTEMPTS: Joi.number().default(5),
   VERIFICATION_TTL_HOURS: Joi.number().default(24),
 
+  // ── FinMatrix Connect (WhatsApp Cloud API). All optional. ──
+  // WHATSAPP_ENABLED=false (default) swaps in the fake provider: nothing
+  // reaches Meta, statuses are simulated. MESSAGING_WORKER_ENABLED=false stops
+  // this process from dispatching (and from running the reminder crons).
+  WHATSAPP_ENABLED: Joi.boolean().default(false),
+  WHATSAPP_GRAPH_VERSION: Joi.string().pattern(/^v\d+\.\d+$/).optional(),
+  WHATSAPP_PHONE_NUMBER_ID: Joi.string().allow('').optional(),
+  WHATSAPP_WABA_ID: Joi.string().allow('').optional(),
+  WHATSAPP_ACCESS_TOKEN: Joi.string().allow('').optional(),
+  WHATSAPP_APP_SECRET: Joi.string().allow('').optional(),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: Joi.string().allow('').optional(),
+  // 32 bytes, base64. Encrypts a company's own access token at rest.
+  MESSAGING_ENCRYPTION_KEY: Joi.string()
+    .allow('')
+    .custom((value: string, helpers) => {
+      if (value === '') return value;
+      return Buffer.from(value, 'base64').length === 32 ? value : helpers.error('any.invalid');
+    }, '32-byte base64 key')
+    .optional(),
+  MESSAGING_WORKER_ENABLED: Joi.boolean().default(true),
+
   SWAGGER_ENABLED: Joi.boolean().default(true),
   SWAGGER_PATH: Joi.string().default('api/docs'),
 }).unknown(true);

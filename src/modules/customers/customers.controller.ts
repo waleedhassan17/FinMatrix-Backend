@@ -79,8 +79,9 @@ export class CustomersController {
   create(
     @CurrentCompany() companyId: string,
     @Body() dto: CreateCustomerDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.customers.create(companyId, dto);
+    return this.customers.create(companyId, dto, user?.id);
   }
 
   @Patch(':customerId')
@@ -89,8 +90,9 @@ export class CustomersController {
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,
     @Body() dto: UpdateCustomerDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.customers.update(companyId, customerId, dto);
+    return this.customers.update(companyId, customerId, dto, user?.id);
   }
 
   @Get(':customerId/invoices')

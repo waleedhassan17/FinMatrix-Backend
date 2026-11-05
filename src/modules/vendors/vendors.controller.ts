@@ -73,8 +73,12 @@ export class VendorsController {
 
   @Post()
   @Roles('admin', 'staff')
-  create(@CurrentCompany() companyId: string, @Body() dto: CreateVendorDto) {
-    return this.vendors.create(companyId, dto);
+  create(
+    @CurrentCompany() companyId: string,
+    @Body() dto: CreateVendorDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.vendors.create(companyId, dto, user?.id);
   }
 
   @Patch(':vendorId')
@@ -83,8 +87,9 @@ export class VendorsController {
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,
     @Body() dto: UpdateVendorDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.vendors.update(companyId, vendorId, dto);
+    return this.vendors.update(companyId, vendorId, dto, user?.id);
   }
 
   @Get(':vendorId/bills')

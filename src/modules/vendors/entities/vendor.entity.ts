@@ -47,4 +47,27 @@ export class Vendor extends BaseCompanyEntity {
 
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
+
+  // ── FinMatrix Connect (1790500000000-MessagingFoundation) ──
+  /** The number WhatsApp messages go to, E.164 ('+923001234567'). */
+  @Column({ type: 'varchar', length: 16, nullable: true, name: 'whatsapp_e164' })
+  whatsappE164!: string | null;
+
+  /** When someone recorded this contact's consent to WhatsApp messages. */
+  @Column({ type: 'timestamptz', nullable: true, name: 'whatsapp_opt_in_at' })
+  whatsappOptInAt!: Date | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'whatsapp_opt_in_by' })
+  whatsappOptInBy!: string | null;
+
+  /** Set when the contact replies STOP / UNSUBSCRIBE. Nothing is sent after. */
+  @Column({ type: 'boolean', default: false, name: 'whatsapp_opt_out' })
+  whatsappOptOut!: boolean;
+
+  /** Last time a message to this number was delivered. */
+  @Column({ type: 'timestamptz', nullable: true, name: 'whatsapp_verified_at' })
+  whatsappVerifiedAt!: Date | null;
+
+  @Column({ type: 'varchar', length: 2, nullable: true, name: 'preferred_language' })
+  preferredLanguage!: 'en' | 'ur' | null;
 }

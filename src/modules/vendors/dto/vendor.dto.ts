@@ -60,6 +60,23 @@ export class CreateVendorDto {
   @ApiPropertyOptional() @IsOptional() @IsString() taxId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() defaultExpenseAccountId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+
+  // ── FinMatrix Connect ──
+  @ApiPropertyOptional({ example: '0300 1234567', description: 'WhatsApp number. Left out: derived from phone. Empty: cleared.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  whatsappPhone?: string;
+
+  @ApiPropertyOptional({ description: 'true records consent to WhatsApp messages now; false withdraws it.' })
+  @IsOptional()
+  @IsBoolean()
+  whatsappOptIn?: boolean;
+
+  @ApiPropertyOptional({ enum: ['en', 'ur'] })
+  @IsOptional()
+  @IsIn(['en', 'ur'])
+  preferredLanguage?: 'en' | 'ur';
 }
 
 export class UpdateVendorDto extends PartialType(CreateVendorDto) {

@@ -11,7 +11,7 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     expect(f.bankReconciliation).toBe(true); // core feature, all tiers (phase3.md)
     for (const k of [
       'inventory', 'purchaseOrders', 'salesOrders', 'agencies', 'delivery',
-      'payroll', 'budgets', 'auditLog', 'periodClose',
+      'payroll', 'budgets', 'auditLog', 'periodClose', 'whatsappConnect',
     ] as const) {
       expect(f[k]).toBe(false);
     }
@@ -35,6 +35,12 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     expect(f.inventory).toBe(false); // warehouse-only
     expect(f.delivery).toBe(false);
     expect(f.purchaseOrders).toBe(false);
+  });
+
+  it('whatsappConnect: off for small_business, on for large_org and warehouse', () => {
+    expect(computeFeatures({ ...base, companyType: 'small_business' }).whatsappConnect).toBe(false);
+    expect(computeFeatures({ ...base, companyType: 'large_org' }).whatsappConnect).toBe(true);
+    expect(computeFeatures({ ...base, companyType: 'warehouse' }).whatsappConnect).toBe(true);
   });
 
   it('large_org: the per-company inventory toggle no longer unlocks anything (warehouse-only)', () => {

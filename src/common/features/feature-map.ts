@@ -37,7 +37,11 @@ export type FeatureKey =
   | 'purchaseOrders' // PO → GRNI 3-way match
   | 'salesOrders'
   | 'agencies'
-  | 'delivery'; // deliveries + delivery personnel + approvals + shadow inventory
+  | 'delivery' // deliveries + delivery personnel + approvals + shadow inventory
+  // FinMatrix Connect: the server sends documents over WhatsApp, tracks them
+  // to "read" and runs payment reminders. Off for small businesses (the wa.me
+  // hand-off stays); every company still has to switch it on in settings.
+  | 'whatsappConnect';
 
 /**
  * 'toggle' = decided by the company's own inventory_enabled flag. No tier
@@ -65,6 +69,7 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     salesOrders: false,
     agencies: false,
     delivery: false,
+    whatsappConnect: false,
   },
   large_org: {
     estimates: true,
@@ -81,6 +86,7 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     salesOrders: false,
     agencies: false,
     delivery: false, // warehouse-only: never on this tier
+    whatsappConnect: true,
   },
   warehouse: {
     estimates: true,
@@ -97,6 +103,7 @@ export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>
     salesOrders: true,
     agencies: true,
     delivery: true,
+    whatsappConnect: true,
   },
 };
 

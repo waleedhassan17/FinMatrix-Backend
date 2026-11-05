@@ -1,3 +1,4 @@
+import { applyWhatsappContactFields } from '../../common/utils/whatsapp-contact.util';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
@@ -174,7 +175,7 @@ export class CustomersService {
     };
   }
 
-  async create(companyId: string, dto: CreateCustomerDto): Promise<Customer> {
+  async create(companyId: string, dto: CreateCustomerDto, userId?: string | null): Promise<Customer> {
     const billing = normalizeAddress(dto.billingAddress);
     const shipping =
       dto.shippingAddress?.sameAsBilling && billing
@@ -198,7 +199,9 @@ export class CustomersService {
       notes: dto.notes ?? null,
       contactPerson: dto.contactPerson ?? null,
       taxId: dto.taxId ?? null,
+      collectionsPaused: dto.collectionsPaused ?? false,
     });
+    applyWhatsappContactFields(entity, dto, { userId, isCreate: true });
     // Geocoding is a network call; it runs before the transaction so the
     // number taken below is held only for the moment the row is written.
     await this.applyShippingGeocode(entity);
@@ -259,8 +262,10 @@ export class CustomersService {
     companyId: string,
     id: string,
     dto: UpdateCustomerDto,
+    userId?: string | null,
   ): Promise<Customer> {
     const c = await this.getById(companyId, id);
+    const previousPhone = c.phone;
     const addressChanged =
       dto.shippingAddress !== undefined || dto.billingAddress !== undefined;
     if (dto.name !== undefined) c.name = dto.name;
@@ -279,6 +284,8 @@ export class CustomersService {
     if (dto.isActive !== undefined) c.isActive = dto.isActive;
     if (dto.contactPerson !== undefined) c.contactPerson = dto.contactPerson;
     if (dto.taxId !== undefined) c.taxId = dto.taxId;
+    if (dto.collectionsPaused !== undefined) c.collectionsPaused = dto.collectionsPaused;
+    applyWhatsappContactFields(c, dto, { userId, previousPhone });
     if (addressChanged) await this.applyShippingGeocode(c);
     // An empty ID on an edit keeps the one the customer has: every customer
     // keeps an ID once given one.

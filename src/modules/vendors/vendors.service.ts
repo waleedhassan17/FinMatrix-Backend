@@ -1,3 +1,4 @@
+import { applyWhatsappContactFields } from '../../common/utils/whatsapp-contact.util';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -74,12 +75,10 @@ export class VendorsService {
     return v;
   }
 
-  create(companyId: string, dto: CreateVendorDto): Promise<Vendor> {
+  create(companyId: string, dto: CreateVendorDto, userId?: string | null): Promise<Vendor> {
     const typed = normalizePartyCode(dto.code);
     if (typed) assertValidPartyCode('vendor', typed);
-    return this.saveWithCode(
-      companyId,
-      this.repo.create({
+    const entity = this.repo.create({
         companyId,
         companyName: dto.companyName,
         contactPerson: dto.contactPerson ?? null,
@@ -92,9 +91,9 @@ export class VendorsService {
         balance: '0',
         isActive: true,
         notes: dto.notes ?? null,
-      }),
-      typed,
-    );
+      });
+    applyWhatsappContactFields(entity, dto, { userId, isCreate: true });
+    return this.saveWithCode(companyId, entity, typed);
   }
 
   /** The ID a new vendor would get now, for the form's placeholder. */
@@ -129,8 +128,10 @@ export class VendorsService {
     companyId: string,
     id: string,
     dto: UpdateVendorDto,
+    userId?: string | null,
   ): Promise<Vendor> {
     const v = await this.getById(companyId, id);
+    const previousPhone = v.phone;
     if (dto.companyName !== undefined) v.companyName = dto.companyName;
     if (dto.contactPerson !== undefined) v.contactPerson = dto.contactPerson;
     if (dto.email !== undefined) v.email = dto.email;
@@ -142,6 +143,7 @@ export class VendorsService {
       v.defaultExpenseAccountId = dto.defaultExpenseAccountId;
     if (dto.notes !== undefined) v.notes = dto.notes;
     if (dto.isActive !== undefined) v.isActive = dto.isActive;
+    applyWhatsappContactFields(v, dto, { userId, previousPhone });
     // An empty ID on an edit keeps the vendor's current one.
     const typed = normalizePartyCode(dto.code);
     if (typed && typed !== v.code) {
