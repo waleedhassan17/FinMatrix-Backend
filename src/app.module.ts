@@ -51,6 +51,7 @@ import { ShadowInventoryModule } from './modules/shadow-inventory/shadow-invento
 import { TaxModule } from './modules/tax/tax.module';
 import { ReconciliationsModule } from './modules/reconciliations/reconciliations.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { MessagingModule } from './modules/messaging/messaging.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SearchModule } from './modules/search/search.module';
@@ -124,6 +125,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     TaxModule,
     ReconciliationsModule,
     NotificationsModule,
+    MessagingModule,
     SettingsModule,
     ReportsModule,
     SearchModule,

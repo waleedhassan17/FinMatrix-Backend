@@ -15,6 +15,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     cors: false,
+    // FinMatrix Connect: the WhatsApp webhook verifies Meta's HMAC signature
+    // over the exact bytes received (req.rawBody); parsed JSON is unchanged.
+    rawBody: true,
   });
   app.useLogger(app.get(PinoLogger));
 

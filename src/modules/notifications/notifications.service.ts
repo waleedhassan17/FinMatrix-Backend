@@ -70,16 +70,42 @@ export class NotificationsService {
   }
 
   /**
-   * Broadcast to all users of a given role within a company.
+   * Broadcast to every ACTIVE member holding `role` in the company (the owner
+   * alert path: role 'admin'). Membership is read with one SQL query on the
+   * same connection, so this module still imports no users/companies module.
+   * Like create(), it never throws: a failed alert must not break the caller.
+   * Returns how many notifications were written.
    */
-  async createForRole(_companyId: string, _role: string, _payload: {
-    type: string;
-    title: string;
-    message: string;
-    data?: Record<string, unknown>;
-  }): Promise<void> {
-    // Resolution requires a UsersRepository lookup; left as a TODO so we
-    // don't introduce a circular dep here. Callers that already know the
-    // target user IDs should use create() directly.
+  async createForRole(
+    companyId: string,
+    role: string,
+    payload: {
+      type: string;
+      title: string;
+      message: string;
+      data?: Record<string, unknown>;
+    },
+  ): Promise<number> {
+    let userIds: string[] = [];
+    try {
+      const rows: Array<{ user_id: string }> = await this.repo.manager.query(
+        `SELECT uc.user_id
+           FROM user_companies uc
+           JOIN users u ON u.id = uc.user_id
+          WHERE uc.company_id = $1 AND uc.role = $2 AND u.is_active = true`,
+        [companyId, role],
+      );
+      userIds = rows.map((r) => r.user_id);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[notifications] createForRole lookup failed:', err);
+      return 0;
+    }
+    let written = 0;
+    for (const userId of userIds) {
+      const row = await this.create({ companyId, userId, ...payload });
+      if (row) written++;
+    }
+    return written;
   }
 }

@@ -50,3 +50,16 @@ export function isPositive(value: MoneyInput): boolean {
 export function isZero(value: MoneyInput): boolean {
   return toDecimal(value).isZero();
 }
+
+/**
+ * Money as a person reads it: `Rs 12,345.50`. Decimal throughout (no float
+ * round trip), two places, comma grouping — the same text the existing
+ * messages and PDFs show (credit-control.util, payslip-pdf.service).
+ */
+export function formatRupees(value: MoneyInput | null | undefined): string {
+  const d = toDecimal(value ?? 0);
+  const fixed = d.abs().toFixed(2);
+  const [whole, frac] = fixed.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${d.isNegative() && !d.isZero() ? '-' : ''}Rs ${grouped}.${frac}`;
+}
