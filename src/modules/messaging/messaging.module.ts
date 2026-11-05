@@ -9,13 +9,16 @@ import { FakeWhatsAppProvider } from './providers/fake-whatsapp.provider';
 import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider';
 import { WhatsAppWebhookController } from './webhook/whatsapp-webhook.controller';
 import { whatsappLive } from './messaging-env.util';
+import { LedgerModule } from '../ledger/ledger.module';
+import { DunningCronService } from './dunning-cron.service';
+import { StatementCronService } from './statement-cron.service';
 
 /**
  * FinMatrix Connect: dispatcher, providers, webhook, collections crons and the
  * API. Imported only by AppModule; domain modules import MessagingCoreModule.
  */
 @Module({
-  imports: [MessagingCoreModule, NotificationsModule],
+  imports: [MessagingCoreModule, NotificationsModule, LedgerModule],
   controllers: [WhatsAppWebhookController],
   providers: [
     MessageStatusService,
@@ -31,7 +34,14 @@ import { whatsappLive } from './messaging-env.util';
       ) => (whatsappLive(config) ? meta : fake),
     },
     MessagingDispatcherService,
+    DunningCronService,
+    StatementCronService,
   ],
-  exports: [MessageStatusService, MessagingDispatcherService],
+  exports: [
+    MessageStatusService,
+    MessagingDispatcherService,
+    DunningCronService,
+    StatementCronService,
+  ],
 })
 export class MessagingModule {}

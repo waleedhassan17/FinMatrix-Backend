@@ -315,3 +315,82 @@ export function deliveryUpdateMessage(
     createdBy: userId,
   };
 }
+
+/** A payment reminder from the dunning cron; docVersion is the signed day offset. */
+export function reminderMessage(
+  invoice: InvoiceLike & { balance: string },
+  target: { offset: number; event: 'reminder_upcoming' | 'reminder_overdue' },
+  opts: {
+    explicit?: boolean;
+    createdBy?: string | null;
+    keySuffix?: string;
+  } = {},
+): EnqueueInput {
+  const overdue = target.event === 'reminder_overdue';
+  return {
+    companyId: invoice.companyId,
+    event: target.event,
+    docType: 'invoice',
+    docId: invoice.id,
+    docVersion: target.offset,
+    recipient: { type: 'customer', id: invoice.customerId },
+    params: {
+      invoiceNumber: invoice.invoiceNumber,
+      balance: formatRupees(invoice.balance),
+      dueDate: pdfDate(invoice.dueDate) || 'on receipt',
+    },
+    // The overdue reminder carries the invoice; the courtesy one is text only.
+    attachment: overdue
+      ? {
+          renderer: 'invoice',
+          args: {
+            invoiceId: invoice.id,
+            filename: `${invoice.invoiceNumber}.pdf`,
+          },
+        }
+      : null,
+    createdBy: opts.createdBy ?? null,
+    explicit: opts.explicit,
+    keySuffix: opts.keySuffix,
+  };
+}
+
+/** Monthly statement; docVersion is YYYYMM of the period. */
+export function statementMessage(
+  input: {
+    companyId: string;
+    customerId: string;
+    closingBalance: string | number;
+  },
+  window: { start: string; end: string; label: string; version: number },
+  opts: {
+    explicit?: boolean;
+    createdBy?: string | null;
+    keySuffix?: string;
+  } = {},
+): EnqueueInput {
+  return {
+    companyId: input.companyId,
+    event: 'statement',
+    docType: 'customer_statement',
+    docId: input.customerId,
+    docVersion: window.version,
+    recipient: { type: 'customer', id: input.customerId },
+    params: {
+      period: window.label,
+      closingBalance: formatRupees(String(input.closingBalance)),
+    },
+    attachment: {
+      renderer: 'statement',
+      args: {
+        customerId: input.customerId,
+        startDate: window.start,
+        endDate: window.end,
+        filename: `Statement-${window.label.replace(/\s+/g, '-')}.pdf`,
+      },
+    },
+    createdBy: opts.createdBy ?? null,
+    explicit: opts.explicit,
+    keySuffix: opts.keySuffix,
+  };
+}
