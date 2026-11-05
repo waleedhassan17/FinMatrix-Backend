@@ -10,6 +10,8 @@ import { AuthenticatedUser } from '../../common/decorators/current-user.decorato
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 import { ApprovalRequest, ApprovalType } from './entities/approval-request.entity';
 import { ApprovalListFilter } from './dto/approval.dto';
+import { MessagingService } from '../messaging/messaging.service';
+import { approvalPendingMessage } from '../messaging/document-messages';
 
 /** What a gated controller hands back to a staff member. */
 export interface PendingApprovalResponse {
@@ -41,6 +43,7 @@ export class ApprovalRequestsService {
     @InjectRepository(ApprovalRequest)
     private readonly repo: Repository<ApprovalRequest>,
     private readonly audit: OperationalAuditService,
+    private readonly messaging: MessagingService,
   ) {}
 
   /**
@@ -76,6 +79,8 @@ export class ApprovalRequestsService {
       targetId: request.id,
       details: { type, summary },
     });
+    // FinMatrix Connect: tell the owners on WhatsApp (any hour; rule approval_pending).
+    await this.messaging.enqueueForAdmins(this.repo.manager, approvalPendingMessage(request, user.id));
 
     return {
       pending: true,

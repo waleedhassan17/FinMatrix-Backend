@@ -6,6 +6,7 @@
     "dist",
     "api",
     "qa",
+    "scripts",
     "**/*spec.ts"
   ]
 }

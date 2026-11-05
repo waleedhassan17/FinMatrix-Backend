@@ -152,7 +152,11 @@ export class PurchaseOrdersController {
     @CurrentCompany() companyId: string,
     @Param('poId', ParseUUIDPipe) poId: string,
     @Body() dto: UpdatePurchaseOrderStatusDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.updateStatus(companyId, poId, dto.status);
+    return this.service.updateStatus(companyId, poId, dto.status, {
+      userId: user?.id ?? null,
+      deliver: dto.deliver ?? null,
+    });
   }
 }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ApprovalRequest } from './entities/approval-request.entity';
 import { ApprovalRequestsService } from './approval-requests.service';
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
 
 /**
  * The half of the approval engine that domain modules can safely import.
@@ -17,7 +18,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
  * one of those edges would need forwardRef(). They import this instead.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([ApprovalRequest])],
+  imports: [TypeOrmModule.forFeature([ApprovalRequest]), MessagingCoreModule],
   providers: [ApprovalRequestsService],
   exports: [ApprovalRequestsService, TypeOrmModule],
 })

@@ -28,6 +28,7 @@ import { Delete } from '@nestjs/common';
 import { creditOverrideFrom } from '../../common/validation/credit-override.dto';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { InvoicesService } from './invoices.service';
+import { MessagingService } from '../messaging/messaging.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import {
   CreateInvoiceDto,
@@ -52,6 +53,7 @@ import { Company } from '../companies/entities/company.entity';
 @Controller('invoices')
 export class InvoicesController {
   constructor(
+    private readonly messaging: MessagingService,
     private readonly invoices: InvoicesService,
     private readonly approvals: ApprovalRequestsService,
     private readonly pdf: InvoicePdfService,
@@ -129,15 +131,29 @@ export class InvoicesController {
   @Roles('admin', 'staff')
   @HttpCode(200)
   @ApiOperation({ summary: 'Send invoice: status->sent, auto journal entry.' })
-  send(
+  async send(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
     @Body() dto: SendInvoiceDto,
   ) {
-    return this.invoices.send(companyId, invoiceId, user.id, {
+    const invoice = await this.invoices.send(companyId, invoiceId, user.id, {
       creditOverride: creditOverrideFrom(dto?.creditOverride, user),
+      deliver: dto?.deliver ?? null,
     });
+    // The app's own wa.me chat (Connect off): keep a record on the timeline.
+    if (dto?.channel === 'whatsapp' && dto.toPhone) {
+      await this.messaging.logManualShare(null, {
+        companyId,
+        event: 'invoice_issued',
+        docType: 'invoice',
+        docId: invoice.id,
+        recipient: { type: 'customer', id: invoice.customerId },
+        toPhone: dto.toPhone,
+        createdBy: user.id,
+      });
+    }
+    return invoice;
   }
 
   /**

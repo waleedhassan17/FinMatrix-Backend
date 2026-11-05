@@ -1,3 +1,4 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { InventoryUpdateRequest } from './entities/inventory-update-request.entity';
@@ -40,6 +41,7 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     AccountsModule,
     // Stage-3 postings (phase1.md) live in DeliveryLedgerService.
     DeliveriesModule,
+    MessagingCoreModule,
   ],
   providers: [InventoryApprovalsService],
   controllers: [

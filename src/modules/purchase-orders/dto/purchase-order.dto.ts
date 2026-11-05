@@ -1,3 +1,4 @@
+import { DeliverDto } from '../../messaging/dto/deliver.dto';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -115,6 +116,13 @@ export class UpdatePurchaseOrderStatusDto {
   @ApiProperty({ enum: PURCHASE_ORDER_STATUSES })
   @IsIn(PURCHASE_ORDER_STATUSES)
   status!: PurchaseOrderStatus;
+
+  /** FinMatrix Connect: { whatsapp: false } marks it sent without messaging the vendor. */
+  @ApiPropertyOptional({ type: DeliverDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DeliverDto)
+  deliver?: DeliverDto;
 }
 
 export class ListPurchaseOrdersQueryDto {

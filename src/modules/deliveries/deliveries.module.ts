@@ -1,3 +1,4 @@
+import { MessagingCoreModule } from '../messaging/messaging-core.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Delivery } from './entities/delivery.entity';
@@ -45,6 +46,8 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     CreditMemosModule,
     // A staff member's advance delivery is filed for the owner, not created.
     ApprovalsCoreModule,
+    // FinMatrix Connect: delivery updates to the customer (rule off by default).
+    MessagingCoreModule,
   ],
   providers: [DeliveriesService, GeocodingService, DeliveryLedgerService],
   controllers: [DeliveriesController],

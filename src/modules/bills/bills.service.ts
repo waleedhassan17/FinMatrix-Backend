@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import {
   BadRequestException,
   Injectable,
@@ -53,6 +54,8 @@ import {
 const BILL_OPEN_STATUSES = ['open', 'partial'] as const;
 import { assertMoneyAccount } from '../../common/utils/money-account.util';
 import { pagedResponse } from '../../common/utils/paged-response.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { remittanceMessage } from '../messaging/document-messages';
 
 /** What a bill line raised from a purchase order bills (see createInTransaction). */
 export interface PoBillLineLink {
@@ -115,6 +118,7 @@ export class BillsService {
     @InjectRepository(BillPaymentProof)
     private readonly proofRepo: Repository<BillPaymentProof>,
     private readonly storage: StorageService,
+    private readonly messaging: MessagingService,
   ) {}
 
   /**
@@ -686,6 +690,7 @@ export class BillsService {
     });
     payment.journalEntryId = entry.id;
     await manager.save(payment);
+    await this.messaging.enqueue(manager, remittanceMessage({ companyId, vendorId: vendor.id, userId, payment, paymentDate: dto.paymentDate }));
 
     return payment;
   }
@@ -807,6 +812,7 @@ export class BillsService {
 
       const billIds = [...new Set([...credits.map((c) => c.billId), ...cashApps.map((a) => a.billId)])];
       const bills = await manager.find(Bill, { where: { id: In(billIds), companyId } });
+      await this.messaging.enqueue(manager, remittanceMessage({ companyId, vendorId: vendor.id, userId, payment, credits: used, settlementId: randomUUID(), paymentDate: dto.paymentDate, merge: true }));
       return {
         payment,
         credits: used,

@@ -46,6 +46,8 @@ import {
 } from './delivery-collection.util';
 import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
 import { likeContains } from '../../common/utils/like.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { deliveryUpdateMessage } from '../messaging/document-messages';
 
 const DELIVERY_STATUSES = ['unassigned', 'pending', 'picked_up', 'in_transit', 'arrived', 'delivered', 'failed', 'returned', 'cancelled'];
 /** `statuses=a,b` → the known ones; unknown words are ignored, not an error. */
@@ -117,6 +119,7 @@ export class DeliveriesService {
     private readonly geocoding: GeocodingService,
     private readonly ledger: DeliveryLedgerService,
     private readonly payments: PaymentsService,
+    private readonly messaging: MessagingService,
   ) {}
 
   /**
@@ -764,6 +767,7 @@ export class DeliveriesService {
           changedBy: userId,
         }),
       );
+      await this.messaging.enqueue(em, deliveryUpdateMessage(d, dto.status, userId));
       return d;
     });
   }

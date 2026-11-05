@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { DataSource, EntityManager } from 'typeorm';
 import { companyFeatures } from '../../common/features/company-features.util';
 import { maskPhone, toWhatsappE164 } from '../../common/utils/phone.util';
@@ -52,6 +53,17 @@ export interface EnqueueInput {
   requireSent?: { docType: DocType; docId: string; events?: string[] };
   /** Appended to the idempotency key (resend). */
   keySuffix?: string;
+  /**
+   * docVersion = 1 + the rows this event already has for the document, so a
+   * second real occurrence (a PO sent, withdrawn and sent again) is a new
+   * message while a retried call inside the same lock still dedupes.
+   */
+  autoVersion?: boolean;
+  /** Template values looked up here so the hook in the service stays one call. */
+  lookups?: {
+    billNumbers?: { param: string; ids: string[] };
+    userName?: { param: string; userId: string };
+  };
 }
 
 export interface EnqueueResult {
@@ -100,14 +112,115 @@ export class MessagingService {
 
   async enqueue(
     manager: EntityManager | null | undefined,
-    input: EnqueueInput,
+    input: EnqueueInput | null | undefined,
   ): Promise<EnqueueResult | null> {
+    if (!input) return null; // the event sends nothing (see document-messages.ts)
     const m = manager ?? this.dataSource.manager;
     return this.guarded(
       m,
       `enqueue ${input.event} ${input.docType}:${input.docId}`,
       () => this.doEnqueue(m, input),
     );
+  }
+
+  /**
+   * Record a document someone shared by hand through a wa.me link (Connect
+   * off, or the person chose their own chat). channel 'wa_link', status
+   * 'sent', no provider call — it exists so the timeline is complete and a
+   * later cancellation knows the party had the document. Returns null when
+   * the number is not a WhatsApp number. Never throws.
+   */
+  async logManualShare(
+    manager: EntityManager | null | undefined,
+    input: {
+      companyId: string;
+      event: MessageEventOrTest;
+      docType: DocType;
+      docId: string;
+      recipient: EnqueueRecipient;
+      toPhone: string | null | undefined;
+      createdBy?: string | null;
+    },
+  ): Promise<EnqueueResult | null> {
+    const phone = toWhatsappE164(input.toPhone ?? null);
+    if (!phone) return null;
+    const m = manager ?? this.dataSource.manager;
+    return this.guarded(
+      m,
+      `manual share ${input.docType}:${input.docId}`,
+      async () => {
+        const template = templateForEvent(input.event);
+        const rows = rowsOf(
+          await m.query(
+            `INSERT INTO outbound_messages
+             (company_id, event_type, doc_type, doc_id, doc_version, recipient_type, recipient_id,
+              to_phone_e164, channel, template_name, language, params, status, attempts,
+              idempotency_key, created_by)
+           VALUES ($1, $2, $3, $4, 1, $5, $6, $7, 'wa_link', $8, 'en', '{}'::jsonb, 'sent', 1,
+                   $9, $10)
+           RETURNING id, status`,
+            [
+              input.companyId,
+              input.event,
+              input.docType,
+              input.docId,
+              input.recipient.type,
+              input.recipient.type === 'user'
+                ? input.recipient.userId
+                : input.recipient.id,
+              phone,
+              template.name,
+              `manual:${input.docType}:${input.docId}:${randomUUID()}`,
+              input.createdBy ?? null,
+            ],
+          ),
+        );
+        const id = String(rows[0].id);
+        await m.query(
+          `INSERT INTO message_status_events (message_id, status, occurred_at, raw)
+         VALUES ($1, 'sent', now(), '{"channel":"wa_link"}'::jsonb)`,
+          [id],
+        );
+        return {
+          id,
+          status: 'sent' as MessageStatus,
+          skipReason: null,
+          duplicate: false,
+        };
+      },
+    );
+  }
+
+  /**
+   * One message per ACTIVE admin (owner) of the company — the approval alert.
+   * Never throws; returns the rows written.
+   */
+  async enqueueForAdmins(
+    manager: EntityManager | null | undefined,
+    input: Omit<EnqueueInput, 'recipient'>,
+  ): Promise<EnqueueResult[]> {
+    const m = manager ?? this.dataSource.manager;
+    const admins =
+      (await this.guarded(m, `admins of ${input.companyId}`, async () =>
+        rowsOf(
+          await m.query(
+            `SELECT uc.user_id FROM user_companies uc
+               JOIN users u ON u.id = uc.user_id
+              WHERE uc.company_id = $1 AND uc.role = 'admin' AND u.is_active = true
+              ORDER BY uc.joined_at`,
+            [input.companyId],
+          ),
+        ).map((r) => String(r.user_id)),
+      )) ?? [];
+    const out: EnqueueResult[] = [];
+    for (const userId of admins) {
+      const r = await this.enqueue(m, {
+        ...input,
+        recipient: { type: 'user', userId },
+      });
+      if (r) out.push(r);
+    }
+    return out;
   }
 
   /**
@@ -230,6 +343,7 @@ export class MessagingService {
     }
 
     const template = templateForEvent(input.event);
+    const looked = await this.resolveLookups(m, input);
     const settings = await this.settings.resolve(input.companyId, m);
     const recipient = await this.loadRecipient(
       m,
@@ -243,10 +357,22 @@ export class MessagingService {
       recipient?.language ?? settings.defaultLanguage ?? 'en';
     const params = {
       ...stringParams(input.params),
+      ...looked,
       company: settings.companyName,
       recipientName: recipient?.name ?? '',
     };
-    const version = input.docVersion ?? 1;
+    let version = input.docVersion ?? 1;
+    if (input.autoVersion) {
+      const prior = rowsOf(
+        await m.query(
+          `SELECT COUNT(*)::int AS n FROM outbound_messages
+            WHERE company_id = $1 AND event_type = $2 AND doc_type = $3 AND doc_id = $4
+              AND channel = 'whatsapp_api' AND idempotency_key NOT LIKE '%:resend:%'`,
+          [input.companyId, input.event, input.docType, input.docId],
+        ),
+      );
+      version = Number(prior[0]?.n ?? 0) + 1;
+    }
     const key = [
       input.event,
       input.docType,
@@ -322,6 +448,48 @@ export class MessagingService {
       skipReason: (existing[0].last_error as SkipReason | null) ?? null,
       duplicate: true,
     };
+  }
+
+  private async resolveLookups(
+    m: EntityManager,
+    input: EnqueueInput,
+  ): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const bills = input.lookups?.billNumbers;
+    if (bills) {
+      const ids = bills.ids.filter((id) => UUID.test(id));
+      const nums = ids.length
+        ? rowsOf(
+            await m.query(
+              `SELECT bill_number FROM bills WHERE company_id = $1 AND id = ANY($2::uuid[]) ORDER BY bill_number`,
+              [input.companyId, ids],
+            ),
+          )
+            .map((r) => String(r.bill_number ?? ''))
+            .filter(Boolean)
+        : [];
+      out[bills.param] =
+        nums.length === 0
+          ? ids.length === 1
+            ? '1 bill'
+            : `${ids.length} bills`
+          : nums.length > 3
+            ? `${nums.slice(0, 3).join(', ')} and ${nums.length - 3} more`
+            : nums.join(', ');
+    }
+    const user = input.lookups?.userName;
+    if (user) {
+      const r = rowsOf(
+        await m.query(
+          `SELECT display_name, username, email FROM users WHERE id = $1 LIMIT 1`,
+          [user.userId],
+        ),
+      )[0];
+      out[user.param] = String(
+        r?.display_name || r?.username || r?.email || 'A team member',
+      );
+    }
+    return out;
   }
 
   private async skipReason(

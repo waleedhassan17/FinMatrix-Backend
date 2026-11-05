@@ -52,6 +52,12 @@ import {
 const INVOICE_OPEN_STATUSES = ['sent', 'partial'] as const;
 import { assertSalesLinesClassified } from '../../common/utils/sales-lines.util';
 import { CreditOverride, enforceCreditLimit } from '../../common/utils/credit-control.util';
+import { MessagingService } from '../messaging/messaging.service';
+import {
+  DeliverOption,
+  invoiceCancelledMessage,
+  invoiceIssuedMessage,
+} from '../messaging/document-messages';
 
 interface LineCalc {
   description: string;
@@ -99,6 +105,7 @@ export class InvoicesService {
     private readonly lineRepo: Repository<InvoiceLineItem>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    private readonly messaging: MessagingService,
   ) {}
 
   // ------- Query -------
@@ -330,6 +337,7 @@ export class InvoicesService {
       if (status !== 'draft') {
         await this.createJournalEntryForInvoice(manager, invoice, userId);
         await this.incrementCustomerBalance(manager, customer, invoice.total);
+        await this.messaging.enqueue(manager, invoiceIssuedMessage(invoice, userId));
       }
 
       return invoice;
@@ -418,7 +426,7 @@ export class InvoicesService {
     companyId: string,
     id: string,
     userId: string,
-    opts: { creditOverride?: CreditOverride | null } = {},
+    opts: { creditOverride?: CreditOverride | null; deliver?: DeliverOption | null } = {},
   ): Promise<Invoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await manager.findOne(Invoice, {
@@ -457,6 +465,7 @@ export class InvoicesService {
 
       if (invoice.status === 'draft') invoice.status = 'sent';
       await manager.save(invoice);
+      await this.messaging.enqueue(manager, invoiceIssuedMessage(invoice, userId, opts.deliver));
       return invoice;
     });
   }
@@ -562,6 +571,8 @@ export class InvoicesService {
         ? `${invoice.notes}\n[VOID] ${dto.reason}`
         : `[VOID] ${dto.reason}`;
       await manager.save(invoice);
+      await this.messaging.cancelQueued(manager, companyId, 'invoice', invoice.id, { reason: 'invoice_void' });
+      await this.messaging.enqueue(manager, invoiceCancelledMessage(invoice, userId));
       return invoice;
     });
   }

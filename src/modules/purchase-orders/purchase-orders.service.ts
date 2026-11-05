@@ -34,6 +34,8 @@ import { InventoryMovement } from '../inventory/entities/inventory-movement.enti
 import { PurchaseOrderStatus } from '../../types';
 import { addDaysIso, businessToday, termsDays } from '../../common/utils/business-date.util';
 import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { DeliverOption, isPoWithdrawal, purchaseOrderStatusMessage } from '../messaging/document-messages';
 
 const round4 = (d: Decimal) => d.toDecimalPlaces(4, Decimal.ROUND_HALF_UP);
 
@@ -56,6 +58,7 @@ export class PurchaseOrdersService {
     private readonly accounts: AccountsService,
     @InjectRepository(PurchaseOrder)
     private readonly repo: Repository<PurchaseOrder>,
+    private readonly messaging: MessagingService,
   ) {}
 
   async list(
@@ -698,10 +701,16 @@ export class PurchaseOrdersService {
    * A PO cannot close while received goods are still unbilled: billing a
    * closed PO is refused, so their GRNI would be stranded.
    */
-  async updateStatus(companyId: string, id: string, status: PurchaseOrderStatus) {
+  async updateStatus(
+    companyId: string,
+    id: string,
+    status: PurchaseOrderStatus,
+    opts: { userId?: string | null; deliver?: DeliverOption | null } = {},
+  ) {
     await this.dataSource.transaction(async (manager) => {
       const po = await this.lockPo(manager, companyId, id);
       if (po.status === status) return;
+      const previousStatus = po.status;
       const anyReceived = po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0));
       const refuse = (message: string) => {
         throw new BadRequestException({ code: 'INVALID_STATUS_TRANSITION', message });
@@ -740,6 +749,10 @@ export class PurchaseOrdersService {
           refuse(`'${status}' follows from goods received and cannot be set directly.`);
       }
       await manager.save(po);
+      if (isPoWithdrawal(previousStatus, po.status, anyReceived)) {
+        await this.messaging.cancelQueued(manager, companyId, 'purchase_order', po.id, { reason: 'po_withdrawn' });
+      }
+      await this.messaging.enqueue(manager, purchaseOrderStatusMessage(po, previousStatus, anyReceived, opts));
     });
     return this.getById(companyId, id);
   }

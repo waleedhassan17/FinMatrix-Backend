@@ -9,9 +9,11 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   ValidateNested,
   Min,
 } from 'class-validator';
+import { DeliverDto } from '../../messaging/dto/deliver.dto';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
 import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
@@ -129,4 +131,26 @@ export class SendInvoiceDto {
   @ValidateNested()
   @Type(() => CreditOverrideDto)
   creditOverride?: CreditOverrideDto;
+
+  /**
+   * How the app shared it, when it shared by hand. `whatsapp` + `toPhone`
+   * records a wa.me hand-off on the document's message timeline.
+   */
+  @ApiPropertyOptional({ enum: ['whatsapp', 'email', 'share'] })
+  @IsOptional()
+  @IsIn(['whatsapp', 'email', 'share'])
+  channel?: 'whatsapp' | 'email' | 'share';
+
+  @ApiPropertyOptional({ example: '0300 1234567' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  toPhone?: string;
+
+  /** FinMatrix Connect: { whatsapp: false } posts without sending; true sends even if the rule says ask. */
+  @ApiPropertyOptional({ type: DeliverDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DeliverDto)
+  deliver?: DeliverDto;
 }

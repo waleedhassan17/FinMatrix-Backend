@@ -52,6 +52,8 @@ import { validate } from 'class-validator';
 import Decimal from 'decimal.js';
 import { plainToInstance } from 'class-transformer';
 import { pagedResponse } from '../../common/utils/paged-response.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { deliveryUpdateMessage } from '../messaging/document-messages';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'all';
 
@@ -76,6 +78,7 @@ export class InventoryApprovalsService {
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
     private readonly deliveryLedger: DeliveryLedgerService,
+    private readonly messaging: MessagingService,
   ) {}
 
   // ==========================================================================
@@ -628,6 +631,7 @@ export class InventoryApprovalsService {
         data: { requestId: req.id, route: 'DPHistory' },
       });
 
+      await this.messaging.enqueue(em, deliveryUpdateMessage(delivery, 'approved', reviewerId));
       return { ...this.formatRequest(req), ledger: ledgerResult };
     });
   }

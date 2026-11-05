@@ -50,6 +50,9 @@ import {
   type UnappliedReceiptRow,
 } from './unapplied-receipts.sql';
 import { pagedResponse } from '../../common/utils/paged-response.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { paymentReceivedMessage } from '../messaging/document-messages';
+import { REMINDER_EVENTS } from '../messaging/messaging.constants';
 
 /** A receipt still holding money that has not been applied to an invoice. */
 export interface CustomerAdvance {
@@ -97,6 +100,7 @@ export class PaymentsService {
     private readonly appRepo: Repository<PaymentApplication>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    private readonly messaging: MessagingService,
   ) {}
 
   async outstanding(companyId: string, customerId: string) {
@@ -447,6 +451,8 @@ export class PaymentsService {
     });
     payment.journalEntryId = entry.id;
     await manager.save(payment);
+    await this.messaging.cancelQueued(manager, companyId, 'invoice', appEntities.map((a) => a.invoiceId), { events: REMINDER_EVENTS, reason: 'payment_recorded' });
+    await this.messaging.enqueue(manager, paymentReceivedMessage(payment, customer.balance, userId));
 
     return payment;
   }
