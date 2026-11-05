@@ -133,6 +133,13 @@ describe('Meta error classification', () => {
       true,
     );
   });
+  it("names the test number's allow-list error in plain words", () => {
+    expect(classifyMetaError({ code: 131030, httpStatus: 400 })).toMatchObject({
+      retryable: false,
+      reason:
+        "This number is not on the test number's recipient list (add it in Meta's API Setup)",
+    });
+  });
   it('treats the 200-299 range as a missing permission', () => {
     expect(classifyMetaError({ code: 250, httpStatus: 403 })).toMatchObject({
       retryable: false,

@@ -9,6 +9,7 @@
  *   WEB_APP_URL=https://finmatrix-theta.vercel.app \
  *   WHATSAPP_APP_ID=…   # the Meta app; uploads the sample PDF Meta asks for
  *   [WHATSAPP_SAMPLE_DOCUMENT_HANDLE=…]   # or pass a handle you already have
+ *   [TEMPLATE_LANGUAGES=en]               # only these languages (default en,ur)
  *   [DRY_RUN=1]                           # print what would be created
  *     npm run messaging:templates:sync
  *
@@ -139,6 +140,11 @@ async function main() {
   const dry = env('DRY_RUN') === '1';
   const waba = env('WHATSAPP_WABA_ID');
   const handle = await sampleDocumentHandle(dry);
+  // e.g. English first while the Urdu texts wait for a native speaker's check.
+  const languages = (env('TEMPLATE_LANGUAGES') || 'en,ur')
+    .split(',')
+    .map((l) => l.trim())
+    .filter((l): l is 'en' | 'ur' => l === 'en' || l === 'ur');
 
   // Everything on the account (paged), keyed name/language.
   const existing = new Map<string, string>();
@@ -158,7 +164,7 @@ async function main() {
   let created = 0;
   let problems = 0;
   for (const t of TEMPLATES) {
-    for (const language of ['en', 'ur'] as const) {
+    for (const language of languages) {
       const key = `${t.name}/${language}`;
       const status = existing.get(key);
       if (status) {

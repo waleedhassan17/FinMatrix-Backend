@@ -83,6 +83,12 @@ const PERMANENT: Record<number, ErrorClass> = {
     reason: 'This number cannot receive WhatsApp messages',
     clearsVerification: true,
   },
+  // Meta's free test number only: the recipient must be on its allow list.
+  131030: {
+    retryable: false,
+    reason:
+      "This number is not on the test number's recipient list (add it in Meta's API Setup)",
+  },
   131031: {
     retryable: false,
     reason:
