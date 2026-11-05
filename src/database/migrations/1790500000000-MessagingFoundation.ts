@@ -166,6 +166,7 @@ export class MessagingFoundation1790500000000 implements MigrationInterface {
           ADD COLUMN IF NOT EXISTS "whatsapp_opt_in_by" uuid,
           ADD COLUMN IF NOT EXISTS "whatsapp_opt_out" boolean NOT NULL DEFAULT false,
           ADD COLUMN IF NOT EXISTS "whatsapp_verified_at" TIMESTAMP WITH TIME ZONE,
+          ADD COLUMN IF NOT EXISTS "whatsapp_user_id" character varying(160),
           ADD COLUMN IF NOT EXISTS "preferred_language" character varying(2)
       `);
       await queryRunner.query(`
@@ -177,6 +178,12 @@ export class MessagingFoundation1790500000000 implements MigrationInterface {
       await queryRunner.query(`
         CREATE INDEX IF NOT EXISTS "IDX_${table}_whatsapp_e164"
           ON "${table}" ("whatsapp_e164") WHERE "whatsapp_e164" IS NOT NULL
+      `);
+      // A contact with a WhatsApp username can reply with no phone number,
+      // only WhatsApp's business-scoped user id (BSUID); STOP matches on it.
+      await queryRunner.query(`
+        CREATE INDEX IF NOT EXISTS "IDX_${table}_whatsapp_user_id"
+          ON "${table}" ("whatsapp_user_id") WHERE "whatsapp_user_id" IS NOT NULL
       `);
       await queryRunner.query(backfillSql(table));
     }
@@ -193,6 +200,9 @@ export class MessagingFoundation1790500000000 implements MigrationInterface {
     );
     for (const table of ['vendors', 'customers']) {
       await queryRunner.query(
+        `DROP INDEX IF EXISTS "IDX_${table}_whatsapp_user_id"`,
+      );
+      await queryRunner.query(
         `DROP INDEX IF EXISTS "IDX_${table}_whatsapp_e164"`,
       );
       await queryRunner.query(
@@ -201,6 +211,7 @@ export class MessagingFoundation1790500000000 implements MigrationInterface {
       await queryRunner.query(`
         ALTER TABLE "${table}"
           DROP COLUMN IF EXISTS "preferred_language",
+          DROP COLUMN IF EXISTS "whatsapp_user_id",
           DROP COLUMN IF EXISTS "whatsapp_verified_at",
           DROP COLUMN IF EXISTS "whatsapp_opt_out",
           DROP COLUMN IF EXISTS "whatsapp_opt_in_by",

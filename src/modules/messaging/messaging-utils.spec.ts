@@ -115,6 +115,38 @@ describe('Meta error classification', () => {
       false,
     );
   });
+  it("knows the codes on Meta's reference as of Nov 2026", () => {
+    expect(classifyMetaError({ code: 131037, httpStatus: 400 })).toMatchObject({
+      retryable: false,
+      reason: 'The sending number has no approved display name yet',
+    });
+    expect(classifyMetaError({ code: 130403, httpStatus: 400 }).retryable).toBe(
+      false,
+    );
+    expect(classifyMetaError({ code: 132018, httpStatus: 400 }).retryable).toBe(
+      false,
+    );
+    expect(classifyMetaError({ code: 0, httpStatus: 401 }).retryable).toBe(
+      false,
+    );
+    expect(classifyMetaError({ code: 131057, httpStatus: 400 }).retryable).toBe(
+      true,
+    );
+  });
+  it('treats the 200-299 range as a missing permission', () => {
+    expect(classifyMetaError({ code: 250, httpStatus: 403 })).toMatchObject({
+      retryable: false,
+      reason: 'The WhatsApp app is missing a permission',
+    });
+  });
+  it('leaves code 1 to the HTTP status', () => {
+    expect(classifyMetaError({ code: 1, httpStatus: 500 }).retryable).toBe(
+      true,
+    );
+    expect(classifyMetaError({ code: 1, httpStatus: 400 }).retryable).toBe(
+      false,
+    );
+  });
   it('backs off 2^attempts minutes', () => {
     expect(nextAttemptDelayMs(1)).toBe(2 * 60_000);
     expect(nextAttemptDelayMs(3)).toBe(8 * 60_000);

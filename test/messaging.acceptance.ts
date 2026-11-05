@@ -18,6 +18,7 @@
  *   6. opted out, no number, rule off, no consent (and feature off) give
  *      'skipped' with the reason
  *   7. webhook: bad signature 401, statuses only move forward, STOP opts out
+ *      (also by WhatsApp user id alone, as contacts with usernames send it)
  *   8. dunning at the configured offsets, none after full payment, quiet
  *      hours defer to 09:00 company time, approval alerts ignore quiet hours
  *   9. the ledger invariants show nothing new
@@ -1061,6 +1062,76 @@ async function main() {
         custStop.id,
       ])
     ).rows[0]?.whatsapp_opt_out === false,
+  );
+  // WhatsApp usernames (2026): a status carries the contact's user id (BSUID)
+  // and a later STOP may carry only that id, no phone number.
+  const BSUID = `PK.${RUN}`;
+  const custUser = await mk('/customers', {
+    name: `Connect Username ${RUN}`,
+    phone: `0305${tail}`,
+    whatsappOptIn: true,
+  });
+  const invUser = await makeInvoice(custUser?.id, 'Username', day(10));
+  const userMsg = await waitFor(
+    async () => (await msgs('invoice', invUser?.id, 'invoice_issued'))[0],
+    (m: any) => !!m?.provider_message_id,
+  );
+  await hook({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              statuses: [
+                {
+                  id: userMsg?.provider_message_id,
+                  status: 'delivered',
+                  timestamp: String(Math.floor(Date.now() / 1000)),
+                  recipient_id: `92305${tail}`,
+                  recipient_user_id: BSUID,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+  const userIdOf = async (id: string) =>
+    (
+      await db.query(
+        `SELECT whatsapp_user_id, whatsapp_opt_out FROM customers WHERE id = $1`,
+        [id],
+      )
+    ).rows[0];
+  ok(
+    "7g a status carrying the contact's WhatsApp user id stores it",
+    (await userIdOf(custUser?.id))?.whatsapp_user_id === BSUID,
+    await userIdOf(custUser?.id),
+  );
+  const byUserId = (body: string) => ({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [{ profile: { name: 'Username' }, user_id: BSUID }],
+              messages: [{ from_user_id: BSUID, type: 'text', text: { body } }],
+            },
+          },
+        ],
+      },
+    ],
+  });
+  await hook(byUserId('STOP'));
+  ok(
+    '7h a STOP with no phone number, only the user id, still opts them out',
+    (await userIdOf(custUser?.id))?.whatsapp_opt_out === true,
+  );
+  await hook(byUserId('start'));
+  ok(
+    '7i START by user id opts them back in',
+    (await userIdOf(custUser?.id))?.whatsapp_opt_out === false,
   );
   await hook(inbound('UNSUBSCRIBE'));
 

@@ -18,7 +18,17 @@ export interface ProviderStatusUpdate {
   raw?: Record<string, unknown> | null;
   errorCode?: string | number | null;
   errorTitle?: string | null;
+  /** statuses[].recipient_user_id: WhatsApp's user id for the recipient. */
+  recipientUserId?: string | null;
 }
+
+/** A non-empty string from a webhook field, else null. */
+const str = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() !== ''
+    ? v.trim()
+    : typeof v === 'number'
+      ? String(v)
+      : null;
 
 const EVENT_LABEL: Record<string, string> = {
   invoice_issued: 'Invoice',
@@ -131,6 +141,21 @@ export class MessageStatusService {
         [row.recipient_id, row.to_phone_e164],
       );
     }
+    if (
+      party &&
+      row.recipient_id &&
+      u.recipientUserId &&
+      u.status !== 'failed'
+    ) {
+      // Remember WhatsApp's user id for this contact (still on the number we
+      // sent to), so a later STOP that carries no phone number still finds them.
+      await this.dataSource.query(
+        `UPDATE ${party} SET whatsapp_user_id = $3::varchar
+          WHERE id = $1 AND whatsapp_e164 = $2
+            AND whatsapp_user_id IS DISTINCT FROM $3::varchar`,
+        [row.recipient_id, row.to_phone_e164, u.recipientUserId.slice(0, 160)],
+      );
+    }
 
     if (applied && target === 'failed') {
       const cls = classifyMetaError({
@@ -212,36 +237,61 @@ export class MessageStatusService {
   }
 
   /**
-   * A contact replied. STOP / UNSUBSCRIBE opts the number out on every
-   * customer and vendor holding it (every company: over-honouring a STOP is
-   * the safe side) and cancels anything still queued to it. START /
-   * SUBSCRIBE lifts the opt-out (decision D16: only the contact can).
+   * A contact replied. STOP / UNSUBSCRIBE opts the contact out on every
+   * customer and vendor holding that number or WhatsApp user id (every
+   * company: over-honouring a STOP is the safe side) and cancels anything
+   * still queued to them. START / SUBSCRIBE lifts the opt-out (decision D16:
+   * only the contact can).
+   *
+   * Since 2026 a contact with a WhatsApp username can arrive without a phone
+   * number, only a business-scoped user id (BSUID). Either one is enough; a
+   * message carrying both teaches us the id for that number.
    */
   async handleInbound(
-    fromRaw: string,
+    from: { phone?: string | null; userId?: string | null },
     text: string | null | undefined,
   ): Promise<'stop' | 'start' | null> {
-    const intent = inboundIntent(text);
-    if (!intent) return null;
-    const phone = toWhatsappE164(
-      fromRaw.startsWith('+') ? fromRaw : `+${fromRaw}`,
-    );
-    if (!phone) return null;
-    const optOut = intent === 'stop';
-    for (const table of ['customers', 'vendors']) {
-      await this.dataSource.query(
-        `UPDATE ${table} SET whatsapp_opt_out = $2 WHERE whatsapp_e164 = $1`,
-        [phone, optOut],
-      );
+    const raw = (from.phone ?? '').trim();
+    const phone = raw
+      ? toWhatsappE164(raw.startsWith('+') ? raw : `+${raw}`)
+      : null;
+    const userId = (from.userId ?? '').trim().slice(0, 160) || null;
+    if (phone && userId) {
+      for (const table of ['customers', 'vendors']) {
+        await this.dataSource.query(
+          `UPDATE ${table} SET whatsapp_user_id = $2::varchar
+            WHERE whatsapp_e164 = $1 AND whatsapp_user_id IS DISTINCT FROM $2::varchar`,
+          [phone, userId],
+        );
+      }
     }
-    if (optOut) {
+    const intent = inboundIntent(text);
+    if (!intent || (!phone && !userId)) return null;
+    const optOut = intent === 'stop';
+    const phones = new Set<string>(phone ? [phone] : []);
+    for (const table of ['customers', 'vendors']) {
+      const hit = rowsOf(
+        await this.dataSource.query(
+          `UPDATE ${table} SET whatsapp_opt_out = $3
+            WHERE whatsapp_e164 = $1::varchar
+               OR ($2::varchar IS NOT NULL AND whatsapp_user_id = $2::varchar)
+          RETURNING whatsapp_e164`,
+          [phone, userId, optOut],
+        ),
+      );
+      for (const r of hit)
+        if (r.whatsapp_e164) phones.add(String(r.whatsapp_e164));
+    }
+    if (optOut && phones.size > 0) {
       await this.dataSource.query(
         `UPDATE outbound_messages SET status = 'cancelled', last_error = 'opted_out', updated_at = now()
-          WHERE to_phone_e164 = $1 AND status = 'queued' AND recipient_type <> 'user'`,
-        [phone],
+          WHERE to_phone_e164 = ANY($1::text[]) AND status = 'queued' AND recipient_type <> 'user'`,
+        [[...phones]],
       );
     }
-    this.logger.log(`inbound ${intent.toUpperCase()} from ${maskPhone(phone)}`);
+    this.logger.log(
+      `inbound ${intent.toUpperCase()} from ${phone ? maskPhone(phone) : 'a WhatsApp user id'}`,
+    );
     return intent;
   }
 
@@ -282,16 +332,31 @@ export class MessageStatusService {
               (err?.title as string | undefined) ??
               (err?.message as string | undefined) ??
               null,
+            recipientUserId: str(s.recipient_user_id),
           });
           statuses++;
         }
+        const contacts =
+          (value.contacts as Array<Record<string, unknown>> | undefined) ?? [];
         for (const msg of (value.messages as Array<Record<string, unknown>>) ??
           []) {
           const text =
             (msg.text as { body?: string } | undefined)?.body ??
             (msg.button as { text?: string } | undefined)?.text ??
             null;
-          if (msg.from && (await this.handleInbound(String(msg.from), text)))
+          // `from` / `wa_id` may be missing for a contact with a username;
+          // `from_user_id` (the BSUID) is then the only key.
+          const fromUserId = str(msg.from_user_id);
+          const contact =
+            contacts.find(
+              (c) => fromUserId !== null && str(c.user_id) === fromUserId,
+            ) ?? (contacts.length === 1 ? contacts[0] : undefined);
+          const phone = str(msg.from) ?? str(contact?.wa_id);
+          const userId = fromUserId ?? str(contact?.user_id);
+          if (
+            (phone || userId) &&
+            (await this.handleInbound({ phone, userId }, text))
+          )
             inbound++;
         }
       }

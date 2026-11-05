@@ -68,6 +68,19 @@ export class Vendor extends BaseCompanyEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'whatsapp_verified_at' })
   whatsappVerifiedAt!: Date | null;
 
+  /**
+   * WhatsApp's business-scoped user id (BSUID), learned from webhooks. A
+   * contact with a WhatsApp username may reply with only this, no number.
+   */
+  @Column({
+    type: 'varchar',
+    length: 160,
+    nullable: true,
+    name: 'whatsapp_user_id',
+    select: false,
+  })
+  whatsappUserId?: string | null;
+
   @Column({ type: 'varchar', length: 2, nullable: true, name: 'preferred_language' })
   preferredLanguage!: 'en' | 'ur' | null;
 }
