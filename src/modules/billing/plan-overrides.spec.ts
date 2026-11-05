@@ -8,12 +8,14 @@
  * already on it.
  */
 import {
+  DEFAULT_WHATSAPP_MONTHLY_MESSAGES,
   PLAN_CONFIG,
   getPlanConfig,
   getPlanOverride,
   isPlanOffered,
   loadPlanOverrides,
   plansForType,
+  whatsappAllowance,
   type PlanKey,
 } from './plan-config';
 
@@ -128,5 +130,26 @@ describe('loadPlanOverrides', () => {
     expect(getPlanConfig(KEY).monthlyMinorUnits).toBe(
       PLAN_CONFIG[KEY].monthlyMinorUnits,
     );
+  });
+});
+
+describe('the WhatsApp allowance (messages a month FinMatrix pays for)', () => {
+  it('is 200 on every plan unless the plan says otherwise', () => {
+    expect(DEFAULT_WHATSAPP_MONTHLY_MESSAGES).toBe(200);
+    expect(whatsappAllowance(getPlanConfig(KEY))).toBe(200);
+    expect(whatsappAllowance(getPlanConfig('free'))).toBe(200);
+    expect(whatsappAllowance(getPlanConfig(null))).toBe(200);
+  });
+
+  it("follows the console's edit for that plan only", () => {
+    loadPlanOverrides([[KEY, { whatsappMonthlyMessages: 500 }]]);
+    expect(whatsappAllowance(getPlanConfig(KEY))).toBe(500);
+    expect(whatsappAllowance(getPlanConfig('free'))).toBe(200);
+  });
+
+  it('an edit to something else leaves the allowance alone', () => {
+    loadPlanOverrides([[KEY, { label: 'Renamed' }]]);
+    expect(whatsappAllowance(getPlanConfig(KEY))).toBe(200);
+    expect('whatsappMonthlyMessages' in getPlanConfig(KEY)).toBe(false);
   });
 });

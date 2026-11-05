@@ -1,6 +1,7 @@
 import { MessagingService } from './messaging.service';
 import { MessagingSettingsService } from './messaging-settings.service';
 import { DEFAULT_EVENT_RULES } from './messaging.constants';
+import { loadPlanOverrides } from '../billing/plan-config';
 
 /**
  * enqueue() against an in-memory stand-in for the database: the SQL it sends
@@ -236,6 +237,8 @@ describe('MessagingService.enqueue', () => {
       world({ settings: { ...ENABLED, monthly_cap: 5 }, usage: 5 }),
       {},
     ],
+    // The plan's allowance (FinMatrix pays): 200 a month unless the plan says otherwise.
+    ['plan_limit_reached', world({ usage: 200 }), {}],
   ])('writes a skipped row: %s', async (reason, w, over) => {
     const { manager, rows } = makeManager(w);
     const r = await service().enqueue(manager, input(over));
@@ -369,5 +372,33 @@ describe('MessagingService.cancelQueued', () => {
     await expect(
       service().cancelQueued(manager, 'c1', 'invoice', 'i1'),
     ).resolves.toBe(0);
+  });
+});
+
+describe('the plan allowance (FinMatrix pays Meta)', () => {
+  afterEach(() => loadPlanOverrides([]));
+
+  it('lets messages through below the allowance', async () => {
+    const { manager } = makeManager(world({ usage: 199 }));
+    const r = await service().enqueue(manager, input());
+    expect(r).toMatchObject({ status: 'queued', skipReason: null });
+  });
+
+  it("follows the admin's per-plan edit", async () => {
+    loadPlanOverrides([['free', { whatsappMonthlyMessages: 3 }]]);
+    const { manager } = makeManager(world({ usage: 3 }));
+    const r = await service().enqueue(manager, input());
+    expect(r).toMatchObject({
+      status: 'skipped',
+      skipReason: 'plan_limit_reached',
+    });
+  });
+
+  it("reports the owner's own lower cap first", async () => {
+    const { manager } = makeManager(
+      world({ settings: { ...ENABLED, monthly_cap: 5 }, usage: 250 }),
+    );
+    const r = await service().enqueue(manager, input());
+    expect(r).toMatchObject({ skipReason: 'cap_reached' });
   });
 });

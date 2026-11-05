@@ -38,6 +38,10 @@ export class PlanOverride {
   @Column({ type: 'int', nullable: true })
   deliveryPersonnelLimit!: number | null;
 
+  /** WhatsApp messages a month FinMatrix sends for one company on this plan. */
+  @Column({ type: 'int', nullable: true })
+  whatsappMonthlyMessages!: number | null;
+
   /**
    * false retires the plan: companies already on it keep resolving, renewing
    * and being charged correctly, but it is offered to nobody new. This is the

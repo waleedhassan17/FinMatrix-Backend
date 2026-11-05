@@ -50,6 +50,13 @@ export class UpdatePlanDto {
   @Min(0)
   deliveryPersonnelLimit?: number;
 
+  /** WhatsApp messages a month FinMatrix sends for one company on this plan. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  whatsappMonthlyMessages?: number;
+
   /**
    * false retires the plan: nobody new is offered it, everybody already on it
    * keeps working. This is the safe alternative to deleting one.

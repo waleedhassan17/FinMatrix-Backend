@@ -2,11 +2,19 @@ import {
   ClaimedMessage,
   MessagingDispatcherService,
   PermanentSendError,
+  withCompanyName,
 } from './messaging-dispatcher.service';
 import { ProviderError } from './meta-error-map';
 
 function dispatcher(
-  opts: { settings?: Record<string, unknown>; features?: boolean } = {},
+  opts: {
+    settings?: Record<string, unknown>;
+    features?: boolean;
+    /** This month's counted sends, for the allowance check. */
+    usage?: number;
+    /** What the usage upsert returns after this send. */
+    countAfter?: number;
+  } = {},
 ) {
   const sql: Array<{ q: string; p: unknown[] }> = [];
   const dataSource = {
@@ -32,6 +40,13 @@ function dispatcher(
         ];
       }
       if (/FROM invoices/.test(q)) return [{ status: 'sent', balance: '100' }];
+      if (/SUM\(count\)/.test(q) && /messaging_usage/.test(q))
+        return [{ used: opts.usage ?? 0 }];
+      if (
+        /INSERT INTO messaging_usage/.test(q) &&
+        opts.countAfter !== undefined
+      )
+        return [{ count: opts.countAfter }];
       return [];
     }),
   };
@@ -46,11 +61,16 @@ function dispatcher(
     })),
     ownAccessToken: () => null,
   };
-  const status = { clearVerification: jest.fn(), notifyFailure: jest.fn() };
+  const status = {
+    clearVerification: jest.fn(),
+    notifyFailure: jest.fn(),
+    notifyAllowance: jest.fn(),
+  };
   const provider = {
     kind: 'fake',
     uploadMedia: jest.fn(async () => 'media-1'),
     sendTemplate: jest.fn(async () => ({ providerMessageId: 'wamid-1' })),
+    sendText: jest.fn(async () => ({ providerMessageId: 'wamid-text' })),
   };
   const renderers = {
     get: () => ({
@@ -211,5 +231,86 @@ describe('MessagingDispatcherService', () => {
     expect(
       await d.handleError(row(), new PermanentSendError('No PDF renderer')),
     ).toBe('failed');
+  });
+});
+
+describe('one FinMatrix number for every company (D34-D36)', () => {
+  it('the PDF file name carries the company', async () => {
+    const { d, provider } = dispatcher();
+    expect(await d.processOne(row(), DAY)).toBe('sent');
+    const file = (provider.uploadMedia.mock.calls[0] as unknown[])[1] as {
+      filename: string;
+    };
+    expect(file.filename).toBe('Warehouse Co - INV-1.pdf');
+  });
+
+  it('withCompanyName: cleans the name, skips an empty or repeated one', () => {
+    expect(withCompanyName('Ali & Sons (Pvt) Ltd.', 'INV-9.pdf')).toBe(
+      'Ali Sons Pvt Ltd. - INV-9.pdf',
+    );
+    expect(withCompanyName('علی ٹریڈرز', 'INV-9.pdf')).toBe('INV-9.pdf');
+    expect(withCompanyName('Warehouse Co', 'Warehouse Co - INV-9.pdf')).toBe(
+      'Warehouse Co - INV-9.pdf',
+    );
+  });
+
+  it('an automatic reply goes as plain text, counted as a free service message', async () => {
+    const { d, sql, provider } = dispatcher({ settings: { planAllowance: 0 } });
+    const out = await d.processOne(
+      row({
+        eventType: 'auto_reply',
+        templateName: '_text',
+        params: { company: 'Warehouse Co', text: 'This is FinMatrix…' },
+        attachment: null,
+      }),
+      NIGHT, // replies ignore quiet hours
+    );
+    expect(out).toBe('sent');
+    expect(provider.sendText).toHaveBeenCalledWith(expect.anything(), {
+      to: '+923124890176',
+      body: 'This is FinMatrix…',
+    });
+    expect(provider.sendTemplate).not.toHaveBeenCalled();
+    const usage = sql.find((s) => /INSERT INTO messaging_usage/.test(s.q));
+    expect(usage?.p).toContain('service');
+  });
+
+  it('at the plan allowance nothing more goes out this month', async () => {
+    const { d, provider } = dispatcher({
+      settings: { planAllowance: 2 },
+      usage: 2,
+    });
+    expect(await d.processOne(row(), DAY)).toBe('skipped:plan_limit_reached');
+    expect(provider.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it('tells the owners once at 80% and once at 100%', async () => {
+    const at80 = dispatcher({
+      settings: { planAllowance: 10 },
+      usage: 7,
+      countAfter: 8,
+    });
+    await at80.d.processOne(row(), DAY);
+    expect(at80.status.notifyAllowance).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ used: 8, limit: 10, full: false }),
+    );
+    const between = dispatcher({
+      settings: { planAllowance: 10 },
+      usage: 8,
+      countAfter: 9,
+    });
+    await between.d.processOne(row(), DAY);
+    expect(between.status.notifyAllowance).not.toHaveBeenCalled();
+    const full = dispatcher({
+      settings: { planAllowance: 10 },
+      usage: 9,
+      countAfter: 10,
+    });
+    await full.d.processOne(row(), DAY);
+    expect(full.status.notifyAllowance).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ used: 10, limit: 10, full: true }),
+    );
   });
 });

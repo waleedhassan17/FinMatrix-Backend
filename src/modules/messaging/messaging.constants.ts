@@ -22,6 +22,18 @@ export type MessageEvent = (typeof MESSAGE_EVENTS)[number];
 /** `test` is the settings screen's "send me a test" — never a rule. */
 export type MessageEventOrTest = MessageEvent | 'test';
 
+/**
+ * A plain-text answer to a customer who wrote to the FinMatrix number (never
+ * a rule, never a template): it points them to the company that messaged them.
+ */
+export const AUTO_REPLY_EVENT = 'auto_reply' as const;
+/** Every event an outbound row can carry. */
+export type OutboundEvent = MessageEventOrTest | typeof AUTO_REPLY_EVENT;
+/** template_name of a plain-text row (the column is NOT NULL). */
+export const TEXT_MESSAGE_TEMPLATE = '_text';
+/** messaging_usage category for plain-text service replies (free tier; never counted against limits). */
+export const SERVICE_USAGE_CATEGORY = 'service';
+
 export const EVENT_RULES = ['auto', 'manual', 'off'] as const;
 export type EventRule = (typeof EVENT_RULES)[number];
 export type EventRules = Record<MessageEvent, EventRule>;
@@ -36,7 +48,8 @@ export const DEFAULT_EVENT_RULES: EventRules = {
   po_cancelled: 'auto',
   remittance: 'auto',
   approval_pending: 'auto',
-  reminder_upcoming: 'auto',
+  // Off by default: FinMatrix pays for every message (D37); overdue stays on.
+  reminder_upcoming: 'off',
   reminder_overdue: 'auto',
   statement: 'off',
   delivery_update: 'off',
@@ -64,6 +77,8 @@ export const SKIP_REASONS = [
   'opted_out',
   'no_consent',
   'cap_reached',
+  /** The company's plan allowance (FinMatrix pays) is used up this month. */
+  'plan_limit_reached',
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
@@ -106,9 +121,11 @@ export const REMINDER_EVENTS: MessageEvent[] = [
 ];
 
 /** Events that go out at any hour (an owner waiting to approve). */
-export const QUIET_HOURS_EXEMPT: MessageEventOrTest[] = [
+export const QUIET_HOURS_EXEMPT: OutboundEvent[] = [
   'approval_pending',
   'test',
+  // The customer has just written to us; answering at once is the point.
+  'auto_reply',
 ];
 
 /** Status order for webhook updates: only ever move forward. */

@@ -2,14 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { NotificationsService } from '../notifications/notifications.service';
 import { maskPhone, toWhatsappE164 } from '../../common/utils/phone.util';
-import { MessageStatus } from './messaging.constants';
+import { MessageLanguage, MessageStatus } from './messaging.constants';
 import { classifyMetaError } from './meta-error-map';
 import {
   inboundIntent,
   nextStatus,
   replaceableBy,
 } from './message-status.util';
-import { rowsOf } from './messaging.service';
+import { MessagingService, rowsOf } from './messaging.service';
+import { inboundReply } from './inbound-reply';
+
+/** Inbound message types that never get an automatic answer. */
+const NO_REPLY_TYPES = new Set(['reaction', 'system', 'unsupported']);
 
 export interface ProviderStatusUpdate {
   providerMessageId: string;
@@ -44,6 +48,7 @@ const EVENT_LABEL: Record<string, string> = {
   statement: 'Statement',
   delivery_update: 'Delivery update',
   test: 'Test message',
+  auto_reply: 'Automatic reply',
 };
 
 export const eventLabel = (event: string) =>
@@ -61,6 +66,7 @@ export class MessageStatusService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly notifications: NotificationsService,
+    private readonly messaging: MessagingService,
   ) {}
 
   /** Returns 'unknown' when no message has that provider id. */
@@ -198,6 +204,128 @@ export class MessageStatusService {
   }
 
   /** In-app alert for a message that will not arrive: its sender, else every owner. */
+  /** Owners' notice that the plan's WhatsApp allowance is nearly or fully used. */
+  async notifyAllowance(
+    companyId: string,
+    a: { used: number; limit: number; period: string; full: boolean },
+  ): Promise<void> {
+    try {
+      await this.notifications.createForRole(companyId, 'admin', {
+        type: 'whatsapp_allowance',
+        title: a.full
+          ? 'WhatsApp allowance used up for this month'
+          : 'WhatsApp allowance 80% used',
+        message: a.full
+          ? `All ${a.limit} WhatsApp messages included in your plan have been sent this month. ` +
+            'Documents will not go out on WhatsApp until next month; you can still share them by hand.'
+          : `${a.used} of the ${a.limit} WhatsApp messages included in your plan have been sent this month.`,
+        data: { period: a.period, used: a.used, limit: a.limit },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `allowance notice not written: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * A contact wrote to the FinMatrix number (not STOP / START). Find the
+   * company that messaged this number last (within 30 days) and queue one
+   * automatic answer with that company's contact details (decision D36).
+   * Owners' approval alerts are not answered, nor is a number nobody here
+   * has messaged. Returns true when a new reply was queued.
+   */
+  async replyToInbound(from: {
+    phone?: string | null;
+    userId?: string | null;
+  }): Promise<boolean> {
+    try {
+      const raw = (from.phone ?? '').trim();
+      const phones: string[] = [];
+      const e164 = raw
+        ? toWhatsappE164(raw.startsWith('+') ? raw : `+${raw}`)
+        : null;
+      if (e164) phones.push(e164);
+      else if (from.userId) {
+        for (const table of ['customers', 'vendors']) {
+          for (const r of rowsOf(
+            await this.dataSource.query(
+              `SELECT DISTINCT whatsapp_e164 FROM ${table}
+                WHERE whatsapp_user_id = $1 AND whatsapp_e164 IS NOT NULL`,
+              [from.userId],
+            ),
+          ))
+            phones.push(String(r.whatsapp_e164));
+        }
+      }
+      if (phones.length === 0) return false;
+
+      const last = rowsOf(
+        await this.dataSource.query(
+          `SELECT company_id, doc_type, doc_id, recipient_type, recipient_id, to_phone_e164, language
+             FROM outbound_messages
+            WHERE to_phone_e164 = ANY($1::text[]) AND channel = 'whatsapp_api'
+              AND status IN ('sent','delivered','read')
+              AND recipient_type IN ('customer','vendor') AND recipient_id IS NOT NULL
+              AND event_type <> 'auto_reply'
+              AND created_at > now() - interval '30 days'
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [phones],
+        ),
+      )[0];
+      if (!last) return false;
+
+      const party = last.recipient_type === 'vendor' ? 'vendors' : 'customers';
+      const contact = rowsOf(
+        await this.dataSource.query(
+          `SELECT whatsapp_opt_out, whatsapp_e164 FROM ${party} WHERE id = $1 AND company_id = $2`,
+          [last.recipient_id, last.company_id],
+        ),
+      )[0];
+      // Respect a STOP; and only while they still have the number we wrote to.
+      if (
+        !contact ||
+        contact.whatsapp_opt_out ||
+        contact.whatsapp_e164 !== last.to_phone_e164
+      )
+        return false;
+
+      const company = rowsOf(
+        await this.dataSource.query(
+          `SELECT name, phone, email FROM companies WHERE id = $1`,
+          [last.company_id],
+        ),
+      )[0];
+      const language: MessageLanguage = last.language === 'ur' ? 'ur' : 'en';
+      const reply = inboundReply({
+        companyName: String(company?.name ?? ''),
+        companyPhone: (company?.phone as string | null) ?? null,
+        companyEmail: (company?.email as string | null) ?? null,
+        language,
+      });
+      if (!reply) return false;
+
+      const res = await this.messaging.enqueueAutoReply({
+        companyId: String(last.company_id),
+        docType: String(last.doc_type),
+        docId: String(last.doc_id),
+        recipient: {
+          type: last.recipient_type === 'vendor' ? 'vendor' : 'customer',
+          id: String(last.recipient_id),
+        },
+        toPhone: String(last.to_phone_e164),
+        language,
+        text: reply.text,
+        day: new Date().toISOString().slice(0, 10),
+      });
+      return Boolean(res && !res.duplicate);
+    } catch (err) {
+      this.logger.warn(`auto-reply not queued: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
   async notifyFailure(
     m: {
       id: string;
@@ -298,11 +426,12 @@ export class MessageStatusService {
   /** Meta's webhook body: statuses and inbound messages, every entry and change. */
   async processWebhook(
     body: unknown,
-  ): Promise<{ statuses: number; inbound: number }> {
+  ): Promise<{ statuses: number; inbound: number; replies: number }> {
     let statuses = 0;
     let inbound = 0;
+    let replies = 0;
     const entries = (body as { entry?: unknown[] })?.entry;
-    if (!Array.isArray(entries)) return { statuses, inbound };
+    if (!Array.isArray(entries)) return { statuses, inbound, replies };
     for (const entry of entries) {
       const changes = (entry as { changes?: unknown[] })?.changes;
       if (!Array.isArray(changes)) continue;
@@ -353,14 +482,16 @@ export class MessageStatusService {
             ) ?? (contacts.length === 1 ? contacts[0] : undefined);
           const phone = str(msg.from) ?? str(contact?.wa_id);
           const userId = fromUserId ?? str(contact?.user_id);
-          if (
-            (phone || userId) &&
-            (await this.handleInbound({ phone, userId }, text))
-          )
+          if (!phone && !userId) continue;
+          if (await this.handleInbound({ phone, userId }, text)) {
             inbound++;
+          } else if (!NO_REPLY_TYPES.has(String(msg.type ?? 'text'))) {
+            // Anything else they wrote: point them to the company (D36).
+            if (await this.replyToInbound({ phone, userId })) replies++;
+          }
         }
       }
     }
-    return { statuses, inbound };
+    return { statuses, inbound, replies };
   }
 }

@@ -5,6 +5,7 @@ import {
   MediaFile,
   ProviderCredentials,
   TemplateSend,
+  TextSend,
   WhatsAppProvider,
 } from './whatsapp-provider';
 
@@ -103,6 +104,35 @@ export class MetaCloudProvider implements WhatsAppProvider {
         json,
       );
     this.logger.log(`sent ${msg.templateName} to ${maskPhone(msg.to)} (${id})`);
+    return { providerMessageId: id };
+  }
+
+  /** A plain-text reply (a "service" message: free within Meta's monthly tier). */
+  async sendText(
+    creds: ProviderCredentials,
+    msg: TextSend,
+  ): Promise<{ providerMessageId: string }> {
+    const body = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: msg.to.replace(/^\+/, ''),
+      type: 'text',
+      text: { preview_url: false, body: msg.body },
+    };
+    const json = (await this.call(creds, 'messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })) as { messages?: Array<{ id?: string }> };
+    const id = json.messages?.[0]?.id;
+    if (!id)
+      throw new ProviderError(
+        'WhatsApp returned no message id',
+        null,
+        200,
+        json,
+      );
+    this.logger.log(`sent a text reply to ${maskPhone(msg.to)} (${id})`);
     return { providerMessageId: id };
   }
 

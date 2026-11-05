@@ -9,6 +9,7 @@ import {
 } from './messaging-settings.service';
 import { MessageAttachment } from './entities/outbound-message.entity';
 import {
+  AUTO_REPLY_EVENT,
   DocType,
   MessageEventOrTest,
   MessageLanguage,
@@ -16,6 +17,7 @@ import {
   RecipientType,
   SENT_STATUSES,
   SkipReason,
+  TEXT_MESSAGE_TEMPLATE,
 } from './messaging.constants';
 import { templateForEvent } from './templates/template-registry';
 import { zonedPeriod } from './quiet-hours.util';
@@ -192,6 +194,81 @@ export class MessagingService {
   }
 
   /**
+   * Answer a customer or vendor who wrote to the FinMatrix number: one
+   * plain-text row (event 'auto_reply'), filed under the document they were
+   * last sent so it shows in that document's WhatsApp history. At most one a
+   * day per company and number (idempotency key). Only written while the
+   * company has Connect on. Never throws; null when nothing was written.
+   */
+  async enqueueAutoReply(input: {
+    companyId: string;
+    docType: string;
+    docId: string;
+    recipient: { type: 'customer' | 'vendor'; id: string };
+    toPhone: string;
+    language: MessageLanguage;
+    text: string;
+    day: string;
+  }): Promise<EnqueueResult | null> {
+    const m = this.dataSource.manager;
+    return this.guarded(
+      m,
+      `auto-reply ${input.docType}:${input.docId}`,
+      async () => {
+        const features = await companyFeatures(m, input.companyId);
+        const s = await this.settings.resolve(input.companyId, m);
+        if (!features.whatsappConnect || !s.enabled) return null;
+        const key = [
+          AUTO_REPLY_EVENT,
+          input.companyId,
+          input.toPhone,
+          input.day,
+        ].join(':');
+        const rows = rowsOf(
+          await m.query(
+            `INSERT INTO outbound_messages
+             (company_id, event_type, doc_type, doc_id, doc_version, recipient_type, recipient_id,
+              to_phone_e164, channel, template_name, language, params, status, idempotency_key)
+           VALUES ($1, $2, $3, $4, 1, $5, $6, $7, 'whatsapp_api', $8, $9, $10::jsonb, 'queued', $11)
+           ON CONFLICT (idempotency_key) DO NOTHING
+           RETURNING id, status`,
+            [
+              input.companyId,
+              AUTO_REPLY_EVENT,
+              input.docType,
+              input.docId,
+              input.recipient.type,
+              input.recipient.id,
+              input.toPhone,
+              TEXT_MESSAGE_TEMPLATE,
+              input.language,
+              JSON.stringify({ company: s.companyName, text: input.text }),
+              key,
+            ],
+          ),
+        );
+        if (rows.length === 0) {
+          return {
+            id: '',
+            status: 'queued' as MessageStatus,
+            skipReason: null,
+            duplicate: true,
+          };
+        }
+        this.logger.log(
+          `auto-reply ${input.docType}:${input.docId} -> ${maskPhone(input.toPhone)} queued`,
+        );
+        return {
+          id: String(rows[0].id),
+          status: rows[0].status as MessageStatus,
+          skipReason: null,
+          duplicate: false,
+        };
+      },
+    );
+  }
+
+  /**
    * One message per ACTIVE admin (owner) of the company — the approval alert.
    * Never throws; returns the rows written.
    */
@@ -277,6 +354,7 @@ export class MessagingService {
         `SELECT DISTINCT ON (doc_id) doc_id, id, status, event_type, channel, updated_at, last_error
            FROM outbound_messages
           WHERE company_id = $1 AND doc_type = $2 AND doc_id = ANY($3::uuid[])
+            AND event_type <> 'auto_reply'
           ORDER BY doc_id, created_at DESC, id DESC`,
         [companyId, docType, ids],
       );
@@ -517,16 +595,24 @@ export class MessagingService {
     ) {
       return 'no_consent';
     }
-    if (s.monthlyCap !== null && !isTest) {
-      const used = rowsOf(
+    const planLimit =
+      typeof s.planAllowance === 'number' ? s.planAllowance : null;
+    if ((s.monthlyCap !== null || planLimit !== null) && !isTest) {
+      // Sent this month (templates only; free 'service' replies excluded)
+      // plus what is already waiting to go.
+      const usedRows = rowsOf(
         await m.query(
-          `SELECT COALESCE((SELECT SUM(count) FROM messaging_usage WHERE company_id = $1 AND period = $2), 0)
+          `SELECT COALESCE((SELECT SUM(count) FROM messaging_usage
+                             WHERE company_id = $1 AND period = $2 AND category <> 'service'), 0)
                 + (SELECT COUNT(*) FROM outbound_messages
-                    WHERE company_id = $1 AND channel = 'whatsapp_api' AND status IN ('queued','sending')) AS used`,
+                    WHERE company_id = $1 AND channel = 'whatsapp_api' AND status IN ('queued','sending')
+                      AND event_type NOT IN ('test','auto_reply')) AS used`,
           [input.companyId, zonedPeriod(new Date(), s.timezone)],
         ),
       );
-      if (Number(used[0]?.used ?? 0) >= s.monthlyCap) return 'cap_reached';
+      const used = Number(usedRows[0]?.used ?? 0);
+      if (s.monthlyCap !== null && used >= s.monthlyCap) return 'cap_reached';
+      if (planLimit !== null && used >= planLimit) return 'plan_limit_reached';
     }
     return null;
   }

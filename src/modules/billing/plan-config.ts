@@ -67,8 +67,16 @@ export interface PlanConfig {
   durationDays?: number;
   /** Max simultaneously-active delivery personnel allowed on this plan. */
   deliveryPersonnelLimit: number;
+  /**
+   * WhatsApp messages a month FinMatrix sends (and pays Meta for) for one
+   * company on this plan. Absent = DEFAULT_WHATSAPP_MONTHLY_MESSAGES.
+   */
+  whatsappMonthlyMessages?: number;
   currency: string;
 }
+
+/** The WhatsApp allowance every plan has unless it says otherwise (decision D35). */
+export const DEFAULT_WHATSAPP_MONTHLY_MESSAGES = 200;
 
 export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   // ── Legacy (pre-tiering) — resolvable, never offered ──
@@ -350,6 +358,7 @@ export interface PlanOverridePatch {
   monthlyMinorUnits?: number;
   priceMinorUnits?: number;
   deliveryPersonnelLimit?: number;
+  whatsappMonthlyMessages?: number;
   isOffered?: boolean;
 }
 
@@ -395,6 +404,9 @@ function withOverride(base: PlanConfig): PlanConfig {
     priceMinorUnits: patch.priceMinorUnits ?? base.priceMinorUnits,
     deliveryPersonnelLimit:
       patch.deliveryPersonnelLimit ?? base.deliveryPersonnelLimit,
+    ...(patch.whatsappMonthlyMessages !== undefined
+      ? { whatsappMonthlyMessages: patch.whatsappMonthlyMessages }
+      : {}),
   };
 }
 
@@ -408,6 +420,11 @@ export function normalizePlan(raw: string | null | undefined): PlanKey {
 
 export function getPlanConfig(raw: string | null | undefined): PlanConfig {
   return withOverride(PLAN_CONFIG[normalizePlan(raw)]);
+}
+
+/** WhatsApp messages a month included in a plan (admin edits applied). */
+export function whatsappAllowance(config: PlanConfig): number {
+  return config.whatsappMonthlyMessages ?? DEFAULT_WHATSAPP_MONTHLY_MESSAGES;
 }
 
 /** Every plan in the catalogue, admin edits applied, in config order. */

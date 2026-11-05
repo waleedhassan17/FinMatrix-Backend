@@ -22,6 +22,7 @@ import {
   getPlanOverride,
   isPlanKey,
   isPlanOffered,
+  whatsappAllowance,
   type PlanKey,
 } from '../billing/plan-config';
 import { PlanOverrideService } from './plan-override.service';
@@ -32,6 +33,7 @@ export interface UpdatePlanDto {
   monthlyMinorUnits?: number;
   priceMinorUnits?: number;
   deliveryPersonnelLimit?: number;
+  whatsappMonthlyMessages?: number;
   isOffered?: boolean;
   updatedBy?: string | null;
 }
@@ -531,6 +533,7 @@ export class SuperAdminService {
         totalLabel: formatMinorUnits(p.priceMinorUnits, p.currency),
         currency: p.currency,
         deliveryPersonnelLimit: p.deliveryPersonnelLimit,
+        whatsappMonthlyMessages: whatsappAllowance(p),
         // Editing state, so the console can show what has been changed from
         // the configured default and offer to put it back.
         isOffered: isPlanKey(key) ? isPlanOffered(key as PlanKey) : true,
@@ -598,6 +601,9 @@ export class SuperAdminService {
           : {}),
         ...(dto.deliveryPersonnelLimit !== undefined
           ? { deliveryPersonnelLimit: dto.deliveryPersonnelLimit }
+          : {}),
+        ...(dto.whatsappMonthlyMessages !== undefined
+          ? { whatsappMonthlyMessages: dto.whatsappMonthlyMessages }
           : {}),
         ...(dto.isOffered !== undefined ? { isOffered: dto.isOffered } : {}),
       },

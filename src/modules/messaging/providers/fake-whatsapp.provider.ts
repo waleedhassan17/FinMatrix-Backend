@@ -7,6 +7,7 @@ import {
   MediaFile,
   ProviderCredentials,
   TemplateSend,
+  TextSend,
   WhatsAppProvider,
 } from './whatsapp-provider';
 
@@ -50,10 +51,23 @@ export class FakeWhatsAppProvider implements WhatsAppProvider {
     if (msg.to.endsWith('9999')) {
       throw new ProviderError('(fake) Rate limit hit', 130429, 429);
     }
-    const id = `fake-${randomUUID()}`;
     this.logger.log(
       `[simulated] ${msg.templateName}/${msg.language} -> ${maskPhone(msg.to)}${msg.documentHeader ? ' +PDF' : ''}: ${msg.preview ?? ''}`,
     );
+    return { providerMessageId: this.simulateDelivery() };
+  }
+
+  async sendText(
+    _creds: ProviderCredentials,
+    msg: TextSend,
+  ): Promise<{ providerMessageId: string }> {
+    this.logger.log(`[simulated] text -> ${maskPhone(msg.to)}: ${msg.body}`);
+    return { providerMessageId: this.simulateDelivery() };
+  }
+
+  /** A fake id that reaches 'delivered' and then 'read' like a real message. */
+  private simulateDelivery(): string {
+    const id = `fake-${randomUUID()}`;
     const later = (ms: number, status: 'delivered' | 'read') =>
       setTimeout(() => {
         this.status
@@ -70,6 +84,6 @@ export class FakeWhatsAppProvider implements WhatsAppProvider {
       }, ms).unref?.();
     later(this.deliveredAfterMs, 'delivered');
     later(this.readAfterMs, 'read');
-    return { providerMessageId: id };
+    return id;
   }
 }

@@ -12,13 +12,16 @@ import {
 import { DocumentRendererRegistry } from './document-renderer.registry';
 import { MessageStatusService } from './message-status.service';
 import {
+  AUTO_REPLY_EVENT,
   DISPATCH_BATCH,
   MAX_SEND_ATTEMPTS,
   MessageEventOrTest,
   MessageLanguage,
   MessageStatus,
+  OutboundEvent,
   QUIET_HOURS_EXEMPT,
   REMINDER_EVENTS,
+  SERVICE_USAGE_CATEGORY,
   STUCK_SENDING_MINUTES,
 } from './messaging.constants';
 import {
@@ -184,7 +187,7 @@ export class MessagingDispatcherService {
     const stale = await this.staleReason(row);
     if (stale) return this.finish(row, stale.status, stale.reason);
 
-    if (!QUIET_HOURS_EXEMPT.includes(row.eventType as MessageEventOrTest)) {
+    if (!QUIET_HOURS_EXEMPT.includes(row.eventType as OutboundEvent)) {
       const until = deferUntil(now, s.timezone, s.quietHours);
       if (until) {
         await this.dataSource.query(
@@ -197,18 +200,32 @@ export class MessagingDispatcherService {
       }
     }
 
-    if (s.monthlyCap !== null && row.eventType !== 'test') {
+    const isAutoReply = row.eventType === AUTO_REPLY_EVENT;
+    const planLimit =
+      typeof s.planAllowance === 'number' ? s.planAllowance : null;
+    if (
+      (s.monthlyCap !== null || planLimit !== null) &&
+      row.eventType !== 'test' &&
+      !isAutoReply
+    ) {
+      // Template messages already sent this month; free 'service' replies excluded.
       const used = rowsOf(
         await this.dataSource.query(
-          `SELECT COALESCE(SUM(count), 0) AS used FROM messaging_usage WHERE company_id = $1 AND period = $2`,
+          `SELECT COALESCE(SUM(count), 0) AS used FROM messaging_usage
+            WHERE company_id = $1 AND period = $2 AND category <> 'service'`,
           [row.companyId, zonedPeriod(now, s.timezone)],
         ),
       );
-      if (Number(used[0]?.used ?? 0) >= s.monthlyCap)
+      const n = Number(used[0]?.used ?? 0);
+      if (s.monthlyCap !== null && n >= s.monthlyCap)
         return this.finish(row, 'skipped', 'cap_reached');
+      if (planLimit !== null && n >= planLimit)
+        return this.finish(row, 'skipped', 'plan_limit_reached');
     }
 
     if (!row.toPhone) return this.finish(row, 'skipped', 'no_number');
+
+    if (isAutoReply) return this.sendTextReply(row, s, now);
 
     const template =
       templateByName(row.templateName) ??
@@ -252,16 +269,86 @@ export class MessagingDispatcherService {
         JSON.stringify({ providerMessageId, provider: this.provider.kind }),
       ],
     );
+    const period = zonedPeriod(now, s.timezone);
+    const counted = rowsOf(
+      await this.dataSource.query(
+        `INSERT INTO messaging_usage (company_id, period, category, count, updated_at)
+         VALUES ($1, $2, $3, 1, now())
+         ON CONFLICT (company_id, period, category)
+         DO UPDATE SET count = messaging_usage.count + 1, updated_at = now()
+         RETURNING count`,
+        [row.companyId, period, template.category.toLowerCase()],
+      ),
+    );
+    // Every template is UTILITY, so this category's count IS the month's use
+    // of the allowance; each increment returns a distinct value, so exactly
+    // one send crosses each threshold even with several dynos.
+    const used = Number(counted[0]?.count ?? NaN);
+    if (row.eventType !== 'test' && Number.isFinite(used)) {
+      await this.noticeAllowance(row.companyId, s, used, period);
+    }
+    return 'sent';
+  }
+
+  /** In-app notice to the owners at 80% and at 100% of the plan allowance. */
+  private async noticeAllowance(
+    companyId: string,
+    s: ResolvedMessagingSettings,
+    used: number,
+    period: string,
+  ): Promise<void> {
+    const limit = typeof s.planAllowance === 'number' ? s.planAllowance : null;
+    if (limit === null || limit <= 0) return;
+    const at80 = Math.ceil(limit * 0.8);
+    if (used === limit) {
+      await this.status.notifyAllowance(companyId, {
+        used,
+        limit,
+        period,
+        full: true,
+      });
+    } else if (used === at80 && at80 < limit) {
+      await this.status.notifyAllowance(companyId, {
+        used,
+        limit,
+        period,
+        full: false,
+      });
+    }
+  }
+
+  /** A plain-text auto-reply ('service' message): no template, no PDF, no allowance. */
+  private async sendTextReply(
+    row: ClaimedMessage,
+    s: ResolvedMessagingSettings,
+    now: Date,
+  ): Promise<string> {
+    const body = String(row.params.text ?? '').trim();
+    if (!body) return this.finish(row, 'cancelled', 'empty_reply');
+    const { providerMessageId } = await this.provider.sendText(
+      this.credentials(s),
+      { to: row.toPhone!, body },
+    );
+    await this.dataSource.query(
+      `UPDATE outbound_messages
+          SET status = 'sent', provider_message_id = $2, attempts = attempts + 1,
+              last_error = NULL, updated_at = now()
+        WHERE id = $1 AND status = 'sending'`,
+      [row.id, providerMessageId],
+    );
+    await this.dataSource.query(
+      `INSERT INTO message_status_events (message_id, status, occurred_at, raw) VALUES ($1, 'sent', now(), $2::jsonb)`,
+      [
+        row.id,
+        JSON.stringify({ providerMessageId, provider: this.provider.kind }),
+      ],
+    );
     await this.dataSource.query(
       `INSERT INTO messaging_usage (company_id, period, category, count, updated_at)
        VALUES ($1, $2, $3, 1, now())
        ON CONFLICT (company_id, period, category)
        DO UPDATE SET count = messaging_usage.count + 1, updated_at = now()`,
-      [
-        row.companyId,
-        zonedPeriod(now, s.timezone),
-        template.category.toLowerCase(),
-      ],
+      [row.companyId, zonedPeriod(now, s.timezone), SERVICE_USAGE_CATEGORY],
     );
     return 'sent';
   }
@@ -312,9 +399,11 @@ export class MessagingDispatcherService {
   }
 
   private async attachmentFile(row: ClaimedMessage): Promise<MediaFile> {
-    const filename = safeFilename(
-      String(row.attachment?.args?.filename ?? ''),
-      row,
+    // "Warehouse Co - INV-2026-0337.pdf": on the shared FinMatrix number the
+    // document itself must say whose it is (decision D34).
+    const filename = withCompanyName(
+      row.params.company,
+      safeFilename(String(row.attachment?.args?.filename ?? ''), row),
     );
     if (row.mediaStorageKey) {
       // A retry sends exactly the copy stored on the first attempt.
@@ -355,7 +444,12 @@ export class MessagingDispatcherService {
     );
     return {
       buffer: rendered.buffer,
-      filename: rendered.filename || filename,
+      filename: rendered.filename
+        ? withCompanyName(
+            row.params.company,
+            safeFilename(rendered.filename, row),
+          )
+        : filename,
       mimeType: 'application/pdf',
     };
   }
@@ -470,6 +564,21 @@ function streamToBuffer(stream: Readable): Promise<Buffer> {
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
   });
+}
+
+/**
+ * Prefix the company's name, cleaned the same way as the file name (ASCII
+ * only, at most 60 characters). A name that cleans to nothing adds nothing.
+ */
+export function withCompanyName(company: unknown, filename: string): string {
+  const c = String(company ?? '')
+    .replace(/[^\w.\- ]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60)
+    .trim();
+  if (!c || filename.toLowerCase().startsWith(c.toLowerCase())) return filename;
+  return `${c} - ${filename}`;
 }
 
 function safeFilename(name: string, row: ClaimedMessage): string {

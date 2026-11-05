@@ -23,6 +23,8 @@ import {
   messagingKey,
 } from './token-crypto.util';
 import { whatsappLive } from './messaging-env.util';
+import { getPlanConfig, whatsappAllowance } from '../billing/plan-config';
+import { zonedPeriod } from './quiet-hours.util';
 
 /** A company's Connect settings with every default filled in. */
 export interface ResolvedMessagingSettings {
@@ -45,6 +47,11 @@ export interface ResolvedMessagingSettings {
   /** IANA zone the company works in (Asia/Karachi when unset). */
   timezone: string;
   companyName: string;
+  /**
+   * WhatsApp messages a month FinMatrix sends for this company (its plan's
+   * allowance; decision D35). Separate from the owner's own monthlyCap.
+   */
+  planAllowance: number;
   updatedAt: Date | null;
 }
 
@@ -81,7 +88,7 @@ export class MessagingSettingsService {
   ): Promise<ResolvedMessagingSettings> {
     const m = manager ?? this.dataSource.manager;
     const rows: Array<Record<string, unknown>> = await m.query(
-      `SELECT c.name AS company_name, cs.timezone AS timezone, s.*
+      `SELECT c.name AS company_name, c.subscription_plan AS subscription_plan, cs.timezone AS timezone, s.*
          FROM companies c
          LEFT JOIN company_settings cs ON cs.company_id = c.id
          LEFT JOIN company_messaging_settings s ON s.company_id = c.id
@@ -120,7 +127,40 @@ export class MessagingSettingsService {
         (r.contacts_opt_in_confirmed_by as string | null) ?? null,
       timezone: businessTimezone(r.timezone as string | null),
       companyName: (r.company_name as string) ?? '',
+      planAllowance: whatsappAllowance(
+        getPlanConfig(r.subscription_plan as string | null),
+      ),
       updatedAt: (r.updated_at as Date | null) ?? null,
+    };
+  }
+
+  /**
+   * Template messages sent this month that count against the limits: every
+   * category except 'service' (plain-text replies, free up to Meta's tier).
+   */
+  async usedThisPeriod(
+    companyId: string,
+    period: string,
+    manager?: EntityManager,
+  ): Promise<number> {
+    const m = manager ?? this.dataSource.manager;
+    const rows: Array<Record<string, unknown>> = await m.query(
+      `SELECT COALESCE(SUM(count), 0) AS used FROM messaging_usage
+        WHERE company_id = $1 AND period = $2 AND category <> 'service'`,
+      [companyId, period],
+    );
+    return Number(rows[0]?.used ?? 0);
+  }
+
+  /** The plan allowance and this month's use, for the settings screens. */
+  async allowance(
+    s: ResolvedMessagingSettings,
+  ): Promise<{ limit: number; used: number; period: string }> {
+    const period = zonedPeriod(new Date(), s.timezone);
+    return {
+      limit: s.planAllowance,
+      used: await this.usedThisPeriod(s.companyId, period),
+      period,
     };
   }
 

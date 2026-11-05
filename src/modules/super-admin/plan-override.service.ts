@@ -106,6 +106,16 @@ export class PlanOverrideService implements OnModuleInit {
         message: 'A rider limit cannot be negative.',
       });
     }
+    if (
+      patch.whatsappMonthlyMessages !== undefined &&
+      (!Number.isInteger(patch.whatsappMonthlyMessages) ||
+        patch.whatsappMonthlyMessages < 0)
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_LIMIT',
+        message: 'A WhatsApp allowance must be a whole number, 0 or more.',
+      });
+    }
 
     const existing = await this.repo.findOne({ where: { planKey: key } });
     const merged: PlanOverridePatch = { ...toPatch(existing), ...patch };
@@ -134,6 +144,7 @@ export class PlanOverrideService implements OnModuleInit {
       monthlyMinorUnits: merged.monthlyMinorUnits ?? null,
       priceMinorUnits: merged.priceMinorUnits ?? null,
       deliveryPersonnelLimit: merged.deliveryPersonnelLimit ?? null,
+      whatsappMonthlyMessages: merged.whatsappMonthlyMessages ?? null,
       isOffered: merged.isOffered ?? null,
       updatedBy,
     });
@@ -170,6 +181,12 @@ function toPatch(row: PlanOverride | null | undefined): PlanOverridePatch {
   if (row.priceMinorUnits !== null) patch.priceMinorUnits = row.priceMinorUnits;
   if (row.deliveryPersonnelLimit !== null) {
     patch.deliveryPersonnelLimit = row.deliveryPersonnelLimit;
+  }
+  if (
+    row.whatsappMonthlyMessages !== null &&
+    row.whatsappMonthlyMessages !== undefined
+  ) {
+    patch.whatsappMonthlyMessages = row.whatsappMonthlyMessages;
   }
   if (row.isOffered !== null) patch.isOffered = row.isOffered;
   return patch;

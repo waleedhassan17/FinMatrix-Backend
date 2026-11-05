@@ -43,7 +43,11 @@ export class MessagingSettingsController {
 
   @Get()
   async get(@CurrentCompany() companyId: string) {
-    return this.settings.view(await this.settings.resolve(companyId));
+    const s = await this.settings.resolve(companyId);
+    return {
+      ...this.settings.view(s),
+      allowance: await this.settings.allowance(s),
+    };
   }
 
   @Put()
@@ -79,7 +83,10 @@ export class MessagingSettingsController {
               : 'cleared',
       },
     });
-    return this.settings.view(after);
+    return {
+      ...this.settings.view(after),
+      allowance: await this.settings.allowance(after),
+    };
   }
 
   @Post('test')

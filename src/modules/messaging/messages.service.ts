@@ -50,6 +50,8 @@ const REASONS: Record<string, string> = {
   opted_out: 'The contact replied STOP',
   no_consent: 'No WhatsApp consent recorded for the contact',
   cap_reached: "This month's message limit was reached",
+  plan_limit_reached: "This month's WhatsApp allowance in your plan is used up",
+  empty_reply: 'There was nothing to send',
   invoice_void: 'The invoice was voided',
   document_changed: 'The document changed before it was sent',
   po_withdrawn: 'The purchase order was withdrawn',
@@ -211,12 +213,16 @@ export class MessagesService {
       createdBy: (r.created_by as string | null) ?? null,
       hasMedia: Boolean(r.media_storage_key),
       preview:
-        template && r.channel === 'whatsapp_api'
-          ? renderPreview(template, r.language === 'ur' ? 'ur' : 'en', params)
-          : null,
+        r.event_type === 'auto_reply'
+          ? String(params.text ?? '') || null
+          : template && r.channel === 'whatsapp_api'
+            ? renderPreview(template, r.language === 'ur' ? 'ur' : 'en', params)
+            : null,
+      // An automatic reply answers one inbound message; it is never resent.
       canResend:
         ['failed', 'skipped', 'cancelled'].includes(status) &&
-        r.channel === 'whatsapp_api',
+        r.channel === 'whatsapp_api' &&
+        r.event_type !== 'auto_reply',
       events,
     };
   }
@@ -585,6 +591,7 @@ export class MessagesService {
                              AND status IN ('sent','delivered','read')) AS reminders_sent
            FROM outbound_messages
           WHERE company_id = $1 AND channel = 'whatsapp_api'
+            AND event_type <> 'auto_reply'
             AND created_at >= $2::date AND created_at < ($3::date + 1)`,
         range,
       ),
@@ -637,7 +644,8 @@ export class MessagesService {
     const period = zonedPeriod(new Date(), s.timezone);
     const usage = rowsOf(
       await this.dataSource.query(
-        `SELECT COALESCE(SUM(count), 0) AS n FROM messaging_usage WHERE company_id = $1 AND period = $2`,
+        `SELECT COALESCE(SUM(count), 0) AS n FROM messaging_usage
+          WHERE company_id = $1 AND period = $2 AND category <> 'service'`,
         [companyId, period],
       ),
     )[0];
@@ -658,7 +666,12 @@ export class MessagesService {
         beforeConnect: await dsoAt(enabledOn),
         enabledAt: s.enabledAt ? new Date(s.enabledAt).toISOString() : null,
       },
-      usage: { period, count: n(usage?.n), cap: s.monthlyCap },
+      usage: {
+        period,
+        count: n(usage?.n),
+        cap: s.monthlyCap,
+        allowance: s.planAllowance,
+      },
       recentReminders: recent.map((r) => {
         const outcome =
           r.invoice_status === 'paid'

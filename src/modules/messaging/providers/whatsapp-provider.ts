@@ -25,12 +25,23 @@ export interface TemplateSend {
   preview?: string;
 }
 
+/** A plain-text message: only allowed as a reply within 24 h of the contact writing. */
+export interface TextSend {
+  /** E.164 with '+'. */
+  to: string;
+  body: string;
+}
+
 export interface WhatsAppProvider {
   readonly kind: 'meta' | 'fake';
   uploadMedia(creds: ProviderCredentials, file: MediaFile): Promise<string>;
   sendTemplate(
     creds: ProviderCredentials,
     msg: TemplateSend,
+  ): Promise<{ providerMessageId: string }>;
+  sendText(
+    creds: ProviderCredentials,
+    msg: TextSend,
   ): Promise<{ providerMessageId: string }>;
 }
 

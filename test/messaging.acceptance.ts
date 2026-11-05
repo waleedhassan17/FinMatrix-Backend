@@ -15,10 +15,12 @@
  *   4. settle() with credit + cash gives ONE remittance (and credit-only one)
  *   5. void cancels queued messages and queues the cancellation (only if the
  *      customer had the invoice)
- *   6. opted out, no number, rule off, no consent (and feature off) give
- *      'skipped' with the reason
+ *   6. opted out, no number, rule off, no consent (and feature off, and the
+ *      plan's WhatsApp allowance used up) give 'skipped' with the reason
  *   7. webhook: bad signature 401, statuses only move forward, STOP opts out
- *      (also by WhatsApp user id alone, as contacts with usernames send it)
+ *      (also by WhatsApp user id alone, as contacts with usernames send it);
+ *      any other message gets ONE automatic reply a day naming the company
+ *      that wrote to them (one FinMatrix number for every company, D36)
  *   8. dunning at the configured offsets, none after full payment, quiet
  *      hours defer to 09:00 company time, approval alerts ignore quiet hours
  *   9. the ledger invariants show nothing new
@@ -1133,6 +1135,77 @@ async function main() {
     '7i START by user id opts them back in',
     (await userIdOf(custUser?.id))?.whatsapp_opt_out === false,
   );
+  // Replies to the FinMatrix number (D36): whoever writes gets ONE answer a
+  // day pointing to the company that messaged them. A customer of its own,
+  // so no other check sees the extra row.
+  const custReply = await mk('/customers', {
+    name: `Connect Reply ${RUN}`,
+    phone: `0306${tail}`,
+    whatsappOptIn: true,
+  });
+  const invReply = await makeInvoice(custReply?.id, 'Reply', day(10));
+  await waitFor(
+    async () => (await msgs('invoice', invReply?.id, 'invoice_issued'))[0],
+    (m: any) => SENT.includes(m?.status),
+  );
+  const from = (phone: string, body: string) => ({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [{ profile: { name: 'Customer' }, wa_id: phone }],
+              messages: [{ from: phone, type: 'text', text: { body } }],
+            },
+          },
+        ],
+      },
+    ],
+  });
+  const repliesTo = async (phone: string) =>
+    (
+      await db.query(
+        `SELECT * FROM outbound_messages WHERE event_type = 'auto_reply' AND to_phone_e164 = $1`,
+        [phone],
+      )
+    ).rows as any[];
+  await hook(from(`92306${tail}`, 'Thanks, received'));
+  const reply = await waitFor(
+    async () => (await repliesTo(`+92306${tail}`))[0],
+    (m: any) => SENT.includes(m?.status),
+  );
+  const companyName = (
+    await db.query(`SELECT name FROM companies WHERE id = $1`, [COMPANY])
+  ).rows[0]?.name;
+  ok(
+    '7j a customer who writes back gets one automatic reply naming the company',
+    SENT.includes(reply?.status) &&
+      String(reply?.params?.text ?? '').includes(String(companyName)) &&
+      reply?.doc_id === invReply?.id &&
+      reply?.recipient_id === custReply?.id,
+    reply && { status: reply.status, text: reply.params?.text },
+  );
+  await hook(from(`92306${tail}`, 'Also, can you call me?'));
+  await sleep(1500);
+  ok(
+    '7k a second message the same day gets no second reply',
+    (await repliesTo(`+92306${tail}`)).length === 1,
+  );
+  await hook(from(`92307${tail}`, 'Hello?'));
+  await sleep(1500);
+  ok(
+    '7l a number nobody here has messaged gets no reply',
+    (await repliesTo(`+92307${tail}`)).length === 0,
+  );
+  const lastTick = data(
+    await req('GET', `/invoices/${invReply?.id}`),
+  )?.lastMessageStatus;
+  ok(
+    "7m the invoice's tick still shows the invoice's own message",
+    lastTick?.eventType === 'invoice_issued',
+    lastTick,
+  );
+
   await hook(inbound('UNSUBSCRIBE'));
 
   // ══ 6. Skip reasons ═════════════════════════════════════════════
@@ -1233,6 +1306,41 @@ async function main() {
     ok(
       '6g a tier without the feature → skipped (feature_off)',
       r?.status === 'skipped' && r?.skipReason === 'feature_off',
+      r,
+    );
+    await db.query(`DELETE FROM outbound_messages WHERE id = $1`, [r?.id]);
+  }
+
+  // The plan's WhatsApp allowance (FinMatrix pays, D35), set to 0 for this
+  // company's plan inside this process only, then put back.
+  {
+    const {
+      loadPlanOverrides,
+      normalizePlan,
+    } = require('../src/modules/billing/plan-config');
+    const {
+      PlanOverrideService,
+    } = require('../src/modules/super-admin/plan-override.service');
+    const plan = (
+      await db.query(`SELECT subscription_plan FROM companies WHERE id = $1`, [
+        COMPANY,
+      ])
+    ).rows[0]?.subscription_plan;
+    loadPlanOverrides([[normalizePlan(plan), { whatsappMonthlyMessages: 0 }]]);
+    const r = await app.get(MessagingService).enqueue(null, {
+      companyId: COMPANY,
+      event: 'invoice_issued',
+      docType: 'invoice',
+      docId: inv1?.id,
+      docVersion: 900,
+      recipient: { type: 'customer', id: custA.id },
+      params: {},
+      explicit: true,
+    });
+    await app.get(PlanOverrideService).refresh();
+    ok(
+      "6h the plan's WhatsApp allowance used up → skipped (plan_limit_reached)",
+      r?.status === 'skipped' && r?.skipReason === 'plan_limit_reached',
       r,
     );
     await db.query(`DELETE FROM outbound_messages WHERE id = $1`, [r?.id]);
