@@ -60,6 +60,7 @@
     "test:lists": "ts-node -r tsconfig-paths/register test/lists.acceptance.ts",
     "test:party-ledger": "ts-node -r tsconfig-paths/register test/party-ledger.acceptance.ts",
     "test:bank-accounts": "ts-node -r tsconfig-paths/register test/bank-accounts.acceptance.ts",
+    "test:profile": "ts-node -r tsconfig-paths/register test/profile.acceptance.ts",
     "test:inventory-media": "ts-node -r tsconfig-paths/register test/inventory-media-import.acceptance.ts",
     "messaging:render-samples": "ts-node -r tsconfig-paths/register scripts/messaging-render-samples.ts",
     "messaging:templates:sync": "ts-node -r tsconfig-paths/register scripts/messaging-templates-sync.ts",

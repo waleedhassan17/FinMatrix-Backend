@@ -15,6 +15,9 @@ import { EmailVerification } from './entities/email-verification.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -653,6 +656,119 @@ describe('AuthService', () => {
       await expect(service.isAccessTokenRevoked('j1')).resolves.toBe(true);
       revokedRepo.exists.mockResolvedValueOnce(false);
       await expect(service.isAccessTokenRevoked('j2')).resolves.toBe(false);
+    });
+  });
+  describe('updateProfile', () => {
+    const owner = () => ({
+      id: 'u1',
+      email: 'owner@x.pk',
+      username: null,
+      displayName: 'Old Name',
+      phone: '+923001112223',
+      role: 'admin',
+      defaultCompanyId: null,
+      isEmailVerified: true,
+    });
+
+    beforeEach(() => {
+      userCompanyRepo.find.mockResolvedValue([]);
+    });
+
+    it('saves the new name and phone and answers with the /auth/me payload', async () => {
+      const user = owner();
+      users.getByIdOrFail.mockResolvedValue(user);
+      const res = await service.updateProfile('u1', {
+        displayName: 'New Name',
+        phone: '+923124890176',
+      });
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          displayName: 'New Name',
+          phone: '+923124890176',
+        }),
+      );
+      expect(res.user).toEqual(
+        expect.objectContaining({
+          id: 'u1',
+          displayName: 'New Name',
+          phone: '+923124890176',
+        }),
+      );
+    });
+
+    it('clears the phone when the form sends none', async () => {
+      users.getByIdOrFail.mockResolvedValue(owner());
+      const res = await service.updateProfile('u1', {
+        displayName: 'Old Name',
+      });
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({ phone: null }),
+      );
+      expect(res.user.phone).toBeNull();
+    });
+
+    it('lets a team member edit their own profile', async () => {
+      users.getByIdOrFail.mockResolvedValue({
+        ...owner(),
+        role: 'staff',
+        email: null,
+        username: 'ali',
+      });
+      await expect(
+        service.updateProfile('u1', { displayName: 'Ali Raza' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses a rider, whose profile the office keeps', async () => {
+      users.getByIdOrFail.mockResolvedValue({ ...owner(), role: 'delivery' });
+      await expect(
+        service.updateProfile('u1', { displayName: 'Rider' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(users.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('UpdateProfileDto', () => {
+    const parse = async (body: Record<string, unknown>) => {
+      const dto = plainToInstance(UpdateProfileDto, body);
+      const errors = await validate(dto);
+      return { dto, fields: errors.map((e) => e.property) };
+    };
+
+    it('normalises a typed phone to +92 and tidies the name', async () => {
+      const { dto, fields } = await parse({
+        displayName: '  Ali   Khan ',
+        phone: '0312-4890176',
+      });
+      expect(fields).toEqual([]);
+      expect(dto.phone).toBe('+923124890176');
+      expect(dto.displayName).toBe('Ali Khan');
+    });
+
+    it('treats a blank phone as none', async () => {
+      const { dto, fields } = await parse({
+        displayName: 'Ali Khan',
+        phone: '  ',
+      });
+      expect(fields).toEqual([]);
+      expect(dto.phone).toBeUndefined();
+    });
+
+    it('rejects a phone that is not a Pakistani mobile', async () => {
+      const { fields } = await parse({
+        displayName: 'Ali Khan',
+        phone: '12345',
+      });
+      expect(fields).toEqual(['phone']);
+    });
+
+    it('rejects a one-letter or over-long name', async () => {
+      expect((await parse({ displayName: ' A ' })).fields).toEqual([
+        'displayName',
+      ]);
+      expect((await parse({ displayName: 'x'.repeat(121) })).fields).toEqual([
+        'displayName',
+      ]);
     });
   });
 });

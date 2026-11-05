@@ -25,6 +25,7 @@ import { RevokedAccessToken } from './entities/revoked-access-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { PasswordResetOtp } from './entities/password-reset-otp.entity';
 import { SignupDto } from './dto/signup.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import {
   ForgotPasswordDto,
   ResetPasswordDto,
@@ -852,6 +853,32 @@ export class AuthService {
       // already loaded, so the shell needs no billing fetch of its own.
       subscription: subscriptionSummary(primary?.company),
     };
+  }
+
+  /**
+   * The signed-in user's own name and phone. Replace-not-merge: the form
+   * sends the whole profile, so a missing/blank phone clears it.
+   *
+   * Riders are refused: their name and phone are mirrored on the
+   * delivery-personnel record the office manages, and editing one copy here
+   * would leave the two disagreeing. The super admin has no My account page.
+   */
+  async updateProfile(
+    userId: string,
+    dto: UpdateProfileDto,
+  ): ReturnType<AuthService['getMe']> {
+    const user = await this.users.getByIdOrFail(userId);
+    if (user.role !== 'admin' && user.role !== 'staff') {
+      throw new ForbiddenException({
+        code: 'PROFILE_MANAGED_BY_OWNER',
+        message:
+          'Your name and phone are managed by your company. Ask the office to update them.',
+      });
+    }
+    user.displayName = dto.displayName;
+    user.phone = dto.phone ?? null;
+    await this.users.save(user);
+    return this.getMe(user.id);
   }
 
   // ------- Helpers -------
