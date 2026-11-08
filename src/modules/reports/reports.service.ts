@@ -80,6 +80,7 @@ import {
 } from './item-stock';
 import { MediaUrlSigner } from '../inventory/images/media-url.signer';
 import { businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
+import { buildDashboardAlerts } from './dashboard-alerts';
 import { MONEY_TOLERANCE } from '../../common/utils/money.util';
 import {
   UNAPPLIED_RECEIPTS_SQL,
@@ -3568,11 +3569,23 @@ export class ReportsService {
       ...recentBills.map((bill) => ({ id: bill.id, type: 'bill' as const, description: bill.billNumber, date: bill.billDate, amount: num(bill.total), status: bill.status })),
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8);
 
-    const overdueInvoicesCount = recentInvoices.filter((inv) => inv.status !== 'paid' && inv.status !== 'void' && new Date(inv.dueDate) < now).length;
-    const alerts: { id: string; message: string; severity: 'red' | 'amber' | 'blue' }[] = [];
-    if (overdueInvoicesCount > 0) alerts.push({ id: 'overdue', message: `${overdueInvoicesCount} overdue invoice(s) require attention.`, severity: 'red' });
-    if (num(pendingAP) > 0) alerts.push({ id: 'pending_bills', message: `You have pending bills totalling Rs ${num(pendingAP).toLocaleString()}.`, severity: 'amber' });
-    if (deliveryBreakdown.pending > 0) alerts.push({ id: 'pending_delivery', message: `${deliveryBreakdown.pending} delivery order(s) awaiting assignment.`, severity: 'blue' });
+    // Every open invoice past its due date, counted in the database. This used
+    // to filter `recentInvoices` — the five latest by invoice date — so it
+    // could never report more than five, and an old invoice that had gone
+    // overdue was invisible as soon as five newer ones were raised. Same
+    // open-document predicate as AR aging, so the count matches the report the
+    // alert links to.
+    const overdueRow = (await this.dataSource.query(
+      `SELECT COUNT(*)::int AS n, COALESCE(SUM(i.balance::numeric),0) AS amt
+         FROM invoices i
+        WHERE i.company_id=$1 AND ${openDocPredicate('i')} AND i.due_date < $2`,
+      [companyId, businessToday()]))[0];
+    const alerts = buildDashboardAlerts({
+      overdueCount: Number(overdueRow?.n ?? 0),
+      overdueAmount: num(overdueRow?.amt),
+      pendingAP: num(pendingAP),
+      pendingDeliveries: deliveryBreakdown.pending,
+    });
 
     const setup = await this.setupStatus(companyId, itemCount);
 
