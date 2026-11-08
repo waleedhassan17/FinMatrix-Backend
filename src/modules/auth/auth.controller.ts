@@ -14,6 +14,14 @@ import type { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import {
+  ACCOUNT_THROTTLER,
+  AccountThrottle,
+  IP_SIGNIN_TTL_MS,
+  accountSigninLimit,
+  accountSigninTtlMs,
+  ipSigninLimit,
+} from './signin-throttle';
 import { SignupDto } from './dto/signup.dto';
 import {
   ForgotPasswordDto,
@@ -49,8 +57,20 @@ export class AuthController {
   @Post('signin')
   @PublicRoute()
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Authenticate with email + password.' })
+  // Counted per IP AND per account — see signin-throttle.ts for why 5/min per
+  // IP alone both locked out shared office addresses and let a distributed
+  // guesser through.
+  @AccountThrottle()
+  @Throttle({
+    default: { limit: ipSigninLimit, ttl: IP_SIGNIN_TTL_MS },
+    [ACCOUNT_THROTTLER]: {
+      limit: accountSigninLimit,
+      ttl: accountSigninTtlMs,
+    },
+  })
+  @ApiOperation({
+    summary: 'Authenticate with a username or email + password.',
+  })
   signin(@Body() dto: SigninDto) {
     return this.auth.signin(dto);
   }

@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -102,8 +103,17 @@ function subscriptionSummary(company: Company | null | undefined): SubscriptionS
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
+
+  /**
+   * A hash of nothing anyone knows, at the same cost as real ones. Sign-in
+   * compares against it when the identifier matches no account, so "no such
+   * user" takes as long as "wrong password" — otherwise the time a refusal
+   * takes tells a caller which usernames exist, one guess at a time.
+   * Built once (it costs what a real hash costs) and shared by every request.
+   */
+  private dummyHash: Promise<string> | null = null;
 
   constructor(
     private readonly users: UsersService,
@@ -124,6 +134,20 @@ export class AuthService {
     @InjectRepository(UserCompany)
     private readonly userCompanyRepo: Repository<UserCompany>,
   ) {}
+
+  onModuleInit(): void {
+    // Start building it now so the first unknown-user sign-in does not pay
+    // for it (which would itself be a timing difference).
+    void this.getDummyHash();
+  }
+
+  private getDummyHash(): Promise<string> {
+    if (!this.dummyHash) {
+      const cost = this.config.get<number>('app.bcryptCost', 12);
+      this.dummyHash = bcrypt.hash(randomBytes(32).toString('hex'), cost);
+    }
+    return this.dummyHash;
+  }
 
   // ------- Public API -------
 
@@ -245,16 +269,18 @@ export class AuthService {
     }
 
     const user = await this.users.findByIdentifier(identifier);
-    if (!user || !user.isActive) {
-      this.logger.warn(`Failed login (no user/inactive): ${identifier}`);
-      throw new UnauthorizedException({
-        code: 'INVALID_CREDENTIALS',
-        message: 'Invalid username or password',
-      });
-    }
-    const ok = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!ok) {
-      this.logger.warn(`Failed login (bad password): ${identifier}`);
+    // ALWAYS one bcrypt comparison, whether or not the account exists or is
+    // active: the refusal then takes the same time on every path, so its
+    // timing cannot be used to discover which usernames exist. All three
+    // refusals carry the same code and message for the same reason.
+    const ok = await bcrypt.compare(
+      dto.password,
+      user?.passwordHash ?? (await this.getDummyHash()),
+    );
+    if (!user || !user.isActive || !ok) {
+      this.logger.warn(
+        `Failed login (${!user ? 'no user' : !user.isActive ? 'inactive' : 'bad password'}): ${identifier}`,
+      );
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid username or password',

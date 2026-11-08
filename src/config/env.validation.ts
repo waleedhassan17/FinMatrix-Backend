@@ -55,6 +55,10 @@ export const envValidationSchema = Joi.object({
   CORS_ORIGINS: Joi.string().required(),
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
+  // Sign-in limits (modules/auth/signin-throttle.ts holds the defaults).
+  SIGNIN_ACCOUNT_LIMIT: Joi.number().integer().min(1).optional(),
+  SIGNIN_ACCOUNT_TTL_SECONDS: Joi.number().integer().min(1).optional(),
+  SIGNIN_IP_LIMIT: Joi.number().integer().min(1).optional(),
   COOKIE_SECRET: Joi.string().min(32).required(),
 
   LOG_LEVEL: Joi.string().valid('trace', 'debug', 'info', 'warn', 'error', 'fatal').default('info'),

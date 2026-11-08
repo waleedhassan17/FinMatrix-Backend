@@ -47,6 +47,10 @@ jobs:
       # ThrottlerGuard itself is still active and still covered by test #18.
       THROTTLE_TTL: '60'
       THROTTLE_LIMIT: '100000'
+      # Sign-in has its own limits, per IP and per account (signin-throttle.ts),
+      # and the suites sign in as one account dozens of times a run.
+      SIGNIN_ACCOUNT_LIMIT: '100000'
+      SIGNIN_IP_LIMIT: '100000'
       # Credentials the acceptance suites log in with (see test/acceptance.ts).
       # WAREHOUSE-ONLY BUILD: warehouse is the tier the product ships, and the
       # only one with inventory and delivery — so it is also the tier that

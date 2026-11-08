@@ -16,6 +16,13 @@ import { ResponseEnvelopeInterceptor } from './common/interceptors/response-enve
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { IdempotencyRecord } from './common/interceptors/idempotency-record.entity';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import {
+  ACCOUNT_THROTTLER,
+  accountSigninLimit,
+  accountSigninTtlMs,
+  accountTracker,
+  skipUnlessAccountThrottled,
+} from './modules/auth/signin-throttle';
 import { FeatureGuard } from './common/features/feature.guard';
 
 import { AppController } from './app.controller';
@@ -90,6 +97,15 @@ import { SentryModule } from '@sentry/nestjs/setup';
         {
           ttl: config.get<number>('app.throttleTtlSeconds', 60) * 1000,
           limit: config.get<number>('app.throttleLimit', 100),
+        },
+        // Per-account sign-in limit (signin-throttle.ts). Inert on every
+        // route without @AccountThrottle().
+        {
+          name: ACCOUNT_THROTTLER,
+          ttl: accountSigninTtlMs,
+          limit: accountSigninLimit,
+          getTracker: accountTracker,
+          skipIf: skipUnlessAccountThrottled,
         },
       ],
     }),

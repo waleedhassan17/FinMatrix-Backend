@@ -143,6 +143,61 @@ describe('AuthService', () => {
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
+    // ── Equal timing ─────────────────────────────────────────────────────
+    // A refusal that skips the bcrypt comparison returns measurably faster,
+    // and that difference tells a caller which usernames exist. Every refusal
+    // therefore costs one comparison and reads the same.
+    describe('takes the same path whether or not the account exists', () => {
+      // The service's own module object, so the spy sees its calls.
+      const bcryptjs = jest.requireActual<typeof import('bcryptjs')>('bcryptjs');
+      let compare: jest.SpyInstance;
+      beforeEach(() => {
+        compare = jest.spyOn(bcryptjs, 'compare');
+      });
+      afterEach(() => compare.mockRestore());
+
+      const refusal = {
+        response: { code: 'INVALID_CREDENTIALS', message: 'Invalid username or password' },
+      };
+
+      it('compares a password for a username that matches no account', async () => {
+        users.findByUsername.mockResolvedValue(null);
+        await expect(
+          service.signin({ identifier: 'nobody.here', password: 'Secret123!' }),
+        ).rejects.toMatchObject(refusal);
+        expect(compare).toHaveBeenCalledTimes(1);
+      });
+
+      it('compares a password for a deactivated account, and refuses it the same way', async () => {
+        users.findByUsername.mockResolvedValue({
+          id: 'u1',
+          username: 'gone.staff',
+          passwordHash: await bcrypt.hash('Secret123!', 4),
+          role: 'staff',
+          isActive: false,
+        });
+        // The right password: still refused, with nothing that says why.
+        await expect(
+          service.signin({ identifier: 'gone.staff', password: 'Secret123!' }),
+        ).rejects.toMatchObject(refusal);
+        expect(compare).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses a wrong password with the same code and message', async () => {
+        users.findByUsername.mockResolvedValue({
+          id: 'u1',
+          username: 'real.staff',
+          passwordHash: await bcrypt.hash('Secret123!', 4),
+          role: 'staff',
+          isActive: true,
+        });
+        await expect(
+          service.signin({ identifier: 'real.staff', password: 'nope' }),
+        ).rejects.toMatchObject(refusal);
+        expect(compare).toHaveBeenCalledTimes(1);
+      });
+    });
+
     // Soft gate. An unverified owner used to be refused with no token, which
     // left the client nothing to wait with: they verified elsewhere, then had
     // to sign in a second time. The session they get now is refused on every
@@ -294,6 +349,22 @@ describe('AuthService', () => {
     it('refuses a team member on the owner portal', async () => {
       await expect(signInAs('staff', { portal: 'admin' })).rejects.toMatchObject({
         response: { code: 'WRONG_PORTAL', details: { accountType: 'staff' } },
+      });
+      expect(jwtMock.signAsync).not.toHaveBeenCalled();
+    });
+
+    // The app's Staff and Delivery Portals are separate doors: the portal a
+    // person picked is checked, not just whether they are "team".
+    it('refuses a staff account on the delivery portal', async () => {
+      await expect(signInAs('staff', { portal: 'delivery' })).rejects.toMatchObject({
+        response: { code: 'WRONG_PORTAL', details: { accountType: 'staff', portal: 'delivery' } },
+      });
+      expect(jwtMock.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('refuses a rider on the staff portal', async () => {
+      await expect(signInAs('delivery', { portal: 'staff' })).rejects.toMatchObject({
+        response: { code: 'WRONG_PORTAL', details: { accountType: 'delivery', portal: 'staff' } },
       });
       expect(jwtMock.signAsync).not.toHaveBeenCalled();
     });
