@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import {
   HealthCheckService,
   HealthCheck,
@@ -6,7 +7,19 @@ import {
   MemoryHealthIndicator,
   DiskHealthIndicator,
 } from '@nestjs/terminus';
+import { PublicRoute } from '../../common/decorators/public.decorator';
 
+/**
+ * Dependency health for load balancers and deploy checks.
+ *
+ * Public: these sat behind the global JWT guard, so /health/db and
+ * /health/ready answered 401 to every probe. Unthrottled, so frequent probes
+ * never get rate-limited into looking unhealthy.
+ *
+ * Plain liveness (GET /health) is served by AppController.
+ */
+@PublicRoute()
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(
@@ -16,17 +29,12 @@ export class HealthController {
     private disk: DiskHealthIndicator,
   ) {}
 
-  @Get()
-  @HealthCheck()
-  liveness() {
-    return this.health.check([]);
-  }
-
-
   @Get('db')
   @HealthCheck()
   database() {
-    return this.health.check([() => this.db.pingCheck('database', { timeout: 1500 })]);
+    return this.health.check([
+      () => this.db.pingCheck('database', { timeout: 1500 }),
+    ]);
   }
 
   @Get('ready')
@@ -35,7 +43,8 @@ export class HealthController {
     return this.health.check([
       () => this.db.pingCheck('database', { timeout: 1500 }),
       () => this.memory.checkHeap('memory_heap', 250 * 1024 * 1024),
-      () => this.disk.checkStorage('disk', { path: '/', thresholdPercent: 0.9 }),
+      () =>
+        this.disk.checkStorage('disk', { path: '/', thresholdPercent: 0.9 }),
     ]);
   }
 }

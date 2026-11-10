@@ -49,6 +49,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message =
           (typeof b.message === 'string' ? b.message : undefined) ??
           (Array.isArray(b.message) ? (b.message as string[]).join('; ') : undefined) ??
+          (status === HttpStatus.SERVICE_UNAVAILABLE ? 'Service unavailable' : undefined) ??
           message;
         code = typeof b.code === 'string' ? b.code : this.defaultCodeForStatus(status);
         if (b.details !== undefined) details = b.details;
@@ -116,6 +117,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         return 'UNPROCESSABLE';
       case HttpStatus.TOO_MANY_REQUESTS:
         return 'RATE_LIMIT';
+      // A failed readiness check (Terminus) or a dependency that is down: not
+      // a crash, and `details` says which dependency.
+      case HttpStatus.SERVICE_UNAVAILABLE:
+        return 'SERVICE_UNAVAILABLE';
       default:
         return 'INTERNAL_ERROR';
     }

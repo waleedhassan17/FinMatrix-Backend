@@ -1,17 +1,41 @@
 // Sentry MUST initialize before anything else (phase6) — keep this first.
 import './instrument';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
-import helmet from 'helmet';
-import compression from 'compression';
-import cookieParser from 'cookie-parser';
+import * as Sentry from '@sentry/nestjs';
 import { AppModule } from './app.module';
+import { configureHttpApp } from './app.setup';
+
+/**
+ * Last-resort handlers. Without them a single promise rejection nobody awaited
+ * terminates the process under Node's default — but only when SENTRY_DSN is
+ * unset, because Sentry installs a non-fatal handler of its own. Behaviour
+ * should not depend on whether monitoring is configured.
+ *
+ *  - unhandledRejection: report and keep serving; one stray promise must not
+ *    take down every in-flight request.
+ *  - uncaughtException: report, then exit. State may be corrupt; the
+ *    orchestrator (ECS / Heroku) restarts a clean process.
+ */
+function installProcessHandlers(): void {
+  const logger = new Logger('Process');
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error(`Unhandled promise rejection: ${err.stack ?? err.message}`);
+    Sentry.captureException(err);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error(`Uncaught exception, exiting: ${err.stack ?? err.message}`);
+    Sentry.captureException(err);
+    void Sentry.flush(2000).finally(() => process.exit(1));
+  });
+}
 
 async function bootstrap() {
-
+  installProcessHandlers();
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     cors: false,
@@ -22,56 +46,17 @@ async function bootstrap() {
   app.useLogger(app.get(PinoLogger));
 
   const config = app.get(ConfigService);
-  const port = config.get<number>('PORT') || config.get<number>('app.port', 3000);
-  const globalPrefix = config.get<string>('API_PREFIX') || config.get<string>('app.globalPrefix', 'api/v1');
-  const nodeEnv = config.get<string>('NODE_ENV') || config.get<string>('app.nodeEnv', 'development');
-  const isProd = nodeEnv === 'production';
+  const port =
+    config.get<number>('PORT') || config.get<number>('app.port', 3000);
+  const nodeEnv =
+    config.get<string>('NODE_ENV') ||
+    config.get<string>('app.nodeEnv', 'development');
+  const { globalPrefix, isProd } = configureHttpApp(app);
 
-  // Trust proxy headers (required behind load balancer / Heroku)
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
-
-  // Security headers
-  app.use(helmet({
-    contentSecurityPolicy: isProd ? undefined : false,
-    crossOriginEmbedderPolicy: false,
-  }));
-
-  // Gzip compression
-  app.use(compression());
-
-  // Signed cookies
-  app.use(cookieParser(config.get('COOKIE_SECRET') || 'cookie-secret'));
-
-  // CORS — strict in prod, permissive in dev
-  const corsOrigins = (config.get<string>('CORS_ORIGINS') || '*').split(',').map((s) => s.trim());
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (corsOrigins.includes('*') || corsOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Blocked by CORS'));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Company-Id', 'Idempotency-Key'],
-    exposedHeaders: ['X-Request-Id', 'X-Total-Count'],
-    maxAge: 86400,
-  });
-
-  app.setGlobalPrefix(globalPrefix);
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: false,
-      transformOptions: { enableImplicitConversion: true },
-    }),
-  );
-
-  // Swagger — only when enabled
-  if (config.get<boolean>('SWAGGER_ENABLED', true)) {
+  // Swagger — only when enabled (off by default in production, see env.validation.ts)
+  const swaggerEnabled = config.get<boolean>('SWAGGER_ENABLED', !isProd);
+  const swaggerPath = config.get<string>('SWAGGER_PATH') || 'api/docs';
+  if (swaggerEnabled) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('FinMatrix API')
       .setDescription('Accounting + Delivery Management backend')
@@ -80,7 +65,7 @@ async function bootstrap() {
       .addServer(config.get<string>('APP_URL') || 'http://localhost:3000')
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup(config.get('SWAGGER_PATH') || 'api/docs', app, document, {
+    SwaggerModule.setup(swaggerPath, app, document, {
       swaggerOptions: { persistAuthorization: true },
     });
   }
@@ -91,11 +76,13 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
   console.log(
-    `FinMatrix backend [${nodeEnv}] listening on http://localhost:${port}/${globalPrefix}  (Swagger: /api/docs)`,
+    `FinMatrix backend [${nodeEnv}] listening on http://localhost:${port}/${globalPrefix}` +
+      (swaggerEnabled ? `  (Swagger: /${swaggerPath})` : ''),
   );
 }
 
 bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
   console.error('Failed to start:', err);
   process.exit(1);
 });

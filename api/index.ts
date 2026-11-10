@@ -3,125 +3,98 @@
  *
  * Vercel runs each request through a (possibly cold) lambda. We bootstrap the
  * Nest application once per warm instance and cache it, then hand the raw
- * Node req/res to the underlying Express adapter for every subsequent call.
+ * Node req/res to the underlying Express instance for every subsequent call.
  *
- * `src/main.ts` is still used for local/dev (`npm run start:dev`) and any
- * traditional always-on host; this file only exists for the Vercel runtime.
+ * `src/main.ts` is used for local/dev (`npm run start:dev`) and every
+ * long-running host (Heroku, ECS); this file only exists for the Vercel
+ * runtime. Both share the HTTP pipeline in `src/app.setup.ts`.
+ *
+ * Note: scheduled work (@Cron / @Interval) does not run reliably on a
+ * serverless instance that is frozen between requests.
  */
+// Sentry must initialise before anything else is loaded.
+import '../src/instrument';
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import type { IncomingMessage, ServerResponse } from 'http';
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ExpressAdapter } from '@nestjs/platform-express';
-import compression from 'compression';
-import cookieParser from 'cookie-parser';
-import express, { Request, Response } from 'express';
-import helmet from 'helmet';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import * as Sentry from '@sentry/nestjs';
 
-const expressApp = express();
-let bootstrapPromise: Promise<void> | null = null;
+type RequestListener = (req: IncomingMessage, res: ServerResponse) => void;
 
-// TEMPORARY diagnostics: capture async failures that would otherwise hard-exit
-// the lambda (opaque FUNCTION_INVOCATION_FAILED). Registering these handlers
-// also PREVENTS the default crash, so the request handler can report the cause.
-let lastFatal: unknown = null;
-process.on('unhandledRejection', (e) => {
-  lastFatal = e;
-});
-process.on('uncaughtException', (e) => {
-  lastFatal = e;
-});
+const logger = new Logger('VercelEntry');
+let handlerPromise: Promise<RequestListener> | null = null;
 
-async function bootstrap(): Promise<void> {
-  // Lazy import so any module-load error (missing dep, decorator failure) is
+async function bootstrap(): Promise<RequestListener> {
+  // Lazy imports so a module-load error (missing dep, decorator failure) is
   // caught by the handler's try/catch instead of crashing the whole function.
   const { AppModule } = await import('../src/app.module');
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
+  const { configureHttpApp } = await import('../src/app.setup');
+
+  // Nest's own Express adapter (Express 4). A separately created Express 5
+  // app was used here before, which Nest 10 does not support.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     // Pino's buffered logger does not fit the serverless lifecycle; the default
     // Nest logger writes straight to stdout, which Vercel captures fine.
     bufferLogs: false,
     cors: false,
+    // The WhatsApp webhook verifies Meta's HMAC over the exact bytes received.
+    rawBody: true,
   });
-
-  const config = app.get(ConfigService);
-  const globalPrefix = config.get<string>('API_PREFIX') || 'api/v1';
-
-  // Trust Vercel's proxy so secure cookies / rate-limit IPs work.
-  expressApp.set('trust proxy', 1);
-
-  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-  app.use(compression());
-  app.use(cookieParser(config.get('COOKIE_SECRET') || 'cookie-secret'));
-
-  const corsOrigins = (config.get<string>('CORS_ORIGINS') || '*')
-    .split(',')
-    .map((s) => s.trim());
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (corsOrigins.includes('*') || corsOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Blocked by CORS'));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Company-Id'],
-    exposedHeaders: ['X-Request-Id', 'X-Total-Count'],
-    maxAge: 86400,
-  });
-
-  app.setGlobalPrefix(globalPrefix);
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: false,
-      transformOptions: { enableImplicitConversion: true },
-    }),
-  );
-
+  configureHttpApp(app);
   await app.init();
+  return app.getHttpAdapter().getInstance() as RequestListener;
 }
 
-export default async function handler(req: Request, res: Response) {
-  if (!bootstrapPromise) {
-    bootstrapPromise = bootstrap().catch((err) => {
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`bootstrap timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+export default async function handler(
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  if (!handlerPromise) {
+    handlerPromise = bootstrap().catch((err) => {
       // Reset so the next request retries a fresh bootstrap instead of being
       // stuck on a permanently rejected promise.
-      bootstrapPromise = null;
+      handlerPromise = null;
       throw err;
     });
   }
-  const fail = (label: string, err: unknown) => {
-    const e = err as Error;
-    if (res.headersSent) return;
-    res.statusCode = 500;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(
-      JSON.stringify({
-        diag: label,
-        bootError: e?.message ?? String(err),
-        name: e?.name,
-        stack: (e?.stack ?? '').split('\n').slice(0, 14),
-      }),
-    );
-  };
 
+  let listener: RequestListener;
   try {
-    // Guard against a hung bootstrap (e.g. DB connect retry storm) so we return
-    // a readable error rather than an opaque FUNCTION_INVOCATION_FAILED.
-    await Promise.race([
-      bootstrapPromise,
-      new Promise((_, rej) =>
-        setTimeout(() => rej(new Error('bootstrap timed out after 20s')), 20_000),
-      ),
-    ]);
+    // Guard against a hung bootstrap (e.g. DB connect retry storm).
+    listener = await withTimeout(handlerPromise, 20_000);
   } catch (err) {
-    return fail('bootstrap-rejected', err);
+    // Details go to the logs and Sentry, never to the client.
+    const e = err instanceof Error ? err : new Error(String(err));
+    logger.error(`bootstrap failed: ${e.stack ?? e.message}`);
+    Sentry.captureException(e);
+    if (!res.headersSent) {
+      res.statusCode = 503;
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Retry-After', '5');
+      res.end(
+        JSON.stringify({
+          success: false,
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Service is starting, please retry.',
+          },
+        }),
+      );
+    }
+    return;
   }
-  if (lastFatal) {
-    return fail('async-fatal', lastFatal);
-  }
-  expressApp(req, res);
+  listener(req, res);
 }
