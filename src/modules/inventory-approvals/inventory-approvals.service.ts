@@ -28,7 +28,7 @@ import { AccountsService } from '../accounts/accounts.service';
 import { ACCT_COGS, ACCT_INVENTORY } from '../accounts/accounts.constants';
 import { JournalEntry } from '../journal-entries/entities/journal-entry.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
-import { StorageService, StoredFile } from '../../common/storage/storage.service';
+import { StorageService } from '../../common/storage/storage.service';
 import {
   ApproveInventoryUpdateRequestDto,
   BillPhotoChangeDto,
@@ -224,7 +224,11 @@ export class InventoryApprovalsService {
     const callerUser = await this.userRepo.findOne({ where: { id: callerUserId } });
     const resolvedName = callerUser?.displayName ?? callerName;
 
-    return this.dataSource.transaction(async (em) => {
+    // Best-effort notifications are sent only after the transaction commits.
+    // Sent from inside it, a later failure (the ledger, the WhatsApp enqueue)
+    // rolled the work back after the message had already gone out.
+    const afterCommit: Array<() => void> = [];
+    const result = await this.dataSource.transaction(async (em) => {
       const deliveryRepo = em.getRepository(Delivery);
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const lineRepo = em.getRepository(InventoryUpdateRequestLine);
@@ -423,13 +427,16 @@ export class InventoryApprovalsService {
         await shadowRepo.save(shadow);
       }
 
-      // 10) Notify admins (best-effort)
-      void this.notifyAdmins(companyId, {
-        type: 'inventory_approvals',
-        title: 'Bill photo received — review needed',
-        message: `${resolvedName} submitted a signed bill for ${req.deliveryReference}. Review and approve to update inventory.`,
-        data: { requestId: req.id, route: 'InventoryApproval' },
-      });
+      // 10) Notify admins (best-effort, once committed)
+      afterCommit.push(
+        () =>
+          void this.notifyAdmins(companyId, {
+            type: 'inventory_approvals',
+            title: 'Bill photo received — review needed',
+            message: `${resolvedName} submitted a signed bill for ${req.deliveryReference}. Review and approve to update inventory.`,
+            data: { requestId: req.id, route: 'InventoryApproval' },
+          }),
+      );
 
       return {
         requestId: req.id,
@@ -441,6 +448,8 @@ export class InventoryApprovalsService {
         amountDue: collection?.amountDue ?? null,
       };
     });
+    afterCommit.forEach((send) => send());
+    return result;
   }
 
   // ==========================================================================
@@ -499,7 +508,11 @@ export class InventoryApprovalsService {
     reviewer: { id: string; role: string },
   ) {
     const reviewerId = reviewer.id;
-    return this.dataSource.transaction(async (em) => {
+    // Best-effort notifications are sent only after the transaction commits.
+    // Sent from inside it, a later failure (the ledger, the WhatsApp enqueue)
+    // rolled the work back after the message had already gone out.
+    const afterCommit: Array<() => void> = [];
+    const result = await this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
       const shadowRepo = em.getRepository(ShadowInventorySnapshot);
@@ -621,19 +634,24 @@ export class InventoryApprovalsService {
         }),
       );
 
-      // Notify the DP (best-effort)
-      void this.notifications.create({
-        companyId,
-        userId: req.personnelId,
-        type: 'approval_results',
-        title: 'Inventory request approved',
-        message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were approved and synced.`,
-        data: { requestId: req.id, route: 'DPHistory' },
-      });
+      // Notify the DP (best-effort, once committed)
+      afterCommit.push(
+        () =>
+          void this.notifications.create({
+            companyId,
+            userId: req.personnelId,
+            type: 'approval_results',
+            title: 'Inventory request approved',
+            message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were approved and synced.`,
+            data: { requestId: req.id, route: 'DPHistory' },
+          }),
+      );
 
       await this.messaging.enqueue(em, deliveryUpdateMessage(delivery, 'approved', reviewerId));
       return { ...this.formatRequest(req), ledger: ledgerResult };
     });
+    afterCommit.forEach((send) => send());
+    return result;
   }
 
   /**
@@ -648,7 +666,6 @@ export class InventoryApprovalsService {
     reviewerId: string,
   ): Promise<string | null> {
     const itemRepo = em.getRepository(InventoryItem);
-    const moveRepo = em.getRepository(InventoryMovement);
 
     let netCost = toDecimal(0);
     for (const line of req.lines) {
@@ -751,7 +768,11 @@ export class InventoryApprovalsService {
     reviewer: { id: string; role: string },
   ) {
     const reviewerId = reviewer.id;
-    return this.dataSource.transaction(async (em) => {
+    // Best-effort notifications are sent only after the transaction commits.
+    // Sent from inside it, a later failure (the ledger, the WhatsApp enqueue)
+    // rolled the work back after the message had already gone out.
+    const afterCommit: Array<() => void> = [];
+    const result = await this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const auditRepo = em.getRepository(InventoryApprovalAuditEntry);
       const shadowRepo = em.getRepository(ShadowInventorySnapshot);
@@ -850,17 +871,22 @@ export class InventoryApprovalsService {
         }),
       );
 
-      void this.notifications.create({
-        companyId,
-        userId: req.personnelId,
-        type: 'approval_results',
-        title: 'Inventory request rejected',
-        message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were rejected. ${dto.reviewerComment}`,
-        data: { requestId: req.id, route: 'DPHistory' },
-      });
+      afterCommit.push(
+        () =>
+          void this.notifications.create({
+            companyId,
+            userId: req.personnelId,
+            type: 'approval_results',
+            title: 'Inventory request rejected',
+            message: `${req.deliveryReference ?? 'Your delivery'} inventory changes were rejected. ${dto.reviewerComment}`,
+            data: { requestId: req.id, route: 'DPHistory' },
+          }),
+      );
 
       return { ...this.formatRequest(req), ledger: ledgerReversal };
     });
+    afterCommit.forEach((send) => send());
+    return result;
   }
 
   /**
@@ -1056,7 +1082,11 @@ export class InventoryApprovalsService {
   }
 
   async undoApproval(companyId: string, id: string, reviewerId: string) {
-    return this.dataSource.transaction(async (em) => {
+    // Best-effort notifications are sent only after the transaction commits.
+    // Sent from inside it, a later failure (the ledger, the WhatsApp enqueue)
+    // rolled the work back after the message had already gone out.
+    const afterCommit: Array<() => void> = [];
+    const result = await this.dataSource.transaction(async (em) => {
       const reqRepo = em.getRepository(InventoryUpdateRequest);
       const itemRepo = em.getRepository(InventoryItem);
       const moveRepo = em.getRepository(InventoryMovement);
@@ -1204,18 +1234,23 @@ export class InventoryApprovalsService {
         }),
       );
 
-      // Notify the DP (best-effort)
-      void this.notifications.create({
-        companyId,
-        userId: req.personnelId,
-        type: 'approval_results',
-        title: 'Inventory approval reversed',
-        message: `The approval for ${req.deliveryReference ?? 'your delivery'} was undone and sent back for re-review. Inventory quantities have been restored.`,
-        data: { requestId: req.id, route: 'DPHistory' },
-      });
+      // Notify the DP (best-effort, once committed)
+      afterCommit.push(
+        () =>
+          void this.notifications.create({
+            companyId,
+            userId: req.personnelId,
+            type: 'approval_results',
+            title: 'Inventory approval reversed',
+            message: `The approval for ${req.deliveryReference ?? 'your delivery'} was undone and sent back for re-review. Inventory quantities have been restored.`,
+            data: { requestId: req.id, route: 'DPHistory' },
+          }),
+      );
 
       return this.formatRequest(req);
     });
+    afterCommit.forEach((send) => send());
+    return result;
   }
 
   async streamBillPhoto(
