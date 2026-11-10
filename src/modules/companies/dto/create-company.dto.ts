@@ -95,7 +95,10 @@ export class CreateCompanyDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() taxId?: string;
 
-  @ApiPropertyOptional({ description: 'Fiscal year start month, 1-12', example: 1 })
+  @ApiPropertyOptional({
+    description: 'Fiscal year start month, 1-12',
+    example: 1,
+  })
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -147,7 +150,9 @@ export class CreateCompanyDto {
 }
 
 export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
-  @ApiPropertyOptional({ description: 'Mark/dismiss the first-run setup checklist' })
+  @ApiPropertyOptional({
+    description: 'Mark/dismiss the first-run setup checklist',
+  })
   @IsOptional()
   @IsBoolean()
   setupCompleted?: boolean;
@@ -158,7 +163,8 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   // detectable. Setting the lock through a generic field edit would skip both.
 
   @ApiPropertyOptional({
-    description: 'GST/Sales-tax registered: reclaim input tax on bills to a recoverable asset (1300).',
+    description:
+      'GST/Sales-tax registered: reclaim input tax on bills to a recoverable asset (1300).',
   })
   @IsOptional()
   @IsBoolean()
@@ -182,7 +188,8 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
 export class ClosePeriodDto {
   @ApiProperty({
     example: '2026-07-31',
-    description: 'Close the books through this date. Postings dated on or before it are rejected.',
+    description:
+      'Close the books through this date. Postings dated on or before it are rejected.',
   })
   @IsDateString()
   lockDate!: string;
@@ -202,7 +209,8 @@ export class SelfSubscribeDto {
   planId!: string;
 
   @ApiPropertyOptional({
-    description: "Company to subscribe. Defaults to the x-company-id header, then the token's company.",
+    description:
+      "Company to subscribe. Defaults to the x-company-id header, then the token's company.",
   })
   @IsOptional()
   @IsUUID()

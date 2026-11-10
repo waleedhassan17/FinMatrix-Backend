@@ -23,16 +23,40 @@ export class InvoiceLineItem {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 1 })
   quantity!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_price' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_price',
+  })
   unitPrice!: string;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 8,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'line_total' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'line_total',
+  })
   lineTotal!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })
@@ -111,7 +135,13 @@ export class InvoiceLineItem {
    * `unknown` — nothing recoverable. NULL — a draft, not yet posted, which is a
    * third thing from zero and from unknown.
    */
-  @Column({ type: 'varchar', length: 16, nullable: true, select: false, name: 'cost_basis' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    select: false,
+    name: 'cost_basis',
+  })
   costBasis!: string | null;
 
   @Column({ type: 'int', default: 0, name: 'line_order' })

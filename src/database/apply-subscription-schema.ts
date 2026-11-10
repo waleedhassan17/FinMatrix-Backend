@@ -111,7 +111,8 @@ async function main(): Promise<void> {
   `);
   console.log(
     '[apply-subscription-schema] company columns present:',
-    res.rows.map((r: { column_name: string }) => r.column_name).join(', ') || '(none)',
+    res.rows.map((r: { column_name: string }) => r.column_name).join(', ') ||
+      '(none)',
   );
 
   await client.end();

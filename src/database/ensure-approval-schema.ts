@@ -18,13 +18,19 @@ const { Client } = require('pg');
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL not set');
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const client = new Client({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+  });
   await client.connect();
 
   const before = await client.query(
     `SELECT to_regclass('public.inventory_approval_audit_entries') AS audit`,
   );
-  console.log('[ensure-approval-schema] audit table BEFORE:', before.rows[0].audit);
+  console.log(
+    '[ensure-approval-schema] audit table BEFORE:',
+    before.rows[0].audit,
+  );
 
   await client.query(`
     ALTER TABLE "deliveries"
@@ -113,7 +119,10 @@ async function main(): Promise<void> {
   const after = await client.query(
     `SELECT to_regclass('public.inventory_approval_audit_entries') AS audit`,
   );
-  console.log('[ensure-approval-schema] audit table AFTER:', after.rows[0].audit);
+  console.log(
+    '[ensure-approval-schema] audit table AFTER:',
+    after.rows[0].audit,
+  );
 
   await client.end();
 }

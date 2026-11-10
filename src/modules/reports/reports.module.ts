@@ -14,7 +14,14 @@ import { ReportsController } from './reports.controller';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Invoice, Bill, InventoryItem, InventoryMovement, Delivery, TaxPayment]),
+    TypeOrmModule.forFeature([
+      Invoice,
+      Bill,
+      InventoryItem,
+      InventoryMovement,
+      Delivery,
+      TaxPayment,
+    ]),
     BudgetsModule,
     // For MediaUrlSigner: the item explorer shows the item's photo.
     InventoryModule,

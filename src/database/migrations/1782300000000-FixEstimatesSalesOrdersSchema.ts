@@ -11,10 +11,14 @@ export class FixEstimatesSalesOrdersSchema1782300000000 implements MigrationInte
   name = 'FixEstimatesSalesOrdersSchema1782300000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP TABLE IF EXISTS "estimate_line_items" CASCADE`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "estimate_line_items" CASCADE`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "estimates" CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS "sales_order_lines" CASCADE`);
-    await queryRunner.query(`DROP TABLE IF EXISTS "sales_order_line_items" CASCADE`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "sales_order_line_items" CASCADE`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "sales_orders" CASCADE`);
 
     await queryRunner.query(`
@@ -40,9 +44,15 @@ export class FixEstimatesSalesOrdersSchema1782300000000 implements MigrationInte
         "created_by" uuid NOT NULL,
         CONSTRAINT "PK_estimates" PRIMARY KEY ("id")
       )`);
-    await queryRunner.query(`CREATE UNIQUE INDEX "UQ_estimates_company_number" ON "estimates" ("company_id","estimate_number")`);
-    await queryRunner.query(`CREATE INDEX "IDX_estimates_company_status" ON "estimates" ("company_id","status")`);
-    await queryRunner.query(`CREATE INDEX "IDX_estimates_company_customer" ON "estimates" ("company_id","customer_id")`);
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX "UQ_estimates_company_number" ON "estimates" ("company_id","estimate_number")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "IDX_estimates_company_status" ON "estimates" ("company_id","status")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "IDX_estimates_company_customer" ON "estimates" ("company_id","customer_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE "estimate_line_items" (
@@ -59,7 +69,9 @@ export class FixEstimatesSalesOrdersSchema1782300000000 implements MigrationInte
         CONSTRAINT "PK_estimate_line_items" PRIMARY KEY ("id"),
         CONSTRAINT "FK_estimate_line_items_estimate" FOREIGN KEY ("estimate_id") REFERENCES "estimates"("id") ON DELETE CASCADE
       )`);
-    await queryRunner.query(`CREATE INDEX "IDX_estimate_line_items_estimate" ON "estimate_line_items" ("estimate_id")`);
+    await queryRunner.query(
+      `CREATE INDEX "IDX_estimate_line_items_estimate" ON "estimate_line_items" ("estimate_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE "sales_orders" (
@@ -84,9 +96,15 @@ export class FixEstimatesSalesOrdersSchema1782300000000 implements MigrationInte
         "created_by" uuid NOT NULL,
         CONSTRAINT "PK_sales_orders" PRIMARY KEY ("id")
       )`);
-    await queryRunner.query(`CREATE UNIQUE INDEX "UQ_sales_orders_company_number" ON "sales_orders" ("company_id","order_number")`);
-    await queryRunner.query(`CREATE INDEX "IDX_sales_orders_company_status" ON "sales_orders" ("company_id","status")`);
-    await queryRunner.query(`CREATE INDEX "IDX_sales_orders_company_customer" ON "sales_orders" ("company_id","customer_id")`);
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX "UQ_sales_orders_company_number" ON "sales_orders" ("company_id","order_number")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "IDX_sales_orders_company_status" ON "sales_orders" ("company_id","status")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX "IDX_sales_orders_company_customer" ON "sales_orders" ("company_id","customer_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE "sales_order_line_items" (
@@ -104,13 +122,19 @@ export class FixEstimatesSalesOrdersSchema1782300000000 implements MigrationInte
         CONSTRAINT "PK_sales_order_line_items" PRIMARY KEY ("id"),
         CONSTRAINT "FK_sales_order_line_items_order" FOREIGN KEY ("sales_order_id") REFERENCES "sales_orders"("id") ON DELETE CASCADE
       )`);
-    await queryRunner.query(`CREATE INDEX "IDX_sales_order_line_items_order" ON "sales_order_line_items" ("sales_order_id")`);
+    await queryRunner.query(
+      `CREATE INDEX "IDX_sales_order_line_items_order" ON "sales_order_line_items" ("sales_order_id")`,
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP TABLE IF EXISTS "sales_order_line_items" CASCADE`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "sales_order_line_items" CASCADE`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "sales_orders" CASCADE`);
-    await queryRunner.query(`DROP TABLE IF EXISTS "estimate_line_items" CASCADE`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "estimate_line_items" CASCADE`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "estimates" CASCADE`);
   }
 }

@@ -41,7 +41,9 @@ export interface DashboardAlertInput {
 const rupees = (n: number): string =>
   `Rs ${Math.round(n).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-export function buildDashboardAlerts(input: DashboardAlertInput): DashboardAlert[] {
+export function buildDashboardAlerts(
+  input: DashboardAlertInput,
+): DashboardAlert[] {
   const alerts: DashboardAlert[] = [];
 
   const overdue = Math.max(0, Math.trunc(input.overdueCount || 0));
@@ -49,7 +51,10 @@ export function buildDashboardAlerts(input: DashboardAlertInput): DashboardAlert
     alerts.push({
       id: 'overdue',
       severity: 'red',
-      message: overdue === 1 ? '1 invoice is past due.' : `${overdue} invoices are past due.`,
+      message:
+        overdue === 1
+          ? '1 invoice is past due.'
+          : `${overdue} invoices are past due.`,
       count: overdue,
       amount: Math.max(0, input.overdueAmount || 0),
     });

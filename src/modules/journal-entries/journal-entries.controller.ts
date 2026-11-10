@@ -41,7 +41,9 @@ export class JournalEntriesController {
 
   @Get()
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'List manual journal entries (the General Journal).' })
+  @ApiOperation({
+    summary: 'List manual journal entries (the General Journal).',
+  })
   list(
     @CurrentCompany() companyId: string,
     @Query() query: ListJournalEntriesQueryDto,
@@ -110,7 +112,8 @@ export class JournalEntriesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: VoidJournalEntryDto,
   ) {
-    if (user.role === 'admin') return this.svc.void(companyId, id, user.id, dto);
+    if (user.role === 'admin')
+      return this.svc.void(companyId, id, user.id, dto);
     return this.approvals.createRequest(
       'void',
       { entity: 'journal', targetId: id, ...dto },

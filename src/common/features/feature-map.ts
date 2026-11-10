@@ -11,7 +11,11 @@
 
 export type CompanyType = 'small_business' | 'large_org' | 'warehouse';
 
-export const COMPANY_TYPES: CompanyType[] = ['small_business', 'large_org', 'warehouse'];
+export const COMPANY_TYPES: CompanyType[] = [
+  'small_business',
+  'large_org',
+  'warehouse',
+];
 
 export function isCompanyType(v: unknown): v is CompanyType {
   return typeof v === 'string' && (COMPANY_TYPES as string[]).includes(v);
@@ -50,7 +54,10 @@ export type FeatureKey =
  */
 type FeatureSetting = boolean | 'toggle';
 
-export const FEATURE_MAP: Record<CompanyType, Record<FeatureKey, FeatureSetting>> = {
+export const FEATURE_MAP: Record<
+  CompanyType,
+  Record<FeatureKey, FeatureSetting>
+> = {
   small_business: {
     estimates: true,
     journalEntries: true,
@@ -125,7 +132,9 @@ export interface CompanyFeatureSource {
  * migration default) is treated as fully unlocked: existing customers can
  * never lose access because of a missing value.
  */
-export function computeFeatures(src: CompanyFeatureSource): Record<FeatureKey, boolean> {
+export function computeFeatures(
+  src: CompanyFeatureSource,
+): Record<FeatureKey, boolean> {
   const unlockAll =
     src.allFeaturesUnlocked ||
     process.env.FEATURES_DISABLED === 'true' ||

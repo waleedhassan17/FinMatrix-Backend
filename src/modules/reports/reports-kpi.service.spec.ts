@@ -206,11 +206,15 @@ describe('ReportsKpiService — analytics', () => {
     const { kpi } = await svcs();
     const a = await kpi.analytics('c1', '2026-01-01', '2026-12-31');
     for (const k of a.kpis) {
-      expect(['healthy', 'watch', 'risk', 'neutral']).toContain(k.assessment.level);
+      expect(['healthy', 'watch', 'risk', 'neutral']).toContain(
+        k.assessment.level,
+      );
       expect(k.assessment.guide).toMatch(/\.$/);
     }
     // Gross and net profit are KPIs in their own right, each the P&L's figure.
-    const pl = await (await svcs()).reports.profitLoss('c1', '2026-01-01', '2026-12-31');
+    const pl = await (
+      await svcs()
+    ).reports.profitLoss('c1', '2026-01-01', '2026-12-31');
     expect(a.kpis.find((k) => k.key === 'grossProfit')).toMatchObject({
       value: pl.grossProfit,
       unit: 'money',
@@ -246,7 +250,12 @@ describe('ReportsKpiService — analytics', () => {
     const chart = [
       ...CHART,
       { code: '6100', name: 'Salaries', type: 'expense', subType: 'Operating' },
-      { code: '6200', name: 'Utilities', type: 'expense', subType: 'Operating' },
+      {
+        code: '6200',
+        name: 'Utilities',
+        type: 'expense',
+        subType: 'Operating',
+      },
       { code: '6400', name: 'Fuel', type: 'expense', subType: 'Operating' },
       { code: '6500', name: 'Repairs', type: 'expense', subType: 'Operating' },
     ];
@@ -276,10 +285,14 @@ describe('ReportsKpiService — analytics', () => {
     const q = ledgerQuery(chart, books, {
       lookThrough: LOOK_THROUGH,
       extra: (sql) =>
-        sql.includes('FROM invoices i LEFT JOIN customers c') ? customers : undefined,
+        sql.includes('FROM invoices i LEFT JOIN customers c')
+          ? customers
+          : undefined,
     });
     const kpi = await makeKpiService(q);
-    const pl = await (await makeService(q)).profitLoss('c1', '2026-01-01', '2026-12-31');
+    const pl = await (
+      await makeService(q)
+    ).profitLoss('c1', '2026-01-01', '2026-12-31');
 
     const a = await kpi.analytics('c1', '2026-01-01', '2026-12-31', {
       expenseTop: 3,
@@ -293,25 +306,37 @@ describe('ReportsKpiService — analytics', () => {
       'Other',
     ]);
     expect(a.expenseByAccount[3].amount).toBe(600);
-    expect(a.expenseByAccount.reduce((t, x) => t + x.amount, 0)).toBe(pl.totalExpenses);
+    expect(a.expenseByAccount.reduce((t, x) => t + x.amount, 0)).toBe(
+      pl.totalExpenses,
+    );
     // Each slice carries its share of the whole, so neither client divides.
-    expect(a.expenseByAccount.map((x) => x.sharePct)).toEqual([
-      (1000 / 3300) * 100,
-      (900 / 3300) * 100,
-      (800 / 3300) * 100,
-      (600 / 3300) * 100,
-    ].map((x) => Math.round(x * 100) / 100));
+    expect(a.expenseByAccount.map((x) => x.sharePct)).toEqual(
+      [
+        (1000 / 3300) * 100,
+        (900 / 3300) * 100,
+        (800 / 3300) * 100,
+        (600 / 3300) * 100,
+      ].map((x) => Math.round(x * 100) / 100),
+    );
     expect(a.salesByCustomer.customers).toHaveLength(5);
     expect(a.salesByCustomer.customers[0].sharePct).toBe(19.23);
-    expect(a.salesByCustomer.other).toEqual({ count: 3, amount: 1200, sharePct: 23.08 });
+    expect(a.salesByCustomer.other).toEqual({
+      count: 3,
+      amount: 1200,
+      sharePct: 23.08,
+    });
     // Top five: 4,000 of 5,200.
     expect(a.salesByCustomer.top5SharePct).toBe(76.92);
     expect(a.salesByCustomer.assessment.level).toBe('risk');
 
     // Bounded: a pie of one, or of fifty, is not on offer.
-    const tiny = await kpi.analytics('c1', '2026-01-01', '2026-12-31', { expenseTop: 1 });
+    const tiny = await kpi.analytics('c1', '2026-01-01', '2026-12-31', {
+      expenseTop: 1,
+    });
     expect(tiny.expenseByAccount).toHaveLength(4);
-    const wide = await kpi.analytics('c1', '2026-01-01', '2026-12-31', { customerTop: 50 });
+    const wide = await kpi.analytics('c1', '2026-01-01', '2026-12-31', {
+      customerTop: 50,
+    });
     expect(wide.salesByCustomer.customers).toHaveLength(8);
     // The defaults are unchanged: eight accounts, ten customers.
     const plain = await kpi.analytics('c1', '2026-01-01', '2026-12-31');

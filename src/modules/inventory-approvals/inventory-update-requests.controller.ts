@@ -20,7 +20,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -52,7 +55,11 @@ export class InventoryUpdateRequestsController {
   @Get()
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'List inventory update requests (admin)' })
-  @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected', 'all'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['pending', 'approved', 'rejected', 'all'],
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'pageSize', required: false, type: Number })
   @ApiResponse({
@@ -65,7 +72,12 @@ export class InventoryUpdateRequestsController {
   ) {
     const page = Number(query.page) || 1;
     const pageSize = Number(query.pageSize) || 20;
-    const data = await this.svc.listFormatted(companyId, query.status, page, pageSize);
+    const data = await this.svc.listFormatted(
+      companyId,
+      query.status,
+      page,
+      pageSize,
+    );
     return { success: true, data };
   }
 
@@ -77,14 +89,22 @@ export class InventoryUpdateRequestsController {
   @Roles('admin', 'staff', 'delivery')
   @ApiOperation({ summary: 'Get a single inventory update request' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Request detail with changes and proof' })
+  @ApiResponse({
+    status: 200,
+    description: 'Request detail with changes and proof',
+  })
   @ApiResponse({ status: 404, description: 'Request not found' })
   async getOne(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    const data = await this.svc.getOneFormatted(companyId, id, user.id, user.role);
+    const data = await this.svc.getOneFormatted(
+      companyId,
+      id,
+      user.id,
+      user.role,
+    );
     return { success: true, data };
   }
 
@@ -109,7 +129,10 @@ export class InventoryUpdateRequestsController {
   @Roles('admin')
   @ApiOperation({ summary: 'Approve inventory update request (owner only)' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Request approved and inventory synced' })
+  @ApiResponse({
+    status: 200,
+    description: 'Request approved and inventory synced',
+  })
   @ApiResponse({ status: 409, description: 'Request is not pending' })
   @ApiResponse({ status: 422, description: 'Negative stock would result' })
   async approve(
@@ -176,10 +199,18 @@ export class InventoryUpdateRequestsController {
    */
   @Post(':id/undo')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Undo an approved delivery (owner direct, staff by request)' })
+  @ApiOperation({
+    summary: 'Undo an approved delivery (owner direct, staff by request)',
+  })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Approval undone, or a request filed' })
-  @ApiResponse({ status: 409, description: 'Request is not approved, or already committed' })
+  @ApiResponse({
+    status: 200,
+    description: 'Approval undone, or a request filed',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Request is not approved, or already committed',
+  })
   async undoApproval(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -224,7 +255,10 @@ export class InventoryUpdateRequestsController {
   @ApiOperation({ summary: 'Draft credit memo reversing an approved delivery' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Draft credit memo' })
-  @ApiResponse({ status: 409, description: 'Not approved, or never posted a sale' })
+  @ApiResponse({
+    status: 409,
+    description: 'Not approved, or never posted a sale',
+  })
   async creditMemoDraft(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -249,7 +283,10 @@ export class InventoryUpdateRequestsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
-    const file = await this.svc.streamBillPhoto(companyId, id, { id: user.id, role: user.role });
+    const file = await this.svc.streamBillPhoto(companyId, id, {
+      id: user.id,
+      role: user.role,
+    });
     res.setHeader('Content-Type', file.mimeType ?? 'image/jpeg');
     if (file.size != null) res.setHeader('Content-Length', String(file.size));
     res.setHeader('Cache-Control', 'private, max-age=3600');

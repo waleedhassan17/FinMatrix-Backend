@@ -48,7 +48,9 @@ async function main(): Promise<void> {
   const res = await client.query(
     `UPDATE "companies" SET "company_type" = 'warehouse' WHERE "company_type" IS NULL`,
   );
-  console.log(`✔ tiering columns present; ${res.rowCount} legacy companies defaulted to 'warehouse'`);
+  console.log(
+    `✔ tiering columns present; ${res.rowCount} legacy companies defaulted to 'warehouse'`,
+  );
 
   // Record the migration row so a future fixed migration:run skips it.
   await client.query(`
@@ -65,7 +67,10 @@ async function main(): Promise<void> {
       AND column_name IN ('company_type', 'inventory_enabled', 'all_features_unlocked')
     ORDER BY column_name
   `);
-  console.log('✔ verified columns:', check.rows.map((r: { column_name: string }) => r.column_name).join(', '));
+  console.log(
+    '✔ verified columns:',
+    check.rows.map((r: { column_name: string }) => r.column_name).join(', '),
+  );
 
   await client.end();
 }

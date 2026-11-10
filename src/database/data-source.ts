@@ -32,7 +32,9 @@ function sslForUrl(url: string): false | { rejectUnauthorized: boolean } {
   } catch {
     // Not parseable as a URL — fall through to the secure default.
   }
-  return { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true' };
+  return {
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true',
+  };
 }
 
 function buildOptions(): DataSourceOptions {
@@ -70,10 +72,12 @@ function buildOptions(): DataSourceOptions {
     logging: false,
     ssl:
       process.env.DB_SSL === 'true'
-        ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+        ? {
+            rejectUnauthorized:
+              process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+          }
         : false,
   };
 }
 
 export const AppDataSource = new DataSource(buildOptions());
-

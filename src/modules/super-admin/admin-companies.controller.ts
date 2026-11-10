@@ -13,7 +13,10 @@ import {
 } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { SuperAdminService } from './super-admin.service';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 
 class RejectDto {
   @IsString()
@@ -88,7 +91,8 @@ export class AdminCompaniesController {
     @Body() dto: RejectDto,
   ) {
     guardSuperAdmin(user);
-    if (!dto?.reason) throw new BadRequestException('Rejection reason is required');
+    if (!dto?.reason)
+      throw new BadRequestException('Rejection reason is required');
     return this.service.updateCompanyStatus(
       id,
       { status: 'rejected', rejectionReason: dto.reason },

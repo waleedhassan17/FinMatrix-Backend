@@ -18,7 +18,9 @@
  */
 import 'reflect-metadata';
 
-const API = process.env.API_BASE || 'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
+const API =
+  process.env.API_BASE ||
+  'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'warehouse@gmail.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '123456';
 const RIDER_EMAIL = process.env.RIDER_EMAIL || 'rider1@warehouseco.com';
@@ -48,7 +50,11 @@ async function api(
   method: string,
   path: string,
   body?: unknown,
-  opts: { token?: string; headers?: Record<string, string>; raw?: boolean } = {},
+  opts: {
+    token?: string;
+    headers?: Record<string, string>;
+    raw?: boolean;
+  } = {},
 ): Promise<{ status: number; body: any }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -80,12 +86,16 @@ async function api(
     json = null;
   }
   // Most endpoints wrap in { success, data }; the reports controller returns raw.
-  const data = json && typeof json === 'object' && 'success' in json ? json.data : json;
+  const data =
+    json && typeof json === 'object' && 'success' in json ? json.data : json;
   return { status: res.status, body: data ?? json };
 }
 
 /** Sign-in with 429-throttle retry (the API allows 5 sign-ins/min). */
-async function signinRetry(email: string, password: string): Promise<{ status: number; body: any }> {
+async function signinRetry(
+  email: string,
+  password: string,
+): Promise<{ status: number; body: any }> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const r = await api('POST', '/auth/signin', { email, password });
     if (r.status !== 429) return r;
@@ -97,7 +107,9 @@ async function signinRetry(email: string, password: string): Promise<{ status: n
 
 async function firstId(path: string): Promise<string> {
   const { body } = await api('GET', path);
-  const arr = Array.isArray(body) ? body : body?.data ?? body?.accounts ?? body?.items ?? [];
+  const arr = Array.isArray(body)
+    ? body
+    : (body?.data ?? body?.accounts ?? body?.items ?? []);
   return arr[0]?.id;
 }
 
@@ -126,7 +138,11 @@ async function deliveryE2E() {
 
   async function invariants(label: string) {
     const tb = (await api('GET', '/reports/trial-balance')).body;
-    ok(`[${label}] Trial Balance balanced`, !!tb?.isBalanced, `Dr=${tb?.totalDebits} Cr=${tb?.totalCredits}`);
+    ok(
+      `[${label}] Trial Balance balanced`,
+      !!tb?.isBalanced,
+      `Dr=${tb?.totalDebits} Cr=${tb?.totalCredits}`,
+    );
     const bs = (await api('GET', '/reports/balance-sheet')).body;
     ok(
       `[${label}] Balance Sheet balanced (A = L + E)`,
@@ -134,16 +150,28 @@ async function deliveryE2E() {
       `A=${bs?.totalAssets} L=${bs?.totalLiabilities} E=${bs?.totalEquity}`,
     );
   }
-  const pl = async () => (await api('GET', '/reports/profit-loss?startDate=1970-01-01&endDate=2999-12-31')).body;
+  const pl = async () =>
+    (
+      await api(
+        'GET',
+        '/reports/profit-loss?startDate=1970-01-01&endDate=2999-12-31',
+      )
+    ).body;
   const agingTotal = async () => {
     const a = (await api('GET', '/reports/ar-aging')).body;
     const rows = a?.rows ?? a ?? [];
-    return Array.isArray(rows) ? rows.reduce((s: number, x: any) => s + n(x.total), 0) : 0;
+    return Array.isArray(rows)
+      ? rows.reduce((s: number, x: any) => s + n(x.total), 0)
+      : 0;
   };
   const valuationTies = async (label: string) => {
     const val = (await api('GET', '/reports/inventory-valuation')).body;
     const gl1200 = await acctBalance('1200');
-    ok(`[${label}] Inventory Valuation ties to GL 1200`, approx(n(val?.totalValue), gl1200), `valuation=${val?.totalValue} gl=${gl1200}`);
+    ok(
+      `[${label}] Inventory Valuation ties to GL 1200`,
+      approx(n(val?.totalValue), gl1200),
+      `valuation=${val?.totalValue} gl=${gl1200}`,
+    );
   };
 
   // Delivery is warehouse-only (FEATURE_MAP). Probe the tier before driving
@@ -152,7 +180,9 @@ async function deliveryE2E() {
   // working correctly as a wall of failures.
   const deliveryProbe = await api('GET', '/deliveries');
   if (deliveryProbe.status === 403) {
-    console.log('\n— delivery E2E skipped: not available on this company\'s tier');
+    console.log(
+      "\n— delivery E2E skipped: not available on this company's tier",
+    );
     return;
   }
 
@@ -160,14 +190,20 @@ async function deliveryE2E() {
   const riderSignin = await signinRetry(RIDER_EMAIL, RIDER_PASSWORD);
   const riderTok = riderSignin.body?.tokens?.accessToken;
   const riderUserId = riderSignin.body?.user?.id;
-  ok('D0 rider (Saim) signs in', !!riderTok && !!riderUserId, `status=${riderSignin.status} body=${JSON.stringify(riderSignin.body)?.slice(0, 200)}`);
+  ok(
+    'D0 rider (Saim) signs in',
+    !!riderTok && !!riderUserId,
+    `status=${riderSignin.status} body=${JSON.stringify(riderSignin.body)?.slice(0, 200)}`,
+  );
   if (!riderTok) return;
 
   // Second rider for isolation tests. Creating one may hit the plan's rider
   // limit (server-enforced — correct behavior); fall back to the seeded
   // second rider in that case.
   const rider2Create = await api('POST', '/delivery-personnel', {
-    email: `qa_rider2_${Date.now()}@qa.local`, password: 'Rider2@123', name: 'QA Second Rider',
+    email: `qa_rider2_${Date.now()}@qa.local`,
+    password: 'Rider2@123',
+    name: 'QA Second Rider',
   });
   let rider2Email = rider2Create.body?.email;
   let rider2Password = 'Rider2@123';
@@ -178,26 +214,58 @@ async function deliveryE2E() {
   const rider2Signin = await signinRetry(rider2Email, rider2Password);
   const rider2Tok = rider2Signin.body?.tokens?.accessToken;
   const rider2UserId = rider2Signin.body?.user?.id ?? rider2Create.body?.userId;
-  ok('D0 second rider ready (for isolation tests)', !!rider2Tok && !!rider2UserId);
+  ok(
+    'D0 second rider ready (for isolation tests)',
+    !!rider2Tok && !!rider2UserId,
+  );
 
   const customerId = await firstId('/customers');
   let vendorId = await firstId('/vendors');
-  if (!vendorId) vendorId = (await api('POST', '/vendors', { companyName: 'QA Delivery Vendor' })).body?.id;
-  const itemRes = (await api('POST', '/inventory/items', {
-    sku: `E2E-${Date.now()}`, name: 'E2E Crate', unitCost: '0', sellingPrice: '150',
-  })).body;
+  if (!vendorId)
+    vendorId = (
+      await api('POST', '/vendors', { companyName: 'QA Delivery Vendor' })
+    ).body?.id;
+  const itemRes = (
+    await api('POST', '/inventory/items', {
+      sku: `E2E-${Date.now()}`,
+      name: 'E2E Crate',
+      unitCost: '0',
+      sellingPrice: '150',
+    })
+  ).body;
   const itemId = itemRes?.id ?? itemRes?.item?.id;
-  const po = (await api('POST', '/purchase-orders', {
-    vendorId, orderDate: TODAY, lines: [{ description: 'E2E Crates', orderedQty: '12', unitCost: '100', itemId }],
-  })).body;
+  const po = (
+    await api('POST', '/purchase-orders', {
+      vendorId,
+      orderDate: TODAY,
+      lines: [
+        {
+          description: 'E2E Crates',
+          orderedQty: '12',
+          unitCost: '100',
+          itemId,
+        },
+      ],
+    })
+  ).body;
   await api('PATCH', `/purchase-orders/${po?.id}/status`, { status: 'sent' });
-  await api('POST', `/purchase-orders/${po?.id}/receive`, { lines: [{ lineId: po?.lines?.[0]?.id, receivedQty: '12' }] });
-  await api('POST', `/purchase-orders/${po?.id}/create-bill`, { billNumber: `E2E-B-${Date.now()}`, billDate: TODAY, dueDate: TODAY });
+  await api('POST', `/purchase-orders/${po?.id}/receive`, {
+    lines: [{ lineId: po?.lines?.[0]?.id, receivedQty: '12' }],
+  });
+  await api('POST', `/purchase-orders/${po?.id}/create-bill`, {
+    billNumber: `E2E-B-${Date.now()}`,
+    billDate: TODAY,
+    dueDate: TODAY,
+  });
   const qtyOnHand = async () => {
     const b = (await api('GET', `/inventory/items/${itemId}`)).body;
     return n(b?.item?.quantityOnHand ?? b?.quantityOnHand);
   };
-  ok('D0 item stocked: exactly 12 on hand', approx(await qtyOnHand(), 12), `qty=${await qtyOnHand()}`);
+  ok(
+    'D0 item stocked: exactly 12 on hand',
+    approx(await qtyOnHand(), 12),
+    `qty=${await qtyOnHand()}`,
+  );
   await invariants('D0 after stocking');
 
   // Baselines for delta assertions (company may already have books)
@@ -211,181 +279,558 @@ async function deliveryE2E() {
     aging: await agingTotal(),
   };
 
-  const mkDelivery = async (qty: unknown, extra: Record<string, unknown> = {}, personnel: string = riderUserId) =>
+  const mkDelivery = async (
+    qty: unknown,
+    extra: Record<string, unknown> = {},
+    personnel: string = riderUserId,
+  ) =>
     api('POST', '/deliveries', {
-      customerId, customerName: 'E2E Customer', personnelId: personnel,
-      items: [{ itemId, itemName: 'E2E Crate', orderedQty: qty, unitPrice: 150, taxRate: 10 }],
+      customerId,
+      customerName: 'E2E Customer',
+      personnelId: personnel,
+      items: [
+        {
+          itemId,
+          itemName: 'E2E Crate',
+          orderedQty: qty,
+          unitPrice: 150,
+          taxRate: 10,
+        },
+      ],
       ...extra,
     });
 
   // ── D1 over-allocation: 13 when only 12 exist → clear rejection ──
   const over = await mkDelivery(13);
-  ok('D1 assigning 13 of 12 rejected', over.status >= 400 && over.status < 500, `status=${over.status}`);
+  ok(
+    'D1 assigning 13 of 12 rejected',
+    over.status >= 400 && over.status < 500,
+    `status=${over.status}`,
+  );
   const overMsg = JSON.stringify(over.body ?? '');
-  ok('D1 rejection message names the shortage', /only\s+12/i.test(overMsg) && /INSUFFICIENT_STOCK/i.test(overMsg), overMsg.slice(0, 160));
-  ok('D1 stock unchanged after rejection', approx(await qtyOnHand(), 12), `qty=${await qtyOnHand()}`);
-  ok('D1 nothing half-posted (GIT unchanged)', approx(await acctBalance('1250'), base.git), `git=${await acctBalance('1250')}`);
+  ok(
+    'D1 rejection message names the shortage',
+    /only\s+12/i.test(overMsg) && /INSUFFICIENT_STOCK/i.test(overMsg),
+    overMsg.slice(0, 160),
+  );
+  ok(
+    'D1 stock unchanged after rejection',
+    approx(await qtyOnHand(), 12),
+    `qty=${await qtyOnHand()}`,
+  );
+  ok(
+    'D1 nothing half-posted (GIT unchanged)',
+    approx(await acctBalance('1250'), base.git),
+    `git=${await acctBalance('1250')}`,
+  );
   await invariants('D1 after over-allocation attempt');
 
   // ── D2 zero / negative / non-integer / garbage quantities rejected ──
-  for (const [labelQty, qty] of [['zero', 0], ['negative', -3], ['non-integer', 2.5], ['garbage', 'abc']] as const) {
+  for (const [labelQty, qty] of [
+    ['zero', 0],
+    ['negative', -3],
+    ['non-integer', 2.5],
+    ['garbage', 'abc'],
+  ] as const) {
     const r = await mkDelivery(qty);
-    ok(`D2 ${labelQty} quantity (${qty}) rejected with 4xx`, r.status >= 400 && r.status < 500, `status=${r.status} body=${JSON.stringify(r.body)?.slice(0, 120)}`);
+    ok(
+      `D2 ${labelQty} quantity (${qty}) rejected with 4xx`,
+      r.status >= 400 && r.status < 500,
+      `status=${r.status} body=${JSON.stringify(r.body)?.slice(0, 120)}`,
+    );
   }
-  ok('D2 stock still 12 after invalid attempts', approx(await qtyOnHand(), 12), `qty=${await qtyOnHand()}`);
+  ok(
+    'D2 stock still 12 after invalid attempts',
+    approx(await qtyOnHand(), 12),
+    `qty=${await qtyOnHand()}`,
+  );
 
   // ── D3 exact stock allowed: 12 of 12 → on-hand 0, never negative ──
   const exact = await mkDelivery(12);
-  ok('D3 exact allocation (12 of 12) accepted', exact.status < 300 && !!exact.body?.id, `status=${exact.status}`);
-  ok('D3 ledger echo: stock committed to GIT', exact.body?.ledger?.committed === true, JSON.stringify(exact.body?.ledger));
-  ok('D3 sales order created (non-posting)', !!exact.body?.ledger?.salesOrderNumber, JSON.stringify(exact.body?.ledger));
-  ok('D3 on-hand fell to exactly 0', approx(await qtyOnHand(), 0), `qty=${await qtyOnHand()}`);
-  ok('D3 GIT rose by cost 1200 (12 × 100)', approx(await acctBalance('1250'), base.git + 1200), `git=${await acctBalance('1250')}`);
+  ok(
+    'D3 exact allocation (12 of 12) accepted',
+    exact.status < 300 && !!exact.body?.id,
+    `status=${exact.status}`,
+  );
+  ok(
+    'D3 ledger echo: stock committed to GIT',
+    exact.body?.ledger?.committed === true,
+    JSON.stringify(exact.body?.ledger),
+  );
+  ok(
+    'D3 sales order created (non-posting)',
+    !!exact.body?.ledger?.salesOrderNumber,
+    JSON.stringify(exact.body?.ledger),
+  );
+  ok(
+    'D3 on-hand fell to exactly 0',
+    approx(await qtyOnHand(), 0),
+    `qty=${await qtyOnHand()}`,
+  );
+  ok(
+    'D3 GIT rose by cost 1200 (12 × 100)',
+    approx(await acctBalance('1250'), base.git + 1200),
+    `git=${await acctBalance('1250')}`,
+  );
   const oneMore = await mkDelivery(1);
-  ok('D3 one more unit rejected — inventory can never go negative', oneMore.status >= 400, `status=${oneMore.status}`);
-  ok('D3 on-hand still 0 (not negative)', (await qtyOnHand()) === 0, `qty=${await qtyOnHand()}`);
-  ok('D3 no revenue posted at assignment', approx(n((await pl())?.revenue), base.revenue), `rev=${n((await pl())?.revenue)}`);
+  ok(
+    'D3 one more unit rejected — inventory can never go negative',
+    oneMore.status >= 400,
+    `status=${oneMore.status}`,
+  );
+  ok(
+    'D3 on-hand still 0 (not negative)',
+    (await qtyOnHand()) === 0,
+    `qty=${await qtyOnHand()}`,
+  );
+  ok(
+    'D3 no revenue posted at assignment',
+    approx(n((await pl())?.revenue), base.revenue),
+    `rev=${n((await pl())?.revenue)}`,
+  );
   await invariants('D3 after exact allocation');
 
   // ── D4 return path: reject the pending POD → full reversal + restock ──
   for (const st of ['picked_up', 'in_transit', 'arrived']) {
-    await api('PATCH', `/deliveries/${exact.body.id}/status`, { status: st }, { token: riderTok });
+    await api(
+      'PATCH',
+      `/deliveries/${exact.body.id}/status`,
+      { status: st },
+      { token: riderTok },
+    );
   }
   const podReturn = await uploadPod(exact.body.id, riderTok, 'unpaid', [
-    { itemId, itemName: 'E2E Crate', beforeQty: 0, deliveredQty: 12, returnedQty: 0 },
+    {
+      itemId,
+      itemName: 'E2E Crate',
+      beforeQty: 0,
+      deliveredQty: 12,
+      returnedQty: 0,
+    },
   ]);
-  ok('D4 POD submitted for the returned delivery', podReturn.status === 201 && !!podReturn.requestId, `status=${podReturn.status}`);
-  const rejectRes = await api('POST', `/inventory-update-requests/${podReturn.requestId}/reject`, { reviewerComment: 'Customer refused — full return' });
-  ok('D4 admin rejects (return)', rejectRes.status < 300, `status=${rejectRes.status}`);
-  ok('D4 stock fully restored to 12', approx(await qtyOnHand(), 12), `qty=${await qtyOnHand()}`);
-  ok('D4 GIT reversed back to baseline (Dr 1200 / Cr 1250)', approx(await acctBalance('1250'), base.git), `git=${await acctBalance('1250')}`);
-  ok('D4 no revenue posted on return', approx(n((await pl())?.revenue), base.revenue), `rev=${n((await pl())?.revenue)}`);
+  ok(
+    'D4 POD submitted for the returned delivery',
+    podReturn.status === 201 && !!podReturn.requestId,
+    `status=${podReturn.status}`,
+  );
+  const rejectRes = await api(
+    'POST',
+    `/inventory-update-requests/${podReturn.requestId}/reject`,
+    { reviewerComment: 'Customer refused — full return' },
+  );
+  ok(
+    'D4 admin rejects (return)',
+    rejectRes.status < 300,
+    `status=${rejectRes.status}`,
+  );
+  ok(
+    'D4 stock fully restored to 12',
+    approx(await qtyOnHand(), 12),
+    `qty=${await qtyOnHand()}`,
+  );
+  ok(
+    'D4 GIT reversed back to baseline (Dr 1200 / Cr 1250)',
+    approx(await acctBalance('1250'), base.git),
+    `git=${await acctBalance('1250')}`,
+  );
+  ok(
+    'D4 no revenue posted on return',
+    approx(n((await pl())?.revenue), base.revenue),
+    `rev=${n((await pl())?.revenue)}`,
+  );
   await invariants('D4 after return reversal');
   await valuationTies('D4 after return');
 
   // ── D5 concurrency: two simultaneous 8-unit assignments, 12 in stock ──
   const [c1, c2] = await Promise.all([mkDelivery(8), mkDelivery(8)]);
   const winners = [c1, c2].filter((r) => r.status < 300);
-  ok('D5 exactly ONE of two concurrent 8-unit assignments succeeded', winners.length === 1, `successes=${winners.length}`);
-  ok('D5 on-hand 4 — the same stock was not sold twice', approx(await qtyOnHand(), 4), `qty=${await qtyOnHand()}`);
+  ok(
+    'D5 exactly ONE of two concurrent 8-unit assignments succeeded',
+    winners.length === 1,
+    `successes=${winners.length}`,
+  );
+  ok(
+    'D5 on-hand 4 — the same stock was not sold twice',
+    approx(await qtyOnHand(), 4),
+    `qty=${await qtyOnHand()}`,
+  );
   await invariants('D5 after concurrent assignment');
   const live = winners[0]?.body;
 
   // ── D6 rider view: scoping, ownership, status machine ──
   const rider2Delivery = await mkDelivery(1, {}, rider2UserId);
-  ok('D6 second delivery assigned to the other rider', rider2Delivery.status < 300, `status=${rider2Delivery.status}`);
-  const saimList = (await api('GET', '/deliveries?limit=100', undefined, { token: riderTok })).body;
+  ok(
+    'D6 second delivery assigned to the other rider',
+    rider2Delivery.status < 300,
+    `status=${rider2Delivery.status}`,
+  );
+  const saimList = (
+    await api('GET', '/deliveries?limit=100', undefined, { token: riderTok })
+  ).body;
   // The envelope interceptor lifts the inner `data` array of paged responses.
-  const saimRows = (Array.isArray(saimList) ? saimList : saimList?.data ?? []) as any[];
-  ok('D6 Saim sees ONLY his own deliveries', saimRows.length > 0 && saimRows.every((d) => (d.assignedTo ?? d.personnelId) === riderUserId), `rows=${saimRows.length}`);
-  ok("D6 other rider's delivery absent from Saim's list", !saimRows.some((d) => d.id === rider2Delivery.body?.id));
-  const foreignPatch = await api('PATCH', `/deliveries/${rider2Delivery.body?.id}/status`, { status: 'picked_up' }, { token: riderTok });
-  ok("D6 Saim cannot advance another rider's delivery (403)", foreignPatch.status === 403, `status=${foreignPatch.status}`);
-  const riderCancel = await api('PATCH', `/deliveries/${rider2Delivery.body?.id}/status`, { status: 'cancelled' }, { token: rider2Tok });
-  ok('D6 rider cannot cancel a delivery (403)', riderCancel.status === 403, `status=${riderCancel.status}`);
+  const saimRows = (
+    Array.isArray(saimList) ? saimList : (saimList?.data ?? [])
+  ) as any[];
+  ok(
+    'D6 Saim sees ONLY his own deliveries',
+    saimRows.length > 0 &&
+      saimRows.every((d) => (d.assignedTo ?? d.personnelId) === riderUserId),
+    `rows=${saimRows.length}`,
+  );
+  ok(
+    "D6 other rider's delivery absent from Saim's list",
+    !saimRows.some((d) => d.id === rider2Delivery.body?.id),
+  );
+  const foreignPatch = await api(
+    'PATCH',
+    `/deliveries/${rider2Delivery.body?.id}/status`,
+    { status: 'picked_up' },
+    { token: riderTok },
+  );
+  ok(
+    "D6 Saim cannot advance another rider's delivery (403)",
+    foreignPatch.status === 403,
+    `status=${foreignPatch.status}`,
+  );
+  const riderCancel = await api(
+    'PATCH',
+    `/deliveries/${rider2Delivery.body?.id}/status`,
+    { status: 'cancelled' },
+    { token: rider2Tok },
+  );
+  ok(
+    'D6 rider cannot cancel a delivery (403)',
+    riderCancel.status === 403,
+    `status=${riderCancel.status}`,
+  );
   // Admin cancels the second delivery: the dispatched unit must come back on
   // the shelf and its Goods in Transit reverse (Dr 1200 / Cr 1250).
-  const adminCancel = await api('PATCH', `/deliveries/${rider2Delivery.body?.id}/status`, { status: 'cancelled', notes: 'QA — cancel releases stock' });
-  ok('D6 admin cancels the other delivery', adminCancel.status < 300, `status=${adminCancel.status}`);
-  ok('D6 cancelled delivery restocked its unit (on-hand back to 4)', approx(await qtyOnHand(), 4), `qty=${await qtyOnHand()}`);
-  ok('D6 cancelled delivery released its GIT value', approx(await acctBalance('1250'), base.git + 800), `git=${await acctBalance('1250')}`);
+  const adminCancel = await api(
+    'PATCH',
+    `/deliveries/${rider2Delivery.body?.id}/status`,
+    { status: 'cancelled', notes: 'QA — cancel releases stock' },
+  );
+  ok(
+    'D6 admin cancels the other delivery',
+    adminCancel.status < 300,
+    `status=${adminCancel.status}`,
+  );
+  ok(
+    'D6 cancelled delivery restocked its unit (on-hand back to 4)',
+    approx(await qtyOnHand(), 4),
+    `qty=${await qtyOnHand()}`,
+  );
+  ok(
+    'D6 cancelled delivery released its GIT value',
+    approx(await acctBalance('1250'), base.git + 800),
+    `git=${await acctBalance('1250')}`,
+  );
 
-  const skip = await api('PATCH', `/deliveries/${live.id}/status`, { status: 'delivered' }, { token: riderTok });
-  ok('D6 skipping ahead (pending → delivered) rejected', skip.status >= 400, `status=${skip.status}`);
-  const s1 = await api('PATCH', `/deliveries/${live.id}/status`, { status: 'picked_up' }, { token: riderTok });
+  const skip = await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'delivered' },
+    { token: riderTok },
+  );
+  ok(
+    'D6 skipping ahead (pending → delivered) rejected',
+    skip.status >= 400,
+    `status=${skip.status}`,
+  );
+  const s1 = await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'picked_up' },
+    { token: riderTok },
+  );
   ok('D6 pending → picked_up allowed', s1.status < 300, `status=${s1.status}`);
-  const replay = await api('PATCH', `/deliveries/${live.id}/status`, { status: 'picked_up' }, { token: riderTok });
-  ok('D6 double-tap (replay picked_up) succeeds as a no-op', replay.status < 300, `status=${replay.status}`);
-  const hist = (await api('GET', `/deliveries/${live.id}/history?limit=100`)).body;
+  const replay = await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'picked_up' },
+    { token: riderTok },
+  );
+  ok(
+    'D6 double-tap (replay picked_up) succeeds as a no-op',
+    replay.status < 300,
+    `status=${replay.status}`,
+  );
+  const hist = (await api('GET', `/deliveries/${live.id}/history?limit=100`))
+    .body;
   const histRows = (hist?.data ?? hist ?? []) as any[];
-  ok('D6 replay wrote NO duplicate history row', histRows.filter((h) => h.status === 'picked_up').length === 1,
-    `picked_up rows=${histRows.filter((h) => h.status === 'picked_up').length}`);
-  await api('PATCH', `/deliveries/${live.id}/status`, { status: 'in_transit' }, { token: riderTok });
-  const backward = await api('PATCH', `/deliveries/${live.id}/status`, { status: 'picked_up' }, { token: riderTok });
-  ok('D6 going backward (in_transit → picked_up) rejected', backward.status >= 400, `status=${backward.status}`);
-  const arrived = await api('PATCH', `/deliveries/${live.id}/status`, { status: 'arrived' }, { token: riderTok });
-  ok('D6 in_transit → arrived allowed', arrived.status < 300, `status=${arrived.status}`);
+  ok(
+    'D6 replay wrote NO duplicate history row',
+    histRows.filter((h) => h.status === 'picked_up').length === 1,
+    `picked_up rows=${histRows.filter((h) => h.status === 'picked_up').length}`,
+  );
+  await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'in_transit' },
+    { token: riderTok },
+  );
+  const backward = await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'picked_up' },
+    { token: riderTok },
+  );
+  ok(
+    'D6 going backward (in_transit → picked_up) rejected',
+    backward.status >= 400,
+    `status=${backward.status}`,
+  );
+  const arrived = await api(
+    'PATCH',
+    `/deliveries/${live.id}/status`,
+    { status: 'arrived' },
+    { token: riderTok },
+  );
+  ok(
+    'D6 in_transit → arrived allowed',
+    arrived.status < 300,
+    `status=${arrived.status}`,
+  );
 
   // ── D7 rider marks PAID + POD photo; rider posts NOTHING ──
   const cashBeforePod = await acctBalance('1000');
   const pod = await uploadPod(live.id, riderTok, 'paid', [
-    { itemId, itemName: 'E2E Crate', beforeQty: 4, deliveredQty: 8, returnedQty: 0 },
+    {
+      itemId,
+      itemName: 'E2E Crate',
+      beforeQty: 4,
+      deliveredQty: 8,
+      returnedQty: 0,
+    },
   ]);
-  ok('D7 POD photo + PAID flag submitted', pod.status === 201 && !!pod.requestId, `status=${pod.status}`);
-  ok('D7 rider action posted NOTHING (GIT/cash unchanged)',
-    approx(await acctBalance('1250'), base.git + 800) && approx(await acctBalance('1000'), cashBeforePod),
-    `git=${await acctBalance('1250')} cash=${await acctBalance('1000')}`);
+  ok(
+    'D7 POD photo + PAID flag submitted',
+    pod.status === 201 && !!pod.requestId,
+    `status=${pod.status}`,
+  );
+  ok(
+    'D7 rider action posted NOTHING (GIT/cash unchanged)',
+    approx(await acctBalance('1250'), base.git + 800) &&
+      approx(await acctBalance('1000'), cashBeforePod),
+    `git=${await acctBalance('1250')} cash=${await acctBalance('1000')}`,
+  );
 
-  const queue = (await api('GET', '/inventory-update-requests?status=pending&limit=100')).body;
+  const queue = (
+    await api('GET', '/inventory-update-requests?status=pending&limit=100')
+  ).body;
   // The approval queue pages as { items, total, page, pageSize }.
-  const queueRows = (queue?.items ?? (Array.isArray(queue?.data) ? queue.data : queue?.data?.data) ?? (Array.isArray(queue) ? queue : [])) as any[];
+  const queueRows = (queue?.items ??
+    (Array.isArray(queue?.data) ? queue.data : queue?.data?.data) ??
+    (Array.isArray(queue) ? queue : [])) as any[];
   const card = queueRows.find((r) => r.id === pod.requestId);
   ok('D7 approval queue shows the pending request', !!card);
-  ok('D7 queue card carries PAID flag, amount, customer',
-    card?.paidStatus === 'paid' && approx(n(card?.saleAmount), 1320) && !!card?.customerName,
-    JSON.stringify({ paidStatus: card?.paidStatus, saleAmount: card?.saleAmount, customerName: card?.customerName }));
+  ok(
+    'D7 queue card carries PAID flag, amount, customer',
+    card?.paidStatus === 'paid' &&
+      approx(n(card?.saleAmount), 1320) &&
+      !!card?.customerName,
+    JSON.stringify({
+      paidStatus: card?.paidStatus,
+      saleAmount: card?.saleAmount,
+      customerName: card?.customerName,
+    }),
+  );
 
-  const adminPhoto = await fetch(`${API}/inventory-update-requests/${pod.requestId}/bill-photo`, {
-    headers: { Authorization: `Bearer ${token}`, 'x-company-id': companyId },
-  });
-  ok('D7 admin can view the POD photo', adminPhoto.status === 200 && (adminPhoto.headers.get('content-type') ?? '').startsWith('image/'), `status=${adminPhoto.status}`);
-  const ownerPhoto = await fetch(`${API}/inventory-update-requests/${pod.requestId}/bill-photo`, {
-    headers: { Authorization: `Bearer ${riderTok}`, 'x-company-id': companyId },
-  });
-  ok('D7 owner rider can view his own POD photo', ownerPhoto.status === 200, `status=${ownerPhoto.status}`);
-  const strangerPhoto = await fetch(`${API}/inventory-update-requests/${pod.requestId}/bill-photo`, {
-    headers: { Authorization: `Bearer ${rider2Tok}`, 'x-company-id': companyId },
-  });
-  ok("D7 another rider CANNOT view Saim's POD photo (403)", strangerPhoto.status === 403, `status=${strangerPhoto.status}`);
+  const adminPhoto = await fetch(
+    `${API}/inventory-update-requests/${pod.requestId}/bill-photo`,
+    {
+      headers: { Authorization: `Bearer ${token}`, 'x-company-id': companyId },
+    },
+  );
+  ok(
+    'D7 admin can view the POD photo',
+    adminPhoto.status === 200 &&
+      (adminPhoto.headers.get('content-type') ?? '').startsWith('image/'),
+    `status=${adminPhoto.status}`,
+  );
+  const ownerPhoto = await fetch(
+    `${API}/inventory-update-requests/${pod.requestId}/bill-photo`,
+    {
+      headers: {
+        Authorization: `Bearer ${riderTok}`,
+        'x-company-id': companyId,
+      },
+    },
+  );
+  ok(
+    'D7 owner rider can view his own POD photo',
+    ownerPhoto.status === 200,
+    `status=${ownerPhoto.status}`,
+  );
+  const strangerPhoto = await fetch(
+    `${API}/inventory-update-requests/${pod.requestId}/bill-photo`,
+    {
+      headers: {
+        Authorization: `Bearer ${rider2Tok}`,
+        'x-company-id': companyId,
+      },
+    },
+  );
+  ok(
+    "D7 another rider CANNOT view Saim's POD photo (403)",
+    strangerPhoto.status === 403,
+    `status=${strangerPhoto.status}`,
+  );
 
   // ── D8 admin approval (PAID): SO → invoice, Dr Cash / Cr Sales+Tax, COGS ──
-  const riderApprove = await api('POST', `/inventory-update-requests/${pod.requestId}/approve`, {}, { token: riderTok });
-  ok('D8 rider cannot approve (403)', riderApprove.status === 403, `status=${riderApprove.status}`);
-  const approve = await api('POST', `/inventory-update-requests/${pod.requestId}/approve`, {});
-  ok('D8 admin approval succeeds', approve.status < 300, `status=${approve.status} ${JSON.stringify(approve.body)?.slice(0, 120)}`);
+  const riderApprove = await api(
+    'POST',
+    `/inventory-update-requests/${pod.requestId}/approve`,
+    {},
+    { token: riderTok },
+  );
+  ok(
+    'D8 rider cannot approve (403)',
+    riderApprove.status === 403,
+    `status=${riderApprove.status}`,
+  );
+  const approve = await api(
+    'POST',
+    `/inventory-update-requests/${pod.requestId}/approve`,
+    {},
+  );
+  ok(
+    'D8 admin approval succeeds',
+    approve.status < 300,
+    `status=${approve.status} ${JSON.stringify(approve.body)?.slice(0, 120)}`,
+  );
   const led = approve.body?.ledger;
-  ok('D8 approval created invoice + payment (PAID)', !!led?.invoiceId && !!led?.paymentId, JSON.stringify(led));
-  ok('D8 Dr Cash 1,320 (1,200 + 10% tax)', approx(await acctBalance('1000'), cashBeforePod + 1320), `cash Δ=${(await acctBalance('1000')) - cashBeforePod}`);
-  ok('D8 Cr Sales Tax Payable +120', approx(await acctBalance('2300'), base.tax + 120), `tax=${await acctBalance('2300')}`);
-  ok('D8 Dr COGS +800 (8 × cost 100)', approx(await acctBalance('5000'), base.cogs + 800), `cogs=${await acctBalance('5000')}`);
-  ok('D8 Goods in Transit for this delivery nets to ZERO', approx(await acctBalance('1250'), base.git), `git=${await acctBalance('1250')}`);
+  ok(
+    'D8 approval created invoice + payment (PAID)',
+    !!led?.invoiceId && !!led?.paymentId,
+    JSON.stringify(led),
+  );
+  ok(
+    'D8 Dr Cash 1,320 (1,200 + 10% tax)',
+    approx(await acctBalance('1000'), cashBeforePod + 1320),
+    `cash Δ=${(await acctBalance('1000')) - cashBeforePod}`,
+  );
+  ok(
+    'D8 Cr Sales Tax Payable +120',
+    approx(await acctBalance('2300'), base.tax + 120),
+    `tax=${await acctBalance('2300')}`,
+  );
+  ok(
+    'D8 Dr COGS +800 (8 × cost 100)',
+    approx(await acctBalance('5000'), base.cogs + 800),
+    `cogs=${await acctBalance('5000')}`,
+  );
+  ok(
+    'D8 Goods in Transit for this delivery nets to ZERO',
+    approx(await acctBalance('1250'), base.git),
+    `git=${await acctBalance('1250')}`,
+  );
   const plPaid = await pl();
-  ok('D8 P&L shows the sale (+1,200) and COGS (+800)',
-    approx(n(plPaid?.revenue), base.revenue + 1200) && approx(n(plPaid?.cogs), base.cogs + 800),
-    `rev=${plPaid?.revenue} cogs=${plPaid?.cogs}`);
+  ok(
+    'D8 P&L shows the sale (+1,200) and COGS (+800)',
+    approx(n(plPaid?.revenue), base.revenue + 1200) &&
+      approx(n(plPaid?.cogs), base.cogs + 800),
+    `rev=${plPaid?.revenue} cogs=${plPaid?.cogs}`,
+  );
   await invariants('D8 after PAID approval');
   await valuationTies('D8 after PAID approval');
 
-  const approveTwice = await api('POST', `/inventory-update-requests/${pod.requestId}/approve`, {});
-  ok('D8 approving twice rejected (409) — no double post', approveTwice.status === 409, `status=${approveTwice.status}`);
-  ok('D8 books unchanged after replayed approval', approx(await acctBalance('1000'), cashBeforePod + 1320), `cash=${await acctBalance('1000')}`);
+  const approveTwice = await api(
+    'POST',
+    `/inventory-update-requests/${pod.requestId}/approve`,
+    {},
+  );
+  ok(
+    'D8 approving twice rejected (409) — no double post',
+    approveTwice.status === 409,
+    `status=${approveTwice.status}`,
+  );
+  ok(
+    'D8 books unchanged after replayed approval',
+    approx(await acctBalance('1000'), cashBeforePod + 1320),
+    `cash=${await acctBalance('1000')}`,
+  );
 
   // ── D9 NOT-PAID cycle: open invoice in A/R → aging → later payment ──
   const unpaidDel = await mkDelivery(3);
-  ok('D9 unpaid delivery assigned (3 units)', unpaidDel.status < 300, `status=${unpaidDel.status}`);
+  ok(
+    'D9 unpaid delivery assigned (3 units)',
+    unpaidDel.status < 300,
+    `status=${unpaidDel.status}`,
+  );
   for (const st of ['picked_up', 'in_transit', 'arrived']) {
-    await api('PATCH', `/deliveries/${unpaidDel.body.id}/status`, { status: st }, { token: riderTok });
+    await api(
+      'PATCH',
+      `/deliveries/${unpaidDel.body.id}/status`,
+      { status: st },
+      { token: riderTok },
+    );
   }
   const podUnpaid = await uploadPod(unpaidDel.body.id, riderTok, 'unpaid', [
-    { itemId, itemName: 'E2E Crate', beforeQty: 1, deliveredQty: 3, returnedQty: 0 },
+    {
+      itemId,
+      itemName: 'E2E Crate',
+      beforeQty: 1,
+      deliveredQty: 3,
+      returnedQty: 0,
+    },
   ]);
-  ok('D9 POD submitted NOT PAID', podUnpaid.status === 201 && !!podUnpaid.requestId, `status=${podUnpaid.status}`);
+  ok(
+    'D9 POD submitted NOT PAID',
+    podUnpaid.status === 201 && !!podUnpaid.requestId,
+    `status=${podUnpaid.status}`,
+  );
   const arBefore = await acctBalance('1100');
-  const approveUnpaid = await api('POST', `/inventory-update-requests/${podUnpaid.requestId}/approve`, {});
-  ok('D9 approval succeeds', approveUnpaid.status < 300, `status=${approveUnpaid.status}`);
+  const approveUnpaid = await api(
+    'POST',
+    `/inventory-update-requests/${podUnpaid.requestId}/approve`,
+    {},
+  );
+  ok(
+    'D9 approval succeeds',
+    approveUnpaid.status < 300,
+    `status=${approveUnpaid.status}`,
+  );
   const ledU = approveUnpaid.body?.ledger;
-  ok('D9 invoiced on credit — invoice, NO payment', !!ledU?.invoiceId && !ledU?.paymentId, JSON.stringify(ledU));
-  ok('D9 Dr A/R +495 (450 + 10% tax)', approx(await acctBalance('1100'), arBefore + 495), `ar Δ=${(await acctBalance('1100')) - arBefore}`);
-  ok('D9 GIT nets to ZERO again', approx(await acctBalance('1250'), base.git), `git=${await acctBalance('1250')}`);
-  ok('D9 open invoice appears in A/R aging (+495)', approx(await agingTotal(), base.aging + 495), `aging=${await agingTotal()}`);
+  ok(
+    'D9 invoiced on credit — invoice, NO payment',
+    !!ledU?.invoiceId && !ledU?.paymentId,
+    JSON.stringify(ledU),
+  );
+  ok(
+    'D9 Dr A/R +495 (450 + 10% tax)',
+    approx(await acctBalance('1100'), arBefore + 495),
+    `ar Δ=${(await acctBalance('1100')) - arBefore}`,
+  );
+  ok(
+    'D9 GIT nets to ZERO again',
+    approx(await acctBalance('1250'), base.git),
+    `git=${await acctBalance('1250')}`,
+  );
+  ok(
+    'D9 open invoice appears in A/R aging (+495)',
+    approx(await agingTotal(), base.aging + 495),
+    `aging=${await agingTotal()}`,
+  );
   await invariants('D9 after NOT-PAID approval');
 
   const payLater = await api('POST', '/payments', {
-    customerId, paymentDate: TODAY, paymentMethod: 'cash', amount: '495.00',
+    customerId,
+    paymentDate: TODAY,
+    paymentMethod: 'cash',
+    amount: '495.00',
     applications: [{ invoiceId: ledU?.invoiceId, amount: '495.00' }],
   });
-  ok('D9 later Receive Payment accepted (Dr Cash / Cr A/R)', payLater.status < 300, `status=${payLater.status}`);
-  ok('D9 A/R cleared back to baseline', approx(await acctBalance('1100'), arBefore), `ar=${await acctBalance('1100')}`);
+  ok(
+    'D9 later Receive Payment accepted (Dr Cash / Cr A/R)',
+    payLater.status < 300,
+    `status=${payLater.status}`,
+  );
+  ok(
+    'D9 A/R cleared back to baseline',
+    approx(await acctBalance('1100'), arBefore),
+    `ar=${await acctBalance('1100')}`,
+  );
   const invAfterPay = (await api('GET', `/invoices/${ledU?.invoiceId}`)).body;
   const invStatus = invAfterPay?.invoice?.status ?? invAfterPay?.status;
   ok('D9 invoice status = paid', invStatus === 'paid', `status=${invStatus}`);
@@ -402,18 +847,38 @@ async function deliveryE2E() {
     ['GET', '/accounts'],
     ['GET', '/journal-entries'],
     ['POST', '/journal-entries', { entryDate: TODAY, lines: [] }],
-    ['POST', '/invoices', { customerId, invoiceDate: TODAY, dueDate: TODAY, lines: [] }],
-    ['POST', '/payments', { customerId, paymentDate: TODAY, paymentMethod: 'cash', amount: '1' }],
+    [
+      'POST',
+      '/invoices',
+      { customerId, invoiceDate: TODAY, dueDate: TODAY, lines: [] },
+    ],
+    [
+      'POST',
+      '/payments',
+      { customerId, paymentDate: TODAY, paymentMethod: 'cash', amount: '1' },
+    ],
     ['POST', '/deliveries', { customerId, items: [] }],
   ];
   for (const [method, path, body] of financialProbes) {
     const r = await api(method, path, body, { token: riderTok });
-    ok(`D10 rider 403 on ${method} ${path}`, r.status === 403, `status=${r.status}`);
+    ok(
+      `D10 rider 403 on ${method} ${path}`,
+      r.status === 403,
+      `status=${r.status}`,
+    );
   }
 
   // ── Final: everything ties ──
-  ok('DF Goods in Transit nets to ZERO across all completed deliveries', approx(await acctBalance('1250'), base.git), `git=${await acctBalance('1250')}`);
-  ok('DF on-hand never went negative (1 left of 12)', approx(await qtyOnHand(), 1), `qty=${await qtyOnHand()}`);
+  ok(
+    'DF Goods in Transit nets to ZERO across all completed deliveries',
+    approx(await acctBalance('1250'), base.git),
+    `git=${await acctBalance('1250')}`,
+  );
+  ok(
+    'DF on-hand never went negative (1 left of 12)',
+    approx(await qtyOnHand(), 1),
+    `qty=${await qtyOnHand()}`,
+  );
   await invariants('DF final');
   await valuationTies('DF final');
 }
@@ -432,7 +897,10 @@ async function uploadPod(
   fd.append('changes', JSON.stringify(changes));
   const res = await fetch(`${API}/deliveries/${deliveryId}/bill-photo`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${riderToken}`, 'x-company-id': companyId },
+    headers: {
+      Authorization: `Bearer ${riderToken}`,
+      'x-company-id': companyId,
+    },
     body: fd as any,
   });
   const body: any = await res.json().catch(() => null);
@@ -443,9 +911,13 @@ async function run() {
   console.log(`\nFinMatrix Acceptance Suite → ${API}\n`);
 
   // ── Auth ──
-  const signin = await api('POST', '/auth/signin', { email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
+  const signin = await api('POST', '/auth/signin', {
+    email: ADMIN_EMAIL,
+    password: ADMIN_PASSWORD,
+  });
   token = signin.body?.tokens?.accessToken;
-  companyId = signin.body?.user?.companyId || signin.body?.user?.defaultCompanyId;
+  companyId =
+    signin.body?.user?.companyId || signin.body?.user?.defaultCompanyId;
   ok('admin signs in', !!token && !!companyId);
   if (!token) {
     console.error('Cannot continue without auth.');
@@ -455,7 +927,11 @@ async function run() {
   // ── Invariant helpers ──
   async function invariants(label: string) {
     const tb = (await api('GET', '/reports/trial-balance')).body;
-    ok(`[${label}] Trial Balance balanced`, !!tb?.isBalanced, `Dr=${tb?.totalDebits} Cr=${tb?.totalCredits}`);
+    ok(
+      `[${label}] Trial Balance balanced`,
+      !!tb?.isBalanced,
+      `Dr=${tb?.totalDebits} Cr=${tb?.totalCredits}`,
+    );
     const bs = (await api('GET', '/reports/balance-sheet')).body;
     ok(
       `[${label}] Balance Sheet balanced (A = L + E)`,
@@ -469,20 +945,27 @@ async function run() {
   // ── #1 Opening balance posts an offset → TB still balanced ──
   const acctNum = `1099-${Date.now() % 100000}`;
   const created = await api('POST', '/accounts', {
-    accountNumber: acctNum, name: 'Acceptance Opening', type: 'asset', subType: 'Cash', openingBalance: '5000',
+    accountNumber: acctNum,
+    name: 'Acceptance Opening',
+    type: 'asset',
+    subType: 'Cash',
+    openingBalance: '5000',
   });
-  ok('#1 create account with opening balance', created.status < 300 && !!created.body?.id);
+  ok(
+    '#1 create account with opening balance',
+    created.status < 300 && !!created.body?.id,
+  );
   const obe = await acctBalance('3900');
   ok('#1 Opening Balance Equity exists/credited', obe !== 0);
   await invariants('after opening balance');
 
   // ── Resolve master data ──
   const customerId = await firstId('/customers');
-  const cashId = (await (async () => {
+  const cashId = await (async () => {
     const { body } = await api('GET', '/accounts?search=1000');
     const arr = body?.accounts ?? body ?? [];
     return (arr as any[]).find((a) => a.accountNumber === '1000')?.id;
-  })());
+  })();
   // Inventory is a TIER feature: warehouse companies have it, large_org and
   // small_business do not (FEATURE_MAP). This suite runs against whichever
   // demo company it is pointed at, so probe rather than assume — the endpoint
@@ -502,7 +985,8 @@ async function run() {
   const item = items
     .filter((i) => n(i.unitCost) > 0)
     .sort((a, b) => n(b.quantityOnHand) - n(a.quantityOnHand))[0];
-  const hasInventory = itemsRes.status < 300 && !!item && n(item.quantityOnHand) >= 5;
+  const hasInventory =
+    itemsRes.status < 300 && !!item && n(item.quantityOnHand) >= 5;
   console.log(
     hasInventory
       ? `  · inventory available (${item.name}, ${n(item.quantityOnHand)} on hand) — COGS and restock assertions included`
@@ -513,31 +997,68 @@ async function run() {
   const cogsBefore = await acctBalance('5000');
   const qtyBefore = n(item?.quantityOnHand);
   const invoiceLine = hasInventory
-    ? { description: item.name, quantity: '3', unitPrice: item.sellingPrice, taxRate: '17', itemId: item.id }
-    : { description: 'Acceptance service line', quantity: '3', unitPrice: '100', taxRate: '17', lineKind: 'service' };
+    ? {
+        description: item.name,
+        quantity: '3',
+        unitPrice: item.sellingPrice,
+        taxRate: '17',
+        itemId: item.id,
+      }
+    : {
+        description: 'Acceptance service line',
+        quantity: '3',
+        unitPrice: '100',
+        taxRate: '17',
+        lineKind: 'service',
+      };
   const inv = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
+    customerId,
+    invoiceDate: '2026-06-24',
+    dueDate: '2026-07-24',
+    status: 'sent',
     lines: [invoiceLine],
   });
-  ok('#2 issue invoice', inv.status < 300 && !!inv.body?.id, `status=${inv.status}`);
+  ok(
+    '#2 issue invoice',
+    inv.status < 300 && !!inv.body?.id,
+    `status=${inv.status}`,
+  );
   if (hasInventory) {
     const cogsAfter = await acctBalance('5000');
-    ok('#2 COGS increased by qty×cost', approx(cogsAfter - cogsBefore, 3 * n(item.unitCost)), `Δ=${cogsAfter - cogsBefore}`);
+    ok(
+      '#2 COGS increased by qty×cost',
+      approx(cogsAfter - cogsBefore, 3 * n(item.unitCost)),
+      `Δ=${cogsAfter - cogsBefore}`,
+    );
     const itemAfter = (await api('GET', `/inventory/items/${item.id}`)).body;
-    const qtyAfter = n(itemAfter?.quantityOnHand ?? itemAfter?.item?.quantityOnHand);
-    ok('#2 quantity on hand reduced by 3', approx(qtyBefore - qtyAfter, 3), `before=${qtyBefore} after=${qtyAfter}`);
+    const qtyAfter = n(
+      itemAfter?.quantityOnHand ?? itemAfter?.item?.quantityOnHand,
+    );
+    ok(
+      '#2 quantity on hand reduced by 3',
+      approx(qtyBefore - qtyAfter, 3),
+      `before=${qtyBefore} after=${qtyAfter}`,
+    );
   } else {
-    ok('#2 no COGS movement without stock tracking',
-      approx(await acctBalance('5000'), cogsBefore));
+    ok(
+      '#2 no COGS movement without stock tracking',
+      approx(await acctBalance('5000'), cogsBefore),
+    );
   }
   await invariants('after invoice');
 
   // ── #3 Receive full payment → invoice paid ──
   const invFull = (await api('GET', `/invoices/${inv.body.id}`)).body;
-  const invTotal = n(invFull?.invoice?.total ?? invFull?.total ?? inv.body.total);
+  const invTotal = n(
+    invFull?.invoice?.total ?? invFull?.total ?? inv.body.total,
+  );
   const pay = await api('POST', '/payments', {
-    customerId, paymentDate: '2026-06-24', paymentMethod: 'cash', amount: String(invTotal),
-    bankAccountId: cashId, applications: [{ invoiceId: inv.body.id, amount: String(invTotal) }],
+    customerId,
+    paymentDate: '2026-06-24',
+    paymentMethod: 'cash',
+    amount: String(invTotal),
+    bankAccountId: cashId,
+    applications: [{ invoiceId: inv.body.id, amount: String(invTotal) }],
   });
   ok('#3 receive full payment', pay.status < 300);
   const invPaid = (await api('GET', `/invoices/${inv.body.id}`)).body;
@@ -547,10 +1068,25 @@ async function run() {
 
   // ── #10 Void invoice → reversing entry (+ restock when stock is tracked) ──
   const voidLine = hasInventory
-    ? { description: item.name, quantity: '2', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id }
-    : { description: 'Acceptance void line', quantity: '2', unitPrice: '100', taxRate: '0', lineKind: 'service' };
+    ? {
+        description: item.name,
+        quantity: '2',
+        unitPrice: item.sellingPrice,
+        taxRate: '0',
+        itemId: item.id,
+      }
+    : {
+        description: 'Acceptance void line',
+        quantity: '2',
+        unitPrice: '100',
+        taxRate: '0',
+        lineKind: 'service',
+      };
   const inv2 = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
+    customerId,
+    invoiceDate: '2026-06-24',
+    dueDate: '2026-07-24',
+    status: 'sent',
     lines: [voidLine],
   });
   const readQty = async () => {
@@ -560,22 +1096,31 @@ async function run() {
   };
   const arBeforeVoid = await acctBalance('1100');
   const qtyBeforeVoid = await readQty();
-  const voided = await api('POST', `/invoices/${inv2.body.id}/void`, { reason: 'acceptance test' });
+  const voided = await api('POST', `/invoices/${inv2.body.id}/void`, {
+    reason: 'acceptance test',
+  });
   ok('#10 void invoice', voided.status < 300);
   if (hasInventory) {
     const qtyAfterVoid = await readQty();
-    ok('#10 stock restored on void', approx(qtyAfterVoid - qtyBeforeVoid, 2), `Δ=${qtyAfterVoid - qtyBeforeVoid}`);
+    ok(
+      '#10 stock restored on void',
+      approx(qtyAfterVoid - qtyBeforeVoid, 2),
+      `Δ=${qtyAfterVoid - qtyBeforeVoid}`,
+    );
   }
   // Derive the expected release from the invoice itself: the line price is the
   // item's selling price when stock is tracked and a fixed 100 when it is not,
   // so a hard-coded figure is only right in one of the two branches.
   const inv2Total = n(
-    (await api('GET', `/invoices/${inv2.body.id}`)).body?.invoice?.total
-      ?? (await api('GET', `/invoices/${inv2.body.id}`)).body?.total
-      ?? inv2.body?.total,
+    (await api('GET', `/invoices/${inv2.body.id}`)).body?.invoice?.total ??
+      (await api('GET', `/invoices/${inv2.body.id}`)).body?.total ??
+      inv2.body?.total,
   );
-  ok('#10 A/R released on void', approx(await acctBalance('1100'), arBeforeVoid - inv2Total),
-    `before=${arBeforeVoid} after=${await acctBalance('1100')} total=${inv2Total}`);
+  ok(
+    '#10 A/R released on void',
+    approx(await acctBalance('1100'), arBeforeVoid - inv2Total),
+    `before=${arBeforeVoid} after=${await acctBalance('1100')} total=${inv2Total}`,
+  );
   await invariants('after void');
 
   // ── #11 Tax payment → Tax Payable down, Cash down ──
@@ -583,25 +1128,67 @@ async function run() {
   if (taxRateId) {
     const tpBefore = await acctBalance('2300');
     const tp = await api('POST', '/taxes/payments', {
-      taxRateId, period: '2026-Q2', amount: '500', paymentDate: '2026-06-24',
+      taxRateId,
+      period: '2026-Q2',
+      amount: '500',
+      paymentDate: '2026-06-24',
     });
     ok('#11 tax payment posts', tp.status < 300);
     const tpAfter = await acctBalance('2300');
-    ok('#11 Tax Payable reduced by 500', approx(tpBefore - tpAfter, 500), `Δ=${tpBefore - tpAfter}`);
+    ok(
+      '#11 Tax Payable reduced by 500',
+      approx(tpBefore - tpAfter, 500),
+      `Δ=${tpBefore - tpAfter}`,
+    );
     await invariants('after tax payment');
   }
 
   // ── #15 Idempotency: replay create returns the same invoice ──
   const key = `acc-idem-${Date.now()}`;
-  const r1 = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
-  }, { headers: { 'Idempotency-Key': key } });
-  const r2 = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'idem', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
-  }, { headers: { 'Idempotency-Key': key } });
-  ok('#15 idempotent replay returns same invoice', !!r1.body?.id && r1.body.id === r2.body.id);
+  const r1 = await api(
+    'POST',
+    '/invoices',
+    {
+      customerId,
+      invoiceDate: '2026-06-24',
+      dueDate: '2026-07-24',
+      status: 'sent',
+      lines: [
+        {
+          description: 'idem',
+          quantity: '1',
+          unitPrice: '100',
+          taxRate: '0',
+          lineKind: 'service',
+        },
+      ],
+    },
+    { headers: { 'Idempotency-Key': key } },
+  );
+  const r2 = await api(
+    'POST',
+    '/invoices',
+    {
+      customerId,
+      invoiceDate: '2026-06-24',
+      dueDate: '2026-07-24',
+      status: 'sent',
+      lines: [
+        {
+          description: 'idem',
+          quantity: '1',
+          unitPrice: '100',
+          taxRate: '0',
+          lineKind: 'service',
+        },
+      ],
+    },
+    { headers: { 'Idempotency-Key': key } },
+  );
+  ok(
+    '#15 idempotent replay returns same invoice',
+    !!r1.body?.id && r1.body.id === r2.body.id,
+  );
 
   // ── #16 Period lock blocks a posting in a closed period ──
   // Closing the books goes through its own endpoint now: it is tier-gated by
@@ -611,41 +1198,99 @@ async function run() {
   const closeRes = await api('POST', `/companies/${companyId}/period-close`, {
     lockDate: '2025-12-31',
   });
-  ok('#16 books closed through 2025-12-31', closeRes.status < 300, `status=${closeRes.status}`);
+  ok(
+    '#16 books closed through 2025-12-31',
+    closeRes.status < 300,
+    `status=${closeRes.status}`,
+  );
   const locked = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2025-06-15', dueDate: '2025-07-15', status: 'sent',
-    lines: [{ description: 'locked', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
+    customerId,
+    invoiceDate: '2025-06-15',
+    dueDate: '2025-07-15',
+    status: 'sent',
+    lines: [
+      {
+        description: 'locked',
+        quantity: '1',
+        unitPrice: '100',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
-  ok('#16 posting in locked period rejected', locked.status >= 400, `status=${locked.status}`);
+  ok(
+    '#16 posting in locked period rejected',
+    locked.status >= 400,
+    `status=${locked.status}`,
+  );
   await api('POST', `/companies/${companyId}/period-reopen`);
 
   // ── #18 Role enforcement: rider rejected by financial endpoints ──
   const riderSignin = await signinRetry(RIDER_EMAIL, RIDER_PASSWORD);
   const riderTok = riderSignin.body?.tokens?.accessToken;
   if (riderTok) {
-    const a = await api('GET', '/reports/trial-balance', undefined, { token: riderTok });
-    ok('#18 rider blocked from trial balance', a.status === 403, `status=${a.status}`);
-    const b = await api('POST', '/invoices', { customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', lines: [] }, { token: riderTok });
-    ok('#18 rider blocked from creating invoice', b.status === 403, `status=${b.status}`);
+    const a = await api('GET', '/reports/trial-balance', undefined, {
+      token: riderTok,
+    });
+    ok(
+      '#18 rider blocked from trial balance',
+      a.status === 403,
+      `status=${a.status}`,
+    );
+    const b = await api(
+      'POST',
+      '/invoices',
+      {
+        customerId,
+        invoiceDate: '2026-06-24',
+        dueDate: '2026-07-24',
+        lines: [],
+      },
+      { token: riderTok },
+    );
+    ok(
+      '#18 rider blocked from creating invoice',
+      b.status === 403,
+      `status=${b.status}`,
+    );
   } else {
     ok('#18 rider sign-in (skipped — no rider)', true);
   }
 
   // ── #19 Concurrency: two payments on one invoice cannot overpay ──
   const inv3 = await api('POST', '/invoices', {
-    customerId, invoiceDate: '2026-06-24', dueDate: '2026-07-24', status: 'sent',
-    lines: [{ description: 'conc', quantity: '1', unitPrice: '1000', taxRate: '0', lineKind: 'service' }],
+    customerId,
+    invoiceDate: '2026-06-24',
+    dueDate: '2026-07-24',
+    status: 'sent',
+    lines: [
+      {
+        description: 'conc',
+        quantity: '1',
+        unitPrice: '1000',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
   const payBody = {
-    customerId, paymentDate: '2026-06-24', paymentMethod: 'cash', amount: '1000',
-    bankAccountId: cashId, applications: [{ invoiceId: inv3.body.id, amount: '1000' }],
+    customerId,
+    paymentDate: '2026-06-24',
+    paymentMethod: 'cash',
+    amount: '1000',
+    bankAccountId: cashId,
+    applications: [{ invoiceId: inv3.body.id, amount: '1000' }],
   };
   const [c1, c2] = await Promise.all([
     api('POST', '/payments', payBody),
     api('POST', '/payments', payBody),
   ]);
   const successes = [c1, c2].filter((r) => r.status < 300).length;
-  ok('#19 only one of two concurrent payments succeeds', successes === 1, `successes=${successes}`);
+  ok(
+    '#19 only one of two concurrent payments succeeds',
+    successes === 1,
+    `successes=${successes}`,
+  );
   const inv3Final = (await api('GET', `/invoices/${inv3.body.id}`)).body;
   const paid = n(inv3Final?.invoice?.amountPaid ?? inv3Final?.amountPaid);
   ok('#19 invoice not overpaid', approx(paid, 1000), `amountPaid=${paid}`);
@@ -671,17 +1316,35 @@ async function run() {
       })()
     : 0;
   if (hasInventory && stockNow >= 4) {
-    const lineOf = (o: any) => (o?.estimate ?? o?.salesOrder ?? o?.invoice ?? o)?.lines?.[0];
-    const estLine = { description: item.name, quantity: '1', unitPrice: item.sellingPrice, taxRate: '0', itemId: item.id };
+    const lineOf = (o: any) =>
+      (o?.estimate ?? o?.salesOrder ?? o?.invoice ?? o)?.lines?.[0];
+    const estLine = {
+      description: item.name,
+      quantity: '1',
+      unitPrice: item.sellingPrice,
+      taxRate: '0',
+      itemId: item.id,
+    };
 
     // Create → read back. Covers the migration, the entity column and the
     // spread that persists computeTotals' output.
     const est = await api('POST', '/estimates', {
-      customerId, estimateDate: '2026-06-24', status: 'sent', lines: [estLine],
+      customerId,
+      estimateDate: '2026-06-24',
+      status: 'sent',
+      lines: [estLine],
     });
-    ok('#2b create estimate with an item', est.status < 300 && !!est.body?.id, `status=${est.status}`);
+    ok(
+      '#2b create estimate with an item',
+      est.status < 300 && !!est.body?.id,
+      `status=${est.status}`,
+    );
     const estRead = (await api('GET', `/estimates/${est.body.id}`)).body;
-    ok('#2b estimate line keeps its itemId', lineOf(estRead)?.itemId === item.id, `got=${lineOf(estRead)?.itemId}`);
+    ok(
+      '#2b estimate line keeps its itemId',
+      lineOf(estRead)?.itemId === item.id,
+      `got=${lineOf(estRead)?.itemId}`,
+    );
 
     // Edit → read back. The update path DELETES and recreates every line, so
     // this is a separate risk from create.
@@ -690,67 +1353,144 @@ async function run() {
     });
     ok('#2b edit estimate', estPatch.status < 300, `status=${estPatch.status}`);
     const estEdited = (await api('GET', `/estimates/${est.body.id}`)).body;
-    ok('#2b itemId survives a line rewrite', lineOf(estEdited)?.itemId === item.id, `got=${lineOf(estEdited)?.itemId}`);
+    ok(
+      '#2b itemId survives a line rewrite',
+      lineOf(estEdited)?.itemId === item.id,
+      `got=${lineOf(estEdited)?.itemId}`,
+    );
 
     // Estimate → sales order. The third conversion path, and the one with no
     // ledger effect of its own — it just has to carry the link one hop.
-    const so = await api('POST', `/estimates/${est.body.id}/convert-to-sales-order`);
-    ok('#2b convert estimate → sales order', so.status < 300, `status=${so.status}`);
+    const so = await api(
+      'POST',
+      `/estimates/${est.body.id}/convert-to-sales-order`,
+    );
+    ok(
+      '#2b convert estimate → sales order',
+      so.status < 300,
+      `status=${so.status}`,
+    );
     const soId = (so.body?.salesOrder ?? so.body)?.id;
     const soRead = (await api('GET', `/sales-orders/${soId}`)).body;
-    ok('#2b sales order line carries the itemId', lineOf(soRead)?.itemId === item.id, `got=${lineOf(soRead)?.itemId}`);
+    ok(
+      '#2b sales order line carries the itemId',
+      lineOf(soRead)?.itemId === item.id,
+      `got=${lineOf(soRead)?.itemId}`,
+    );
 
     // Same delete-and-recreate hazard as the estimate PATCH above.
-    const soPatch = await api('PATCH', `/sales-orders/${soId}`, { lines: [{ ...estLine, quantity: '1' }] });
-    ok('#2b edit sales order', soPatch.status < 300, `status=${soPatch.status}`);
-    ok('#2b itemId survives a sales-order line rewrite',
-      lineOf((await api('GET', `/sales-orders/${soId}`)).body)?.itemId === item.id);
+    const soPatch = await api('PATCH', `/sales-orders/${soId}`, {
+      lines: [{ ...estLine, quantity: '1' }],
+    });
+    ok(
+      '#2b edit sales order',
+      soPatch.status < 300,
+      `status=${soPatch.status}`,
+    );
+    ok(
+      '#2b itemId survives a sales-order line rewrite',
+      lineOf((await api('GET', `/sales-orders/${soId}`)).body)?.itemId ===
+        item.id,
+    );
 
     // Sales order → invoice. This one POSTS: the whole feature in one step.
     const cogsBeforeConv = await acctBalance('5000');
     const qtyBeforeConv = stockNow;
-    const convInv = await api('POST', `/sales-orders/${soId}/convert-to-invoice`);
-    ok('#2b convert sales order → invoice', convInv.status < 300, `status=${convInv.status}`);
+    const convInv = await api(
+      'POST',
+      `/sales-orders/${soId}/convert-to-invoice`,
+    );
+    ok(
+      '#2b convert sales order → invoice',
+      convInv.status < 300,
+      `status=${convInv.status}`,
+    );
     const convInvId = (convInv.body?.invoice ?? convInv.body)?.id;
     const convInvRead = (await api('GET', `/invoices/${convInvId}`)).body;
-    ok('#2b converted invoice line carries the itemId',
-      lineOf(convInvRead)?.itemId === item.id, `got=${lineOf(convInvRead)?.itemId}`);
-    ok('#2b conversion posted COGS at qty×cost',
+    ok(
+      '#2b converted invoice line carries the itemId',
+      lineOf(convInvRead)?.itemId === item.id,
+      `got=${lineOf(convInvRead)?.itemId}`,
+    );
+    ok(
+      '#2b conversion posted COGS at qty×cost',
       approx((await acctBalance('5000')) - cogsBeforeConv, n(item.unitCost)),
-      `Δ=${(await acctBalance('5000')) - cogsBeforeConv}`);
-    const qtyAfterConv = n((await api('GET', `/inventory/items/${item.id}`)).body?.quantityOnHand);
-    ok('#2b conversion moved stock by 1', approx(qtyBeforeConv - qtyAfterConv, 1),
-      `before=${qtyBeforeConv} after=${qtyAfterConv}`);
+      `Δ=${(await acctBalance('5000')) - cogsBeforeConv}`,
+    );
+    const qtyAfterConv = n(
+      (await api('GET', `/inventory/items/${item.id}`)).body?.quantityOnHand,
+    );
+    ok(
+      '#2b conversion moved stock by 1',
+      approx(qtyBeforeConv - qtyAfterConv, 1),
+      `before=${qtyBeforeConv} after=${qtyAfterConv}`,
+    );
 
     // Estimate → invoice directly, the remaining conversion path.
     const est2 = await api('POST', '/estimates', {
-      customerId, estimateDate: '2026-06-24', status: 'sent', lines: [estLine],
+      customerId,
+      estimateDate: '2026-06-24',
+      status: 'sent',
+      lines: [estLine],
     });
-    const conv2 = await api('POST', `/estimates/${est2.body.id}/convert-to-invoice`);
-    ok('#2b convert estimate → invoice', conv2.status < 300, `status=${conv2.status}`);
-    const conv2Read = (await api('GET', `/invoices/${(conv2.body?.invoice ?? conv2.body)?.id}`)).body;
-    ok('#2b that invoice carries the itemId too',
-      lineOf(conv2Read)?.itemId === item.id, `got=${lineOf(conv2Read)?.itemId}`);
+    const conv2 = await api(
+      'POST',
+      `/estimates/${est2.body.id}/convert-to-invoice`,
+    );
+    ok(
+      '#2b convert estimate → invoice',
+      conv2.status < 300,
+      `status=${conv2.status}`,
+    );
+    const conv2Read = (
+      await api('GET', `/invoices/${(conv2.body?.invoice ?? conv2.body)?.id}`)
+    ).body;
+    ok(
+      '#2b that invoice carries the itemId too',
+      lineOf(conv2Read)?.itemId === item.id,
+      `got=${lineOf(conv2Read)?.itemId}`,
+    );
 
     // A quote must not warehouse an id that is not this company's — it would
     // resurface weeks later as an invoice that silently posts no COGS.
     const foreign = await api('POST', '/estimates', {
-      customerId, estimateDate: '2026-06-24', status: 'sent',
+      customerId,
+      estimateDate: '2026-06-24',
+      status: 'sent',
       lines: [{ ...estLine, itemId: '00000000-0000-0000-0000-000000000000' }],
     });
-    ok('#2b unknown itemId is refused', foreign.status === 400,
-      `status=${foreign.status} body=${JSON.stringify(foreign.body)}`);
+    ok(
+      '#2b unknown itemId is refused',
+      foreign.status === 400,
+      `status=${foreign.status} body=${JSON.stringify(foreign.body)}`,
+    );
 
     // A free-text line still works, and still posts nothing against stock.
     const svc = await api('POST', '/estimates', {
-      customerId, estimateDate: '2026-06-24', status: 'sent',
-      lines: [{ description: 'Acceptance consulting', quantity: '1', unitPrice: '250', taxRate: '0', lineKind: 'service' }],
+      customerId,
+      estimateDate: '2026-06-24',
+      status: 'sent',
+      lines: [
+        {
+          description: 'Acceptance consulting',
+          quantity: '1',
+          unitPrice: '250',
+          taxRate: '0',
+          lineKind: 'service',
+        },
+      ],
     });
-    ok('#2b estimate with no item still saves', svc.status < 300, `status=${svc.status}`);
+    ok(
+      '#2b estimate with no item still saves',
+      svc.status < 300,
+      `status=${svc.status}`,
+    );
 
     await invariants('after estimate/sales-order conversion');
   } else {
-    console.log(`  · skipping #2b item-link block (stock ${stockNow}, needs 4)`);
+    console.log(
+      `  · skipping #2b item-link block (stock ${stockNow}, needs 4)`,
+    );
   }
 
   await invariants('final');

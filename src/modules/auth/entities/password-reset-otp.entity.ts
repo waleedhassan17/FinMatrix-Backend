@@ -21,7 +21,12 @@ export class PasswordResetOtp extends BaseEntity {
   @Column({ type: 'varchar', length: 255, name: 'otp_hash' })
   otpHash!: string;
 
-  @Column({ type: 'varchar', length: 255, name: 'reset_token_hash', nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'reset_token_hash',
+    nullable: true,
+  })
   resetTokenHash!: string | null;
 
   @Column({ type: 'int', default: 0 })

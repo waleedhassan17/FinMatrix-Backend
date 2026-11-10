@@ -117,7 +117,9 @@ export class StorageService {
     if (this.cloudinaryEnabled) {
       try {
         const key = await this.uploadToCloudinary(opts);
-        this.logger.log(`Stored ${key} on Cloudinary (${opts.buffer.length} bytes)`);
+        this.logger.log(
+          `Stored ${key} on Cloudinary (${opts.buffer.length} bytes)`,
+        );
         return { key, ...base };
       } catch (err) {
         // Never lose an upload because the CDN hiccuped — fall back to Postgres.
@@ -136,7 +138,9 @@ export class StorageService {
         data: opts.buffer,
       }),
     );
-    this.logger.log(`Stored db:${record.id} in Postgres (${opts.buffer.length} bytes)`);
+    this.logger.log(
+      `Stored db:${record.id} in Postgres (${opts.buffer.length} bytes)`,
+    );
     return { key: `db:${record.id}`, ...base };
   }
 
@@ -190,7 +194,9 @@ export class StorageService {
     return `cld:${result.public_id}`;
   }
 
-  private async readFromCloudinary(key: string): Promise<ReadableStoredFile | null> {
+  private async readFromCloudinary(
+    key: string,
+  ): Promise<ReadableStoredFile | null> {
     if (!this.cloudinaryEnabled) {
       this.logger.error(`Cannot read ${key}: CLOUDINARY_URL is not configured`);
       return null;
@@ -223,7 +229,9 @@ export class StorageService {
       });
     }
     if (!res.ok || !res.body) {
-      this.logger.error(`Cloudinary fetch failed for ${key}: HTTP ${res.status}`);
+      this.logger.error(
+        `Cloudinary fetch failed for ${key}: HTTP ${res.status}`,
+      );
       return null;
     }
     const length = res.headers.get('content-length');
@@ -236,7 +244,9 @@ export class StorageService {
 
   // ── Postgres backend ───────────────────────────────
 
-  private async readFromDatabase(id: string): Promise<ReadableStoredFile | null> {
+  private async readFromDatabase(
+    id: string,
+  ): Promise<ReadableStoredFile | null> {
     const record = await this.fileRepo
       .createQueryBuilder('f')
       .addSelect('f.data')

@@ -41,7 +41,11 @@ export type TierPlanKey =
 export type RetiredPlanKey = 'warehouse_3mo' | 'warehouse_6mo';
 /** The admin-approved free trial — granted, never bought. */
 export type TrialPlanKey = 'warehouse_trial';
-export type PlanKey = LegacyPlanKey | TierPlanKey | RetiredPlanKey | TrialPlanKey;
+export type PlanKey =
+  | LegacyPlanKey
+  | TierPlanKey
+  | RetiredPlanKey
+  | TrialPlanKey;
 
 export type PlanCompanyType = 'small_business' | 'large_org' | 'warehouse';
 
@@ -266,7 +270,8 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
 
 export const TRIAL_PLAN_KEY: TrialPlanKey = 'warehouse_trial';
 /** The trial runs this many days from the moment it is APPROVED. */
-export const TRIAL_DURATION_DAYS = PLAN_CONFIG.warehouse_trial.durationDays as number;
+export const TRIAL_DURATION_DAYS = PLAN_CONFIG.warehouse_trial
+  .durationDays as number;
 
 export function isTrialPlan(raw: string | null | undefined): boolean {
   return raw === TRIAL_PLAN_KEY;
@@ -320,7 +325,9 @@ export const TIER_PLAN_KEYS: TierPlanKey[] = [
  * own companyType is null, which must be offered nothing rather than matched
  * against every retired plan.
  */
-export function plansForType(companyType: string | null | undefined): PlanConfig[] {
+export function plansForType(
+  companyType: string | null | undefined,
+): PlanConfig[] {
   if (!companyType) return [];
   return TIER_PLAN_KEYS.map((k) => withOverride(PLAN_CONFIG[k])).filter(
     (p) =>
@@ -331,7 +338,6 @@ export function plansForType(companyType: string | null | undefined): PlanConfig
       isPlanOffered(p.key),
   );
 }
-
 
 // ─── Admin overrides ─────────────────────────────────
 /**
@@ -379,7 +385,9 @@ export interface PlanOverridePatch {
 const PLAN_OVERRIDES = new Map<PlanKey, PlanOverridePatch>();
 
 /** Replaces the whole set. Called by PlanOverrideService only. */
-export function loadPlanOverrides(entries: Iterable<[PlanKey, PlanOverridePatch]>): void {
+export function loadPlanOverrides(
+  entries: Iterable<[PlanKey, PlanOverridePatch]>,
+): void {
   PLAN_OVERRIDES.clear();
   for (const [key, patch] of entries) PLAN_OVERRIDES.set(key, patch);
 }
@@ -446,7 +454,8 @@ export function allPlanConfigs(): PlanConfig[] {
  * is what plan-config.spec.ts pins and what the restored build must get back.
  */
 export function riderSeatLimit(config: PlanConfig): number {
-  if (BILLING_DISABLED_BUILD && config.key === 'free') return UNCAPPED_RIDER_SEATS;
+  if (BILLING_DISABLED_BUILD && config.key === 'free')
+    return UNCAPPED_RIDER_SEATS;
   return config.deliveryPersonnelLimit;
 }
 
@@ -478,7 +487,9 @@ export interface PlatformBankAccount {
 
 // The account number alone is enough to receive the transfer. Override any
 // field via env (PLATFORM_BANK_ACCOUNT / PLATFORM_BANK_TITLE / PLATFORM_BANK_NAME).
-export function getPlatformBank(env: NodeJS.ProcessEnv = process.env): PlatformBankAccount {
+export function getPlatformBank(
+  env: NodeJS.ProcessEnv = process.env,
+): PlatformBankAccount {
   return {
     accountTitle: env.PLATFORM_BANK_TITLE || 'Muhammad Waleed Hassan',
     bankName: env.PLATFORM_BANK_NAME || 'Allied Bank',

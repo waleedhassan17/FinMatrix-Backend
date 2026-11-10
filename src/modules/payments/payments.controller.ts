@@ -70,7 +70,8 @@ export class PaymentsController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: ReceivePaymentDto,
   ) {
-    if (user.role === 'admin') return this.payments.receive(companyId, user.id, dto);
+    if (user.role === 'admin')
+      return this.payments.receive(companyId, user.id, dto);
     return this.approvals.createRequest(
       'invoice_payment',
       dto as unknown as Record<string, unknown>,
@@ -88,17 +89,26 @@ export class PaymentsController {
   @Post('settle')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Settle invoices from advances, credit memos and/or new money, atomically.' })
+  @ApiOperation({
+    summary:
+      'Settle invoices from advances, credit memos and/or new money, atomically.',
+  })
   settle(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: SettleInvoicesDto,
   ) {
-    if (user.role === 'admin') return this.payments.settle(companyId, user.id, dto);
-    const credit = (dto.credits ?? []).reduce((t, c) => t + (Number(c.amount) || 0), 0);
+    if (user.role === 'admin')
+      return this.payments.settle(companyId, user.id, dto);
+    const credit = (dto.credits ?? []).reduce(
+      (t, c) => t + (Number(c.amount) || 0),
+      0,
+    );
     const parts = [
       credit > 0 ? `${credit.toFixed(2)} from credit on account` : '',
-      dto.cash ? `${Number(dto.cash.amount).toFixed(2)} received by ${dto.cash.paymentMethod}` : '',
+      dto.cash
+        ? `${Number(dto.cash.amount).toFixed(2)} received by ${dto.cash.paymentMethod}`
+        : '',
     ].filter(Boolean);
     return this.approvals.createRequest(
       'invoice_payment',
@@ -147,10 +157,16 @@ export class PaymentsController {
     if (user.role === 'admin') {
       return this.payments.apply(companyId, user.id, paymentId, dto);
     }
-    const total = dto.applications.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+    const total = dto.applications.reduce(
+      (sum, a) => sum + (Number(a.amount) || 0),
+      0,
+    );
     return this.approvals.createRequest(
       'invoice_payment',
-      { action: 'apply', paymentId, ...dto } as unknown as Record<string, unknown>,
+      { action: 'apply', paymentId, ...dto } as unknown as Record<
+        string,
+        unknown
+      >,
       `Apply ${total.toFixed(2)} of a customer advance to ${dto.applications.length} invoice(s)`,
       user,
       companyId,

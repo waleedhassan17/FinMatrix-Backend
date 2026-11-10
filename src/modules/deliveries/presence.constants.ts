@@ -29,4 +29,5 @@ export const isLocationLive = (
   locationUpdatedAt: Date | null | undefined,
   now: number = Date.now(),
 ): boolean =>
-  !!locationUpdatedAt && now - locationUpdatedAt.getTime() < LOCATION_LIVE_WINDOW_MS;
+  !!locationUpdatedAt &&
+  now - locationUpdatedAt.getTime() < LOCATION_LIVE_WINDOW_MS;

@@ -6,10 +6,17 @@ import { PaymentApplication } from './payment-application.entity';
 @Entity('payments')
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
-@Index('UQ_payments_company_payment_number', ['companyId', 'paymentNumber'], { unique: true })
+@Index('UQ_payments_company_payment_number', ['companyId', 'paymentNumber'], {
+  unique: true,
+})
 export class Payment extends BaseCompanyEntity {
   /** RCT-YYYY-NNNN, from the RCT document series. Null only if never backfilled. */
-  @Column({ type: 'varchar', length: 32, nullable: true, name: 'payment_number' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+    name: 'payment_number',
+  })
   paymentNumber!: string | null;
 
   @Column({ type: 'uuid', name: 'customer_id' })

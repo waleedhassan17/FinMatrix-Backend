@@ -39,7 +39,13 @@ async function run() {
             process.env.DATABASE_URL.includes('sslmode=disable')
               ? false
               : { rejectUnauthorized: false },
-          entities: [User, Company, UserCompany, SubscriptionPlan, CompanySubscription],
+          entities: [
+            User,
+            Company,
+            UserCompany,
+            SubscriptionPlan,
+            CompanySubscription,
+          ],
           synchronize: true,
         }
       : {
@@ -49,8 +55,17 @@ async function run() {
           username: process.env.DB_USERNAME ?? 'finmatrix_user',
           password: process.env.DB_PASSWORD ?? '',
           database: process.env.DB_NAME ?? 'finmatrix',
-          ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-          entities: [User, Company, UserCompany, SubscriptionPlan, CompanySubscription],
+          ssl:
+            process.env.DB_SSL === 'true'
+              ? { rejectUnauthorized: false }
+              : false,
+          entities: [
+            User,
+            Company,
+            UserCompany,
+            SubscriptionPlan,
+            CompanySubscription,
+          ],
           synchronize: true,
         },
   );
@@ -86,7 +101,9 @@ async function run() {
       superAdmin.isActive = true;
       (superAdmin as any).isEmailVerified = true;
       await m.save(superAdmin);
-      console.log(`  ↩ Super admin updated (password reset): ${SUPER_ADMIN_EMAIL}`);
+      console.log(
+        `  ↩ Super admin updated (password reset): ${SUPER_ADMIN_EMAIL}`,
+      );
     }
 
     // ── 2. Subscription Plans ─────────────────────────
@@ -98,24 +115,37 @@ async function run() {
         priceYearly: '0.00',
         maxUsers: 2,
         maxInvoices: 10,
-        features: ['2 Users', '10 Invoices/month', 'Basic Dashboard', 'Email Support'],
+        features: [
+          '2 Users',
+          '10 Invoices/month',
+          'Basic Dashboard',
+          'Email Support',
+        ],
         isActive: true,
         sortOrder: 0,
       },
       {
         name: 'Starter',
-        description: 'Perfect for small businesses getting started with digital accounting.',
+        description:
+          'Perfect for small businesses getting started with digital accounting.',
         priceMonthly: '29.00',
         priceYearly: '290.00',
         maxUsers: 5,
         maxInvoices: 100,
-        features: ['Up to 5 Users', '100 Invoices/month', 'Basic Reports', 'Email Support', 'Mobile App'],
+        features: [
+          'Up to 5 Users',
+          '100 Invoices/month',
+          'Basic Reports',
+          'Email Support',
+          'Mobile App',
+        ],
         isActive: true,
         sortOrder: 1,
       },
       {
         name: 'Professional',
-        description: 'For growing businesses with advanced accounting and team needs.',
+        description:
+          'For growing businesses with advanced accounting and team needs.',
         priceMonthly: '79.00',
         priceYearly: '790.00',
         maxUsers: 20,
@@ -168,9 +198,14 @@ async function run() {
 
     // ── 3. Demo Companies ─────────────────────────────
     const companyDefs: Array<{
-      name: string; industry: string; email: string; phone: string;
-      status: string; planName: string | null;
-      adminEmail: string; adminName: string;
+      name: string;
+      industry: string;
+      email: string;
+      phone: string;
+      status: string;
+      planName: string | null;
+      adminEmail: string;
+      adminName: string;
       daysAgo: number;
     }> = [
       // Demo companies intentionally removed — MetroMatrix (seeded by
@@ -200,7 +235,9 @@ async function run() {
       // Create / find company
       let company = await m.findOneBy(Company, { name: def.name });
       if (!company) {
-        const createdAt = new Date(Date.now() - def.daysAgo * 24 * 60 * 60 * 1000);
+        const createdAt = new Date(
+          Date.now() - def.daysAgo * 24 * 60 * 60 * 1000,
+        );
         company = m.create(Company, {
           name: def.name,
           industry: def.industry,
@@ -212,18 +249,24 @@ async function run() {
           status: def.status,
           logo: null,
           taxId: null,
-          rejectionReason: def.status === 'rejected' ? 'Incomplete documentation provided.' : null,
+          rejectionReason:
+            def.status === 'rejected'
+              ? 'Incomplete documentation provided.'
+              : null,
           reviewedBy: def.status !== 'pending' ? superAdmin.id : null,
-          reviewedAt: def.status !== 'pending' ? new Date(Date.now() - (def.daysAgo - 1) * 24 * 60 * 60 * 1000) : null,
+          reviewedAt:
+            def.status !== 'pending'
+              ? new Date(Date.now() - (def.daysAgo - 1) * 24 * 60 * 60 * 1000)
+              : null,
         });
         // TypeORM doesn't let you override @CreateDateColumn easily;
         // insert via query builder for the timestamp
         await m.save(company);
         // update createdAt via raw query
-        await m.query(
-          `UPDATE companies SET created_at = $1 WHERE id = $2`,
-          [createdAt.toISOString(), company.id],
-        );
+        await m.query(`UPDATE companies SET created_at = $1 WHERE id = $2`, [
+          createdAt.toISOString(),
+          company.id,
+        ]);
         console.log(`  ✔ Company: ${def.name} (${def.status})`);
       } else {
         console.log(`  ↩ Company exists: ${def.name}`);
@@ -236,7 +279,11 @@ async function run() {
       });
       if (!existing) {
         await m.save(
-          m.create(UserCompany, { userId: adminUser.id, companyId: company.id, role: 'admin' }),
+          m.create(UserCompany, {
+            userId: adminUser.id,
+            companyId: company.id,
+            role: 'admin',
+          }),
         );
       }
       if (!adminUser.defaultCompanyId) {
@@ -256,23 +303,35 @@ async function run() {
               companyId: company.id,
               planId: savedPlans[def.planName].id,
               status: 'active',
-              startDate: new Date(Date.now() - (def.daysAgo - 1) * 86400000).toISOString().split('T')[0],
-              endDate: new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+              startDate: new Date(Date.now() - (def.daysAgo - 1) * 86400000)
+                .toISOString()
+                .split('T')[0],
+              endDate: new Date(Date.now() + 365 * 86400000)
+                .toISOString()
+                .split('T')[0],
               notes: null,
               assignedBy: superAdmin.id,
             }),
           );
           console.log(`    ↳ Subscription: ${def.planName}`);
         }
-      } else if (def.status === 'suspended' && def.planName && savedPlans[def.planName]) {
-        const existingSub = await m.findOneBy(CompanySubscription, { companyId: company.id });
+      } else if (
+        def.status === 'suspended' &&
+        def.planName &&
+        savedPlans[def.planName]
+      ) {
+        const existingSub = await m.findOneBy(CompanySubscription, {
+          companyId: company.id,
+        });
         if (!existingSub) {
           await m.save(
             m.create(CompanySubscription, {
               companyId: company.id,
               planId: savedPlans[def.planName].id,
               status: 'cancelled',
-              startDate: new Date(Date.now() - def.daysAgo * 86400000).toISOString().split('T')[0],
+              startDate: new Date(Date.now() - def.daysAgo * 86400000)
+                .toISOString()
+                .split('T')[0],
               endDate: null,
               notes: 'Suspended pending payment review.',
               assignedBy: superAdmin.id,

@@ -123,9 +123,14 @@ export class BillingService {
    * user's own membership — never to a client-supplied header, which could
    * name someone else's company.
    */
-  async resolveCompanyId(userId: string, jwtCompanyId: string | null): Promise<string | null> {
+  async resolveCompanyId(
+    userId: string,
+    jwtCompanyId: string | null,
+  ): Promise<string | null> {
     if (jwtCompanyId) return jwtCompanyId;
-    const membership = await this.userCompanyRepo.findOne({ where: { userId } });
+    const membership = await this.userCompanyRepo.findOne({
+      where: { userId },
+    });
     return membership?.companyId ?? null;
   }
 
@@ -143,7 +148,9 @@ export class BillingService {
     const daysRemaining = expiry ? daysBetween(now, expiry) : null;
 
     const lastSubmission = company.lastSubmissionId
-      ? await this.submissionRepo.findOne({ where: { id: company.lastSubmissionId } })
+      ? await this.submissionRepo.findOne({
+          where: { id: company.lastSubmissionId },
+        })
       : null;
 
     return {
@@ -158,7 +165,8 @@ export class BillingService {
       expiryDate: expiry,
       daysRemaining,
       // The trial has no month count but does expire (durationDays).
-      neverExpires: config.durationMonths === null && config.durationDays === undefined,
+      neverExpires:
+        config.durationMonths === null && config.durationDays === undefined,
       priceMinorUnits: config.priceMinorUnits,
       priceLabel: formatMinorUnits(config.priceMinorUnits, config.currency),
       monthlyMinorUnits: config.monthlyMinorUnits,
@@ -189,7 +197,8 @@ export class BillingService {
       // requestTrial and createSubmission both point lastSubmissionId at the
       // newest request, so an open trial request is always the last one.
       trialPending:
-        lastSubmission?.kind === 'TRIAL' && lastSubmission.status === 'submitted',
+        lastSubmission?.kind === 'TRIAL' &&
+        lastSubmission.status === 'submitted',
     };
   }
 
@@ -201,7 +210,8 @@ export class BillingService {
    */
   async getPlansForType(companyId: string, companyTypeOverride?: string) {
     const company = await this.getCompanyOrFail(companyId);
-    const companyType = companyTypeOverride ?? company.companyType ?? 'warehouse';
+    const companyType =
+      companyTypeOverride ?? company.companyType ?? 'warehouse';
     const plans = plansForType(companyType);
     if (plans.length === 0) {
       // This fires whenever the catalogue is EMPTY for the type, which is not
@@ -226,7 +236,8 @@ export class BillingService {
     for (const p of plans) {
       const cur = baselineForRung.get(p.deliveryPersonnelLimit);
       const shorter =
-        !cur || (p.durationMonths ?? Infinity) < (cur.durationMonths ?? Infinity);
+        !cur ||
+        (p.durationMonths ?? Infinity) < (cur.durationMonths ?? Infinity);
       if (shorter) baselineForRung.set(p.deliveryPersonnelLimit, p);
     }
     return {
@@ -248,7 +259,9 @@ export class BillingService {
           deliveryPersonnelLimit: p.deliveryPersonnelLimit,
           monthlySavingsMinorUnits: monthlySavings,
           monthlySavingsLabel:
-            monthlySavings > 0 ? `${formatMinorUnits(monthlySavings, p.currency)}/month` : null,
+            monthlySavings > 0
+              ? `${formatMinorUnits(monthlySavings, p.currency)}/month`
+              : null,
         };
       }),
     };
@@ -331,7 +344,11 @@ export class BillingService {
     }
     // Tier plans are only purchasable by their own company type (legacy plans
     // carry companyType null and stay renewable by whoever already has one).
-    if (config.companyType && company.companyType && config.companyType !== company.companyType) {
+    if (
+      config.companyType &&
+      company.companyType &&
+      config.companyType !== company.companyType
+    ) {
       throw new BadRequestException({
         code: 'PLAN_TYPE_MISMATCH',
         message:
@@ -432,7 +449,10 @@ export class BillingService {
       .addSelect('s.screenshotData')
       .where('s.id = :id', { id: submissionId })
       .getOne();
-    if (!submission || (!submission.screenshotData && !submission.screenshotKey)) {
+    if (
+      !submission ||
+      (!submission.screenshotData && !submission.screenshotKey)
+    ) {
       throw new NotFoundException('Screenshot not found');
     }
     const mime = submission.screenshotMime ?? 'image/jpeg';
@@ -449,15 +469,20 @@ export class BillingService {
     const file = submission.screenshotKey
       ? await this.storage.read(submission.screenshotKey)
       : null;
-    if (!file) throw new NotFoundException('Screenshot file is no longer available');
+    if (!file)
+      throw new NotFoundException('Screenshot file is no longer available');
     return { stream: file.stream, mime };
   }
 
   async assertOwnsSubmission(submissionId: string, companyId: string) {
-    const submission = await this.submissionRepo.findOne({ where: { id: submissionId } });
+    const submission = await this.submissionRepo.findOne({
+      where: { id: submissionId },
+    });
     if (!submission) throw new NotFoundException('Submission not found');
     if (submission.companyId !== companyId) {
-      throw new ForbiddenException('You do not have access to this submission.');
+      throw new ForbiddenException(
+        'You do not have access to this submission.',
+      );
     }
   }
 
@@ -483,11 +508,16 @@ export class BillingService {
 
     const { entities, raw } = await qb.getRawAndEntities();
     return entities.map((s, i) =>
-      this.toSubmissionView(s, raw[i]?.c_name ?? null, raw[i]?.c_email ?? null, {
-        requesterName: raw[i]?.u_name ?? null,
-        requesterEmail: raw[i]?.u_email ?? null,
-        requesterPhone: raw[i]?.c_phone ?? null,
-      }),
+      this.toSubmissionView(
+        s,
+        raw[i]?.c_name ?? null,
+        raw[i]?.c_email ?? null,
+        {
+          requesterName: raw[i]?.u_name ?? null,
+          requesterEmail: raw[i]?.u_email ?? null,
+          requesterPhone: raw[i]?.c_phone ?? null,
+        },
+      ),
     );
   }
 
@@ -522,7 +552,12 @@ export class BillingService {
       if (!company) throw new NotFoundException('Company not found');
 
       if (submission.kind === 'TRIAL') {
-        const outcome = await this.approveTrial(em, submission, company, reviewerId);
+        const outcome = await this.approveTrial(
+          em,
+          submission,
+          company,
+          reviewerId,
+        );
         afterCommit = outcome.afterCommit;
         return outcome.view;
       }
@@ -549,7 +584,8 @@ export class BillingService {
       // Extend from the later of (now, current expiry) so early action loses no
       // paid days — applies to RENEWAL/UPGRADE of an already-paid plan.
       const hadPaidPlan =
-        company.paymentStatus === 'paid' || company.subscriptionExpiryDate != null;
+        company.paymentStatus === 'paid' ||
+        company.subscriptionExpiryDate != null;
       const currentExpiry = company.subscriptionExpiryDate
         ? new Date(company.subscriptionExpiryDate)
         : null;
@@ -558,7 +594,9 @@ export class BillingService {
           ? currentExpiry
           : now;
       const expiry =
-        config.durationMonths === null ? null : addMonths(base, config.durationMonths);
+        config.durationMonths === null
+          ? null
+          : addMonths(base, config.durationMonths);
 
       // Activate plan + account. NEVER touches business data.
       company.subscriptionPlan = plan;
@@ -584,7 +622,11 @@ export class BillingService {
 
       // Keep active riders within the new plan (restores locked riders when
       // the limit went up). Same transaction as the plan change.
-      const seats = await reconcileRiderSeats(em, company.id, config.deliveryPersonnelLimit);
+      const seats = await reconcileRiderSeats(
+        em,
+        company.id,
+        config.deliveryPersonnelLimit,
+      );
 
       this.logger.log(
         `Approved submission ${submission.id} → company ${company.id} plan=${plan} ` +
@@ -598,7 +640,9 @@ export class BillingService {
       // Notify the company's admins (best-effort, in-app).
       await this.notifyCompanyAdmins(company.id, {
         type: 'subscription_activated',
-        title: convertingTrial ? 'Subscription activated — trial ended' : 'Subscription activated',
+        title: convertingTrial
+          ? 'Subscription activated — trial ended'
+          : 'Subscription activated',
         message: convertingTrial
           ? `Your free trial has ended and your ${config.label} plan is now active` +
             (expiry ? ` until ${expiry.toDateString()}.` : '.')
@@ -607,7 +651,8 @@ export class BillingService {
         data: { plan, expiryDate: expiry, route: 'billing' },
       });
 
-      afterCommit = () => this.recordSeatChanges(company.id, reviewerId, seats, config);
+      afterCommit = () =>
+        this.recordSeatChanges(company.id, reviewerId, seats, config);
 
       return this.toSubmissionView(submission, company.name);
     });
@@ -632,10 +677,16 @@ export class BillingService {
     submission: PaymentSubmission,
     company: Company,
     reviewerId: string,
-  ): Promise<{ view: ReturnType<BillingService['toSubmissionView']>; afterCommit: () => Promise<void> }> {
+  ): Promise<{
+    view: ReturnType<BillingService['toSubmissionView']>;
+    afterCommit: () => Promise<void>;
+  }> {
     const noop = async () => undefined;
     if (submission.status === 'approved') {
-      return { view: this.toSubmissionView(submission, company.name), afterCommit: noop };
+      return {
+        view: this.toSubmissionView(submission, company.name),
+        afterCommit: noop,
+      };
     }
     if (submission.status === 'rejected') {
       throw new BadRequestException('This trial request was already rejected.');
@@ -681,9 +732,16 @@ export class BillingService {
 
     await em
       .getRepository(TrialClaim)
-      .update({ submissionId: submission.id }, { status: 'approved', decidedAt: now });
+      .update(
+        { submissionId: submission.id },
+        { status: 'approved', decidedAt: now },
+      );
 
-    const seats = await reconcileRiderSeats(em, company.id, config.deliveryPersonnelLimit);
+    const seats = await reconcileRiderSeats(
+      em,
+      company.id,
+      config.deliveryPersonnelLimit,
+    );
 
     this.logger.log(
       `Approved TRIAL ${submission.id} → company ${company.id} ends=${trialEndsAt.toISOString()} by ${reviewerId}`,
@@ -706,7 +764,12 @@ export class BillingService {
         await this.recordSeatChanges(companyId, reviewerId, seats, config);
         for (const a of await this.adminRecipients(companyId)) {
           if (a.email) {
-            await this.mail.sendTrialApprovedEmail(a.email, a.displayName, companyName, trialEndsAt);
+            await this.mail.sendTrialApprovedEmail(
+              a.email,
+              a.displayName,
+              companyName,
+              trialEndsAt,
+            );
           }
         }
       },
@@ -719,13 +782,22 @@ export class BillingService {
     reason: string,
     opts: { blockFutureTrials?: boolean } = {},
   ) {
-    const peek = await this.submissionRepo.findOne({ where: { id: submissionId } });
+    const peek = await this.submissionRepo.findOne({
+      where: { id: submissionId },
+    });
     if (!peek) throw new NotFoundException('Submission not found');
     if (peek.kind === 'TRIAL') {
-      return this.rejectTrial(submissionId, reviewerId, reason, opts.blockFutureTrials === true);
+      return this.rejectTrial(
+        submissionId,
+        reviewerId,
+        reason,
+        opts.blockFutureTrials === true,
+      );
     }
 
-    const submission = await this.submissionRepo.findOne({ where: { id: submissionId } });
+    const submission = await this.submissionRepo.findOne({
+      where: { id: submissionId },
+    });
     if (!submission) throw new NotFoundException('Submission not found');
     if (submission.status === 'approved') {
       throw new BadRequestException('This submission was already approved.');
@@ -736,7 +808,9 @@ export class BillingService {
     submission.rejectionReason = reason;
     await this.submissionRepo.save(submission);
 
-    const company = await this.companyRepo.findOne({ where: { id: submission.companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: submission.companyId },
+    });
     if (company && company.lastSubmissionId === submission.id) {
       company.paymentStatus = 'rejected';
       await this.companyRepo.save(company);
@@ -774,13 +848,17 @@ export class BillingService {
       });
       if (!submission) throw new NotFoundException('Submission not found');
       if (submission.status === 'approved') {
-        throw new BadRequestException('This trial request was already approved.');
+        throw new BadRequestException(
+          'This trial request was already approved.',
+        );
       }
       // A decided claim may already have been superseded by a newer request
       // from the same email/phone; re-deciding the old one could collide with
       // it. One decision per request.
       if (submission.status === 'rejected') {
-        throw new BadRequestException('This trial request was already rejected.');
+        throw new BadRequestException(
+          'This trial request was already rejected.',
+        );
       }
 
       const now = new Date();
@@ -808,7 +886,10 @@ export class BillingService {
 
       await em.getRepository(TrialClaim).update(
         { submissionId: submission.id },
-        { status: blockFutureTrials ? 'blocked' : 'released', decidedAt: now },
+        {
+          status: blockFutureTrials ? 'blocked' : 'released',
+          decidedAt: now,
+        },
       );
 
       return { submission, companyName: company?.name ?? null };
@@ -832,7 +913,12 @@ export class BillingService {
     await this.runAfterCommit(async () => {
       for (const a of await this.adminRecipients(submission.companyId)) {
         if (a.email) {
-          await this.mail.sendTrialRejectedEmail(a.email, a.displayName, companyName ?? 'your company', reason);
+          await this.mail.sendTrialRejectedEmail(
+            a.email,
+            a.displayName,
+            companyName ?? 'your company',
+            reason,
+          );
         }
       }
     });
@@ -873,21 +959,48 @@ export class BillingService {
 
     let totalMinorUnits = 0;
     let thisMonthMinorUnits = 0;
-    const byPlanMap = new Map<string, { plan: string; planLabel: string; payments: number; totalMinorUnits: number }>();
-    const byCompanyMap = new Map<string, { companyId: string; companyName: string; payments: number; totalMinorUnits: number; lastPlan: string }>();
+    const byPlanMap = new Map<
+      string,
+      {
+        plan: string;
+        planLabel: string;
+        payments: number;
+        totalMinorUnits: number;
+      }
+    >();
+    const byCompanyMap = new Map<
+      string,
+      {
+        companyId: string;
+        companyName: string;
+        payments: number;
+        totalMinorUnits: number;
+        lastPlan: string;
+      }
+    >();
 
     for (const e of entries) {
       totalMinorUnits += e.amountMinorUnits;
       const recorded = new Date(e.recordedAt);
-      if (monthKey(recorded) === thisMonthKey) thisMonthMinorUnits += e.amountMinorUnits;
+      if (monthKey(recorded) === thisMonthKey)
+        thisMonthMinorUnits += e.amountMinorUnits;
 
-      const p = byPlanMap.get(e.plan) ?? { plan: e.plan, planLabel: e.planLabel, payments: 0, totalMinorUnits: 0 };
+      const p = byPlanMap.get(e.plan) ?? {
+        plan: e.plan,
+        planLabel: e.planLabel,
+        payments: 0,
+        totalMinorUnits: 0,
+      };
       p.payments += 1;
       p.totalMinorUnits += e.amountMinorUnits;
       byPlanMap.set(e.plan, p);
 
       const co = byCompanyMap.get(e.companyId) ?? {
-        companyId: e.companyId, companyName: e.companyName, payments: 0, totalMinorUnits: 0, lastPlan: e.planLabel,
+        companyId: e.companyId,
+        companyName: e.companyName,
+        payments: 0,
+        totalMinorUnits: 0,
+        lastPlan: e.planLabel,
       };
       co.payments += 1;
       co.totalMinorUnits += e.amountMinorUnits;
@@ -895,18 +1008,29 @@ export class BillingService {
     }
 
     // Last 6 calendar months (oldest → newest), collected revenue per month.
-    const monthly: { year: number; month: number; totalMinorUnits: number }[] = [];
+    const monthly: { year: number; month: number; totalMinorUnits: number }[] =
+      [];
     for (let back = 5; back >= 0; back--) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
-      monthly.push({ year: d.getUTCFullYear(), month: d.getUTCMonth(), totalMinorUnits: 0 });
+      const d = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1),
+      );
+      monthly.push({
+        year: d.getUTCFullYear(),
+        month: d.getUTCMonth(),
+        totalMinorUnits: 0,
+      });
     }
     for (const e of entries) {
       const d = new Date(e.recordedAt);
-      const slot = monthly.find((m) => m.year === d.getUTCFullYear() && m.month === d.getUTCMonth());
+      const slot = monthly.find(
+        (m) => m.year === d.getUTCFullYear() && m.month === d.getUTCMonth(),
+      );
       if (slot) slot.totalMinorUnits += e.amountMinorUnits;
     }
 
-    const pendingCount = await this.submissionRepo.count({ where: { status: 'submitted' } });
+    const pendingCount = await this.submissionRepo.count({
+      where: { status: 'submitted' },
+    });
 
     return {
       totalMinorUnits,
@@ -915,8 +1039,12 @@ export class BillingService {
       thisMonthLabel: formatMinorUnits(thisMonthMinorUnits),
       paymentsCount: entries.length,
       pendingSubmissions: pendingCount,
-      byPlan: [...byPlanMap.values()].sort((a, b) => b.totalMinorUnits - a.totalMinorUnits),
-      byCompany: [...byCompanyMap.values()].sort((a, b) => b.totalMinorUnits - a.totalMinorUnits),
+      byPlan: [...byPlanMap.values()].sort(
+        (a, b) => b.totalMinorUnits - a.totalMinorUnits,
+      ),
+      byCompany: [...byCompanyMap.values()].sort(
+        (a, b) => b.totalMinorUnits - a.totalMinorUnits,
+      ),
       monthly,
       entries: entries.slice(0, 50),
     };
@@ -948,7 +1076,9 @@ export class BillingService {
       .getMany();
 
     for (const company of companies) {
-      const expiry = new Date(company.subscriptionExpiryDate as unknown as Date);
+      const expiry = new Date(
+        company.subscriptionExpiryDate as unknown as Date,
+      );
       const accountStatus = normalizeCompanyStatus(company.status);
       const trialing = company.isTrial && !company.trialConvertedAt;
 
@@ -971,7 +1101,11 @@ export class BillingService {
                     message:
                       `Your free trial ends in ${days} day${days === 1 ? '' : 's'}. ` +
                       'Subscribe now to keep everything running without a break.',
-                    data: { daysRemaining: days, expiryDate: expiry, route: 'billing' },
+                    data: {
+                      daysRemaining: days,
+                      expiryDate: expiry,
+                      route: 'billing',
+                    },
                   }
                 : {
                     type: 'subscription_expiring',
@@ -979,7 +1113,11 @@ export class BillingService {
                     message:
                       `Your ${getPlanConfig(company.subscriptionPlan).label} plan expires in ` +
                       `${days} day${days === 1 ? '' : 's'}. Renew now to avoid interruption.`,
-                    data: { daysRemaining: days, expiryDate: expiry, route: 'billing' },
+                    data: {
+                      daysRemaining: days,
+                      expiryDate: expiry,
+                      route: 'billing',
+                    },
                   },
             );
             remindersSent += 1;
@@ -990,13 +1128,19 @@ export class BillingService {
           const milestone = trialing ? trialEmailMilestone(days) : null;
           const emailTrialEnding =
             milestone !== null &&
-            (company.trialReminderMilestone === null || milestone < company.trialReminderMilestone);
+            (company.trialReminderMilestone === null ||
+              milestone < company.trialReminderMilestone);
           if (emailTrialEnding) company.trialReminderMilestone = milestone;
           await this.companyRepo.save(company);
           if (emailTrialEnding) {
             for (const a of await this.adminRecipients(company.id)) {
               if (a.email) {
-                await this.mail.sendTrialEndingEmail(a.email, a.displayName, company.name, days);
+                await this.mail.sendTrialEndingEmail(
+                  a.email,
+                  a.displayName,
+                  company.name,
+                  days,
+                );
               }
             }
           }
@@ -1008,7 +1152,8 @@ export class BillingService {
       } else {
         // Expired. Deactivate the account ONCE — never delete data.
         const alreadyHandled =
-          company.subscriptionStatus === 'expired' && accountStatus === 'inactive';
+          company.subscriptionStatus === 'expired' &&
+          accountStatus === 'inactive';
         if (!alreadyHandled) {
           company.subscriptionStatus = 'expired';
           company.status = 'inactive';
@@ -1024,7 +1169,12 @@ export class BillingService {
               data: { route: 'billing' },
             });
             for (const a of await this.adminRecipients(company.id)) {
-              if (a.email) await this.mail.sendTrialEndedEmail(a.email, a.displayName, company.name);
+              if (a.email)
+                await this.mail.sendTrialEndedEmail(
+                  a.email,
+                  a.displayName,
+                  company.name,
+                );
             }
           } else {
             await this.notifyCompanyAdmins(company.id, {
@@ -1043,13 +1193,20 @@ export class BillingService {
     this.logger.log(
       `Expiry scan: ${expiringMarked} expiring, ${remindersSent} reminders, ${deactivated} deactivated`,
     );
-    return { remindersSent, expiringMarked, deactivated, scanned: companies.length };
+    return {
+      remindersSent,
+      expiringMarked,
+      deactivated,
+      scanned: companies.length,
+    };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private async getCompanyOrFail(companyId: string): Promise<Company> {
-    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
     if (!company) throw new NotFoundException('Company not found');
     return company;
   }
@@ -1062,7 +1219,10 @@ export class BillingService {
     const accountStatus = normalizeCompanyStatus(company.status);
     const currentPlan = normalizePlan(company.subscriptionPlan);
     // An expired/deactivated account restoring access = RENEWAL.
-    if (accountStatus === 'inactive' || company.subscriptionStatus === 'expired') {
+    if (
+      accountStatus === 'inactive' ||
+      company.subscriptionStatus === 'expired'
+    ) {
       return 'RENEWAL';
     }
     if (currentPlan !== 'free') {
@@ -1094,7 +1254,9 @@ export class BillingService {
       );
     } catch (err) {
       // Unique-constraint race → someone else recorded it; that's fine.
-      const again = await revenueRepo.findOne({ where: { submissionId: submission.id } });
+      const again = await revenueRepo.findOne({
+        where: { submissionId: submission.id },
+      });
       if (again) return again;
       throw err;
     }
@@ -1102,13 +1264,22 @@ export class BillingService {
 
   private async notifyCompanyAdmins(
     companyId: string,
-    payload: { type: string; title: string; message: string; data?: Record<string, unknown> },
+    payload: {
+      type: string;
+      title: string;
+      message: string;
+      data?: Record<string, unknown>;
+    },
   ) {
     const admins = await this.userCompanyRepo.find({
       where: { companyId, role: 'admin' },
     });
     for (const a of admins) {
-      await this.notifications.create({ companyId, userId: a.userId, ...payload });
+      await this.notifications.create({
+        companyId,
+        userId: a.userId,
+        ...payload,
+      });
     }
   }
 
@@ -1129,12 +1300,16 @@ export class BillingService {
    * Post-commit side effects (email, audit). Never allowed to fail the call
    * that already committed — the decision stands; a lost email is logged.
    */
-  private async runAfterCommit(fn: (() => Promise<void>) | null): Promise<void> {
+  private async runAfterCommit(
+    fn: (() => Promise<void>) | null,
+  ): Promise<void> {
     if (!fn) return;
     try {
       await fn();
     } catch (err) {
-      this.logger.error(`Post-commit side effect failed: ${(err as Error).message}`);
+      this.logger.error(
+        `Post-commit side effect failed: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -1215,7 +1390,12 @@ export class BillingService {
       requesterPhone: requester?.requesterPhone ?? undefined,
       ageHours:
         s.status === 'submitted'
-          ? Math.max(0, Math.round(((Date.now() - createdAt.getTime()) / 3_600_000) * 10) / 10)
+          ? Math.max(
+              0,
+              Math.round(
+                ((Date.now() - createdAt.getTime()) / 3_600_000) * 10,
+              ) / 10,
+            )
           : null,
     };
   }

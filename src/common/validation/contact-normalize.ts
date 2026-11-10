@@ -49,7 +49,9 @@ export function normalizePhone(raw: unknown): string | null {
   // International dialling prefix: 00 92… is +92…. Handled here because
   // normalizePkPhone would read the leading 0 as a local trunk prefix and
   // produce +920923…, which is not a number.
-  const withPlus = stripped.startsWith('00') ? `+${stripped.slice(2)}` : stripped;
+  const withPlus = stripped.startsWith('00')
+    ? `+${stripped.slice(2)}`
+    : stripped;
   const canonical = normalizePkPhone(withPlus);
   if (!canonical || !isValidPkPhone(canonical, true)) return null;
   return canonical;

@@ -48,10 +48,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const b = body as Record<string, unknown>;
         message =
           (typeof b.message === 'string' ? b.message : undefined) ??
-          (Array.isArray(b.message) ? (b.message as string[]).join('; ') : undefined) ??
-          (status === HttpStatus.SERVICE_UNAVAILABLE ? 'Service unavailable' : undefined) ??
+          (Array.isArray(b.message)
+            ? (b.message as string[]).join('; ')
+            : undefined) ??
+          (status === HttpStatus.SERVICE_UNAVAILABLE
+            ? 'Service unavailable'
+            : undefined) ??
           message;
-        code = typeof b.code === 'string' ? b.code : this.defaultCodeForStatus(status);
+        code =
+          typeof b.code === 'string'
+            ? b.code
+            : this.defaultCodeForStatus(status);
         if (b.details !== undefined) details = b.details;
         if (Array.isArray(b.message)) details = { fields: b.message };
       } else {

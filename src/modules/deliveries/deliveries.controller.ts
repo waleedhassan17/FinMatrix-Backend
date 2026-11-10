@@ -1,10 +1,23 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { DeliveriesService, requestedAdvance } from './deliveries.service';
@@ -19,7 +32,10 @@ import {
   ConfirmDeliveryDto,
 } from './dto/delivery.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
-import { CreditOverrideDto, creditOverrideFrom } from '../../common/validation/credit-override.dto';
+import {
+  CreditOverrideDto,
+  creditOverrideFrom,
+} from '../../common/validation/credit-override.dto';
 
 @ApiTags('Deliveries')
 @ApiBearerAuth()
@@ -73,7 +89,12 @@ export class DeliveriesController {
         companyId,
       );
     }
-    return this.svc.create(companyId, dto, user.id, creditOverrideFrom(dto.creditOverride, user));
+    return this.svc.create(
+      companyId,
+      dto,
+      user.id,
+      creditOverrideFrom(dto.creditOverride, user),
+    );
   }
 
   @Get('my/assigned')
@@ -136,7 +157,13 @@ export class DeliveriesController {
     @Body() dto: UpdateDeliveryDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.svc.update(companyId, id, dto, user.id, creditOverrideFrom(dto.creditOverride, user));
+    return this.svc.update(
+      companyId,
+      id,
+      dto,
+      user.id,
+      creditOverrideFrom(dto.creditOverride, user),
+    );
   }
 
   /**
@@ -162,7 +189,12 @@ export class DeliveriesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() body: { creditOverride?: CreditOverrideDto } = {},
   ) {
-    return this.svc.autoAssign(companyId, id, user.id, creditOverrideFrom(body?.creditOverride, user));
+    return this.svc.autoAssign(
+      companyId,
+      id,
+      user.id,
+      creditOverrideFrom(body?.creditOverride, user),
+    );
   }
 
   @Patch(':id/status')
@@ -213,7 +245,12 @@ export class DeliveriesController {
   @Roles('admin', 'staff')
   assign(
     @CurrentCompany() companyId: string,
-    @Body() dto: { deliveryIds: string[]; personnelId: string; creditOverride?: CreditOverrideDto },
+    @Body()
+    dto: {
+      deliveryIds: string[];
+      personnelId: string;
+      creditOverride?: CreditOverrideDto;
+    },
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.svc.assignDeliveries(

@@ -11,8 +11,16 @@ import { CreateTaxRateDto } from '../../modules/tax/dto/tax.dto';
  * Tax is typed on every line now, so the DTO is what stops -5 or 150 from
  * posting. Sales lines used to be @IsNumberString only.
  */
-const taxErrors = async (cls: new () => object, taxRate: unknown, base: object) => {
-  const dto = plainToInstance(cls, { ...base, taxRate }, { enableImplicitConversion: true });
+const taxErrors = async (
+  cls: new () => object,
+  taxRate: unknown,
+  base: object,
+) => {
+  const dto = plainToInstance(
+    cls,
+    { ...base, taxRate },
+    { enableImplicitConversion: true },
+  );
   const errors = await validate(dto);
   return errors.filter((e) => e.property === 'taxRate');
 };
@@ -39,7 +47,10 @@ describe.each([
 });
 
 describe('DeliveryItemDto taxRate', () => {
-  const item = { itemId: '00000000-0000-4000-8000-000000000000', orderedQty: 1 };
+  const item = {
+    itemId: '00000000-0000-4000-8000-000000000000',
+    orderedQty: 1,
+  };
 
   it.each([0, 12.5, '17'])('accepts %s', async (rate) => {
     expect(await taxErrors(DeliveryItemDto, rate, item)).toHaveLength(0);
@@ -52,7 +63,11 @@ describe('DeliveryItemDto taxRate', () => {
 
 describe('CreateTaxRateDto rate', () => {
   const rateErrors = async (rate: unknown) => {
-    const dto = plainToInstance(CreateTaxRateDto, { name: 'GST', rate }, { enableImplicitConversion: true });
+    const dto = plainToInstance(
+      CreateTaxRateDto,
+      { name: 'GST', rate },
+      { enableImplicitConversion: true },
+    );
     return (await validate(dto)).filter((e) => e.property === 'rate');
   };
 

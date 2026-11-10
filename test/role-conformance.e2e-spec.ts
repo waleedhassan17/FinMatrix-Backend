@@ -442,7 +442,6 @@ describe('Role conformance (e2e)', () => {
     // these two are the only value-in rows that ever changed sides, and this
     // note is what stops the move looking like a regression.
     it('staff create a customer and a vendor directly', async () => {
-
       const before = (await approvalRows()).length;
       await post('/api/v1/customers', staffToken, { name: 'Walk-in' }).expect(
         201,
@@ -501,7 +500,9 @@ describe('Role conformance (e2e)', () => {
         { decision: 'approve' },
       );
       if (decided.status !== 200)
-        throw new Error(`decide → ${decided.status}: ${JSON.stringify(decided.body)}`);
+        throw new Error(
+          `decide → ${decided.status}: ${JSON.stringify(decided.body)}`,
+        );
 
       expect(decided.body.data.status).toBe('approved');
       // resultId is what lets the app open the document the approval created.
@@ -620,9 +621,13 @@ describe('Role conformance (e2e)', () => {
       // that nothing exists while pending would pass just as well if approval
       // were wired to nothing at all.
       const journalsBefore = await countJournalEntries();
-      await post(`/api/v1/approvals/${res.body.data.requestId}/decide`, ownerToken, {
-        decision: 'approve',
-      }).expect(200);
+      await post(
+        `/api/v1/approvals/${res.body.data.requestId}/decide`,
+        ownerToken,
+        {
+          decision: 'approve',
+        },
+      ).expect(200);
 
       const [after] = await ds.query(
         `SELECT COUNT(*)::int AS n FROM purchase_orders WHERE company_id = $1`,
@@ -1020,11 +1025,18 @@ describe('Role conformance (e2e)', () => {
         customerId,
         scheduledDate: '2026-02-02',
         items: [
-          { itemId: deliveryItemId, itemName: 'Conformance Delivery Widget', orderedQty: 1, unitPrice: 100 },
+          {
+            itemId: deliveryItemId,
+            itemName: 'Conformance Delivery Widget',
+            orderedQty: 1,
+            unitPrice: 100,
+          },
         ],
       });
       if (![200, 201].includes(failed.status)) {
-        throw new Error(`delivery → ${failed.status}: ${JSON.stringify(failed.body)}`);
+        throw new Error(
+          `delivery → ${failed.status}: ${JSON.stringify(failed.body)}`,
+        );
       }
       const failedDeliveryId = failed.body.data.id;
       await post('/api/v1/deliveries/assign', staffToken, {
@@ -1062,7 +1074,9 @@ describe('Role conformance (e2e)', () => {
         { reviewerComment: 'Customer refused the delivery.' },
       );
       if (![200, 201].includes(res.status)) {
-        throw new Error(`staff reject → ${res.status}: ${JSON.stringify(res.body)}`);
+        throw new Error(
+          `staff reject → ${res.status}: ${JSON.stringify(res.body)}`,
+        );
       }
 
       const [row] = await ds.query(
@@ -1089,11 +1103,18 @@ describe('Role conformance (e2e)', () => {
         customerId,
         scheduledDate: '2026-02-03',
         items: [
-          { itemId: deliveryItemId, itemName: 'Conformance Delivery Widget', orderedQty: 1, unitPrice: 100 },
+          {
+            itemId: deliveryItemId,
+            itemName: 'Conformance Delivery Widget',
+            orderedQty: 1,
+            unitPrice: 100,
+          },
         ],
       });
       if (![200, 201].includes(sale.status)) {
-        throw new Error(`delivery → ${sale.status}: ${JSON.stringify(sale.body)}`);
+        throw new Error(
+          `delivery → ${sale.status}: ${JSON.stringify(sale.body)}`,
+        );
       }
       const saleDeliveryId = sale.body.data.id;
       await post('/api/v1/deliveries/assign', staffToken, {
@@ -1131,7 +1152,9 @@ describe('Role conformance (e2e)', () => {
         { reviewerComment: 'Delivered, payment to follow.' },
       );
       if (![200, 201].includes(approved.status)) {
-        throw new Error(`approve → ${approved.status}: ${JSON.stringify(approved.body)}`);
+        throw new Error(
+          `approve → ${approved.status}: ${JSON.stringify(approved.body)}`,
+        );
       }
 
       const [afterApproval] = await ds.query(
@@ -1168,9 +1191,10 @@ describe('Role conformance (e2e)', () => {
 
       // Settling the rest does. The propagation itself posts nothing — the
       // payment's own Dr Bank / Cr A/R is the only new entry.
-      const [mid] = await ds.query(`SELECT balance FROM invoices WHERE id = $1`, [
-        afterApproval.invoice_id,
-      ]);
+      const [mid] = await ds.query(
+        `SELECT balance FROM invoices WHERE id = $1`,
+        [afterApproval.invoice_id],
+      );
       const rest = Number(mid.balance).toFixed(2);
       const journalsBefore = await countJournalEntries();
 
@@ -1207,7 +1231,9 @@ describe('Role conformance (e2e)', () => {
         .delete(`/api/v1/payments/${settling.id}`)
         .set(as(ownerToken));
       if (![200, 204].includes(del.status)) {
-        throw new Error(`delete payment → ${del.status}: ${JSON.stringify(del.body)}`);
+        throw new Error(
+          `delete payment → ${del.status}: ${JSON.stringify(del.body)}`,
+        );
       }
 
       const [afterDelete] = await ds.query(
@@ -1236,7 +1262,6 @@ describe('Role conformance (e2e)', () => {
       // service refuses a reviewer who is the delivering rider.
       expect(res.status).toBe(403);
     });
-
 
     // ══════════════════════════════════════════════════════════════════════
     //  Reversing an approved delivery, via a pre-filled credit memo
@@ -1286,12 +1311,14 @@ describe('Role conformance (e2e)', () => {
         lines: draft.lines,
       });
       if (![200, 201].includes(res.status)) {
-        throw new Error(`staff reversal → ${res.status}: ${JSON.stringify(res.body)}`);
+        throw new Error(
+          `staff reversal → ${res.status}: ${JSON.stringify(res.body)}`,
+        );
       }
       expect(res.body.data.pending).toBe(true);
 
       const pending = (await approvalRows()).filter(
-        r => r.type === 'credit_memo' && r.status === 'pending',
+        (r) => r.type === 'credit_memo' && r.status === 'pending',
       );
       expect(pending).toHaveLength(1);
 
@@ -1306,7 +1333,7 @@ describe('Role conformance (e2e)', () => {
 
     it('the owner approving it reverses the sale AND settles the invoice', async () => {
       const [pending] = (await approvalRows()).filter(
-        r => r.type === 'credit_memo' && r.status === 'pending',
+        (r) => r.type === 'credit_memo' && r.status === 'pending',
       );
       expect(pending).toBeTruthy();
 
@@ -1331,7 +1358,7 @@ describe('Role conformance (e2e)', () => {
 
     it('deciding the reversal twice cannot post it twice', async () => {
       const [approved] = (await approvalRows()).filter(
-        r => r.type === 'credit_memo' && r.status === 'approved',
+        (r) => r.type === 'credit_memo' && r.status === 'approved',
       );
       const journalsBefore = await countJournalEntries();
       await post(`/api/v1/approvals/${approved.id}/decide`, ownerToken, {
@@ -1339,7 +1366,6 @@ describe('Role conformance (e2e)', () => {
       }).expect(200);
       expect(await countJournalEntries()).toBe(journalsBefore);
     });
-
 
     it('reversing a delivery nets COGS to zero even after the average cost moves', async () => {
       // The sale posted COGS at the cost frozen on the delivery line at
@@ -1388,7 +1414,12 @@ describe('Role conformance (e2e)', () => {
           vendorId,
           orderDate: '2026-03-10',
           lines: [
-            { itemId, description: 'Conformance Widget', orderedQty: '200', unitCost: '95' },
+            {
+              itemId,
+              description: 'Conformance Widget',
+              orderedQty: '200',
+              unitCost: '95',
+            },
           ],
         }),
       );
@@ -1429,7 +1460,6 @@ describe('Role conformance (e2e)', () => {
       expect(cogsBefore - (await accountBalance('5000'))).toBeCloseTo(120, 4);
       expect(await trialBalanceDelta()).toBe('0.0000');
     });
-
 
     it('delivery_undo — staff ask, the owner approves, and the stock comes back', async () => {
       // The eighth gated type, and the only one that can still reverse stock.
@@ -1490,11 +1520,13 @@ describe('Role conformance (e2e)', () => {
         { reason: 'Customer never received these — rider logged it wrongly.' },
       );
       if (![200, 201].includes(filed.status)) {
-        throw new Error(`undo → ${filed.status}: ${JSON.stringify(filed.body)}`);
+        throw new Error(
+          `undo → ${filed.status}: ${JSON.stringify(filed.body)}`,
+        );
       }
 
       const pending = (await approvalRows()).filter(
-        r => r.type === 'delivery_undo' && r.status === 'pending',
+        (r) => r.type === 'delivery_undo' && r.status === 'pending',
       );
       expect(pending).toHaveLength(1);
       // Nothing moves while it waits.
@@ -1555,9 +1587,6 @@ describe('Role conformance (e2e)', () => {
     });
   });
 
-
-
-
   // ══════════════════════════════════════════════════════════════════════════
   //  Team management is not an upsell
   // ══════════════════════════════════════════════════════════════════════════
@@ -1584,7 +1613,9 @@ describe('Role conformance (e2e)', () => {
         role: 'staff',
       });
       expect(second.status).toBe(400);
-      expect(second.body.error?.code ?? second.body.code).toBe('STAFF_LIMIT_REACHED');
+      expect(second.body.error?.code ?? second.body.code).toBe(
+        'STAFF_LIMIT_REACHED',
+      );
 
       await ds.query(
         `UPDATE companies SET company_type = 'warehouse',
@@ -1614,7 +1645,10 @@ describe('Role conformance (e2e)', () => {
     });
 
     it('deactivating the staff member frees the seat', async () => {
-      await patch(`/api/v1/settings/users/${staffId}/deactivate`, ownerToken).expect(200);
+      await patch(
+        `/api/v1/settings/users/${staffId}/deactivate`,
+        ownerToken,
+      ).expect(200);
 
       const replacement = await post('/api/v1/settings/users', ownerToken, {
         name: 'Replacement Staff',
@@ -1629,11 +1663,13 @@ describe('Role conformance (e2e)', () => {
       }
 
       // Put the fixture back: later blocks sign in as the original staff user.
-      await ds.query(
-        `UPDATE users SET is_active = false WHERE id = $1`,
-        [replacement.body.data.id],
-      );
-      await patch(`/api/v1/settings/users/${staffId}/activate`, ownerToken).expect(200);
+      await ds.query(`UPDATE users SET is_active = false WHERE id = $1`, [
+        replacement.body.data.id,
+      ]);
+      await patch(
+        `/api/v1/settings/users/${staffId}/activate`,
+        ownerToken,
+      ).expect(200);
     });
 
     it('owners are NOT capped — maker != checker still has somebody to check', async () => {
@@ -1715,7 +1751,11 @@ describe('Role conformance (e2e)', () => {
               billDate: '2026-03-03',
               dueDate: '2026-04-03',
               lines: [
-                { description: 'Supplies', amount: '40', accountId: rentExpenseAccountId },
+                {
+                  description: 'Supplies',
+                  amount: '40',
+                  accountId: rentExpenseAccountId,
+                },
               ],
             }),
           );
@@ -1744,7 +1784,7 @@ describe('Role conformance (e2e)', () => {
 
           return { billId: bill.id, proofId };
         },
-        submit: ctx =>
+        submit: (ctx) =>
           post('/api/v1/bills/pay', staffToken, {
             vendorId,
             paymentDate: '2026-03-03',
@@ -1763,9 +1803,11 @@ describe('Role conformance (e2e)', () => {
             ownerToken,
             { itemId, newQty: '460', reason: 'damage' },
           ).expect(201);
-          return { adjustmentId: adj.body.data?.id ?? adj.body.data?.adjustment?.id };
+          return {
+            adjustmentId: adj.body.data?.id ?? adj.body.data?.adjustment?.id,
+          };
         },
-        submit: ctx =>
+        submit: (ctx) =>
           post(
             `/api/v1/inventory/adjustments/${ctx.adjustmentId}/reverse`,
             staffToken,
@@ -1789,7 +1831,7 @@ describe('Role conformance (e2e)', () => {
         expect(res.body.data.type).toBe(spec.type);
 
         const pending = (await approvalRows()).filter(
-          r => r.type === spec.type && r.status === 'pending',
+          (r) => r.type === spec.type && r.status === 'pending',
         );
         expect(pending.length).toBeGreaterThanOrEqual(1);
 
@@ -1812,16 +1854,22 @@ describe('Role conformance (e2e)', () => {
 
       for (const type of approvable) {
         const [pending] = (await approvalRows()).filter(
-          r => r.type === type && r.status === 'pending',
+          (r) => r.type === type && r.status === 'pending',
         );
         if (!pending) throw new Error(`no pending ${type} to approve`);
 
         const journalsBefore = await countJournalEntries();
-        const res = await post(`/api/v1/approvals/${pending.id}/decide`, ownerToken, {
-          decision: 'approve',
-        });
+        const res = await post(
+          `/api/v1/approvals/${pending.id}/decide`,
+          ownerToken,
+          {
+            decision: 'approve',
+          },
+        );
         if (res.status !== 200) {
-          throw new Error(`approve ${type} → ${res.status}: ${JSON.stringify(res.body)}`);
+          throw new Error(
+            `approve ${type} → ${res.status}: ${JSON.stringify(res.body)}`,
+          );
         }
 
         // Exactly one entry per approval — not zero, not two.
@@ -1854,13 +1902,19 @@ describe('Role conformance (e2e)', () => {
         [requestId],
       );
 
-      const res = await post(`/api/v1/approvals/${requestId}/decide`, ownerToken, {
-        decision: 'approve',
-      });
+      const res = await post(
+        `/api/v1/approvals/${requestId}/decide`,
+        ownerToken,
+        {
+          decision: 'approve',
+        },
+      );
       // Previously this returned 200 with the row unchanged: the owner saw
       // success and nothing happened, forever.
       expect(res.status).toBe(409);
-      expect(res.body.error?.code ?? res.body.code).toBe('APPROVAL_INTERRUPTED');
+      expect(res.body.error?.code ?? res.body.code).toBe(
+        'APPROVAL_INTERRUPTED',
+      );
     });
   });
 
@@ -1900,11 +1954,15 @@ describe('Role conformance (e2e)', () => {
       await setStock('100');
 
       // Staff see 20 damaged: "set to 80".
-      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
-        itemId,
-        newQty: '80',
-        reason: 'damage',
-      });
+      const filed = await post(
+        `/api/v1/inventory/items/${itemId}/adjust`,
+        staffToken,
+        {
+          itemId,
+          newQty: '80',
+          reason: 'damage',
+        },
+      );
       const requestId = filed.body.data.requestId;
 
       // A delivery ships 30 before the owner gets to it.
@@ -1924,20 +1982,30 @@ describe('Role conformance (e2e)', () => {
     it('a stale PHYSICAL COUNT is refused rather than posted', async () => {
       await setStock('100');
 
-      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
-        itemId,
-        newQty: '95',
-        reason: 'physical_count',
-      });
+      const filed = await post(
+        `/api/v1/inventory/items/${itemId}/adjust`,
+        staffToken,
+        {
+          itemId,
+          newQty: '95',
+          reason: 'physical_count',
+        },
+      );
       const requestId = filed.body.data.requestId;
 
       await setStock('70');
 
-      const res = await post(`/api/v1/approvals/${requestId}/decide`, ownerToken, {
-        decision: 'approve',
-      });
+      const res = await post(
+        `/api/v1/approvals/${requestId}/decide`,
+        ownerToken,
+        {
+          decision: 'approve',
+        },
+      );
       expect(res.status).toBe(409);
-      expect(res.body.error?.code ?? res.body.code).toBe('STOCK_MOVED_SINCE_COUNT');
+      expect(res.body.error?.code ?? res.body.code).toBe(
+        'STOCK_MOVED_SINCE_COUNT',
+      );
 
       // Nothing posted, and the request is released for another attempt.
       expect(await onHand()).toBe(70);
@@ -1951,14 +2019,22 @@ describe('Role conformance (e2e)', () => {
     it('an UNMOVED physical count still posts normally', async () => {
       await setStock('100');
 
-      const filed = await post(`/api/v1/inventory/items/${itemId}/adjust`, staffToken, {
-        itemId,
-        newQty: '95',
-        reason: 'physical_count',
-      });
-      await post(`/api/v1/approvals/${filed.body.data.requestId}/decide`, ownerToken, {
-        decision: 'approve',
-      }).expect(200);
+      const filed = await post(
+        `/api/v1/inventory/items/${itemId}/adjust`,
+        staffToken,
+        {
+          itemId,
+          newQty: '95',
+          reason: 'physical_count',
+        },
+      );
+      await post(
+        `/api/v1/approvals/${filed.body.data.requestId}/decide`,
+        ownerToken,
+        {
+          decision: 'approve',
+        },
+      ).expect(200);
 
       expect(await onHand()).toBe(95);
       expect(await trialBalanceDelta()).toBe('0.0000');

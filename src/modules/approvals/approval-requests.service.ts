@@ -8,7 +8,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
-import { ApprovalRequest, ApprovalType } from './entities/approval-request.entity';
+import {
+  ApprovalRequest,
+  ApprovalType,
+} from './entities/approval-request.entity';
 import { ApprovalListFilter } from './dto/approval.dto';
 import { MessagingService } from '../messaging/messaging.service';
 import { approvalPendingMessage } from '../messaging/document-messages';
@@ -80,7 +83,10 @@ export class ApprovalRequestsService {
       details: { type, summary },
     });
     // FinMatrix Connect: tell the owners on WhatsApp (any hour; rule approval_pending).
-    await this.messaging.enqueueForAdmins(this.repo.manager, approvalPendingMessage(request, user.id));
+    await this.messaging.enqueueForAdmins(
+      this.repo.manager,
+      approvalPendingMessage(request, user.id),
+    );
 
     return {
       pending: true,
@@ -111,7 +117,8 @@ export class ApprovalRequestsService {
     if (filter && filter !== 'all') {
       // 'approving' is a transient claim; surface it under 'pending' so a row
       // never vanishes from the inbox mid-dispatch.
-      const statuses = filter === 'pending' ? ['pending', 'approving'] : [filter];
+      const statuses =
+        filter === 'pending' ? ['pending', 'approving'] : [filter];
       qb.andWhere('r.status IN (:...statuses)', { statuses });
     }
 
@@ -181,7 +188,10 @@ export class ApprovalRequestsService {
   }
 
   /** Pending count for the owner's inbox badge. */
-  async pendingCount(companyId: string, viewer: AuthenticatedUser): Promise<number> {
+  async pendingCount(
+    companyId: string,
+    viewer: AuthenticatedUser,
+  ): Promise<number> {
     return this.repo.count({
       where: {
         companyId,

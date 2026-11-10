@@ -19,13 +19,31 @@ export class PayrollRun extends BaseCompanyEntity {
   @Column({ type: 'date', name: 'pay_date' })
   payDate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_gross' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_gross',
+  })
   totalGross!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_deductions' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_deductions',
+  })
   totalDeductions!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_net' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_net',
+  })
   totalNet!: string;
 
   @Column({ type: 'varchar', length: 16, default: 'draft' })

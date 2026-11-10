@@ -76,7 +76,8 @@ function kpi(
   status?: KpiStatus,
 ): Kpi {
   const v = value === null || !Number.isFinite(value) ? null : r2(value);
-  const finalStatus: KpiStatus = status ?? (v === null ? 'no_denominator' : 'ok');
+  const finalStatus: KpiStatus =
+    status ?? (v === null ? 'no_denominator' : 'ok');
   return {
     key,
     label,
@@ -345,7 +346,9 @@ export class ReportsKpiService {
     // How many accounts and customers to name before "Other": a donut wants
     // five, a ranked list ten. Bounded so a client cannot ask for a pie of 300.
     const bounded = (n: number | undefined, d: number) =>
-      n === undefined || !Number.isFinite(n) ? d : Math.min(10, Math.max(3, Math.trunc(n)));
+      n === undefined || !Number.isFinite(n)
+        ? d
+        : Math.min(10, Math.max(3, Math.trunc(n)));
     const expenseTop = bounded(opts.expenseTop, 8);
     const customerTop = bounded(opts.customerTop, 10);
     const startMonth = await this.reports.fiscalYearStartMonth(companyId);
@@ -535,7 +538,9 @@ export class ReportsKpiService {
 
     // What stands out — from the figures above and nothing else.
     const budgetRows = (budgetVsActual as { rows?: unknown[] } | null)?.rows;
-    const budgetHead = (budgetVsActual as { budget?: { id?: string; fiscalYear?: number } } | null)?.budget;
+    const budgetHead = (
+      budgetVsActual as { budget?: { id?: string; fiscalYear?: number } } | null
+    )?.budget;
     const budgetId = budgetHead?.id;
     const insights = buildBusinessInsights({
       range: { startDate: s, endDate: e },
@@ -560,11 +565,13 @@ export class ReportsKpiService {
               fiscalYear: Number(budgetHead?.fiscalYear ?? s.slice(0, 4)),
               rows: (budgetRows as Array<Record<string, unknown>>).map((r) => ({
                 accountType: String(r.accountType ?? '').toLowerCase(),
-                months: (Array.isArray(r.months) ? r.months : []).map((m: Record<string, unknown>) => ({
-                  month: Number(m.month),
-                  budgeted: Number(m.budgeted ?? 0),
-                  actual: Number(m.actual ?? 0),
-                })),
+                months: (Array.isArray(r.months) ? r.months : []).map(
+                  (m: Record<string, unknown>) => ({
+                    month: Number(m.month),
+                    budgeted: Number(m.budgeted ?? 0),
+                    actual: Number(m.actual ?? 0),
+                  }),
+                ),
               })),
             }
           : null,
@@ -585,7 +592,12 @@ export class ReportsKpiService {
   }
 
   /** The top customers by invoiced sales (tax excluded) + Other. Invoice basis. */
-  private async salesByCustomer(companyId: string, s: string, e: string, topN = 10) {
+  private async salesByCustomer(
+    companyId: string,
+    s: string,
+    e: string,
+    topN = 10,
+  ) {
     const rows = await this.dataSource.query(
       `SELECT i.customer_id AS "customerId", COALESCE(c.name, '') AS name,
               SUM(i.subtotal::numeric - COALESCE(i.discount_amount, 0)::numeric) AS amount,
@@ -611,7 +623,11 @@ export class ReportsKpiService {
     const restRaw = rest.reduce((t: number, x: any) => t + x.raw, 0);
     const top5 =
       rawTotal > EPS
-        ? r2((all.slice(0, 5).reduce((t: number, x: any) => t + x.raw, 0) / rawTotal) * 100)
+        ? r2(
+            (all.slice(0, 5).reduce((t: number, x: any) => t + x.raw, 0) /
+              rawTotal) *
+              100,
+          )
         : null;
     return {
       basis: 'invoice' as const,
@@ -668,7 +684,10 @@ export class ReportsKpiService {
    * movement record (Σ quantity_change, Σ value_change), and an item whose
    * record carries an unvalued movement has no value rather than a guessed one.
    */
-  async inventoryHealth(companyId: string, asOfDate?: string): Promise<InventoryHealth> {
+  async inventoryHealth(
+    companyId: string,
+    asOfDate?: string,
+  ): Promise<InventoryHealth> {
     const today = businessToday();
     const asOf = asOfDate || today;
     const historic = asOf < today;
@@ -856,7 +875,11 @@ export class ReportsKpiService {
       turnover,
       dio,
       byLocation: [...byLocation.entries()]
-        .map(([location, v]) => ({ location, value: r2(v.value), count: v.count }))
+        .map(([location, v]) => ({
+          location,
+          value: r2(v.value),
+          count: v.count,
+        }))
         .sort((a, b) => b.value - a.value),
       totals: {
         itemCount: stock.length,

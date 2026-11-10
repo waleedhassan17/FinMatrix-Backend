@@ -22,16 +22,33 @@ export class DeliveryPersonnelProfile {
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'vehicle_type' })
   vehicleType!: string | null;
 
-  @Column({ type: 'varchar', length: 64, nullable: true, name: 'vehicle_number' })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    name: 'vehicle_number',
+  })
   vehicleNumber!: string | null;
 
   @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
   zones!: string[];
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'max_load' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    name: 'max_load',
+  })
   maxLoad!: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'current_load' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    name: 'current_load',
+  })
   currentLoad!: string;
 
   @Column({ type: 'boolean', default: true, name: 'is_available' })
@@ -46,13 +63,31 @@ export class DeliveryPersonnelProfile {
   @Column({ type: 'int', default: 0, name: 'total_deliveries' })
   totalDeliveries!: number;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, default: 100, name: 'on_time_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 100,
+    name: 'on_time_rate',
+  })
   onTimeRate!: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, name: 'current_lat' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 7,
+    nullable: true,
+    name: 'current_lat',
+  })
   currentLat!: string | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true, name: 'current_lng' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 7,
+    nullable: true,
+    name: 'current_lng',
+  })
   currentLng!: string | null;
 
   @Column({ type: 'float', nullable: true })

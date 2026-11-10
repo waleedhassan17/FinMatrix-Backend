@@ -1,9 +1,18 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager, In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { DeliveryPersonnelProfile } from './entities/delivery-personnel-profile.entity';
-import { CreatePersonnelDto, UpdatePersonnelDto, UpdateLocationDto } from './dto/delivery-personnel.dto';
+import {
+  CreatePersonnelDto,
+  UpdatePersonnelDto,
+  UpdateLocationDto,
+} from './dto/delivery-personnel.dto';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { DeliveryLocationLog } from '../deliveries/entities/delivery-location-log.entity';
 import { User } from '../users/entities/user.entity';
@@ -12,7 +21,11 @@ import { ManagedCredential } from '../users/entities/managed-credential.entity';
 import { CredentialVaultService } from '../users/credential-vault.service';
 import { ensureRiderUsername } from './rider-username';
 import { isLocationLive } from '../deliveries/presence.constants';
-import { getPlanConfig, isTrialPlan, riderSeatLimit } from '../billing/plan-config';
+import {
+  getPlanConfig,
+  isTrialPlan,
+  riderSeatLimit,
+} from '../billing/plan-config';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 
@@ -63,7 +76,10 @@ export class DeliveryPersonnelService {
       .addSelect('u.email', 'u_email')
       .addSelect('u.username', 'u_username')
       .addSelect('u.phone', 'u_phone')
-      .where('p.userId = :uid AND p.companyId = :cid', { uid: userId, cid: companyId })
+      .where('p.userId = :uid AND p.companyId = :cid', {
+        uid: userId,
+        cid: companyId,
+      })
       .getRawAndEntities();
 
     const p = result.entities[0];
@@ -78,7 +94,11 @@ export class DeliveryPersonnelService {
     };
   }
 
-  async create(companyId: string, dto: CreatePersonnelDto, actorUserId?: string) {
+  async create(
+    companyId: string,
+    dto: CreatePersonnelDto,
+    actorUserId?: string,
+  ) {
     return this.dataSource.transaction(async (em) => {
       // phase2.md — plan-based limit (authoritative, server-side). A downgrade
       // never deletes extras: activating a plan moves riders beyond its limit
@@ -104,7 +124,9 @@ export class DeliveryPersonnelService {
           });
         }
         if (email && (await userRepo.findOne({ where: { email } }))) {
-          throw new BadRequestException('A user with this email already exists');
+          throw new BadRequestException(
+            'A user with this email already exists',
+          );
         }
 
         const hash = await bcrypt.hash(dto.password, 12);
@@ -138,7 +160,13 @@ export class DeliveryPersonnelService {
         // The creator is the custodian of this password: riders have no
         // self-service reset, so the encrypted copy is what lets the personnel
         // screen show the credentials again when the rider forgets them.
-        await this.storeCredential(em, companyId, userId, dto.password, actorUserId);
+        await this.storeCredential(
+          em,
+          companyId,
+          userId,
+          dto.password,
+          actorUserId,
+        );
       }
 
       if (!userId) {
@@ -152,15 +180,22 @@ export class DeliveryPersonnelService {
       // code and companies.join both create one without. A rider signs in with
       // a username and nothing else, so leaving it null is an account nobody
       // can enter and an office with nothing to hand over.
-      const attachUser = await em.getRepository(User).findOne({ where: { id: userId } });
+      const attachUser = await em
+        .getRepository(User)
+        .findOne({ where: { id: userId } });
       if (attachUser && !attachUser.username) {
-        const company = await em.getRepository(Company).findOne({ where: { id: companyId } });
+        const company = await em
+          .getRepository(Company)
+          .findOne({ where: { id: companyId } });
         await ensureRiderUsername(em, attachUser, company?.inviteCode ?? null);
       }
 
       const profileRepo = em.getRepository(DeliveryPersonnelProfile);
-      const exists = await profileRepo.findOne({ where: { userId, companyId } });
-      if (exists) throw new BadRequestException('Profile already exists for this user');
+      const exists = await profileRepo.findOne({
+        where: { userId, companyId },
+      });
+      if (exists)
+        throw new BadRequestException('Profile already exists for this user');
 
       const profile = profileRepo.create({
         userId,
@@ -241,11 +276,15 @@ export class DeliveryPersonnelService {
    * rider. The company row is locked so two concurrent activations (or an
    * activation racing a plan change) cannot both see a free seat.
    */
-  private async assertSeatAvailable(em: EntityManager, companyId: string): Promise<void> {
-    const companyRow: Array<{ subscription_plan: string | null }> = await em.query(
-      `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1 FOR UPDATE`,
-      [companyId],
-    );
+  private async assertSeatAvailable(
+    em: EntityManager,
+    companyId: string,
+  ): Promise<void> {
+    const companyRow: Array<{ subscription_plan: string | null }> =
+      await em.query(
+        `SELECT subscription_plan FROM companies WHERE id = $1 LIMIT 1 FOR UPDATE`,
+        [companyId],
+      );
     const planConfig = getPlanConfig(companyRow[0]?.subscription_plan);
     const activeCountRow: Array<{ count: string }> = await em.query(
       `SELECT COUNT(*)::int AS count FROM delivery_personnel_profiles
@@ -288,7 +327,11 @@ export class DeliveryPersonnelService {
     return this.repo.save(p);
   }
 
-  async updateLocation(companyId: string, userId: string, dto: UpdateLocationDto) {
+  async updateLocation(
+    companyId: string,
+    userId: string,
+    dto: UpdateLocationDto,
+  ) {
     const p = await this.getById(companyId, userId);
     p.currentLat = dto.lat.toFixed(7);
     p.currentLng = dto.lng.toFixed(7);
@@ -299,13 +342,15 @@ export class DeliveryPersonnelService {
     await this.repo.save(p);
 
     // Log location for any active delivery
-    const activeDelivery = await this.dataSource.getRepository(Delivery).findOne({
-      where: {
-        personnelId: userId,
-        companyId,
-        status: In(['picked_up', 'in_transit', 'arrived']),
-      },
-    });
+    const activeDelivery = await this.dataSource
+      .getRepository(Delivery)
+      .findOne({
+        where: {
+          personnelId: userId,
+          companyId,
+          status: In(['picked_up', 'in_transit', 'arrived']),
+        },
+      });
 
     if (activeDelivery) {
       const log = this.dataSource.getRepository(DeliveryLocationLog).create({
@@ -355,7 +400,13 @@ export class DeliveryPersonnelService {
 
     await this.dataSource.transaction(async (em) => {
       await em.getRepository(User).update(p.userId, { passwordHash: hash });
-      await this.storeCredential(em, companyId, p.userId, password, actorUserId);
+      await this.storeCredential(
+        em,
+        companyId,
+        p.userId,
+        password,
+        actorUserId,
+      );
     });
 
     await this.audit.record({
@@ -379,7 +430,11 @@ export class DeliveryPersonnelService {
    * so a locked-out rider can be helped, and the audit row is what makes that
    * help traceable.
    */
-  async revealCredential(companyId: string, userId: string, actorUserId?: string) {
+  async revealCredential(
+    companyId: string,
+    userId: string,
+    actorUserId?: string,
+  ) {
     const p = await this.getById(companyId, userId);
     const record = await this.dataSource
       .getRepository(ManagedCredential)

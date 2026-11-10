@@ -23,14 +23,32 @@ export class PurchaseOrderLine {
   @Column({ type: 'text' })
   description!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'ordered_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'ordered_qty',
+  })
   orderedQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'received_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'received_qty',
+  })
   receivedQty!: string;
 
   /** Quantity already billed. A bill covers received − billed, so a PO can be billed per receipt. */
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'billed_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'billed_qty',
+  })
   billedQty!: string;
 
   /**
@@ -39,19 +57,49 @@ export class PurchaseOrderLine {
    * to zero once a line is fully billed — whatever rounding or tax treatment
    * the receipts used.
    */
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'grni_accrued' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'grni_accrued',
+  })
   grniAccrued!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'grni_cleared' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'grni_cleared',
+  })
   grniCleared!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_cost' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_cost',
+  })
   unitCost!: string;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 8,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'line_total' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'line_total',
+  })
   lineTotal!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })

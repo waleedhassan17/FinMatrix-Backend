@@ -54,7 +54,9 @@ let TOKEN = '';
 let COMPANY = '';
 
 async function req(method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
   // The API throttles (THROTTLE_LIMIT requests per THROTTLE_TTL). Running the
@@ -72,7 +74,9 @@ async function req(method: string, path: string, body?: unknown) {
       // turn off. Wait out the whole window for auth; back off more gently for
       // everything else, which only trips the global limit.
       const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
-      console.log(`    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`);
+      console.log(
+        `    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`,
+      );
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -94,7 +98,10 @@ async function main() {
 
   console.log(`\nFinMatrix Period Close (G4) → ${API}\n`);
 
-  const login = await req('POST', '/auth/signin', { email: EMAIL, password: PASSWORD });
+  const login = await req('POST', '/auth/signin', {
+    email: EMAIL,
+    password: PASSWORD,
+  });
   TOKEN = data(login)?.tokens?.accessToken ?? '';
   COMPANY = data(login)?.companyId ?? '';
   ok('admin signs in', !!TOKEN && !!COMPANY, login.status);
@@ -103,7 +110,8 @@ async function main() {
   // Make sure we start from an open period whatever a previous run left behind.
   await req('POST', `/companies/${COMPANY}/period-reopen`);
 
-  const customer = (data(await req('GET', '/customers?limit=1')) as any)?.data?.[0];
+  const customer = (data(await req('GET', '/customers?limit=1')) as any)
+    ?.data?.[0];
   const vendorRes = data(await req('GET', '/vendors?limit=1')) as any;
   const vendor = vendorRes?.data?.[0] ?? vendorRes?.[0];
   const itemsRes = data(await req('GET', '/inventory/items?limit=50')) as any;
@@ -111,14 +119,21 @@ async function main() {
     (i: any) => n(i.unitCost) > 0 && n(i.quantityOnHand) > 20,
   );
   const accountsRes = data(await req('GET', '/accounts?limit=200')) as any;
-  const accounts = accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
+  const accounts =
+    accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
   const cash = accounts.find((a: any) => a.accountNumber === '1000');
   const revenue = accounts.find((a: any) => a.accountNumber === '4000');
-  ok('master data resolved',
-    !!customer && !!vendor && !!item && !!cash && !!revenue, {
-      customer: !!customer, vendor: !!vendor, item: !!item,
-      cash: !!cash, revenue: !!revenue,
-    });
+  ok(
+    'master data resolved',
+    !!customer && !!vendor && !!item && !!cash && !!revenue,
+    {
+      customer: !!customer,
+      vendor: !!vendor,
+      item: !!item,
+      cash: !!cash,
+      revenue: !!revenue,
+    },
+  );
   if (!customer || !cash || !revenue) throw new Error('missing master data');
 
   // Dates either side of the lock. The lock lands on LOCK_DATE itself, which
@@ -134,28 +149,40 @@ async function main() {
   const future = await req('POST', `/companies/${COMPANY}/period-close`, {
     lockDate: '2099-01-01',
   });
-  ok('A refuses to close a period that has not happened yet',
-    future.status === 400 && errCode(future) === 'LOCK_DATE_IN_FUTURE', future.body);
+  ok(
+    'A refuses to close a period that has not happened yet',
+    future.status === 400 && errCode(future) === 'LOCK_DATE_IN_FUTURE',
+    future.body,
+  );
 
   const closed = await req('POST', `/companies/${COMPANY}/period-close`, {
     lockDate: LOCK_DATE,
   });
-  ok('A books closed through the lock date',
-    closed.status === 200 || closed.status === 201, closed.body);
+  ok(
+    'A books closed through the lock date',
+    closed.status === 200 || closed.status === 201,
+    closed.body,
+  );
 
   const { rows: lockRows } = await db.query(
     `SELECT books_locked_until::text AS until, books_locked_at FROM companies WHERE id = $1`,
     [COMPANY],
   );
   ok('A lock date persisted', lockRows[0]?.until === LOCK_DATE, lockRows[0]);
-  ok('A the TIME of the close is stamped too — this is what makes back-dating detectable',
-    !!lockRows[0]?.books_locked_at, lockRows[0]);
+  ok(
+    'A the TIME of the close is stamped too — this is what makes back-dating detectable',
+    !!lockRows[0]?.books_locked_at,
+    lockRows[0],
+  );
 
   const earlier = await req('POST', `/companies/${COMPANY}/period-close`, {
     lockDate: '2026-06-30',
   });
-  ok('A refuses to silently reopen by moving the lock backwards',
-    earlier.status === 400 && errCode(earlier) === 'PERIOD_ALREADY_CLOSED', earlier.body);
+  ok(
+    'A refuses to silently reopen by moving the lock backwards',
+    earlier.status === 400 && errCode(earlier) === 'PERIOD_ALREADY_CLOSED',
+    earlier.body,
+  );
 
   // ══ B/C. Every document type, either side of the lock ══════════
   console.log('\n— B/C: every document type, before / on / after the lock');
@@ -165,14 +192,29 @@ async function main() {
     invoiceDate: date,
     dueDate: '2099-12-31',
     status: 'sent',
-    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100', taxRate: '0', lineKind: 'service' }],
+    lines: [
+      {
+        description: 'G4 probe',
+        quantity: '1',
+        unitPrice: '100',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
   const billPayload = (date: string) => ({
     vendorId: vendor.id,
     billNumber: `G4-${date}-${Date.now()}`,
     billDate: date,
     dueDate: '2099-12-31',
-    lines: [{ description: 'G4 probe', quantity: '1', unitPrice: '100', lineKind: 'service' }],
+    lines: [
+      {
+        description: 'G4 probe',
+        quantity: '1',
+        unitPrice: '100',
+        lineKind: 'service',
+      },
+    ],
   });
   const journalPayload = (date: string) => ({
     date,
@@ -199,30 +241,51 @@ async function main() {
   ) as any;
 
   const docs: Array<{ label: string; post: (d: string) => Promise<any> }> = [
-    { label: 'invoice', post: (d) => req('POST', '/invoices', invoicePayload(d)) },
+    {
+      label: 'invoice',
+      post: (d) => req('POST', '/invoices', invoicePayload(d)),
+    },
     { label: 'bill', post: (d) => req('POST', '/bills', billPayload(d)) },
-    { label: 'journal entry', post: (d) => req('POST', '/journal-entries', journalPayload(d)) },
-    { label: 'tax payment', post: (d) => req('POST', '/taxes/payments', taxPayload(d, rate.id)) },
+    {
+      label: 'journal entry',
+      post: (d) => req('POST', '/journal-entries', journalPayload(d)),
+    },
+    {
+      label: 'tax payment',
+      post: (d) => req('POST', '/taxes/payments', taxPayload(d, rate.id)),
+    },
   ];
 
   for (const doc of docs) {
     const before = await doc.post(BEFORE);
-    ok(`B ${doc.label} dated BEFORE the lock → PERIOD_LOCKED`,
-      errCode(before) === 'PERIOD_LOCKED', { status: before.status, body: before.body });
+    ok(
+      `B ${doc.label} dated BEFORE the lock → PERIOD_LOCKED`,
+      errCode(before) === 'PERIOD_LOCKED',
+      { status: before.status, body: before.body },
+    );
 
     const on = await doc.post(ON);
-    ok(`B ${doc.label} dated ON the lock date → PERIOD_LOCKED (rule is date <= lock)`,
-      errCode(on) === 'PERIOD_LOCKED', { status: on.status, body: on.body });
+    ok(
+      `B ${doc.label} dated ON the lock date → PERIOD_LOCKED (rule is date <= lock)`,
+      errCode(on) === 'PERIOD_LOCKED',
+      { status: on.status, body: on.body },
+    );
 
     const after = await doc.post(AFTER);
-    ok(`C ${doc.label} dated AFTER the lock → posts`,
-      after.status === 200 || after.status === 201, {
-        status: after.status, body: after.body,
-      });
+    ok(
+      `C ${doc.label} dated AFTER the lock → posts`,
+      after.status === 200 || after.status === 201,
+      {
+        status: after.status,
+        body: after.body,
+      },
+    );
   }
 
   // Payment carries its own date; check it separately against a live invoice.
-  const payTarget = data(await req('POST', '/invoices', invoicePayload(AFTER))) as any;
+  const payTarget = data(
+    await req('POST', '/invoices', invoicePayload(AFTER)),
+  ) as any;
   const payBefore = await req('POST', '/payments', {
     customerId: customer.id,
     paymentDate: BEFORE,
@@ -230,8 +293,11 @@ async function main() {
     paymentMethod: 'cash',
     applications: [{ invoiceId: payTarget.id, amount: '10' }],
   });
-  ok('B payment dated BEFORE the lock → PERIOD_LOCKED',
-    errCode(payBefore) === 'PERIOD_LOCKED', { status: payBefore.status, body: payBefore.body });
+  ok(
+    'B payment dated BEFORE the lock → PERIOD_LOCKED',
+    errCode(payBefore) === 'PERIOD_LOCKED',
+    { status: payBefore.status, body: payBefore.body },
+  );
 
   const payAfter = await req('POST', '/payments', {
     customerId: customer.id,
@@ -240,8 +306,11 @@ async function main() {
     paymentMethod: 'cash',
     applications: [{ invoiceId: payTarget.id, amount: '10' }],
   });
-  ok('C payment dated AFTER the lock → posts',
-    payAfter.status === 200 || payAfter.status === 201, payAfter.status);
+  ok(
+    'C payment dated AFTER the lock → posts',
+    payAfter.status === 200 || payAfter.status === 201,
+    payAfter.status,
+  );
 
   // Inventory movement (adjustment) posts at today's date, so it should work.
   if (item) {
@@ -251,8 +320,11 @@ async function main() {
       reason: 'correction',
       notes: 'G4 probe',
     });
-    ok('C inventory movement dated today (after the lock) → posts',
-      adj.status === 200 || adj.status === 201, adj.status);
+    ok(
+      'C inventory movement dated today (after the lock) → posts',
+      adj.status === 200 || adj.status === 201,
+      adj.status,
+    );
 
     // An adjustment can now carry its own date, so it can be aimed INTO the
     // closed period. There is no period check in adjust() — createEntry does
@@ -260,7 +332,8 @@ async function main() {
     // take the quantity, the adjustment row and the movement with it. If it
     // ever half-applied, stock would move with no journal entry behind it.
     const beforeQty = n(
-      (data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand,
+      (data(await req('GET', `/inventory/items/${item.id}`)) as any)
+        .quantityOnHand,
     );
     const { rows: adjCountBefore } = await db.query(
       `SELECT count(*)::int AS c FROM inventory_adjustments WHERE company_id = $1`,
@@ -278,12 +351,15 @@ async function main() {
       date: BEFORE,
       notes: 'G4 back-date into a closed period',
     });
-    ok('B inventory adjustment back-dated INTO the closed period → PERIOD_LOCKED',
+    ok(
+      'B inventory adjustment back-dated INTO the closed period → PERIOD_LOCKED',
       errCode(lockedAdj) === 'PERIOD_LOCKED',
-      { status: lockedAdj.status, body: lockedAdj.body });
+      { status: lockedAdj.status, body: lockedAdj.body },
+    );
 
     const afterQty = n(
-      (data(await req('GET', `/inventory/items/${item.id}`)) as any).quantityOnHand,
+      (data(await req('GET', `/inventory/items/${item.id}`)) as any)
+        .quantityOnHand,
     );
     const { rows: adjCountAfter } = await db.query(
       `SELECT count(*)::int AS c FROM inventory_adjustments WHERE company_id = $1`,
@@ -294,14 +370,21 @@ async function main() {
       [COMPANY],
     );
 
-    ok('B the refused adjustment left the quantity untouched',
-      afterQty === beforeQty, { before: beforeQty, after: afterQty });
-    ok('B the refused adjustment wrote no adjustment row',
+    ok(
+      'B the refused adjustment left the quantity untouched',
+      afterQty === beforeQty,
+      { before: beforeQty, after: afterQty },
+    );
+    ok(
+      'B the refused adjustment wrote no adjustment row',
       adjCountAfter[0].c === adjCountBefore[0].c,
-      { before: adjCountBefore[0].c, after: adjCountAfter[0].c });
-    ok('B the refused adjustment wrote no movement row',
+      { before: adjCountBefore[0].c, after: adjCountAfter[0].c },
+    );
+    ok(
+      'B the refused adjustment wrote no movement row',
       moveCountAfter[0].c === moveCountBefore[0].c,
-      { before: moveCountBefore[0].c, after: moveCountAfter[0].c });
+      { before: moveCountBefore[0].c, after: moveCountAfter[0].c },
+    );
   }
 
   // ══ D. Drafts ══════════════════════════════════════════════════
@@ -310,14 +393,20 @@ async function main() {
     ...journalPayload(BEFORE),
     status: 'draft',
   });
-  ok('D a DRAFT may be created in a closed period',
-    draft.status === 200 || draft.status === 201, draft.body);
+  ok(
+    'D a DRAFT may be created in a closed period',
+    draft.status === 200 || draft.status === 201,
+    draft.body,
+  );
 
   if (draft.status < 300) {
     const draftId = (data(draft) as any).id;
     const posted = await req('POST', `/journal-entries/${draftId}/post`);
-    ok('D but posting that draft is refused → PERIOD_LOCKED',
-      errCode(posted) === 'PERIOD_LOCKED', { status: posted.status, body: posted.body });
+    ok(
+      'D but posting that draft is refused → PERIOD_LOCKED',
+      errCode(posted) === 'PERIOD_LOCKED',
+      { status: posted.status, body: posted.body },
+    );
   }
 
   // ══ F. I12, old and new ════════════════════════════════════════
@@ -340,15 +429,21 @@ async function main() {
        AND e.status = 'posted'`;
 
   const audited = await db.query(I12_AUDITED);
-  ok('F the AUDITED I12 flags legitimate history — it is a false-positive machine',
-    n(audited.rows[0]?.c) > 0, {
+  ok(
+    'F the AUDITED I12 flags legitimate history — it is a false-positive machine',
+    n(audited.rows[0]?.c) > 0,
+    {
       flagged: audited.rows[0]?.c,
       note: 'every entry dated in the now-closed period, all posted before the close',
-    });
+    },
+  );
 
   const corrected = await db.query(I12_CORRECTED);
-  ok('F the CORRECTED I12 is silent on that same history',
-    n(corrected.rows[0]?.c) === 0, corrected.rows[0]);
+  ok(
+    'F the CORRECTED I12 is silent on that same history',
+    n(corrected.rows[0]?.c) === 0,
+    corrected.rows[0],
+  );
 
   // Now back-date an entry straight into the closed period, bypassing the API
   // exactly as a rogue script would, and prove the corrected invariant sees it.
@@ -375,27 +470,41 @@ async function main() {
   await db.query('COMMIT');
 
   const caught = await db.query(I12_CORRECTED);
-  ok('F the corrected I12 CATCHES an entry back-dated into the closed period',
-    n(caught.rows[0]?.c) === 1, caught.rows[0]);
+  ok(
+    'F the corrected I12 CATCHES an entry back-dated into the closed period',
+    n(caught.rows[0]?.c) === 1,
+    caught.rows[0],
+  );
 
   await db.query(`DELETE FROM journal_entries WHERE id = $1`, [sneak[0].id]);
   const cleaned = await db.query(I12_CORRECTED);
-  ok('F silent again once the back-dated entry is removed',
-    n(cleaned.rows[0]?.c) === 0, cleaned.rows[0]);
+  ok(
+    'F silent again once the back-dated entry is removed',
+    n(cleaned.rows[0]?.c) === 0,
+    cleaned.rows[0],
+  );
 
   // ══ E. Reopen ══════════════════════════════════════════════════
   console.log('\n— E: reopening');
   const reopened = await req('POST', `/companies/${COMPANY}/period-reopen`);
-  ok('E books reopened', reopened.status === 200 || reopened.status === 201, reopened.body);
+  ok(
+    'E books reopened',
+    reopened.status === 200 || reopened.status === 201,
+    reopened.body,
+  );
 
   const afterReopen = await req('POST', '/invoices', invoicePayload(BEFORE));
-  ok('E the previously refused date now posts',
-    afterReopen.status === 201, { status: afterReopen.status, body: afterReopen.body });
+  ok('E the previously refused date now posts', afterReopen.status === 201, {
+    status: afterReopen.status,
+    body: afterReopen.body,
+  });
 
   const reopenAgain = await req('POST', `/companies/${COMPANY}/period-reopen`);
-  ok('E reopening already-open books is refused',
+  ok(
+    'E reopening already-open books is refused',
     reopenAgain.status === 400 && errCode(reopenAgain) === 'PERIOD_NOT_CLOSED',
-    reopenAgain.body);
+    reopenAgain.body,
+  );
 
   // ══ G. Retained earnings are derived, not posted ═══════════════
   console.log('\n— G: retained earnings (derived, no closing entries)');
@@ -405,40 +514,79 @@ async function main() {
       WHERE company_id = $1 AND (memo ILIKE '%closing entry%' OR memo ILIKE '%year-end close%')`,
     [COMPANY],
   );
-  ok('G this system posts NO year-end closing entries — the design is derived',
-    n(closingEntries[0]?.c) === 0, closingEntries[0]);
+  ok(
+    'G this system posts NO year-end closing entries — the design is derived',
+    n(closingEntries[0]?.c) === 0,
+    closingEntries[0],
+  );
 
-  const bs = data(await req('GET', `/reports/balance-sheet?asOfDate=2026-12-31`)) as any;
+  const bs = data(
+    await req('GET', `/reports/balance-sheet?asOfDate=2026-12-31`),
+  ) as any;
   const pl = data(
-    await req('GET', `/reports/profit-loss?startDate=1970-01-01&endDate=2026-12-31`),
+    await req(
+      'GET',
+      `/reports/profit-loss?startDate=1970-01-01&endDate=2026-12-31`,
+    ),
   ) as any;
   const equityIncome = (bs?.equity ?? []).reduce(
-    (s: number, e: any) => (e.accountName?.includes('Net Income') ? s + n(e.amount) : s),
+    (s: number, e: any) =>
+      e.accountName?.includes('Net Income') ? s + n(e.amount) : s,
     0,
   );
-  ok('G cumulative net income is carried into equity at report time',
-    near(equityIncome, n(pl?.netIncome)), {
-      equityLine: equityIncome, plNetIncome: pl?.netIncome,
-    });
-  ok('G balance sheet balances with the derived earnings line',
-    bs?.isBalanced === true, {
+  ok(
+    'G cumulative net income is carried into equity at report time',
+    near(equityIncome, n(pl?.netIncome)),
+    {
+      equityLine: equityIncome,
+      plNetIncome: pl?.netIncome,
+    },
+  );
+  ok(
+    'G balance sheet balances with the derived earnings line',
+    bs?.isBalanced === true,
+    {
       assets: bs?.totalAssets,
       liabEquity: n(bs?.totalLiabilities) + n(bs?.totalEquity),
-    });
+    },
+  );
 
   // ══ Invariants ═════════════════════════════════════════════════
   console.log('\n— invariants');
   const checks: Array<[string, string]> = [
-    ['I1 global imbalance', `SELECT 1 FROM journal_entry_lines HAVING sum(debit) <> sum(credit)`],
-    ['I2 unbalanced entry', `SELECT 1 FROM journal_entry_lines GROUP BY entry_id HAVING sum(debit) <> sum(credit)`],
-    ['I4 bad line shape', `SELECT 1 FROM journal_entry_lines WHERE (debit>0 AND credit>0) OR (debit=0 AND credit=0) OR debit<0 OR credit<0`],
-    ['I8 invoice math', `SELECT 1 FROM invoices WHERE total - amount_paid <> balance`],
-    ['I11 negative stock', `SELECT 1 FROM inventory_items WHERE quantity_on_hand < 0`],
-    ['I12 closed-period posting (corrected)', I12_CORRECTED.replace('count(*)::int AS c', '1').replace('SELECT 1\n', 'SELECT 1 ')],
+    [
+      'I1 global imbalance',
+      `SELECT 1 FROM journal_entry_lines HAVING sum(debit) <> sum(credit)`,
+    ],
+    [
+      'I2 unbalanced entry',
+      `SELECT 1 FROM journal_entry_lines GROUP BY entry_id HAVING sum(debit) <> sum(credit)`,
+    ],
+    [
+      'I4 bad line shape',
+      `SELECT 1 FROM journal_entry_lines WHERE (debit>0 AND credit>0) OR (debit=0 AND credit=0) OR debit<0 OR credit<0`,
+    ],
+    [
+      'I8 invoice math',
+      `SELECT 1 FROM invoices WHERE total - amount_paid <> balance`,
+    ],
+    [
+      'I11 negative stock',
+      `SELECT 1 FROM inventory_items WHERE quantity_on_hand < 0`,
+    ],
+    [
+      'I12 closed-period posting (corrected)',
+      I12_CORRECTED.replace('count(*)::int AS c', '1').replace(
+        'SELECT 1\n',
+        'SELECT 1 ',
+      ),
+    ],
   ];
   for (const [name, sql] of checks) {
     const { rows } = await db.query(sql);
-    const violations = name.startsWith('I12') ? rows.filter((r: any) => r.c !== 0) : rows;
+    const violations = name.startsWith('I12')
+      ? rows.filter((r: any) => r.c !== 0)
+      : rows;
     ok(`[final] ${name}`, violations.length === 0, violations.slice(0, 2));
   }
 

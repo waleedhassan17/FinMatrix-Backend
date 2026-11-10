@@ -24,14 +24,17 @@ function scrub(value: unknown, depth = 0): unknown {
   if (depth > 6 || value == null) return value;
   if (typeof value === 'string') {
     // Payment-screenshot / POD image URLs must not leak.
-    if (/cloudinary\.com|bill-photo|screenshot/i.test(value)) return '[Redacted URL]';
+    if (/cloudinary\.com|bill-photo|screenshot/i.test(value))
+      return '[Redacted URL]';
     return value;
   }
   if (Array.isArray(value)) return value.map((v) => scrub(v, depth + 1));
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SENSITIVE_KEY_PATTERN.test(k) ? '[Redacted]' : scrub(v, depth + 1);
+      out[k] = SENSITIVE_KEY_PATTERN.test(k)
+        ? '[Redacted]'
+        : scrub(v, depth + 1);
     }
     return out;
   }
@@ -81,7 +84,8 @@ if (process.env.SENTRY_DSN) {
       if (event.user) {
         event.user = event.user.id ? { id: event.user.id } : undefined;
       }
-      if (event.contexts) event.contexts = scrub(event.contexts) as typeof event.contexts;
+      if (event.contexts)
+        event.contexts = scrub(event.contexts) as typeof event.contexts;
       if (event.extra) event.extra = scrub(event.extra) as typeof event.extra;
       if (event.breadcrumbs) {
         event.breadcrumbs = event.breadcrumbs.map((b) => ({

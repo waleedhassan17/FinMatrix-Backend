@@ -25,11 +25,22 @@ import {
   ACCT_CUSTOMER_ADVANCES,
   ACCT_AR,
 } from '../accounts/accounts.constants';
-import { toDecimal, MONEY_TOLERANCE, subtractMoney } from '../../common/utils/money.util';
+import {
+  toDecimal,
+  MONEY_TOLERANCE,
+  subtractMoney,
+} from '../../common/utils/money.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
-import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
+import {
+  addDaysIso,
+  businessToday,
+} from '../../common/utils/business-date.util';
 import { Customer } from '../customers/entities/customer.entity';
-import { CreditOverride, enforceCreditLimit, grossValue } from '../../common/utils/credit-control.util';
+import {
+  CreditOverride,
+  enforceCreditLimit,
+  grossValue,
+} from '../../common/utils/credit-control.util';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentApplication } from '../payments/entities/payment-application.entity';
 import {
@@ -186,7 +197,10 @@ export class DeliveryLedgerService {
     const delivery = await deliveryRepo
       .createQueryBuilder('d')
       .setLock('pessimistic_write')
-      .where('d.id = :id AND d.companyId = :cid', { id: deliveryId, cid: companyId })
+      .where('d.id = :id AND d.companyId = :cid', {
+        id: deliveryId,
+        cid: companyId,
+      })
       .getOne();
     if (!delivery) throw new NotFoundException('Delivery not found');
 
@@ -226,7 +240,8 @@ export class DeliveryLedgerService {
     // receipt, which the assessment already counts against the exposure.
     if (!delivery.prepaid) {
       const value = activeItems.reduce(
-        (sum, l) => sum.plus(grossValue(this.lineQty(l), l.unitPrice, l.taxRate ?? '0')),
+        (sum, l) =>
+          sum.plus(grossValue(this.lineQty(l), l.unitPrice, l.taxRate ?? '0')),
         new Decimal(0),
       );
       await enforceCreditLimit(em, companyId, delivery.customerId, value, {
@@ -245,7 +260,10 @@ export class DeliveryLedgerService {
       const item = await invRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
-        .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: line.itemId,
+          cid: companyId,
+        })
         .getOne();
       if (!item) {
         throw new NotFoundException({
@@ -361,8 +379,20 @@ export class DeliveryLedgerService {
         sourceType: 'delivery_dispatch',
         sourceId: delivery.id,
         lines: [
-          { accountId: git.id, description: 'Goods in transit (at cost)', debit: value, credit: '0', lineOrder: 0 },
-          { accountId: inventory.id, description: 'Inventory dispatched to rider', debit: '0', credit: value, lineOrder: 1 },
+          {
+            accountId: git.id,
+            description: 'Goods in transit (at cost)',
+            debit: value,
+            credit: '0',
+            lineOrder: 0,
+          },
+          {
+            accountId: inventory.id,
+            description: 'Inventory dispatched to rider',
+            debit: '0',
+            credit: value,
+            lineOrder: 1,
+          },
         ],
       });
       journalEntryId = entry.id;
@@ -417,7 +447,10 @@ export class DeliveryLedgerService {
     const delivery = await deliveryRepo
       .createQueryBuilder('d')
       .setLock('pessimistic_write')
-      .where('d.id = :id AND d.companyId = :cid', { id: deliveryId, cid: companyId })
+      .where('d.id = :id AND d.companyId = :cid', {
+        id: deliveryId,
+        cid: companyId,
+      })
       .getOne();
     if (!delivery) throw new NotFoundException('Delivery not found');
     if (delivery.ledgerStatus === 'committed') {
@@ -484,7 +517,10 @@ export class DeliveryLedgerService {
         const item = await invRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
-          .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
+          .where('i.id = :id AND i.companyId = :cid', {
+            id: line.itemId,
+            cid: companyId,
+          })
           .getOne();
         // Only owe the GL what the subledger can actually absorb: the restock
         // cost is added AFTER the item is known to exist, so a deleted item
@@ -540,7 +576,8 @@ export class DeliveryLedgerService {
       // and must keep working. Only a delivery that moves real stock while
       // recognising no revenue at all is a defect.
       const invoiceTotalNet = invoiceLines.reduce(
-        (sum, l) => sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+        (sum, l) =>
+          sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
         new Decimal(0),
       );
       if (
@@ -556,16 +593,22 @@ export class DeliveryLedgerService {
         });
       }
 
-      const invoice = await this.invoices.createInTransaction(em, companyId, userId, {
-        customerId: delivery.customerId,
-        invoiceDate: this.today(),
-        dueDate: addDaysIso(this.today(), 30),
-        status: 'sent',
-        notes: `Delivery ${delivery.referenceNo ?? delivery.id} approved${
-          delivery.salesOrderId ? ' — converted from sales order' : ''
-        }`,
-        lines: invoiceLines,
-      }, { credit: { skip: true } });
+      const invoice = await this.invoices.createInTransaction(
+        em,
+        companyId,
+        userId,
+        {
+          customerId: delivery.customerId,
+          invoiceDate: this.today(),
+          dueDate: addDaysIso(this.today(), 30),
+          status: 'sent',
+          notes: `Delivery ${delivery.referenceNo ?? delivery.id} approved${
+            delivery.salesOrderId ? ' — converted from sales order' : ''
+          }`,
+          lines: invoiceLines,
+        },
+        { credit: { skip: true } },
+      );
       invoiceId = invoice.id;
       invoiceNumber = invoice.invoiceNumber;
       invoiceTotal = invoice.total;
@@ -588,7 +631,10 @@ export class DeliveryLedgerService {
         // Control transfers now, so the advance is earned: apply it to the
         // invoice through the receipt that holds it (Dr 2400 / Cr A/R), which
         // leaves a PaymentApplication on the invoice's payment history.
-        const available = await this.unappliedOnReceipt(em, delivery.advancePaymentId);
+        const available = await this.unappliedOnReceipt(
+          em,
+          delivery.advancePaymentId,
+        );
         advanceApplied = Decimal.min(available, total);
         if (advanceApplied.greaterThan(MONEY_TOLERANCE)) {
           await this.payments.applyInTransaction(
@@ -597,7 +643,9 @@ export class DeliveryLedgerService {
             userId,
             delivery.advancePaymentId,
             {
-              applications: [{ invoiceId: invoice.id, amount: advanceApplied.toFixed(4) }],
+              applications: [
+                { invoiceId: invoice.id, amount: advanceApplied.toFixed(4) },
+              ],
               date: this.today(),
             },
             { forDeliveryId: delivery.id },
@@ -609,8 +657,16 @@ export class DeliveryLedgerService {
         // deliveries always were — Dr 2400 / Cr A/R and the invoice marked
         // paid. Its advance was the full order, so it covers any invoice this
         // delivery can raise.
-        const advances = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_CUSTOMER_ADVANCES);
-        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, em);
+        const advances = await this.accounts.getOrCreateSystemAccount(
+          em,
+          companyId,
+          ACCT_CUSTOMER_ADVANCES,
+        );
+        const ar = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_AR,
+          em,
+        );
         const settled = total.toFixed(4);
         await this.posting.createEntry(em, {
           companyId,
@@ -621,8 +677,20 @@ export class DeliveryLedgerService {
           sourceType: 'delivery_advance_release',
           sourceId: delivery.id,
           lines: [
-            { accountId: advances.id, description: 'Customer advance earned on delivery', debit: settled, credit: '0', lineOrder: 0 },
-            { accountId: ar.id, description: 'Invoice settled from advance', debit: '0', credit: settled, lineOrder: 1 },
+            {
+              accountId: advances.id,
+              description: 'Customer advance earned on delivery',
+              debit: settled,
+              credit: '0',
+              lineOrder: 0,
+            },
+            {
+              accountId: ar.id,
+              description: 'Invoice settled from advance',
+              debit: '0',
+              credit: settled,
+              lineOrder: 1,
+            },
           ],
         });
         invoice.amountPaid = invoice.total;
@@ -635,7 +703,9 @@ export class DeliveryLedgerService {
           where: { id: delivery.customerId, companyId },
         });
         if (customer) {
-          customer.balance = subtractMoney(customer.balance, settled).toFixed(4);
+          customer.balance = subtractMoney(customer.balance, settled).toFixed(
+            4,
+          );
           await em.save(customer);
         }
         advanceApplied = total;
@@ -646,8 +716,13 @@ export class DeliveryLedgerService {
       // it is checked against what the advance leaves, now that the invoice
       // (and so the amount due) is final.
       const settle =
-        collection.amountCollected !== undefined && collection.amountCollected !== null
-          ? collectionFromAmount(total, advanceApplied, collection.amountCollected)
+        collection.amountCollected !== undefined &&
+        collection.amountCollected !== null
+          ? collectionFromAmount(
+              total,
+              advanceApplied,
+              collection.amountCollected,
+            )
           : resolveCollection({
               gross: total,
               advance: advanceApplied,
@@ -657,21 +732,30 @@ export class DeliveryLedgerService {
       amountCollected = toDecimal(settle.amountCollected);
       if (amountCollected.greaterThan(MONEY_TOLERANCE)) {
         // Net effect with the invoice above: Dr Cash / Cr Sales / Cr Tax.
-        const payment = await this.payments.receiveInTransaction(em, companyId, userId, {
-          customerId: delivery.customerId,
-          paymentDate: this.today(),
-          paymentMethod: 'cash',
-          amount: amountCollected.toFixed(4),
-          reference: delivery.referenceNo ?? undefined,
-          memo: `Collected by rider — delivery ${delivery.referenceNo ?? delivery.id}`,
-          applications: [{ invoiceId: invoice.id, amount: amountCollected.toFixed(4) }],
-        });
+        const payment = await this.payments.receiveInTransaction(
+          em,
+          companyId,
+          userId,
+          {
+            customerId: delivery.customerId,
+            paymentDate: this.today(),
+            paymentMethod: 'cash',
+            amount: amountCollected.toFixed(4),
+            reference: delivery.referenceNo ?? undefined,
+            memo: `Collected by rider — delivery ${delivery.referenceNo ?? delivery.id}`,
+            applications: [
+              { invoiceId: invoice.id, amount: amountCollected.toFixed(4) },
+            ],
+          },
+        );
         paymentId = payment.id;
       }
 
       // ---- 3. Whatever is left stays in A/R ----
       const settled =
-        (await em.getRepository(Invoice).findOne({ where: { id: invoice.id, companyId } })) ?? invoice;
+        (await em
+          .getRepository(Invoice)
+          .findOne({ where: { id: invoice.id, companyId } })) ?? invoice;
       paidStatus = invoicePaidStatus(settled);
       balanceDue = toDecimal(settled.balance);
     } else if (invoiceLines.length === 0 && delivery.salesOrderId) {
@@ -679,7 +763,9 @@ export class DeliveryLedgerService {
       // below returns everything to the shelf. An advance stays on the
       // customer's receipt, untouched.
       const soRepo = em.getRepository(SalesOrder);
-      const so = await soRepo.findOne({ where: { id: delivery.salesOrderId, companyId } });
+      const so = await soRepo.findOne({
+        where: { id: delivery.salesOrderId, companyId },
+      });
       if (so && so.status !== 'invoiced') {
         so.status = 'cancelled';
         await soRepo.save(so);
@@ -698,7 +784,11 @@ export class DeliveryLedgerService {
       );
       const lines = [];
       if (cogsCost.abs().greaterThan(MONEY_TOLERANCE)) {
-        const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, em);
+        const cogs = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_COGS,
+          em,
+        );
         lines.push({
           accountId: cogs.id,
           description: 'Cost of goods delivered',
@@ -708,7 +798,11 @@ export class DeliveryLedgerService {
         });
       }
       if (restockCost.abs().greaterThan(MONEY_TOLERANCE)) {
-        const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+        const inventory = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_INVENTORY,
+          em,
+        );
         lines.push({
           accountId: inventory.id,
           description: 'Undelivered/returned goods restocked',
@@ -762,11 +856,19 @@ export class DeliveryLedgerService {
    * What an advance receipt still holds. Zero when the receipt is gone — the
    * invoice then simply stays in A/R for whatever the advance would have paid.
    */
-  private async unappliedOnReceipt(em: EntityManager, paymentId: string): Promise<Decimal> {
+  private async unappliedOnReceipt(
+    em: EntityManager,
+    paymentId: string,
+  ): Promise<Decimal> {
     const payment = await em.findOne(Payment, { where: { id: paymentId } });
     if (!payment) return new Decimal(0);
-    const applications = await em.find(PaymentApplication, { where: { paymentId } });
-    const applied = applications.reduce((sum, a) => sum.plus(toDecimal(a.amountApplied)), new Decimal(0));
+    const applications = await em.find(PaymentApplication, {
+      where: { paymentId },
+    });
+    const applied = applications.reduce(
+      (sum, a) => sum.plus(toDecimal(a.amountApplied)),
+      new Decimal(0),
+    );
     return Decimal.max(toDecimal(payment.amount).minus(applied), 0);
   }
 
@@ -803,7 +905,10 @@ export class DeliveryLedgerService {
     const delivery = await deliveryRepo
       .createQueryBuilder('d')
       .setLock('pessimistic_write')
-      .where('d.id = :id AND d.companyId = :cid', { id: deliveryId, cid: companyId })
+      .where('d.id = :id AND d.companyId = :cid', {
+        id: deliveryId,
+        cid: companyId,
+      })
       .getOne();
     if (!delivery) throw new NotFoundException('Delivery not found');
     if (delivery.ledgerStatus !== 'in_transit') {
@@ -827,7 +932,10 @@ export class DeliveryLedgerService {
       const item = await invRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
-        .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: line.itemId,
+          cid: companyId,
+        })
         .getOne();
       // Refuse rather than skip. Accumulating the cost first and then
       // continuing past a missing item debits Inventory 1200 for stock that is
@@ -841,7 +949,11 @@ export class DeliveryLedgerService {
         });
       }
       totalCost = totalCost.plus(qty.times(toDecimal(line.unitCost)));
-      const newQty = this.absorbReturnIntoAverage(item, qty, toDecimal(line.unitCost));
+      const newQty = this.absorbReturnIntoAverage(
+        item,
+        qty,
+        toDecimal(line.unitCost),
+      );
       await invRepo.save(item);
       // Mirrors `totalCost` on the line above, at the cost frozen at dispatch.
       await recordInventoryMovement(em, {
@@ -867,7 +979,11 @@ export class DeliveryLedgerService {
         companyId,
         ACCT_GOODS_IN_TRANSIT,
       );
-      const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+      const inventory = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_INVENTORY,
+        em,
+      );
       const value = totalCost.toFixed(4);
       const entry = await this.posting.createEntry(em, {
         companyId,
@@ -879,8 +995,20 @@ export class DeliveryLedgerService {
         sourceId: delivery.id,
         reversalOfId: delivery.gitJournalEntryId ?? null,
         lines: [
-          { accountId: inventory.id, description: 'Stock restored from Goods in Transit', debit: value, credit: '0', lineOrder: 0 },
-          { accountId: git.id, description: 'Goods in Transit reversed', debit: '0', credit: value, lineOrder: 1 },
+          {
+            accountId: inventory.id,
+            description: 'Stock restored from Goods in Transit',
+            debit: value,
+            credit: '0',
+            lineOrder: 0,
+          },
+          {
+            accountId: git.id,
+            description: 'Goods in Transit reversed',
+            debit: '0',
+            credit: value,
+            lineOrder: 1,
+          },
         ],
       });
       journalEntryId = entry.id;
@@ -911,7 +1039,8 @@ export class DeliveryLedgerService {
         }));
 
       const saleValue = saleLines.reduce(
-        (sum, l) => sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
+        (sum, l) =>
+          sum.plus(toDecimal(l.quantity).times(toDecimal(l.unitPrice))),
         new Decimal(0),
       );
 
@@ -920,13 +1049,18 @@ export class DeliveryLedgerService {
       // credit, PostingService would reject it, and the whole rejection would
       // roll back — leaving the admin unable to reject the delivery at all.
       if (saleValue.greaterThan(MONEY_TOLERANCE)) {
-        const creditMemo = await this.creditMemos.createInTransaction(em, companyId, userId, {
-          customerId: delivery.customerId,
-          date: this.today(),
-          originalInvoiceId: delivery.invoiceId ?? undefined,
-          reason: `Prepaid delivery ${delivery.referenceNo ?? delivery.id} rejected — sale reversed`,
-          lines: saleLines,
-        });
+        const creditMemo = await this.creditMemos.createInTransaction(
+          em,
+          companyId,
+          userId,
+          {
+            customerId: delivery.customerId,
+            date: this.today(),
+            originalInvoiceId: delivery.invoiceId ?? undefined,
+            reason: `Prepaid delivery ${delivery.referenceNo ?? delivery.id} rejected — sale reversed`,
+            lines: saleLines,
+          },
+        );
         creditMemoId = creditMemo.id;
         creditMemoNumber = creditMemo.creditMemoNumber;
       }
@@ -935,7 +1069,9 @@ export class DeliveryLedgerService {
     // Cancel the (never-invoiced) sales order.
     if (delivery.salesOrderId) {
       const soRepo = em.getRepository(SalesOrder);
-      const so = await soRepo.findOne({ where: { id: delivery.salesOrderId, companyId } });
+      const so = await soRepo.findOne({
+        where: { id: delivery.salesOrderId, companyId },
+      });
       if (so && so.status !== 'invoiced' && so.status !== 'cancelled') {
         so.status = 'cancelled';
         await soRepo.save(so);

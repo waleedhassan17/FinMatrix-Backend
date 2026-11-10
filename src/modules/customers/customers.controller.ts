@@ -15,7 +15,10 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { CustomersService } from './customers.service';
 import { PartyLedgerService } from '../ledger/party-ledger.service';
 import { PartyHistoryService } from '../ledger/party-history.service';
@@ -60,7 +63,10 @@ export class CustomersController {
 
   // Literal paths sit above ':customerId', whose UUID pipe would refuse them.
   @Get('next-code')
-  @ApiOperation({ summary: 'The customer ID the next new customer would get (a suggestion, not a reservation).' })
+  @ApiOperation({
+    summary:
+      'The customer ID the next new customer would get (a suggestion, not a reservation).',
+  })
   nextCode(@CurrentCompany() companyId: string) {
     return this.customers.nextCode(companyId);
   }
@@ -129,17 +135,28 @@ export class CustomersController {
    * stays for app builds that read its document arrays.
    */
   @Get(':customerId/ledger-statement')
-  @ApiOperation({ summary: 'Period statement from the ledger: opening + lines + closing.' })
+  @ApiOperation({
+    summary: 'Period statement from the ledger: opening + lines + closing.',
+  })
   ledgerStatement(
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,
     @Query() query: StatementQueryDto,
   ) {
-    return this.partyLedger.statement(companyId, 'customer', customerId, query.startDate, query.endDate);
+    return this.partyLedger.statement(
+      companyId,
+      'customer',
+      customerId,
+      query.startDate,
+      query.endDate,
+    );
   }
 
   @Get(':customerId/history')
-  @ApiOperation({ summary: 'History: since, last invoice/payment, months of the fiscal year, edit log (owner).' })
+  @ApiOperation({
+    summary:
+      'History: since, last invoice/payment, months of the fiscal year, edit log (owner).',
+  })
   history(
     @CurrentCompany() companyId: string,
     @Param('customerId', ParseUUIDPipe) customerId: string,

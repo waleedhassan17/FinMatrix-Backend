@@ -16,6 +16,11 @@ import { PartyHistoryService } from './party-history.service';
   imports: [TypeOrmModule.forFeature([GeneralLedgerEntry])],
   controllers: [LedgerController],
   providers: [LedgerService, PartyLedgerService, PartyHistoryService],
-  exports: [TypeOrmModule, LedgerService, PartyLedgerService, PartyHistoryService],
+  exports: [
+    TypeOrmModule,
+    LedgerService,
+    PartyLedgerService,
+    PartyHistoryService,
+  ],
 })
 export class LedgerModule {}

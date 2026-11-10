@@ -140,11 +140,17 @@ describe('company-status.util', () => {
       // plan yet, so it must report draft regardless of any expiry date.
       expect(
         effectiveCompanyStatus(
-          { status: 'email_verified', subscriptionPlan: 'warehouse_growth_6mo', subscriptionExpiryDate: PAST },
+          {
+            status: 'email_verified',
+            subscriptionPlan: 'warehouse_growth_6mo',
+            subscriptionExpiryDate: PAST,
+          },
           NOW,
         ),
       ).toBe('draft');
-      expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe('draft');
+      expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe(
+        'draft',
+      );
     });
 
     it('a draft whose payment is awaiting verification reports pending', () => {
@@ -161,13 +167,23 @@ describe('company-status.util', () => {
     });
 
     it('a draft with no payment yet is still a draft', () => {
-      expect(effectiveCompanyStatus({ status: 'email_verified', paymentStatus: 'none' }, NOW)).toBe('draft');
-      expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe('draft');
+      expect(
+        effectiveCompanyStatus(
+          { status: 'email_verified', paymentStatus: 'none' },
+          NOW,
+        ),
+      ).toBe('draft');
+      expect(effectiveCompanyStatus({ status: 'email_verified' }, NOW)).toBe(
+        'draft',
+      );
     });
 
     it('a rejected payment returns the owner to onboarding, not to waiting', () => {
       expect(
-        effectiveCompanyStatus({ status: 'email_verified', paymentStatus: 'rejected' }, NOW),
+        effectiveCompanyStatus(
+          { status: 'email_verified', paymentStatus: 'rejected' },
+          NOW,
+        ),
       ).toBe('draft');
     });
 

@@ -46,10 +46,20 @@ export class PaymentSubmission extends BaseEntity {
    * storage loses the file before the super-admin reviews it. `select: false`
    * keeps list queries light; loaded explicitly only when streaming.
    */
-  @Column({ type: 'bytea', name: 'screenshot_data', nullable: true, select: false })
+  @Column({
+    type: 'bytea',
+    name: 'screenshot_data',
+    nullable: true,
+    select: false,
+  })
   screenshotData!: Buffer | null;
 
-  @Column({ type: 'varchar', length: 64, name: 'screenshot_mime', nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    name: 'screenshot_mime',
+    nullable: true,
+  })
   screenshotMime!: string | null;
 
   @Column({ type: 'uuid', name: 'submitted_by', nullable: true })

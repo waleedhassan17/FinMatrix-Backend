@@ -19,7 +19,10 @@ import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { FeatureOverrideDto } from './dto/feature-override.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { PublicRoute } from '../../common/decorators/public.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -48,8 +51,12 @@ class SeedAdminDto {
  * the key's length.
  */
 function timingSafeEquals(a: string, b: string): boolean {
-  const ha = createHash('sha256').update(String(a ?? '')).digest();
-  const hb = createHash('sha256').update(String(b ?? '')).digest();
+  const ha = createHash('sha256')
+    .update(String(a ?? ''))
+    .digest();
+  const hb = createHash('sha256')
+    .update(String(b ?? ''))
+    .digest();
   return timingSafeEqual(ha, hb);
 }
 
@@ -86,14 +93,20 @@ export class SuperAdminController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('seed')
   async seedAdmin(@Body() dto: SeedAdminDto) {
-    const closed = new ForbiddenException('Super admin bootstrap is not available.');
+    const closed = new ForbiddenException(
+      'Super admin bootstrap is not available.',
+    );
 
     const masterKey = process.env.SUPER_ADMIN_MASTER_KEY;
     if (!masterKey || masterKey.length < 32) throw closed;
     if (await this.service.superAdminExists()) throw closed;
     if (!timingSafeEquals(dto.masterKey, masterKey)) throw closed;
 
-    return this.service.seedSuperAdmin(dto.email, dto.password, dto.displayName);
+    return this.service.seedSuperAdmin(
+      dto.email,
+      dto.password,
+      dto.displayName,
+    );
   }
 
   // ─── Platform Stats ──────────────────────────────────────────────────────────
@@ -201,7 +214,10 @@ export class SuperAdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     guardSuperAdmin(user);
-    return this.service.updateSubscriptionPlan(id, { ...dto, updatedBy: user.id });
+    return this.service.updateSubscriptionPlan(id, {
+      ...dto,
+      updatedBy: user.id,
+    });
   }
 
   /** Revert a plan to exactly what the configuration declares. */

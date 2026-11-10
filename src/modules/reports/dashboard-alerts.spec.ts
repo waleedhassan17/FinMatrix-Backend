@@ -1,6 +1,11 @@
 import { buildDashboardAlerts } from './dashboard-alerts';
 
-const none = { overdueCount: 0, overdueAmount: 0, pendingAP: 0, pendingDeliveries: 0 };
+const none = {
+  overdueCount: 0,
+  overdueAmount: 0,
+  pendingAP: 0,
+  pendingDeliveries: 0,
+};
 
 describe('buildDashboardAlerts', () => {
   it('returns nothing when nothing is open', () => {
@@ -8,7 +13,11 @@ describe('buildDashboardAlerts', () => {
   });
 
   it('words one overdue invoice in the singular and carries count + amount', () => {
-    const [a] = buildDashboardAlerts({ ...none, overdueCount: 1, overdueAmount: 12400 });
+    const [a] = buildDashboardAlerts({
+      ...none,
+      overdueCount: 1,
+      overdueAmount: 12400,
+    });
     expect(a).toEqual({
       id: 'overdue',
       severity: 'red',
@@ -19,7 +28,11 @@ describe('buildDashboardAlerts', () => {
   });
 
   it('words several overdue invoices in the plural, with no "(s)"', () => {
-    const [a] = buildDashboardAlerts({ ...none, overdueCount: 7, overdueAmount: 90000 });
+    const [a] = buildDashboardAlerts({
+      ...none,
+      overdueCount: 7,
+      overdueAmount: 90000,
+    });
     expect(a.message).toBe('7 invoices are past due.');
     expect(a.count).toBe(7);
   });
@@ -35,9 +48,9 @@ describe('buildDashboardAlerts', () => {
   });
 
   it('words deliveries in the singular and plural', () => {
-    expect(buildDashboardAlerts({ ...none, pendingDeliveries: 1 })[0].message).toBe(
-      '1 delivery is waiting to be assigned.',
-    );
+    expect(
+      buildDashboardAlerts({ ...none, pendingDeliveries: 1 })[0].message,
+    ).toBe('1 delivery is waiting to be assigned.');
     const [a] = buildDashboardAlerts({ ...none, pendingDeliveries: 5 });
     expect(a).toEqual({
       id: 'pending_delivery',
@@ -59,7 +72,12 @@ describe('buildDashboardAlerts', () => {
 
   it('ignores negative and fractional inputs rather than inventing alerts', () => {
     expect(
-      buildDashboardAlerts({ overdueCount: -1, overdueAmount: -5, pendingAP: -100, pendingDeliveries: 0.4 }),
+      buildDashboardAlerts({
+        overdueCount: -1,
+        overdueAmount: -5,
+        pendingAP: -100,
+        pendingDeliveries: 0.4,
+      }),
     ).toEqual([]);
   });
 });

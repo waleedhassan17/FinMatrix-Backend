@@ -26,10 +26,22 @@ export class BillLineItem {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   amount!: string;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 8,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'int', default: 0, name: 'line_order' })
@@ -48,7 +60,13 @@ export class BillLineItem {
    * landed-cost variance posted to Inventory or COGS. Null for lines that do
    * not clear a receipt accrual.
    */
-  @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true, name: 'grni_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    nullable: true,
+    name: 'grni_amount',
+  })
   grniAmount!: string | null;
 
   @ManyToOne(() => Bill, (b) => b.lines, { onDelete: 'CASCADE' })

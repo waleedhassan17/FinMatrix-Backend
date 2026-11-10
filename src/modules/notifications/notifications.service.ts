@@ -8,12 +8,21 @@ import { pagedResponse } from '../../common/utils/paged-response.util';
 @Injectable()
 export class NotificationsService {
   constructor(
-    @InjectRepository(Notification) private readonly repo: Repository<Notification>,
+    @InjectRepository(Notification)
+    private readonly repo: Repository<Notification>,
   ) {}
 
-  async list(userId: string, query: NotificationQueryDto, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('n').where('n.userId = :uid', { uid: userId });
-    if (query.isRead !== undefined) qb.andWhere('n.isRead = :r', { r: query.isRead });
+  async list(
+    userId: string,
+    query: NotificationQueryDto,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.repo
+      .createQueryBuilder('n')
+      .where('n.userId = :uid', { uid: userId });
+    if (query.isRead !== undefined)
+      qb.andWhere('n.isRead = :r', { r: query.isRead });
     if (query.type) qb.andWhere('n.type = :t', { t: query.type });
     qb.orderBy('n.createdAt', 'DESC').addOrderBy('n.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -22,12 +31,18 @@ export class NotificationsService {
   }
 
   async markRead(userId: string, id: string) {
-    await this.repo.update({ id, userId }, { isRead: true, readAt: new Date() });
+    await this.repo.update(
+      { id, userId },
+      { isRead: true, readAt: new Date() },
+    );
     return { id, read: true };
   }
 
   async markAllRead(userId: string) {
-    await this.repo.update({ userId, isRead: false }, { isRead: true, readAt: new Date() });
+    await this.repo.update(
+      { userId, isRead: false },
+      { isRead: true, readAt: new Date() },
+    );
     return { readAll: true };
   }
 

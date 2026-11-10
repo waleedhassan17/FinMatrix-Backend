@@ -22,7 +22,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -78,8 +81,15 @@ export class BillPhotoController {
       type: 'object',
       required: ['photo', 'signedBy', 'source', 'changes'],
       properties: {
-        photo: { type: 'string', format: 'binary', description: 'Bill photo (jpeg/png/webp, max 8 MB)' },
-        signedBy: { type: 'string', description: 'Customer name on the signed bill' },
+        photo: {
+          type: 'string',
+          format: 'binary',
+          description: 'Bill photo (jpeg/png/webp, max 8 MB)',
+        },
+        signedBy: {
+          type: 'string',
+          description: 'Customer name on the signed bill',
+        },
         source: { type: 'string', enum: ['camera', 'gallery'] },
         note: { type: 'string', description: 'Optional note' },
         changes: {
@@ -108,7 +118,10 @@ export class BillPhotoController {
   @ApiResponse({ status: 400, description: 'Missing/invalid fields' })
   @ApiResponse({ status: 403, description: 'Delivery not assigned to caller' })
   @ApiResponse({ status: 404, description: 'Delivery not found' })
-  @ApiResponse({ status: 409, description: 'Duplicate request for this delivery' })
+  @ApiResponse({
+    status: 409,
+    description: 'Duplicate request for this delivery',
+  })
   @ApiResponse({ status: 413, description: 'File too large (max 8 MB)' })
   @ApiResponse({ status: 415, description: 'Unsupported media type' })
   async submitBillPhoto(

@@ -7,7 +7,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, QueryFailedError, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  QueryFailedError,
+  Repository,
+} from 'typeorm';
 import { BillingService } from '../billing/billing.service';
 import { PaymentSubmission } from '../billing/entities/payment-submission.entity';
 import { TrialClaim } from '../billing/entities/trial-claim.entity';
@@ -43,8 +48,10 @@ import { revokeRefreshTokens } from '../../common/utils/session-revocation.util'
 /** Hours the owner is told a trial request takes to review. */
 export const TRIAL_ACTIVATION_HOURS = 24;
 
-const TRIAL_EMAIL_USED_MESSAGE = 'A free trial has already been used with this email address.';
-const TRIAL_PHONE_USED_MESSAGE = 'A free trial has already been used with this phone number.';
+const TRIAL_EMAIL_USED_MESSAGE =
+  'A free trial has already been used with this email address.';
+const TRIAL_PHONE_USED_MESSAGE =
+  'A free trial has already been used with this phone number.';
 
 @Injectable()
 export class CompaniesService {
@@ -173,7 +180,9 @@ export class CompaniesService {
     Object.assign(company, {
       ...(dto.name !== undefined ? { name: dto.name } : {}),
       ...(dto.industry !== undefined ? { industry: dto.industry } : {}),
-      ...(dto.legalStructure !== undefined ? { legalStructure: dto.legalStructure } : {}),
+      ...(dto.legalStructure !== undefined
+        ? { legalStructure: dto.legalStructure }
+        : {}),
       ...(dto.address !== undefined ? { address: dto.address } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
       ...(dto.email !== undefined ? { email: dto.email } : {}),
@@ -182,15 +191,25 @@ export class CompaniesService {
       ...(dto.fiscalYearStartMonth !== undefined
         ? { fiscalYearStartMonth: dto.fiscalYearStartMonth }
         : {}),
-      ...(dto.accountingMethod !== undefined ? { accountingMethod: dto.accountingMethod } : {}),
-      ...(dto.homeCurrency !== undefined ? { homeCurrency: dto.homeCurrency } : {}),
+      ...(dto.accountingMethod !== undefined
+        ? { accountingMethod: dto.accountingMethod }
+        : {}),
+      ...(dto.homeCurrency !== undefined
+        ? { homeCurrency: dto.homeCurrency }
+        : {}),
       ...(dto.logo !== undefined ? { logo: dto.logo } : {}),
-      ...(dto.setupCompleted !== undefined ? { setupCompleted: dto.setupCompleted } : {}),
-      ...(dto.salesTaxRegistered !== undefined ? { salesTaxRegistered: dto.salesTaxRegistered } : {}),
+      ...(dto.setupCompleted !== undefined
+        ? { setupCompleted: dto.setupCompleted }
+        : {}),
+      ...(dto.salesTaxRegistered !== undefined
+        ? { salesTaxRegistered: dto.salesTaxRegistered }
+        : {}),
       // Large-org per-company inventory opt-in. Harmless for other types:
       // FEATURE_MAP only honors the toggle when companyType is large_org.
       // companyType itself is deliberately NOT updatable here.
-      ...(dto.inventoryEnabled !== undefined ? { inventoryEnabled: dto.inventoryEnabled } : {}),
+      ...(dto.inventoryEnabled !== undefined
+        ? { inventoryEnabled: dto.inventoryEnabled }
+        : {}),
     });
     return this.companyRepo.save(company);
   }
@@ -320,7 +339,10 @@ export class CompaniesService {
     if (company.status === COMPANY_STATUS.PENDING_APPROVAL) {
       return this.toStatusResult(company); // idempotent
     }
-    if (company.status === COMPANY_STATUS.APPROVED || company.status === 'active') {
+    if (
+      company.status === COMPANY_STATUS.APPROVED ||
+      company.status === 'active'
+    ) {
       throw new BadRequestException({
         code: 'ALREADY_APPROVED',
         message: 'This company has already been approved',
@@ -355,7 +377,10 @@ export class CompaniesService {
 
     // Notify the platform admin (best-effort).
     const owner = await this.userRepo.findOneBy({ id: company.createdBy });
-    await this.mail.sendCompanySubmittedNotice(company.name, owner?.email ?? 'unknown');
+    await this.mail.sendCompanySubmittedNotice(
+      company.name,
+      owner?.email ?? 'unknown',
+    );
 
     return this.toStatusResult(company);
   }
@@ -387,7 +412,11 @@ export class CompaniesService {
     // c–e. The company is still an unsubmitted draft with nothing in review
     // and no trial in its history.
     this.assertTrialStillPossible(company);
-    if (await this.submissionRepo.exist({ where: { companyId, status: 'submitted' } })) {
+    if (
+      await this.submissionRepo.exist({
+        where: { companyId, status: 'submitted' },
+      })
+    ) {
       throw new ConflictException({
         code: 'REQUEST_PENDING_REVIEW',
         message: 'You already have a request awaiting review.',
@@ -409,7 +438,8 @@ export class CompaniesService {
     if (!user || !email || !user.isEmailVerified) {
       throw new ForbiddenException({
         code: 'EMAIL_NOT_VERIFIED',
-        message: 'Please verify your email address before requesting a free trial.',
+        message:
+          'Please verify your email address before requesting a free trial.',
       });
     }
 
@@ -435,7 +465,10 @@ export class CompaniesService {
           lock: { mode: 'pessimistic_write' },
         });
         if (!locked) {
-          throw new NotFoundException({ code: 'COMPANY_NOT_FOUND', message: 'Company not found' });
+          throw new NotFoundException({
+            code: 'COMPANY_NOT_FOUND',
+            message: 'Company not found',
+          });
         }
         this.assertTrialStillPossible(locked);
         if (
@@ -456,13 +489,22 @@ export class CompaniesService {
           .getRepository(TrialClaim)
           .createQueryBuilder('t')
           .where(`t.status <> 'released'`)
-          .andWhere('(t.emailNormalized = :email OR t.phoneNormalized = :phone)', { email, phone })
+          .andWhere(
+            '(t.emailNormalized = :email OR t.phoneNormalized = :phone)',
+            { email, phone },
+          )
           .getMany();
         if (existing.some((c) => c.emailNormalized === email)) {
-          throw new ForbiddenException({ code: 'TRIAL_EMAIL_USED', message: TRIAL_EMAIL_USED_MESSAGE });
+          throw new ForbiddenException({
+            code: 'TRIAL_EMAIL_USED',
+            message: TRIAL_EMAIL_USED_MESSAGE,
+          });
         }
         if (existing.length > 0) {
-          throw new ForbiddenException({ code: 'TRIAL_PHONE_USED', message: TRIAL_PHONE_USED_MESSAGE });
+          throw new ForbiddenException({
+            code: 'TRIAL_PHONE_USED',
+            message: TRIAL_PHONE_USED_MESSAGE,
+          });
         }
 
         // 2. The claim.
@@ -499,7 +541,10 @@ export class CompaniesService {
         );
 
         // 4. Link them.
-        await claimRepo.update({ id: claim.id }, { submissionId: submission.id });
+        await claimRepo.update(
+          { id: claim.id },
+          { submissionId: submission.id },
+        );
 
         // 5. Mark the company as awaiting review — exactly what uploading a
         //    payment receipt does. Status stays draft; NOTHING that grants or
@@ -516,7 +561,10 @@ export class CompaniesService {
       // Two requests with the same email/phone that both passed the pre-check
       // race to insert; the unique index lets exactly one through. Answer the
       // loser exactly as the pre-check would have — never with a driver error.
-      if (err instanceof QueryFailedError && (err as any).driverError?.code === '23505') {
+      if (
+        err instanceof QueryFailedError &&
+        (err as any).driverError?.code === '23505'
+      ) {
         const constraint = String((err as any).driverError?.constraint ?? '');
         throw new ForbiddenException(
           constraint === 'ux_trial_claims_phone'
@@ -527,18 +575,32 @@ export class CompaniesService {
       throw err;
     }
 
-    this.logger.log(`Trial requested: company ${companyId} by ${userId} (submission ${submissionId})`);
+    this.logger.log(
+      `Trial requested: company ${companyId} by ${userId} (submission ${submissionId})`,
+    );
 
     // After commit, best-effort: mail must never undo or block the request.
     try {
-      await this.mail.sendTrialRequestedEmail(user.email as string, user.displayName, company.name);
+      await this.mail.sendTrialRequestedEmail(
+        user.email as string,
+        user.displayName,
+        company.name,
+      );
     } catch (err) {
-      this.logger.error(`Trial requested email failed: ${(err as Error).message}`);
+      this.logger.error(
+        `Trial requested email failed: ${(err as Error).message}`,
+      );
     }
     try {
-      await this.mail.sendTrialRequestedAdminNotice(company.name, user.email as string, phone);
+      await this.mail.sendTrialRequestedAdminNotice(
+        company.name,
+        user.email as string,
+        phone,
+      );
     } catch (err) {
-      this.logger.error(`Trial request admin notice failed: ${(err as Error).message}`);
+      this.logger.error(
+        `Trial request admin notice failed: ${(err as Error).message}`,
+      );
     }
 
     return {
@@ -621,13 +683,16 @@ export class CompaniesService {
 
   // ── Self-Subscribe (company admin picks own plan) ──────────────────────────
   async selfSubscribe(companyId: string, planId: string, userId: string) {
-    if (!companyId) throw new BadRequestException('No company associated with your account');
+    if (!companyId)
+      throw new BadRequestException('No company associated with your account');
 
     // The plan is the owner's decision. Any member — staff, a rider — could
     // make it before.
     await this.assertAdmin(userId, companyId);
 
-    const plan = await this.planRepo.findOne({ where: { id: planId, isActive: true } });
+    const plan = await this.planRepo.findOne({
+      where: { id: planId, isActive: true },
+    });
     if (!plan) throw new NotFoundException('Subscription plan not found');
 
     const isFree = parseFloat(plan.priceMonthly) === 0;
@@ -651,7 +716,9 @@ export class CompaniesService {
           planId: plan.id,
           status: isFree ? 'trial' : 'active',
           startDate: new Date().toISOString().split('T')[0],
-          endDate: isFree ? null : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+          endDate: isFree
+            ? null
+            : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
           notes: isFree ? 'Free plan — self-selected during onboarding' : null,
           assignedBy: userId,
         }),

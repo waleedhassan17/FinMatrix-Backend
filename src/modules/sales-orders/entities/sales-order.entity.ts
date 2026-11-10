@@ -3,7 +3,12 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { SalesOrderLineItem } from './sales-order-line-item.entity';
 
 export type DiscountType = 'percent' | 'amount' | 'none';
-export type SalesOrderStatus = 'open' | 'partial' | 'fulfilled' | 'invoiced' | 'cancelled';
+export type SalesOrderStatus =
+  | 'open'
+  | 'partial'
+  | 'fulfilled'
+  | 'invoiced'
+  | 'cancelled';
 
 @Entity('sales_orders')
 @Index(['companyId', 'orderNumber'], { unique: true })
@@ -26,16 +31,39 @@ export class SalesOrder extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   subtotal!: string;
 
-  @Column({ type: 'varchar', length: 8, default: 'none', name: 'discount_type' })
+  @Column({
+    type: 'varchar',
+    length: 8,
+    default: 'none',
+    name: 'discount_type',
+  })
   discountType!: DiscountType;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_value' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_value',
+  })
   discountValue!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_amount',
+  })
   discountAmount!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })

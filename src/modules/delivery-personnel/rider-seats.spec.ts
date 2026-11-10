@@ -13,12 +13,21 @@ const rider = (
 
 describe('planRiderSeats', () => {
   it('changes nothing when the company is within its limit', () => {
-    expect(planRiderSeats([rider('a', 1), rider('b', 2)], 3)).toEqual({ lock: [], unlock: [] });
+    expect(planRiderSeats([rider('a', 1), rider('b', 2)], 3)).toEqual({
+      lock: [],
+      unlock: [],
+    });
   });
 
   it('locks the newest riders beyond the limit', () => {
     const plan = planRiderSeats(
-      [rider('e', 5), rider('a', 1), rider('d', 4), rider('b', 2), rider('c', 3)],
+      [
+        rider('e', 5),
+        rider('a', 1),
+        rider('d', 4),
+        rider('b', 2),
+        rider('c', 3),
+      ],
       3,
     );
     expect(plan.lock.sort()).toEqual(['d', 'e']);
@@ -27,7 +36,12 @@ describe('planRiderSeats', () => {
 
   it('keeps a rider with a delivery on the road even if they are the newest', () => {
     const plan = planRiderSeats(
-      [rider('a', 1), rider('b', 2), rider('c', 3), rider('new', 9, { hasOpenDelivery: true })],
+      [
+        rider('a', 1),
+        rider('b', 2),
+        rider('c', 3),
+        rider('new', 9, { hasOpenDelivery: true }),
+      ],
       3,
     );
     expect(plan.lock).toEqual(['c']);
@@ -49,7 +63,11 @@ describe('planRiderSeats', () => {
 
   it('can lock and unlock in one pass (an in-flight locked rider outranks an idle active one)', () => {
     const plan = planRiderSeats(
-      [rider('a', 1), rider('b', 2), rider('late', 3, { status: 'plan_locked', hasOpenDelivery: true })],
+      [
+        rider('a', 1),
+        rider('b', 2),
+        rider('late', 3, { status: 'plan_locked', hasOpenDelivery: true }),
+      ],
       2,
     );
     expect(plan).toEqual({ lock: ['b'], unlock: ['late'] });

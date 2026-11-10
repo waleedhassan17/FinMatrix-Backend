@@ -90,7 +90,9 @@ export class AuthController {
   @PublicRoute()
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 900_000 } })
-  @ApiOperation({ summary: 'Verify the password-reset OTP, returns a reset token.' })
+  @ApiOperation({
+    summary: 'Verify the password-reset OTP, returns a reset token.',
+  })
   verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.auth.verifyOtp(dto);
   }
@@ -114,7 +116,9 @@ export class AuthController {
 
   @Get('me')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Return current user profile + company memberships.' })
+  @ApiOperation({
+    summary: 'Return current user profile + company memberships.',
+  })
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.auth.getMe(user.id);
   }
@@ -194,7 +198,9 @@ export class AuthController {
     } catch {
       outcome = 'failed';
     }
-    res.type('html').send(renderFallbackPage(outcome, this.auth.verificationOnwardLinks()));
+    res
+      .type('html')
+      .send(renderFallbackPage(outcome, this.auth.verificationOnwardLinks()));
   }
 }
 

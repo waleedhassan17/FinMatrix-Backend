@@ -25,13 +25,25 @@ export class Bill extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   subtotal!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   total!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'amount_paid' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'amount_paid',
+  })
   amountPaid!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })

@@ -58,7 +58,13 @@ export type InvoiceStatus =
   | 'overdue'
   | 'void';
 
-export type BillStatus = 'draft' | 'open' | 'partial' | 'paid' | 'overdue' | 'void';
+export type BillStatus =
+  | 'draft'
+  | 'open'
+  | 'partial'
+  | 'paid'
+  | 'overdue'
+  | 'void';
 
 export type PaymentMethod =
   | 'cash'
@@ -135,7 +141,11 @@ export type InventoryAdjustmentReason =
   | 'reversal'
   | 'other';
 
-export type StockTransferStatus = 'draft' | 'in_transit' | 'completed' | 'cancelled';
+export type StockTransferStatus =
+  | 'draft'
+  | 'in_transit'
+  | 'completed'
+  | 'cancelled';
 
 export type DeliveryStatus =
   | 'unassigned'
@@ -154,7 +164,11 @@ export type DeliveryPriority = 'low' | 'normal' | 'medium' | 'high' | 'urgent';
 // allows fewer riders than it has active — the rider keeps their data but
 // cannot sign in or be assigned until a seat frees up. Deliberately not in the
 // update DTO's IsEnum.
-export type DeliveryPersonnelStatus = 'active' | 'on_leave' | 'inactive' | 'plan_locked';
+export type DeliveryPersonnelStatus =
+  | 'active'
+  | 'on_leave'
+  | 'inactive'
+  | 'plan_locked';
 
 export type DeliveryIssueType =
   | 'damaged'

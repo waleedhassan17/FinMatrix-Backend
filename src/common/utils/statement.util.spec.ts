@@ -12,7 +12,11 @@ describe('statementBalances', () => {
   ];
 
   it('opens with everything before the period and closes with what falls inside it', () => {
-    const { opening, closing } = statementBalances(moves, '2026-02-01', '2026-02-28');
+    const { opening, closing } = statementBalances(
+      moves,
+      '2026-02-01',
+      '2026-02-28',
+    );
     expect(opening.toFixed(2)).toBe('600.00');
     expect(closing.toFixed(2)).toBe('800.00');
   });
@@ -24,12 +28,20 @@ describe('statementBalances', () => {
   });
 
   it('reads a timestamp by its day', () => {
-    const { closing } = statementBalances([{ date: '2026-02-28T23:10:00.000Z', amount: 5 }], '2026-02-01', '2026-02-28');
+    const { closing } = statementBalances(
+      [{ date: '2026-02-28T23:10:00.000Z', amount: 5 }],
+      '2026-02-01',
+      '2026-02-28',
+    );
     expect(closing.toNumber()).toBe(5);
   });
 
   it('is zero for an account with nothing on it', () => {
-    const { opening, closing } = statementBalances([], '2026-01-01', '2026-12-31');
+    const { opening, closing } = statementBalances(
+      [],
+      '2026-01-01',
+      '2026-12-31',
+    );
     expect(opening.toNumber()).toBe(0);
     expect(closing.toNumber()).toBe(0);
   });

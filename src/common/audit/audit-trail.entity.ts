@@ -26,7 +26,11 @@ export type AuditAction = 'create' | 'update' | 'void' | 'delete';
 @Index(['companyId', 'userId'])
 // One record's history (a customer's edit log; a deleted receipt traced back
 // to its customer). Created by the PartyCodesLedgerHistory migration.
-@Index('IDX_audit_trail_company_resource', ['companyId', 'resourceType', 'resourceId'])
+@Index('IDX_audit_trail_company_resource', [
+  'companyId',
+  'resourceType',
+  'resourceId',
+])
 export class AuditTrailEntry {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

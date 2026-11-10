@@ -39,7 +39,10 @@ export type TrialClaimStatus = 'pending' | 'approved' | 'released' | 'blocked';
   where: `"status" <> 'released' AND "phone_normalized" IS NOT NULL`,
 })
 @Index('idx_trial_claims_submission', ['submissionId'])
-@Check('CHK_trial_claims_status', `"status" IN ('pending', 'approved', 'released', 'blocked')`)
+@Check(
+  'CHK_trial_claims_status',
+  `"status" IN ('pending', 'approved', 'released', 'blocked')`,
+)
 export class TrialClaim extends BaseEntity {
   /** normalizeEmail() of the requesting admin's email. */
   @Column({ type: 'text', name: 'email_normalized' })
@@ -53,14 +56,20 @@ export class TrialClaim extends BaseEntity {
   companyId!: string;
 
   @ManyToOne(() => Company, { createForeignKeyConstraints: true })
-  @JoinColumn({ name: 'company_id', foreignKeyConstraintName: 'fk_trial_claims_company' })
+  @JoinColumn({
+    name: 'company_id',
+    foreignKeyConstraintName: 'fk_trial_claims_company',
+  })
   company?: Company;
 
   @Column({ type: 'uuid', name: 'user_id' })
   userId!: string;
 
   @ManyToOne(() => User, { createForeignKeyConstraints: true })
-  @JoinColumn({ name: 'user_id', foreignKeyConstraintName: 'fk_trial_claims_user' })
+  @JoinColumn({
+    name: 'user_id',
+    foreignKeyConstraintName: 'fk_trial_claims_user',
+  })
   user?: User;
 
   /** The kind='TRIAL' payment submission this claim belongs to. */

@@ -50,7 +50,10 @@ import {
 /** Stored statuses an invoice owes money under before it is overdue. */
 const INVOICE_OPEN_STATUSES = ['sent', 'partial'] as const;
 import { assertSalesLinesClassified } from '../../common/utils/sales-lines.util';
-import { CreditOverride, enforceCreditLimit } from '../../common/utils/credit-control.util';
+import {
+  CreditOverride,
+  enforceCreditLimit,
+} from '../../common/utils/credit-control.util';
 import { MessagingService } from '../messaging/messaging.service';
 import {
   DeliverOption,
@@ -120,7 +123,8 @@ export class InvoicesService {
       const qb = this.repo
         .createQueryBuilder('i')
         .where('i.companyId = :companyId', { companyId });
-      if (query.customerId) qb.andWhere('i.customerId = :c', { c: query.customerId });
+      if (query.customerId)
+        qb.andWhere('i.customerId = :c', { c: query.customerId });
       if (query.startDate && query.endDate) {
         qb.andWhere('i.invoiceDate BETWEEN :startDate AND :endDate', {
           startDate: query.startDate,
@@ -137,20 +141,35 @@ export class InvoicesService {
     const qb = filtered();
     // By the status each invoice DISPLAYS: "overdue" includes a sent invoice
     // nobody has paid past its due date, and "sent" leaves it out.
-    applyDerivedStatusFilter(qb, 'i', query.status, INVOICE_OPEN_STATUSES, today);
+    applyDerivedStatusFilter(
+      qb,
+      'i',
+      query.status,
+      INVOICE_OPEN_STATUSES,
+      today,
+    );
     qb.orderBy('i.invoiceDate', 'DESC').addOrderBy('i.createdAt', 'DESC');
     qb.take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
 
     // Batch-load customer names
-    const customerIds = [...new Set(data.map((i) => i.customerId).filter(Boolean))];
+    const customerIds = [
+      ...new Set(data.map((i) => i.customerId).filter(Boolean)),
+    ];
     const customers = customerIds.length
       ? await this.customerRepo.findByIds(customerIds)
       : [];
-    const customerNameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
+    const customerNameMap = Object.fromEntries(
+      customers.map((c) => [c.id, c.name]),
+    );
 
-    const summary = await documentListSummary(filtered(), 'i', INVOICE_OPEN_STATUSES, today);
+    const summary = await documentListSummary(
+      filtered(),
+      'i',
+      INVOICE_OPEN_STATUSES,
+      today,
+    );
 
     // `success` makes ResponseEnvelopeInterceptor pass this through whole.
     // Without it the interceptor keeps only `data`, and the summary and
@@ -206,7 +225,10 @@ export class InvoicesService {
   }
 
   /** Check an invoice's lines without creating anything (a staff request is filed only if they pass). */
-  async assertLinesValid(companyId: string, lines: InvoiceLineDto[]): Promise<void> {
+  async assertLinesValid(
+    companyId: string,
+    lines: InvoiceLineDto[],
+  ): Promise<void> {
     await assertSalesLinesClassified(this.dataSource.manager, companyId, lines);
   }
 
@@ -218,20 +240,22 @@ export class InvoicesService {
     // Read through the caller's transaction when there is one, so an invoice
     // created earlier in the same transaction is visible to the sweep.
     const repo = manager ? manager.getRepository(Invoice) : this.repo;
-    return repo
-      .createQueryBuilder('i')
-      .where('i.companyId = :companyId', { companyId })
-      .andWhere('i.customerId = :c', { c: customerId })
-      .andWhere('i.balance > 0')
-      .andWhere("i.status NOT IN ('draft', 'void')")
-      // Oldest due first — overdue invoices before current ones — and the same
-      // order every time: two invoices due the same day used to come back in
-      // whatever order Postgres chose, so the sweep could settle a different
-      // one on a retry.
-      .orderBy('i.dueDate', 'ASC')
-      .addOrderBy('i.invoiceDate', 'ASC')
-      .addOrderBy('i.invoiceNumber', 'ASC')
-      .getMany();
+    return (
+      repo
+        .createQueryBuilder('i')
+        .where('i.companyId = :companyId', { companyId })
+        .andWhere('i.customerId = :c', { c: customerId })
+        .andWhere('i.balance > 0')
+        .andWhere("i.status NOT IN ('draft', 'void')")
+        // Oldest due first — overdue invoices before current ones — and the same
+        // order every time: two invoices due the same day used to come back in
+        // whatever order Postgres chose, so the sweep could settle a different
+        // one on a retry.
+        .orderBy('i.dueDate', 'ASC')
+        .addOrderBy('i.invoiceDate', 'ASC')
+        .addOrderBy('i.invoiceNumber', 'ASC')
+        .getMany()
+    );
   }
 
   // ------- Create / update -------
@@ -273,7 +297,11 @@ export class InvoicesService {
         treatFreeTextAsService: opts.treatFreeTextAsService,
       });
 
-      const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
+      const totals = this.computeTotals(
+        dto.lines,
+        dto.discountType,
+        dto.discountValue,
+      );
 
       const invoiceNumber = await nextDocumentNumber(
         manager,
@@ -285,13 +313,19 @@ export class InvoicesService {
       const status: InvoiceStatus = dto.status ?? 'draft';
       // An invoice that posts is where the customer's debt becomes real.
       if (status !== 'draft' && !opts.credit?.skip) {
-        await enforceCreditLimit(manager, companyId, dto.customerId, totals.total, {
-          action: 'invoice',
-          targetType: 'customer',
-          targetId: dto.customerId,
-          excludeSalesOrderId: opts.credit?.excludeSalesOrderId,
-          override: opts.credit?.override,
-        });
+        await enforceCreditLimit(
+          manager,
+          companyId,
+          dto.customerId,
+          totals.total,
+          {
+            action: 'invoice',
+            targetType: 'customer',
+            targetId: dto.customerId,
+            excludeSalesOrderId: opts.credit?.excludeSalesOrderId,
+            override: opts.credit?.override,
+          },
+        );
       }
 
       const invoice = manager.create(Invoice, {
@@ -336,7 +370,10 @@ export class InvoicesService {
       if (status !== 'draft') {
         await this.createJournalEntryForInvoice(manager, invoice, userId);
         await this.incrementCustomerBalance(manager, customer, invoice.total);
-        await this.messaging.enqueue(manager, invoiceIssuedMessage(invoice, userId));
+        await this.messaging.enqueue(
+          manager,
+          invoiceIssuedMessage(invoice, userId),
+        );
       }
 
       return invoice;
@@ -370,17 +407,24 @@ export class InvoicesService {
       if (dto.dueDate !== undefined) invoice.dueDate = dto.dueDate;
       if (dto.notes !== undefined) invoice.notes = dto.notes;
 
-      if (dto.lines) await assertSalesLinesClassified(manager, companyId, dto.lines);
+      if (dto.lines)
+        await assertSalesLinesClassified(manager, companyId, dto.lines);
 
-      if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
-        const nextLines = dto.lines ?? invoice.lines.map<InvoiceLineDto>((l) => ({
-          description: l.description,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          taxRate: l.taxRate,
-          accountId: l.accountId ?? undefined,
-          itemId: l.itemId ?? undefined,
-        }));
+      if (
+        dto.lines ||
+        dto.discountType !== undefined ||
+        dto.discountValue !== undefined
+      ) {
+        const nextLines =
+          dto.lines ??
+          invoice.lines.map<InvoiceLineDto>((l) => ({
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            accountId: l.accountId ?? undefined,
+            itemId: l.itemId ?? undefined,
+          }));
         const dType = dto.discountType ?? invoice.discountType;
         const dValue = dto.discountValue ?? invoice.discountValue;
         const totals = this.computeTotals(nextLines, dType, dValue);
@@ -425,7 +469,10 @@ export class InvoicesService {
     companyId: string,
     id: string,
     userId: string,
-    opts: { creditOverride?: CreditOverride | null; deliver?: DeliverOption | null } = {},
+    opts: {
+      creditOverride?: CreditOverride | null;
+      deliver?: DeliverOption | null;
+    } = {},
   ): Promise<Invoice> {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await manager.findOne(Invoice, {
@@ -446,12 +493,18 @@ export class InvoicesService {
       }
 
       if (!invoice.journalEntryId) {
-        await enforceCreditLimit(manager, companyId, invoice.customerId, invoice.total, {
-          action: 'invoice_send',
-          targetType: 'invoice',
-          targetId: invoice.id,
-          override: opts.creditOverride,
-        });
+        await enforceCreditLimit(
+          manager,
+          companyId,
+          invoice.customerId,
+          invoice.total,
+          {
+            action: 'invoice_send',
+            targetType: 'invoice',
+            targetId: invoice.id,
+            override: opts.creditOverride,
+          },
+        );
         await this.createJournalEntryForInvoice(manager, invoice, userId);
         const customer = await manager.findOneBy(Customer, {
           id: invoice.customerId,
@@ -464,7 +517,10 @@ export class InvoicesService {
 
       if (invoice.status === 'draft') invoice.status = 'sent';
       await manager.save(invoice);
-      await this.messaging.enqueue(manager, invoiceIssuedMessage(invoice, userId, opts.deliver));
+      await this.messaging.enqueue(
+        manager,
+        invoiceIssuedMessage(invoice, userId, opts.deliver),
+      );
       return invoice;
     });
   }
@@ -495,7 +551,11 @@ export class InvoicesService {
 
       if (invoice.journalEntryId) {
         // Create reversing entry
-        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
+        const ar = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_AR,
+          manager,
+        );
         const rev = await this.accounts.getByNumberOrFail(
           companyId,
           ACCT_SALES_REVENUE,
@@ -523,21 +583,42 @@ export class InvoicesService {
         // Only include the tax line when there is tax — a zero/zero line is
         // rejected by the posting engine (was a latent bug for tax-free invoices).
         if (toDecimal(invoice.taxAmount).greaterThan(0)) {
-          lines.push({ accountId: tax.id, debit: invoice.taxAmount, credit: '0' });
+          lines.push({
+            accountId: tax.id,
+            debit: invoice.taxAmount,
+            credit: '0',
+          });
         }
 
         // Reverse the cost side and restock (FinMatrixGuide §3.13): COGS↓,
         // Inventory↑, quantity on hand restored.
-        const cogsTotal = await this.postInvoiceCogs(manager, invoice, userId, true);
+        const cogsTotal = await this.postInvoiceCogs(
+          manager,
+          invoice,
+          userId,
+          true,
+        );
         if (cogsTotal.greaterThan(0)) {
-          const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
+          const cogs = await this.accounts.getByNumberOrFail(
+            companyId,
+            ACCT_COGS,
+            manager,
+          );
           const inventory = await this.accounts.getByNumberOrFail(
             companyId,
             ACCT_INVENTORY,
             manager,
           );
-          lines.push({ accountId: cogs.id, debit: '0', credit: cogsTotal.toFixed(4) });
-          lines.push({ accountId: inventory.id, debit: cogsTotal.toFixed(4), credit: '0' });
+          lines.push({
+            accountId: cogs.id,
+            debit: '0',
+            credit: cogsTotal.toFixed(4),
+          });
+          lines.push({
+            accountId: inventory.id,
+            debit: cogsTotal.toFixed(4),
+            credit: '0',
+          });
         }
 
         await this.posting.createEntry(manager, {
@@ -570,8 +651,17 @@ export class InvoicesService {
         ? `${invoice.notes}\n[VOID] ${dto.reason}`
         : `[VOID] ${dto.reason}`;
       await manager.save(invoice);
-      await this.messaging.cancelQueued(manager, companyId, 'invoice', invoice.id, { reason: 'invoice_void' });
-      await this.messaging.enqueue(manager, invoiceCancelledMessage(invoice, userId));
+      await this.messaging.cancelQueued(
+        manager,
+        companyId,
+        'invoice',
+        invoice.id,
+        { reason: 'invoice_void' },
+      );
+      await this.messaging.enqueue(
+        manager,
+        invoiceCancelledMessage(invoice, userId),
+      );
       return invoice;
     });
   }
@@ -599,7 +689,8 @@ export class InvoicesService {
       if (isPositive(invoice.amountPaid)) {
         throw new BadRequestException({
           code: 'INVOICE_HAS_PAYMENTS',
-          message: 'Cannot delete an invoice that has payments. Remove the payments first.',
+          message:
+            'Cannot delete an invoice that has payments. Remove the payments first.',
         });
       }
 
@@ -696,10 +787,16 @@ export class InvoicesService {
       });
     }
     invoice.amountPaid = addMoney(invoice.amountPaid, amt).toFixed(4);
-    invoice.balance = subtractMoney(invoice.total, invoice.amountPaid).toFixed(4);
+    invoice.balance = subtractMoney(invoice.total, invoice.amountPaid).toFixed(
+      4,
+    );
 
     const today = businessToday();
-    if (toDecimal(invoice.amountPaid).greaterThanOrEqualTo(toDecimal(invoice.total))) {
+    if (
+      toDecimal(invoice.amountPaid).greaterThanOrEqualTo(
+        toDecimal(invoice.total),
+      )
+    ) {
       invoice.status = 'paid';
     } else if (invoice.dueDate < today) {
       invoice.status = 'overdue';
@@ -746,7 +843,9 @@ export class InvoicesService {
 
     let discountAmount = new Decimal(0);
     if (discountType === 'percent') {
-      discountAmount = subtotal.times(toDecimal(discountValue ?? 0)).dividedBy(100);
+      discountAmount = subtotal
+        .times(toDecimal(discountValue ?? 0))
+        .dividedBy(100);
     } else if (discountType === 'amount') {
       discountAmount = toDecimal(discountValue ?? 0);
     }
@@ -780,7 +879,11 @@ export class InvoicesService {
       });
     }
 
-    const ar = await this.accounts.getByNumberOrFail(invoice.companyId, ACCT_AR, manager);
+    const ar = await this.accounts.getByNumberOrFail(
+      invoice.companyId,
+      ACCT_AR,
+      manager,
+    );
     const revenue = await this.accounts.getByNumberOrFail(
       invoice.companyId,
       ACCT_SALES_REVENUE,
@@ -791,7 +894,9 @@ export class InvoicesService {
       ACCT_TAX_PAYABLE,
       manager,
     );
-    const revenueNet = toDecimal(invoice.subtotal).minus(toDecimal(invoice.discountAmount));
+    const revenueNet = toDecimal(invoice.subtotal).minus(
+      toDecimal(invoice.discountAmount),
+    );
 
     const lines = [
       {
@@ -823,7 +928,12 @@ export class InvoicesService {
     // item, recognise COGS at the item's unit cost, relieve Inventory, reduce
     // quantity on hand and record an inventory movement — all in this same
     // transaction. Lines with no itemId (free-text/service lines) post no cost.
-    const cogsTotal = await this.postInvoiceCogs(manager, invoice, userId, false);
+    const cogsTotal = await this.postInvoiceCogs(
+      manager,
+      invoice,
+      userId,
+      false,
+    );
     if (cogsTotal.greaterThan(0)) {
       const cogs = await this.accounts.getByNumberOrFail(
         invoice.companyId,
@@ -921,13 +1031,21 @@ export class InvoicesService {
       // nearly dead code: the `moved === 0` guard below skips a line that never
       // moved stock, which is the same condition as having no cost recorded.
       const frozen = frozenCosts.get(line.id) ?? null;
-      const cost = reverse && frozen !== null ? frozen : qty.times(toDecimal(item.unitCost));
+      const cost =
+        reverse && frozen !== null
+          ? frozen
+          : qty.times(toDecimal(item.unitCost));
       if (reverse) {
         // Only put back what this invoice actually took off the shelf. Items
         // with no cost used to be skipped entirely when sold (see below), so an
         // older invoice may have moved nothing to reverse.
         const moved = await manager.getRepository(InventoryMovement).count({
-          where: { companyId: invoice.companyId, itemId: item.id, sourceType: 'invoice', sourceId: invoice.id },
+          where: {
+            companyId: invoice.companyId,
+            itemId: item.id,
+            sourceType: 'invoice',
+            sourceId: invoice.id,
+          },
         });
         if (moved === 0) continue;
       }

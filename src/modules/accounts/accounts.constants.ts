@@ -53,14 +53,24 @@ export interface DefaultAccountSeed {
 
 export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
   { accountNumber: '1000', name: 'Cash', type: 'asset', subType: 'Cash' },
-  { accountNumber: '1010', name: 'Business Checking', type: 'asset', subType: 'Bank' },
+  {
+    accountNumber: '1010',
+    name: 'Business Checking',
+    type: 'asset',
+    subType: 'Bank',
+  },
   {
     accountNumber: '1100',
     name: 'Accounts Receivable',
     type: 'asset',
     subType: 'Accounts Receivable',
   },
-  { accountNumber: '1200', name: 'Inventory', type: 'asset', subType: 'Inventory' },
+  {
+    accountNumber: '1200',
+    name: 'Inventory',
+    type: 'asset',
+    subType: 'Inventory',
+  },
   {
     accountNumber: '1250',
     name: 'Goods in Transit',
@@ -97,7 +107,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'liability',
     subType: 'Other Liability',
   },
-  { accountNumber: '3000', name: 'Owner Equity', type: 'equity', subType: 'Owner Equity' },
+  {
+    accountNumber: '3000',
+    name: 'Owner Equity',
+    type: 'equity',
+    subType: 'Owner Equity',
+  },
   {
     accountNumber: '3100',
     name: 'Retained Earnings',
@@ -110,7 +125,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'equity',
     subType: 'Opening Balance Equity',
   },
-  { accountNumber: '4000', name: 'Sales Revenue', type: 'revenue', subType: 'Sales' },
+  {
+    accountNumber: '4000',
+    name: 'Sales Revenue',
+    type: 'revenue',
+    subType: 'Sales',
+  },
   {
     accountNumber: '5000',
     name: 'Cost of Goods Sold',
@@ -146,14 +166,24 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'expense',
     subType: 'Cost of Goods',
   },
-  { accountNumber: '6000', name: 'Rent Expense', type: 'expense', subType: 'Operating' },
+  {
+    accountNumber: '6000',
+    name: 'Rent Expense',
+    type: 'expense',
+    subType: 'Operating',
+  },
   {
     accountNumber: '6100',
     name: 'Utilities Expense',
     type: 'expense',
     subType: 'Operating',
   },
-  { accountNumber: '6200', name: 'Salary Expense', type: 'expense', subType: 'Payroll' },
+  {
+    accountNumber: '6200',
+    name: 'Salary Expense',
+    type: 'expense',
+    subType: 'Payroll',
+  },
   {
     accountNumber: '6300',
     name: 'Office Supplies',
@@ -218,7 +248,10 @@ export const ACCT_INVENTORY_ADJUSTMENT = '6400';
  * adjustment's offset_account_number. It is mapped only to keep the Record
  * total, and points at the legacy account as an inert fallback.
  */
-export const ADJUSTMENT_REASON_ACCOUNTS: Record<InventoryAdjustmentReason, string> = {
+export const ADJUSTMENT_REASON_ACCOUNTS: Record<
+  InventoryAdjustmentReason,
+  string
+> = {
   damage: ACCT_SHRINKAGE_DAMAGE,
   theft: ACCT_SHRINKAGE_THEFT,
   obsolescence: ACCT_SHRINKAGE_OBSOLESCENCE,

@@ -159,26 +159,62 @@ describe('ReportsController — v2 validation and CSV', () => {
 
   it('passes includeZero through only as the literal true', async () => {
     svc.balanceSheet.mockClear();
-    await ctrl.balanceSheet('c1', '2026-10-26', 'json', res(), undefined, 'true');
-    expect(svc.balanceSheet).toHaveBeenLastCalledWith('c1', '2026-10-26', undefined, { includeZero: true });
+    await ctrl.balanceSheet(
+      'c1',
+      '2026-10-26',
+      'json',
+      res(),
+      undefined,
+      'true',
+    );
+    expect(svc.balanceSheet).toHaveBeenLastCalledWith(
+      'c1',
+      '2026-10-26',
+      undefined,
+      { includeZero: true },
+    );
     await ctrl.balanceSheet('c1', '2026-10-26', 'json', res(), undefined, '1');
-    expect(svc.balanceSheet).toHaveBeenLastCalledWith('c1', '2026-10-26', undefined, { includeZero: false });
+    expect(svc.balanceSheet).toHaveBeenLastCalledWith(
+      'c1',
+      '2026-10-26',
+      undefined,
+      { includeZero: false },
+    );
 
     svc.trialBalance.mockClear();
-    await ctrl.trialBalance('c1', '2026-01-01', '2026-06-30', 'json', res(), 'closing', 'true');
-    expect(svc.trialBalance).toHaveBeenLastCalledWith('c1', '2026-01-01', '2026-06-30', 'closing', {
-      includeZero: true,
-    });
+    await ctrl.trialBalance(
+      'c1',
+      '2026-01-01',
+      '2026-06-30',
+      'json',
+      res(),
+      'closing',
+      'true',
+    );
+    expect(svc.trialBalance).toHaveBeenLastCalledWith(
+      'c1',
+      '2026-01-01',
+      '2026-06-30',
+      'closing',
+      {
+        includeZero: true,
+      },
+    );
   });
 
   it('hands the donut sizes to the cockpit', async () => {
     const kpi = { analytics: jest.fn(async () => ({})) };
     const withKpi = new ReportsController(svc, kpi as any);
     await withKpi.analytics('c1', '2026-01-01', '2026-06-30', '5', '5');
-    expect(kpi.analytics).toHaveBeenLastCalledWith('c1', '2026-01-01', '2026-06-30', {
-      expenseTop: 5,
-      customerTop: 5,
-    });
+    expect(kpi.analytics).toHaveBeenLastCalledWith(
+      'c1',
+      '2026-01-01',
+      '2026-06-30',
+      {
+        expenseTop: 5,
+        customerTop: 5,
+      },
+    );
     await withKpi.analytics('c1');
     expect(kpi.analytics).toHaveBeenLastCalledWith('c1', undefined, undefined, {
       expenseTop: undefined,

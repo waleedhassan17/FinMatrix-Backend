@@ -12,9 +12,15 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { BillingService } from './billing.service';
-import { ListSubmissionsQueryDto, RejectSubmissionDto } from './dto/billing.dto';
+import {
+  ListSubmissionsQueryDto,
+  RejectSubmissionDto,
+} from './dto/billing.dto';
 
 function guardSuperAdmin(user: AuthenticatedUser) {
   if (user.role !== 'super_admin') {

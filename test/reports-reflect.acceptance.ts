@@ -64,8 +64,15 @@ let COMPANY = '';
 let RIDER_TOKEN = '';
 let RIDER_ID = '';
 
-async function req(method: string, path: string, body?: unknown, token?: string) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+async function req(
+  method: string,
+  path: string,
+  body?: unknown,
+  token?: string,
+) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   const auth = token ?? TOKEN;
   if (auth) headers.Authorization = `Bearer ${auth}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
@@ -79,7 +86,9 @@ async function req(method: string, path: string, body?: unknown, token?: string)
     });
     if (res.status === 429 && attempt < 3) {
       const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
-      console.log(`    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`);
+      console.log(
+        `    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`,
+      );
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -103,7 +112,10 @@ async function main() {
 
   console.log(`\nFinMatrix — postings reach the reports → ${API}\n`);
 
-  const login = await req('POST', '/auth/signin', { email: EMAIL, password: PASSWORD });
+  const login = await req('POST', '/auth/signin', {
+    email: EMAIL,
+    password: PASSWORD,
+  });
   TOKEN = data(login)?.tokens?.accessToken ?? '';
   COMPANY = data(login)?.companyId ?? '';
   ok('admin signs in', !!TOKEN && !!COMPANY, login.status);
@@ -116,9 +128,13 @@ async function main() {
   const DATED = `startDate=1970-01-01&endDate=2999-12-31`;
 
   const pnl = async (dated = true) =>
-    data(await req('GET', `/reports/profit-loss${dated ? `?${DATED}` : ''}`)) as any;
+    data(
+      await req('GET', `/reports/profit-loss${dated ? `?${DATED}` : ''}`),
+    ) as any;
   const trialBalance = async (dated = true) =>
-    data(await req('GET', `/reports/trial-balance${dated ? `?${DATED}` : ''}`)) as any;
+    data(
+      await req('GET', `/reports/trial-balance${dated ? `?${DATED}` : ''}`),
+    ) as any;
   const ledgerCount = async () => {
     const led = data(await req('GET', `/ledger?${DATED}&limit=1000`)) as any;
     const entries = led?.entries ?? led?.data ?? led ?? [];
@@ -185,7 +201,10 @@ async function main() {
     );
     unpricedId = unpriced?.id ?? unpriced?.item?.id;
   }
-  ok('masters created', !!customer?.id && !!vendor?.id && !!pricedId && !!unpricedId);
+  ok(
+    'masters created',
+    !!customer?.id && !!vendor?.id && !!pricedId && !!unpricedId,
+  );
 
   // Stock both through a real purchase cycle so weighted-average cost is set
   // the way production sets it.
@@ -194,12 +213,22 @@ async function main() {
       await req('POST', '/purchase-orders', {
         vendorId: vendor.id,
         orderDate: TODAY,
-        lines: [{ description: 'stocking', orderedQty: String(qty), unitCost: String(cost), itemId }],
+        lines: [
+          {
+            description: 'stocking',
+            orderedQty: String(qty),
+            unitCost: String(cost),
+            itemId,
+          },
+        ],
       }),
     );
     await req('PATCH', `/purchase-orders/${po.id}/status`, { status: 'sent' });
     await req('POST', `/purchase-orders/${po.id}/receive`, {
-      lines: (po.lines || []).map((l: any) => ({ lineId: l.id, receivedQty: String(qty) })),
+      lines: (po.lines || []).map((l: any) => ({
+        lineId: l.id,
+        receivedQty: String(qty),
+      })),
     });
     await req('POST', `/purchase-orders/${po.id}/create-bill`, {
       billNumber: `RPT-${RUN}-${itemId.slice(0, 6)}`,
@@ -224,18 +253,34 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'sent',
-    lines: [{ description: 'Reported sale', quantity: '2', unitPrice: '400', taxRate: '0', lineKind: 'service' }],
+    lines: [
+      {
+        description: 'Reported sale',
+        quantity: '2',
+        unitPrice: '400',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
   const inv = data(sentInvoice);
-  ok('A1 invoice created as sent', sentInvoice.status < 400 && !!inv?.id, sentInvoice.body);
+  ok(
+    'A1 invoice created as sent',
+    sentInvoice.status < 400 && !!inv?.id,
+    sentInvoice.body,
+  );
   ok('A2 it carries a journal entry', !!inv?.journalEntryId, {
     journalEntryId: inv?.journalEntryId,
   });
 
-  ok('A3 GET /ledger has more entries than before', (await ledgerCount()) > beforeLedger, {
-    before: beforeLedger,
-    after: await ledgerCount(),
-  });
+  ok(
+    'A3 GET /ledger has more entries than before',
+    (await ledgerCount()) > beforeLedger,
+    {
+      before: beforeLedger,
+      after: await ledgerCount(),
+    },
+  );
 
   const afterPnl = await pnl();
   ok(
@@ -270,7 +315,9 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════
   // B. A draft is absent until it is posted
   // ═══════════════════════════════════════════════════════════════
-  console.log('\n— B. a draft is correctly invisible, and posting it makes it visible');
+  console.log(
+    '\n— B. a draft is correctly invisible, and posting it makes it visible',
+  );
 
   const revenueBeforeDraft = n((await pnl())?.revenue);
   const draftRes = await req('POST', '/invoices', {
@@ -278,7 +325,15 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'draft',
-    lines: [{ description: 'Drafted sale', quantity: '1', unitPrice: '400', taxRate: '0', lineKind: 'service' }],
+    lines: [
+      {
+        description: 'Drafted sale',
+        quantity: '1',
+        unitPrice: '400',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
   const draft = data(draftRes);
   ok('B1 draft created', draftRes.status < 400 && !!draft?.id, draftRes.body);
@@ -307,7 +362,9 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════
   // C. The delivery flow: dispatch posts no sale, approval does
   // ═══════════════════════════════════════════════════════════════
-  console.log('\n— C. delivery: dispatch moves stock only, approval recognises the sale');
+  console.log(
+    '\n— C. delivery: dispatch moves stock only, approval recognises the sale',
+  );
 
   // Reuse this suite's own rider if a previous run already made one.
   //
@@ -359,7 +416,12 @@ async function main() {
   });
 
   /** create -> assign -> in_transit -> delivered -> rider submits the bill. */
-  const runDelivery = async (itemId: string, itemName: string, qty: number, price: number) => {
+  const runDelivery = async (
+    itemId: string,
+    itemName: string,
+    qty: number,
+    price: number,
+  ) => {
     const created = data(
       await req('POST', '/deliveries', {
         customerId: customer.id,
@@ -373,7 +435,9 @@ async function main() {
       deliveryIds: [deliveryId],
       personnelId: RIDER_ID,
     });
-    await req('PATCH', `/deliveries/${deliveryId}/status`, { status: 'in_transit' });
+    await req('PATCH', `/deliveries/${deliveryId}/status`, {
+      status: 'in_transit',
+    });
     await req('PATCH', `/deliveries/${deliveryId}/status`, {
       status: 'delivered',
       paidStatus: 'unpaid',
@@ -391,11 +455,16 @@ async function main() {
     form.append('paidStatus', 'unpaid');
     form.append(
       'changes',
-      JSON.stringify([{ itemId, itemName, beforeQty: 0, deliveredQty: qty, returnedQty: 0 }]),
+      JSON.stringify([
+        { itemId, itemName, beforeQty: 0, deliveredQty: qty, returnedQty: 0 },
+      ]),
     );
     const photoRes = await fetch(`${API}/deliveries/${deliveryId}/bill-photo`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${RIDER_TOKEN}`, 'x-company-id': COMPANY },
+      headers: {
+        Authorization: `Bearer ${RIDER_TOKEN}`,
+        'x-company-id': COMPANY,
+      },
       body: form,
     });
     const photoBody: any = await photoRes.json().catch(() => null);
@@ -409,15 +478,23 @@ async function main() {
 
   const qty = 3;
   const d = await runDelivery(pricedId, `Reports Widget ${RUN}`, qty, 400);
-  ok('C1 rider submitted the bill photo', d.photoStatus < 400 && !!d.requestId, {
-    status: d.photoStatus,
-  });
+  ok(
+    'C1 rider submitted the bill photo',
+    d.photoStatus < 400 && !!d.requestId,
+    {
+      status: d.photoStatus,
+    },
+  );
 
   // Dispatch moved stock into Goods in Transit and NOTHING into the P&L.
-  ok('C2 dispatch moved stock into Goods in Transit', (await glNet('1250')) > gitBeforeDispatch, {
-    before: gitBeforeDispatch,
-    after: await glNet('1250'),
-  });
+  ok(
+    'C2 dispatch moved stock into Goods in Transit',
+    (await glNet('1250')) > gitBeforeDispatch,
+    {
+      before: gitBeforeDispatch,
+      after: await glNet('1250'),
+    },
+  );
   const midPnl = await pnl();
   ok(
     'C3 dispatch recognised NO revenue (nothing is sold yet)',
@@ -429,10 +506,14 @@ async function main() {
     after: midPnl?.cogs,
   });
 
-  const approve = await req('PATCH', `/inventory-approvals/${d.requestId}/review`, {
-    action: 'approved',
-    notes: 'reports-reflect acceptance',
-  });
+  const approve = await req(
+    'PATCH',
+    `/inventory-approvals/${d.requestId}/review`,
+    {
+      action: 'approved',
+      notes: 'reports-reflect acceptance',
+    },
+  );
   ok('C5 approval succeeds', approve.status < 400, approve.body);
 
   const finalPnl = await pnl();
@@ -441,10 +522,14 @@ async function main() {
     near(n(finalPnl?.revenue) - revenueBeforeDispatch, qty * 400),
     { before: revenueBeforeDispatch, after: finalPnl?.revenue },
   );
-  ok('C7 approval moves COGS into the P&L', n(finalPnl?.cogs) > cogsBeforeDispatch, {
-    before: cogsBeforeDispatch,
-    after: finalPnl?.cogs,
-  });
+  ok(
+    'C7 approval moves COGS into the P&L',
+    n(finalPnl?.cogs) > cogsBeforeDispatch,
+    {
+      before: cogsBeforeDispatch,
+      after: finalPnl?.cogs,
+    },
+  );
   ok(
     'C8 Goods in Transit is relieved back to where it started',
     near(await glNet('1250'), gitBeforeDispatch),
@@ -456,7 +541,9 @@ async function main() {
     dr: tbAfter?.totalDebits,
     cr: tbAfter?.totalCredits,
   });
-  const bs = data(await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`)) as any;
+  const bs = data(
+    await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`),
+  ) as any;
   ok('C10 the balance sheet still balances', bs?.isBalanced === true, {
     a: bs?.totalAssets,
     l: bs?.totalLiabilities,
@@ -466,29 +553,42 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════
   // D. An all-unpriced delivery is refused with a message you can act on
   // ═══════════════════════════════════════════════════════════════
-  console.log('\n— D. an unpriced delivery is refused BY NAME, not by the posting engine');
+  console.log(
+    '\n— D. an unpriced delivery is refused BY NAME, not by the posting engine',
+  );
 
   const revenueBeforeBad = n((await pnl())?.revenue);
   const bad = await runDelivery(unpricedId, unpricedName, 2, 0);
-  ok('D1 the unpriced delivery still dispatched (stock really did move)', !!bad.requestId, {
-    status: bad.photoStatus,
-  });
+  ok(
+    'D1 the unpriced delivery still dispatched (stock really did move)',
+    !!bad.requestId,
+    {
+      status: bad.photoStatus,
+    },
+  );
 
-  const badApprove = await req('PATCH', `/inventory-approvals/${bad.requestId}/review`, {
-    action: 'approved',
-    notes: 'should be refused',
-  });
+  const badApprove = await req(
+    'PATCH',
+    `/inventory-approvals/${bad.requestId}/review`,
+    {
+      action: 'approved',
+      notes: 'should be refused',
+    },
+  );
   ok('D2 approval is refused', badApprove.status >= 400, badApprove.status);
   ok(
     'D3 refused with DELIVERY_ITEM_NO_PRICE, not the engine line-shape error',
     codeOf(badApprove) === 'DELIVERY_ITEM_NO_PRICE',
-    { code: codeOf(badApprove), message: badApprove.body?.error?.message ?? badApprove.body?.message },
+    {
+      code: codeOf(badApprove),
+      message: badApprove.body?.error?.message ?? badApprove.body?.message,
+    },
   );
   ok(
     'D4 the message names the item to fix',
-    String(badApprove.body?.error?.message ?? badApprove.body?.message ?? '').includes(
-      'selling price',
-    ),
+    String(
+      badApprove.body?.error?.message ?? badApprove.body?.message ?? '',
+    ).includes('selling price'),
     badApprove.body,
   );
   ok(
@@ -503,11 +603,19 @@ async function main() {
   // qa/diagnose-company.sql §5 as permanent noise that hides the real thing
   // that section exists to find. Rejecting exercises the reversal path anyway.
   const gitBeforeReject = await glNet('1250');
-  const reject = await req('PATCH', `/inventory-approvals/${bad.requestId}/review`, {
-    action: 'rejected',
-    notes: 'reports-reflect acceptance — returning the unpriced stock',
-  });
-  ok('D6 the refused delivery can be rejected back to stock', reject.status < 400, reject.body);
+  const reject = await req(
+    'PATCH',
+    `/inventory-approvals/${bad.requestId}/review`,
+    {
+      action: 'rejected',
+      notes: 'reports-reflect acceptance — returning the unpriced stock',
+    },
+  );
+  ok(
+    'D6 the refused delivery can be rejected back to stock',
+    reject.status < 400,
+    reject.body,
+  );
   ok(
     'D7 rejecting relieves Goods in Transit',
     (await glNet('1250')) < gitBeforeReject,
@@ -524,13 +632,29 @@ async function main() {
     invoiceDate: TODAY,
     dueDate: TODAY,
     status: 'sent',
-    lines: [{ description: 'Free of charge', quantity: '1', unitPrice: '0', taxRate: '0', lineKind: 'service' }],
+    lines: [
+      {
+        description: 'Free of charge',
+        quantity: '1',
+        unitPrice: '0',
+        taxRate: '0',
+        lineKind: 'service',
+      },
+    ],
   });
-  ok('E1 a zero-total invoice cannot be posted', zero.status >= 400, zero.status);
-  ok('E2 refused with INVOICE_ZERO_TOTAL', codeOf(zero) === 'INVOICE_ZERO_TOTAL', {
-    code: codeOf(zero),
-    message: zero.body?.error?.message ?? zero.body?.message,
-  });
+  ok(
+    'E1 a zero-total invoice cannot be posted',
+    zero.status >= 400,
+    zero.status,
+  );
+  ok(
+    'E2 refused with INVOICE_ZERO_TOTAL',
+    codeOf(zero) === 'INVOICE_ZERO_TOTAL',
+    {
+      code: codeOf(zero),
+      message: zero.body?.error?.message ?? zero.body?.message,
+    },
+  );
 
   // ═══════════════════════════════════════════════════════════════
   // G. Cost is RECORDED per line and per movement, not recomputed
@@ -583,7 +707,10 @@ async function main() {
     ok(
       'G1 a receipt records what it added to Inventory, not qty x the new average',
       near(receiptValue, glAfter - glBefore),
-      { movement: receiptValue, gl1200Delta: Number((glAfter - glBefore).toFixed(2)) },
+      {
+        movement: receiptValue,
+        gl1200Delta: Number((glAfter - glBefore).toFixed(2)),
+      },
     );
 
     // G2. Voiding an invoice must reverse COGS by what the SALE cost, even
@@ -598,7 +725,13 @@ async function main() {
         dueDate: TODAY,
         status: 'sent',
         lines: [
-          { description: `Moving Cost Widget ${RUN}`, quantity: '4', unitPrice: '500', taxRate: '0', itemId: mvId },
+          {
+            description: `Moving Cost Widget ${RUN}`,
+            quantity: '4',
+            unitPrice: '500',
+            taxRate: '0',
+            itemId: mvId,
+          },
         ],
       }),
     );
@@ -623,7 +756,9 @@ async function main() {
     };
     const gapBefore = await subledgerGap();
 
-    await req('POST', `/invoices/${inv.id}/void`, { reason: 'cost-capture check' });
+    await req('POST', `/invoices/${inv.id}/void`, {
+      reason: 'cost-capture check',
+    });
     const cogsAfterVoid = await glNet('5000');
 
     // Back exactly where it started. Sized from the item's CURRENT average it
@@ -651,7 +786,10 @@ async function main() {
     ok(
       'G2b the void does not widen the gap between stock and Inventory 1200',
       near(gapAfter, gapBefore, 1),
-      { gapBefore: Math.round(gapBefore * 100) / 100, gapAfter: Math.round(gapAfter * 100) / 100 },
+      {
+        gapBefore: Math.round(gapBefore * 100) / 100,
+        gapAfter: Math.round(gapAfter * 100) / 100,
+      },
     );
 
     // G3. And the line kept the cost it was posted at.
@@ -660,11 +798,15 @@ async function main() {
          FROM invoice_line_items WHERE invoice_id = $1 AND item_id = $2`,
       [inv.id, mvId],
     );
-    ok('G3 the invoice line froze its own cost at posting', lineRows[0]?.cost_basis === 'posted', {
-      unitCost: lineRows[0]?.uc,
-      costAmount: lineRows[0]?.ca,
-      basis: lineRows[0]?.cost_basis,
-    });
+    ok(
+      'G3 the invoice line froze its own cost at posting',
+      lineRows[0]?.cost_basis === 'posted',
+      {
+        unitCost: lineRows[0]?.uc,
+        costAmount: lineRows[0]?.ca,
+        basis: lineRows[0]?.cost_basis,
+      },
+    );
 
     // G4. Nothing writes a movement without a value any more.
     const { rows: nullRows } = await db.query(
@@ -712,11 +854,23 @@ async function main() {
   console.log('\n— H. P&L drill-down over HTTP —');
 
   {
-    const pl = data(await req('GET', `/reports/profit-loss?startDate=${TODAY}&endDate=${TODAY}`));
-    const line = (pl?.income ?? [])[0] ?? (pl?.cogsLines ?? [])[0] ?? (pl?.expenseLines ?? [])[0];
-    ok('H1 the P&L offers a per-account line to drill into', !!line?.accountCode, {
-      accountCode: line?.accountCode,
-    });
+    const pl = data(
+      await req(
+        'GET',
+        `/reports/profit-loss?startDate=${TODAY}&endDate=${TODAY}`,
+      ),
+    );
+    const line =
+      (pl?.income ?? [])[0] ??
+      (pl?.cogsLines ?? [])[0] ??
+      (pl?.expenseLines ?? [])[0];
+    ok(
+      'H1 the P&L offers a per-account line to drill into',
+      !!line?.accountCode,
+      {
+        accountCode: line?.accountCode,
+      },
+    );
 
     if (line?.accountCode) {
       const res = await req(
@@ -727,27 +881,45 @@ async function main() {
 
       // The object must SURVIVE. An array here means the envelope flattened it
       // again and the clients are about to show nothing.
-      ok('H2 the drill-down returns an object, not a bare array', !Array.isArray(d), {
-        got: Array.isArray(d) ? 'array' : typeof d,
-      });
+      ok(
+        'H2 the drill-down returns an object, not a bare array',
+        !Array.isArray(d),
+        {
+          got: Array.isArray(d) ? 'array' : typeof d,
+        },
+      );
       ok('H3 it carries its own entries', Array.isArray(d?.entries), {
         keys: d && typeof d === 'object' ? Object.keys(d) : null,
       });
-      ok('H4 the metadata survived the envelope', d?.accountCode === line.accountCode && d?.lineAmount !== undefined && d?.total !== undefined, {
-        accountCode: d?.accountCode,
-        lineAmount: d?.lineAmount,
-        total: d?.total,
-      });
+      ok(
+        'H4 the metadata survived the envelope',
+        d?.accountCode === line.accountCode &&
+          d?.lineAmount !== undefined &&
+          d?.total !== undefined,
+        {
+          accountCode: d?.accountCode,
+          lineAmount: d?.lineAmount,
+          total: d?.total,
+        },
+      );
 
       const entries = d?.entries ?? [];
       if (entries.length) {
         // Named, not numbered: the record is INV-2026-0001, not JE-005.
-        ok('H5 each row names its document', entries.every((e: any) => !!e.documentNumber), {
-          sample: entries[0]?.documentNumber,
-        });
-        ok('H6 each row stays drillable', entries.every((e: any) => !!e.sourceId), {
-          sample: entries[0]?.sourceType,
-        });
+        ok(
+          'H5 each row names its document',
+          entries.every((e: any) => !!e.documentNumber),
+          {
+            sample: entries[0]?.documentNumber,
+          },
+        );
+        ok(
+          'H6 each row stays drillable',
+          entries.every((e: any) => !!e.sourceId),
+          {
+            sample: entries[0]?.sourceType,
+          },
+        );
         // Newest first, so a busy account does not open on its oldest rows.
         const dates = entries.map((e: any) => e.date);
         ok(
@@ -783,7 +955,9 @@ async function main() {
     const monthStart = `${TODAY.slice(0, 7)}-01`;
     const window = `startDate=${monthStart}&endDate=${TODAY}`;
     const perfOf = async () =>
-      data(await req('GET', `/reports/item-performance/${pricedId}?${window}`)) as any;
+      data(
+        await req('GET', `/reports/item-performance/${pricedId}?${window}`),
+      ) as any;
     const round2 = (v: number) => Math.round(v * 100) / 100;
 
     const before = await perfOf();
@@ -800,24 +974,44 @@ async function main() {
         discountType: 'percent',
         discountValue: '10',
         lines: [
-          { description: `Reports Widget ${RUN}`, quantity: '2', unitPrice: '400', taxRate: '0', itemId: pricedId },
-          { description: 'Handling', quantity: '1', unitPrice: '200', taxRate: '0', lineKind: 'service' },
+          {
+            description: `Reports Widget ${RUN}`,
+            quantity: '2',
+            unitPrice: '400',
+            taxRate: '0',
+            itemId: pricedId,
+          },
+          {
+            description: 'Handling',
+            quantity: '1',
+            unitPrice: '200',
+            taxRate: '0',
+            lineKind: 'service',
+          },
         ],
       }),
     );
     const after = await perfOf();
     const pnlAfter = n((await pnl())?.revenue);
-    ok('I1 the ledger booked revenue net of the discount', near(pnlAfter - pnlBefore, 900), {
-      delta: round2(pnlAfter - pnlBefore),
-    });
     ok(
-      "I2 the item took its share of the discount, not its list price",
+      'I1 the ledger booked revenue net of the discount',
+      near(pnlAfter - pnlBefore, 900),
+      {
+        delta: round2(pnlAfter - pnlBefore),
+      },
+    );
+    ok(
+      'I2 the item took its share of the discount, not its list price',
       near(n(after?.totals?.revenue) - n(before?.totals?.revenue), 720),
       { delta: round2(n(after?.totals?.revenue) - n(before?.totals?.revenue)) },
     );
-    ok('I3 the item arrives with its facts', typeof after?.item?.qtyOnHand === 'number' && !!after?.item?.lastSoldDate, {
-      item: after?.item,
-    });
+    ok(
+      'I3 the item arrives with its facts',
+      typeof after?.item?.qtyOnHand === 'number' && !!after?.item?.lastSoldDate,
+      {
+        item: after?.item,
+      },
+    );
     ok(
       'I4 the buyer is among its customers',
       (after?.customers ?? []).some((c: any) => c.customerId === customer.id),
@@ -830,27 +1024,48 @@ async function main() {
       `/reports/item-performance/${pricedId}/entries?${window}&limit=100`,
     );
     const d = data(res);
-    ok('I5 entries arrive as an object with rows and a count', !Array.isArray(d) && Array.isArray(d?.entries) && typeof d?.total === 'number', {
-      keys: d && typeof d === 'object' ? Object.keys(d) : null,
-    });
+    ok(
+      'I5 entries arrive as an object with rows and a count',
+      !Array.isArray(d) &&
+        Array.isArray(d?.entries) &&
+        typeof d?.total === 'number',
+      {
+        keys: d && typeof d === 'object' ? Object.keys(d) : null,
+      },
+    );
     const entries: any[] = d?.entries ?? [];
-    const point = (after?.points ?? []).find((p: any) => p.period === TODAY.slice(0, 7));
+    const point = (after?.points ?? []).find(
+      (p: any) => p.period === TODAY.slice(0, 7),
+    );
     if (entries.length >= n(d?.total)) {
       const shown = entries.reduce((t, e) => t + n(e.revenue), 0);
-      ok('I6 the month is exactly the documents listed under it', near(shown, n(point?.revenue)) && near(n(d?.totals?.revenue), n(point?.revenue)), {
-        entries: round2(shown),
-        month: point?.revenue,
-      });
+      ok(
+        'I6 the month is exactly the documents listed under it',
+        near(shown, n(point?.revenue)) &&
+          near(n(d?.totals?.revenue), n(point?.revenue)),
+        {
+          entries: round2(shown),
+          month: point?.revenue,
+        },
+      );
     }
     ok(
       'I7 the discounted line lists at its discounted price',
-      entries.some((e) => e.docId === dinv?.id && near(n(e.revenue), 720) && near(n(e.unitPrice), 360)),
+      entries.some(
+        (e) =>
+          e.docId === dinv?.id &&
+          near(n(e.revenue), 720) &&
+          near(n(e.unitPrice), 360),
+      ),
       { line: entries.find((e) => e.docId === dinv?.id) },
     );
 
     // I8–I9. The stock history ends where the valuation table stands.
     const hist = data(
-      await req('GET', `/reports/inventory-valuation/items/${pricedId}/history?${window}`),
+      await req(
+        'GET',
+        `/reports/inventory-valuation/items/${pricedId}/history?${window}`,
+      ),
     ) as any;
     const last = (hist?.points ?? [])[(hist?.points ?? []).length - 1];
     const { rows: itemRows } = await db.query(
@@ -859,30 +1074,54 @@ async function main() {
     );
     const qty = n(itemRows[0]?.q);
     const cost = n(itemRows[0]?.c);
-    ok('I8 the latest close is the quantity on hand', (hist?.points ?? []).length === 1 && near(n(last?.closingQty), qty), {
-      points: (hist?.points ?? []).length,
-      closingQty: last?.closingQty,
-      onHand: qty,
-    });
-    ok('I9 the latest close is valued at quantity × average cost', last?.valueKnown === true && near(n(last?.closingValue), round2(qty * cost)), {
-      closingValue: last?.closingValue,
-      expected: round2(qty * cost),
-    });
+    ok(
+      'I8 the latest close is the quantity on hand',
+      (hist?.points ?? []).length === 1 && near(n(last?.closingQty), qty),
+      {
+        points: (hist?.points ?? []).length,
+        closingQty: last?.closingQty,
+        onHand: qty,
+      },
+    );
+    ok(
+      'I9 the latest close is valued at quantity × average cost',
+      last?.valueKnown === true &&
+        near(n(last?.closingValue), round2(qty * cost)),
+      {
+        closingValue: last?.closingValue,
+        expected: round2(qty * cost),
+      },
+    );
 
     // I10. A malformed date is refused, not handed to Postgres.
-    const bad = await req('GET', `/reports/item-performance/${pricedId}?startDate=2026-13-01&endDate=${TODAY}`);
-    ok('I10 a malformed date is a 400', bad.status === 400 && codeOf(bad) === 'INVALID_DATE', {
-      status: bad.status,
-      code: codeOf(bad),
-    });
+    const bad = await req(
+      'GET',
+      `/reports/item-performance/${pricedId}?startDate=2026-13-01&endDate=${TODAY}`,
+    );
+    ok(
+      'I10 a malformed date is a 400',
+      bad.status === 400 && codeOf(bad) === 'INVALID_DATE',
+      {
+        status: bad.status,
+        code: codeOf(bad),
+      },
+    );
 
     // I11–I12. The valuation screen's tie-out and "last sold".
-    const ip = data(await req('GET', `/reports/inventory-performance?${window}`)) as any;
-    ok('I11 inventory-performance carries the Inventory 1200 balance', near(n(ip?.totals?.ledgerValue), await glNet('1200')), {
-      ledgerValue: ip?.totals?.ledgerValue,
-    });
+    const ip = data(
+      await req('GET', `/reports/inventory-performance?${window}`),
+    ) as any;
+    ok(
+      'I11 inventory-performance carries the Inventory 1200 balance',
+      near(n(ip?.totals?.ledgerValue), await glNet('1200')),
+      {
+        ledgerValue: ip?.totals?.ledgerValue,
+      },
+    );
     const row = (ip?.rows ?? []).find((r: any) => r.itemId === pricedId);
-    ok('I12 an item sold today says so', row?.lastSoldDate === TODAY, { lastSoldDate: row?.lastSoldDate });
+    ok('I12 an item sold today says so', row?.lastSoldDate === TODAY, {
+      lastSoldDate: row?.lastSoldDate,
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -893,24 +1132,68 @@ async function main() {
   console.log('\n— V. investing and financing cash, and every drill-down ties');
   {
     const freeNumber = async (min: number, max: number) => {
-      const { rows } = await db.query(`SELECT account_number FROM accounts WHERE company_id = $1`, [COMPANY]);
+      const { rows } = await db.query(
+        `SELECT account_number FROM accounts WHERE company_id = $1`,
+        [COMPANY],
+      );
       const used = new Set(rows.map((r: any) => r.account_number));
-      for (let v = min; v <= max; v++) if (!used.has(String(v))) return String(v);
+      for (let v = min; v <= max; v++)
+        if (!used.has(String(v))) return String(v);
       throw new Error(`no free account number in ${min}–${max}`);
     };
-    const chart = ((data(await req('GET', '/accounts?limit=500')) as any)?.accounts ?? []) as any[];
+    const chart = ((data(await req('GET', '/accounts?limit=500')) as any)
+      ?.accounts ?? []) as any[];
     const byNum = new Map(chart.map((a: any) => [a.accountNumber, a]));
     /** The chart's account of a subtype, or a new one in the given range. */
-    const ensure = async (subType: string, type: string, name: string, min: number, max: number) =>
+    const ensure = async (
+      subType: string,
+      type: string,
+      name: string,
+      min: number,
+      max: number,
+    ) =>
       chart.find((a: any) => a.subType === subType && a.isActive !== false) ??
-      data(await req('POST', '/accounts', { accountNumber: await freeNumber(min, max), name, type, subType }));
-    const equipment = await ensure('Fixed Asset', 'asset', `Equipment ${RUN}`, 1500, 1599);
-    const loan = await ensure('Notes Payable', 'liability', `Bank Loan ${RUN}`, 2700, 2799);
-    const draws = await ensure('Owner Draws', 'equity', `Owner Drawings ${RUN}`, 3200, 3299);
+      data(
+        await req('POST', '/accounts', {
+          accountNumber: await freeNumber(min, max),
+          name,
+          type,
+          subType,
+        }),
+      );
+    const equipment = await ensure(
+      'Fixed Asset',
+      'asset',
+      `Equipment ${RUN}`,
+      1500,
+      1599,
+    );
+    const loan = await ensure(
+      'Notes Payable',
+      'liability',
+      `Bank Loan ${RUN}`,
+      2700,
+      2799,
+    );
+    const draws = await ensure(
+      'Owner Draws',
+      'equity',
+      `Owner Drawings ${RUN}`,
+      3200,
+      3299,
+    );
     const cashAcct: any = byNum.get('1000');
     const bankAcct: any = byNum.get('1010');
     const ownerEq: any = byNum.get('3000');
-    ok('V0 accounts for capex, loan and drawings exist', !!equipment?.id && !!loan?.id && !!draws?.id && !!cashAcct && !!bankAcct && !!ownerEq);
+    ok(
+      'V0 accounts for capex, loan and drawings exist',
+      !!equipment?.id &&
+        !!loan?.id &&
+        !!draws?.id &&
+        !!cashAcct &&
+        !!bankAcct &&
+        !!ownerEq,
+    );
 
     const je = async (memo: string, lines: Array<[string, number, number]>) => {
       const r = await req('POST', '/journal-entries', {
@@ -918,7 +1201,10 @@ async function main() {
         memo,
         status: 'posted',
         lines: lines.map(([accountId, debit, credit], lineOrder) => ({
-          accountId, debit: debit.toFixed(4), credit: credit.toFixed(4), lineOrder,
+          accountId,
+          debit: debit.toFixed(4),
+          credit: credit.toFixed(4),
+          lineOrder,
         })),
       });
       return r.status < 400;
@@ -929,32 +1215,54 @@ async function main() {
     );
     const uploadProof = async () => {
       const fd = new FormData();
-      fd.append('proof', new Blob([PNG_PROOF as unknown as BlobPart], { type: 'image/png' }), 'proof.png');
+      fd.append(
+        'proof',
+        new Blob([PNG_PROOF as unknown as BlobPart], { type: 'image/png' }),
+        'proof.png',
+      );
       const r = await fetch(`${API}/bill-payments/proofs`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${TOKEN}`, 'x-company-id': COMPANY },
         body: fd as any,
-      }).then((x) => x.json()).catch(() => null);
+      })
+        .then((x) => x.json())
+        .catch(() => null);
       return (r?.data ?? r)?.id as string;
     };
 
     const window = `startDate=${TODAY}&endDate=${TODAY}`;
-    const cashFlow = async () => data(await req('GET', `/reports/cash-flow?${window}`)) as any;
+    const cashFlow = async () =>
+      data(await req('GET', `/reports/cash-flow?${window}`)) as any;
     const lineOf = (cf: any, key: string) =>
-      [...cf.operating.lines, ...cf.investing.lines, ...cf.financing.lines].find((l: any) => l.lineKey === key)?.amount ?? 0;
+      [
+        ...cf.operating.lines,
+        ...cf.investing.lines,
+        ...cf.financing.lines,
+      ].find((l: any) => l.lineKey === key)?.amount ?? 0;
     const residualOf = (cf: any) =>
-      (cf.operatingIndirect?.adjustments ?? []).find((a: any) => a.label === 'Other operating adjustments')?.amount ?? 0;
+      (cf.operatingIndirect?.adjustments ?? []).find(
+        (a: any) => a.label === 'Other operating adjustments',
+      )?.amount ?? 0;
     const before = await cashFlow();
 
     // A machine bought on a bill and paid from the bank.
-    const capexBill = data(await req('POST', '/bills', {
-      vendorId: vendor.id,
-      billNumber: `V2-CAPEX-${RUN}`,
-      billDate: TODAY,
-      dueDate: TODAY,
-      status: 'open',
-      lines: [{ description: 'Delivery van', amount: '80000', taxRate: '0', accountId: equipment.id }],
-    })) as any;
+    const capexBill = data(
+      await req('POST', '/bills', {
+        vendorId: vendor.id,
+        billNumber: `V2-CAPEX-${RUN}`,
+        billDate: TODAY,
+        dueDate: TODAY,
+        status: 'open',
+        lines: [
+          {
+            description: 'Delivery van',
+            amount: '80000',
+            taxRate: '0',
+            accountId: equipment.id,
+          },
+        ],
+      }),
+    ) as any;
     const paid = await req('POST', '/bills/pay', {
       vendorId: vendor.id,
       paymentDate: TODAY,
@@ -966,70 +1274,207 @@ async function main() {
     });
     const posted = [
       paid.status < 400,
-      await je(`V2 loan ${RUN}`, [[bankAcct.id, 250000, 0], [loan.id, 0, 250000]]),
-      await je(`V2 owner capital ${RUN}`, [[cashAcct.id, 60000, 0], [ownerEq.id, 0, 60000]]),
-      await je(`V2 owner drawing ${RUN}`, [[draws.id, 15000, 0], [cashAcct.id, 0, 15000]]),
-      await je(`V2 cash to bank ${RUN}`, [[bankAcct.id, 20000, 0], [cashAcct.id, 0, 20000]]),
+      await je(`V2 loan ${RUN}`, [
+        [bankAcct.id, 250000, 0],
+        [loan.id, 0, 250000],
+      ]),
+      await je(`V2 owner capital ${RUN}`, [
+        [cashAcct.id, 60000, 0],
+        [ownerEq.id, 0, 60000],
+      ]),
+      await je(`V2 owner drawing ${RUN}`, [
+        [draws.id, 15000, 0],
+        [cashAcct.id, 0, 15000],
+      ]),
+      await je(`V2 cash to bank ${RUN}`, [
+        [bankAcct.id, 20000, 0],
+        [cashAcct.id, 0, 20000],
+      ]),
     ];
-    ok('V1 capex bill, its payment and four journals post', posted.every(Boolean), posted);
+    ok(
+      'V1 capex bill, its payment and four journals post',
+      posted.every(Boolean),
+      posted,
+    );
 
     const after = await cashFlow();
     const delta = (key: string) => lineOf(after, key) - lineOf(before, key);
-    ok('V2 the capex payment is investing, not "paid to suppliers"', near(delta('inv.fixed_assets'), -80000) && near(delta('op.suppliers'), 0), {
-      investing: delta('inv.fixed_assets'), suppliers: delta('op.suppliers'),
-    });
-    ok('V3 the loan is financing', near(delta('fin.loans'), 250000), delta('fin.loans'));
-    ok('V4 the owner capital is financing', near(delta('fin.owner_contributions'), 60000), delta('fin.owner_contributions'));
-    ok('V5 the owner drawing is financing', near(delta('fin.owner_drawings'), -15000), delta('fin.owner_drawings'));
-    ok('V6 operating cash is untouched by all of it', near(after.operating.total, before.operating.total), {
-      before: before.operating.total, after: after.operating.total,
-    });
-    ok('V7 the transfer is in no section: net change moved by exactly the rest',
-      near(after.netChange - before.netChange, -80000 + 250000 + 60000 - 15000), after.netChange - before.netChange);
-    ok('V8 sections sum to the net change', near(after.operating.total + after.investing.total + after.financing.total, after.netChange));
-    ok('V9 ending cash is the balance sheet Cash + Bank', after.cashTie?.ties === true, after.cashTie);
-    ok('V10 none of it leaves an unexplained residual', near(residualOf(after), residualOf(before)), {
-      before: residualOf(before), after: residualOf(after),
-    });
+    ok(
+      'V2 the capex payment is investing, not "paid to suppliers"',
+      near(delta('inv.fixed_assets'), -80000) && near(delta('op.suppliers'), 0),
+      {
+        investing: delta('inv.fixed_assets'),
+        suppliers: delta('op.suppliers'),
+      },
+    );
+    ok(
+      'V3 the loan is financing',
+      near(delta('fin.loans'), 250000),
+      delta('fin.loans'),
+    );
+    ok(
+      'V4 the owner capital is financing',
+      near(delta('fin.owner_contributions'), 60000),
+      delta('fin.owner_contributions'),
+    );
+    ok(
+      'V5 the owner drawing is financing',
+      near(delta('fin.owner_drawings'), -15000),
+      delta('fin.owner_drawings'),
+    );
+    ok(
+      'V6 operating cash is untouched by all of it',
+      near(after.operating.total, before.operating.total),
+      {
+        before: before.operating.total,
+        after: after.operating.total,
+      },
+    );
+    ok(
+      'V7 the transfer is in no section: net change moved by exactly the rest',
+      near(after.netChange - before.netChange, -80000 + 250000 + 60000 - 15000),
+      after.netChange - before.netChange,
+    );
+    ok(
+      'V8 sections sum to the net change',
+      near(
+        after.operating.total + after.investing.total + after.financing.total,
+        after.netChange,
+      ),
+    );
+    ok(
+      'V9 ending cash is the balance sheet Cash + Bank',
+      after.cashTie?.ties === true,
+      after.cashTie,
+    );
+    ok(
+      'V10 none of it leaves an unexplained residual',
+      near(residualOf(after), residualOf(before)),
+      {
+        before: residualOf(before),
+        after: residualOf(after),
+      },
+    );
 
     // The statements still tie, in every trial-balance mode.
-    const bs = data(await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`)) as any;
-    ok('V11 A = L + E with no gap', bs?.isBalanced === true && near(n(bs?.gap), 0), { gap: bs?.gap });
-    const codes = (bs?.equity ?? []).map((l: any) => l.accountCode).filter(Boolean);
-    ok('V12 no equity account code appears twice', new Set(codes).size === codes.length, codes);
+    const bs = data(
+      await req('GET', `/reports/balance-sheet?asOfDate=${TODAY}`),
+    ) as any;
+    ok(
+      'V11 A = L + E with no gap',
+      bs?.isBalanced === true && near(n(bs?.gap), 0),
+      { gap: bs?.gap },
+    );
+    const codes = (bs?.equity ?? [])
+      .map((l: any) => l.accountCode)
+      .filter(Boolean);
+    ok(
+      'V12 no equity account code appears twice',
+      new Set(codes).size === codes.length,
+      codes,
+    );
     for (const mode of ['closing', 'working'] as const) {
-      const tb = data(await req('GET', `/reports/trial-balance?mode=${mode}&startDate=${TODAY.slice(0, 4)}-01-01&endDate=${TODAY}`)) as any;
-      ok(`V13 the ${mode} trial balance balances`, tb?.isBalanced === true, tb?.balanced ?? tb?.totalDebits);
+      const tb = data(
+        await req(
+          'GET',
+          `/reports/trial-balance?mode=${mode}&startDate=${TODAY.slice(0, 4)}-01-01&endDate=${TODAY}`,
+        ),
+      ) as any;
+      ok(
+        `V13 the ${mode} trial balance balances`,
+        tb?.isBalanced === true,
+        tb?.balanced ?? tb?.totalDebits,
+      );
     }
 
     // Every drill-down adds up to the line it came from.
-    for (const l of [...after.operating.lines, ...after.investing.lines, ...after.financing.lines]) {
+    for (const l of [
+      ...after.operating.lines,
+      ...after.investing.lines,
+      ...after.financing.lines,
+    ]) {
       let page = 1;
       let sum = 0;
       for (;;) {
-        const r = data(await req('GET', `/reports/cash-flow/lines/${l.lineKey}/entries?${window}&page=${page}&limit=200`)) as any;
-        sum += (r?.entries ?? []).reduce((t: number, x: any) => t + n(x.allocatedAmount), 0);
+        const r = data(
+          await req(
+            'GET',
+            `/reports/cash-flow/lines/${l.lineKey}/entries?${window}&page=${page}&limit=200`,
+          ),
+        ) as any;
+        sum += (r?.entries ?? []).reduce(
+          (t: number, x: any) => t + n(x.allocatedAmount),
+          0,
+        );
         if (page * 200 >= n(r?.total)) break;
         page++;
       }
-      ok(`V14 ${l.lineKey} rows add up to the line`, near(sum, l.amount, 0.05), { line: l.amount, rows: sum });
+      ok(
+        `V14 ${l.lineKey} rows add up to the line`,
+        near(sum, l.amount, 0.05),
+        { line: l.amount, rows: sum },
+      );
     }
-    const loanLine = (bs?.liabilities ?? []).find((x: any) => x.accountCode === loan.accountNumber);
-    const reg = data(await req('GET', `/reports/accounts/${loan.accountNumber}/register?startDate=1970-01-01&endDate=${TODAY}&limit=200`)) as any;
-    const regSum = (reg?.entries ?? []).reduce((t: number, x: any) => t + n(x.amount), 0);
-    ok('V15 the loan register foots and closes on the balance sheet line',
-      near(n(reg?.openingBalance) + regSum, n(reg?.closingBalance)) && near(n(reg?.closingBalance), n(loanLine?.amount)), {
-        opening: reg?.openingBalance, sum: regSum, closing: reg?.closingBalance, bs: loanLine?.amount,
-      });
-    const mv = data(await req('GET', `/reports/accounts/${equipment.accountNumber}/movement?startDate=${TODAY}&endDate=${TODAY}`)) as any;
-    ok('V16 the equipment movement breaks down completely',
-      near((mv?.byCounterparty ?? []).reduce((t: number, x: any) => t + n(x.change), 0), n(mv?.change)) &&
-        near(n(mv?.change), n(mv?.current) - n(mv?.prior)) && n(mv?.current) >= 80000, mv);
-    const re = data(await req('GET', `/reports/balance-sheet/retained-earnings?asOfDate=${TODAY}`)) as any;
-    const reLine = (bs?.equity ?? []).find((l: any) => l.composite || l.synthetic === 'retainedEarnings');
-    ok('V17 the retained-earnings breakdown totals to its balance-sheet line', near(n(re?.total), n(reLine?.amount ?? 0)), {
-      total: re?.total, line: reLine?.amount,
-    });
+    const loanLine = (bs?.liabilities ?? []).find(
+      (x: any) => x.accountCode === loan.accountNumber,
+    );
+    const reg = data(
+      await req(
+        'GET',
+        `/reports/accounts/${loan.accountNumber}/register?startDate=1970-01-01&endDate=${TODAY}&limit=200`,
+      ),
+    ) as any;
+    const regSum = (reg?.entries ?? []).reduce(
+      (t: number, x: any) => t + n(x.amount),
+      0,
+    );
+    ok(
+      'V15 the loan register foots and closes on the balance sheet line',
+      near(n(reg?.openingBalance) + regSum, n(reg?.closingBalance)) &&
+        near(n(reg?.closingBalance), n(loanLine?.amount)),
+      {
+        opening: reg?.openingBalance,
+        sum: regSum,
+        closing: reg?.closingBalance,
+        bs: loanLine?.amount,
+      },
+    );
+    const mv = data(
+      await req(
+        'GET',
+        `/reports/accounts/${equipment.accountNumber}/movement?startDate=${TODAY}&endDate=${TODAY}`,
+      ),
+    ) as any;
+    ok(
+      'V16 the equipment movement breaks down completely',
+      near(
+        (mv?.byCounterparty ?? []).reduce(
+          (t: number, x: any) => t + n(x.change),
+          0,
+        ),
+        n(mv?.change),
+      ) &&
+        near(n(mv?.change), n(mv?.current) - n(mv?.prior)) &&
+        n(mv?.current) >= 80000,
+      mv,
+    );
+    const re = data(
+      await req(
+        'GET',
+        `/reports/balance-sheet/retained-earnings?asOfDate=${TODAY}`,
+      ),
+    ) as any;
+    const reLine = (bs?.equity ?? []).find(
+      (l: any) => l.composite || l.synthetic === 'retainedEarnings',
+    );
+    ok(
+      'V17 the retained-earnings breakdown totals to its balance-sheet line',
+      near(n(re?.total), n(reLine?.amount ?? 0)),
+      {
+        total: re?.total,
+        line: reLine?.amount,
+      },
+    );
   }
 
   // ── Books still sound ──────────────────────────────────────────

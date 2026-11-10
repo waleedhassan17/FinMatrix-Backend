@@ -2,7 +2,12 @@ import { normalizeEmail, normalizePhone } from './contact-normalize';
 
 describe('normalizePhone', () => {
   it('reduces every way of writing the same mobile to ONE string', () => {
-    const inputs = ['03001234567', '+923001234567', '923001234567', '00923001234567'];
+    const inputs = [
+      '03001234567',
+      '+923001234567',
+      '923001234567',
+      '00923001234567',
+    ];
     const outputs = inputs.map(normalizePhone);
     expect(outputs).toEqual([
       '+923001234567',
@@ -63,12 +68,24 @@ describe('normalizeEmail', () => {
 
   it('keeps Gmail dots and +tags — they may be different people', () => {
     expect(normalizeEmail('first.last@gmail.com')).toBe('first.last@gmail.com');
-    expect(normalizeEmail('firstlast+shop@gmail.com')).toBe('firstlast+shop@gmail.com');
-    expect(normalizeEmail('first.last@gmail.com')).not.toBe(normalizeEmail('firstlast@gmail.com'));
+    expect(normalizeEmail('firstlast+shop@gmail.com')).toBe(
+      'firstlast+shop@gmail.com',
+    );
+    expect(normalizeEmail('first.last@gmail.com')).not.toBe(
+      normalizeEmail('firstlast@gmail.com'),
+    );
   });
 
   it('returns null for blank or malformed input', () => {
-    for (const bad of ['', '   ', 'owner', 'owner@', '@example.com', 'a b@example.com', 'owner@example']) {
+    for (const bad of [
+      '',
+      '   ',
+      'owner',
+      'owner@',
+      '@example.com',
+      'a b@example.com',
+      'owner@example',
+    ]) {
       expect(normalizeEmail(bad)).toBeNull();
     }
     expect(normalizeEmail(null)).toBeNull();

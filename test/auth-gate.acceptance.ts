@@ -15,7 +15,9 @@
  */
 export {}; // isolate module scope (shares a tsconfig with acceptance.ts)
 
-const API = process.env.API_BASE || 'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
+const API =
+  process.env.API_BASE ||
+  'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'metromatrix@gmail.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '123456';
 const SA_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'waleedhassansfd@gmail.com';
@@ -24,8 +26,13 @@ const SA_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Waleed@104';
 let pass = 0;
 let fail = 0;
 const ok = (name: string, cond: boolean, detail = '') => {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name} ${detail}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name} ${detail}`);
+  }
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,7 +48,11 @@ async function req(
     body: body ? JSON.stringify(body) : undefined,
   });
   let json: any = null;
-  try { json = await res.json(); } catch { /* no body */ }
+  try {
+    json = await res.json();
+  } catch {
+    /* no body */
+  }
   return { status: res.status, body: json };
 }
 
@@ -78,15 +89,33 @@ async function main() {
   const forbid = await req('GET', '/admin/companies', undefined, {
     Authorization: `Bearer ${adminTok}`,
   });
-  ok('non-super-admin → 403 on /admin/companies', forbid.status === 403, `got ${forbid.status}`);
+  ok(
+    'non-super-admin → 403 on /admin/companies',
+    forbid.status === 403,
+    `got ${forbid.status}`,
+  );
 
   // Super-admin can list companies.
-  const list = await req('GET', '/admin/companies?status=all&limit=50', undefined, saHdr);
+  const list = await req(
+    'GET',
+    '/admin/companies?status=all&limit=50',
+    undefined,
+    saHdr,
+  );
   ok('super-admin can list companies', list.status === 200);
 
   // Deactivate → sign-in survives but lands in renew-only; business endpoints blocked.
-  const deact = await req('PATCH', `/admin/companies/${companyId}/deactivate`, {}, saHdr);
-  ok('super-admin can deactivate a company', deact.status === 200, `got ${deact.status}`);
+  const deact = await req(
+    'PATCH',
+    `/admin/companies/${companyId}/deactivate`,
+    {},
+    saHdr,
+  );
+  ok(
+    'super-admin can deactivate a company',
+    deact.status === 200,
+    `got ${deact.status}`,
+  );
 
   // This used to assert a BLOCKED login with code COMPANY_INACTIVE. That code exists
   // nowhere in src/ and the design deliberately changed: 'pending' and 'rejected' are
@@ -96,24 +125,39 @@ async function main() {
   // COMPANY_NOT_ACTIVE. Asserting the old contract hid what actually protects the
   // tenant, which is the 403 immediately below.
   const blocked = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
-  const blockedStatus = blocked.body?.data?.companyStatus ?? blocked.body?.data?.company?.status;
-  ok('deactivated company signs in to renew-only, reported as inactive',
+  const blockedStatus =
+    blocked.body?.data?.companyStatus ?? blocked.body?.data?.company?.status;
+  ok(
+    'deactivated company signs in to renew-only, reported as inactive',
     blocked.status === 200 && blockedStatus === 'inactive',
-    `status=${blocked.status} companyStatus=${blockedStatus} code=${codeOf(blocked.body)}`);
+    `status=${blocked.status} companyStatus=${blockedStatus} code=${codeOf(blocked.body)}`,
+  );
 
   const guarded = await req('GET', '/accounts?search=1000', undefined, {
     Authorization: `Bearer ${adminTok}`,
     'x-company-id': companyId,
   });
-  ok('existing session blocked on business endpoint (403)', guarded.status === 403, `got ${guarded.status}`);
+  ok(
+    'existing session blocked on business endpoint (403)',
+    guarded.status === 403,
+    `got ${guarded.status}`,
+  );
 
   // Reactivate → login restored.
-  const react = await req('PATCH', `/admin/companies/${companyId}/activate`, {}, saHdr);
+  const react = await req(
+    'PATCH',
+    `/admin/companies/${companyId}/activate`,
+    {},
+    saHdr,
+  );
   ok('super-admin can reactivate a company', react.status === 200);
 
   const restored = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
-  ok('reactivated company can log in again', !!tokenOf(restored.body),
-    `code=${codeOf(restored.body)}`);
+  ok(
+    'reactivated company can log in again',
+    !!tokenOf(restored.body),
+    `code=${codeOf(restored.body)}`,
+  );
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

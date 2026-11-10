@@ -17,8 +17,15 @@ import { CreditOverrideDto } from '../../../common/validation/credit-override.dt
 import { Transform, Type } from 'class-transformer';
 import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DeliveryPriority, DeliveryStatus, DeliveryIssueType } from '../../../types';
-import { DELIVERY_PAID_STATUSES, DeliveryPaidStatus } from '../delivery-collection.util';
+import {
+  DeliveryPriority,
+  DeliveryStatus,
+  DeliveryIssueType,
+} from '../../../types';
+import {
+  DELIVERY_PAID_STATUSES,
+  DeliveryPaidStatus,
+} from '../delivery-collection.util';
 
 // Clients send quantities as numbers or numeric strings; normalise before
 // validating so '12' passes and '', 'abc', {} all become NaN and fail IsInt
@@ -58,7 +65,9 @@ export class DeliveryItemDto {
   @IsNumber({}, { message: 'unitPrice must be a number' })
   @Min(0, { message: 'unitPrice cannot be negative' })
   unitPrice?: number;
-  @ApiPropertyOptional({ description: 'Sales tax %, flows to the Sales Order / Invoice line' })
+  @ApiPropertyOptional({
+    description: 'Sales tax %, flows to the Sales Order / Invoice line',
+  })
   @IsOptional()
   @Transform(toNumberOrNaN)
   @IsNumber({}, { message: 'taxRate must be a number' })
@@ -72,21 +81,40 @@ export class CreateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() zone?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() scheduledDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[])
+  priority?: DeliveryPriority;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) preferredTimeSlot?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   // Manual destination override — used when automatic geocoding fails and
   // the dispatcher supplies the address/pin themselves.
   @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  destLat?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  destLng?: number;
   @ApiPropertyOptional({
     description:
       'Customer paid the whole order before dispatch. Same as advanceAmount = the order total (tax included). ' +
       'Staff: the delivery is sent to the owner for approval.',
   })
-  @IsOptional() @IsBoolean() prePaid?: boolean;
+  @IsOptional()
+  @IsBoolean()
+  prePaid?: boolean;
 
   @ApiPropertyOptional({
     example: '3000',
@@ -95,12 +123,19 @@ export class CreateDeliveryDto {
       'and applied to the invoice when the delivery is approved. The rider collects only the balance. ' +
       'Staff: the delivery is sent to the owner for approval.',
   })
-  @IsOptional() @IsNumberString({}, { message: 'advanceAmount must be a number' }) advanceAmount?: string;
-  @ApiProperty() @IsArray() @ValidateNested({ each: true }) @Type(() => DeliveryItemDto) items!: DeliveryItemDto[];
+  @IsOptional()
+  @IsNumberString({}, { message: 'advanceAmount must be a number' })
+  advanceAmount?: string;
+  @ApiProperty()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DeliveryItemDto)
+  items!: DeliveryItemDto[];
 
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()
@@ -110,17 +145,31 @@ export class CreateDeliveryDto {
 
 export class UpdateDeliveryDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[]) priority?: DeliveryPriority;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEnum(['low', 'normal', 'medium', 'high', 'urgent'] as DeliveryPriority[])
+  priority?: DeliveryPriority;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() preferredTimeSlot?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() destAddress?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-90) @Max(90) destLat?: number;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(-180) @Max(180) destLng?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  destLat?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  destLng?: number;
 
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()
@@ -129,9 +178,19 @@ export class UpdateDeliveryDto {
 }
 
 export class DeliveryStatusUpdateDto {
-  @ApiProperty() @IsEnum([
-    'unassigned', 'pending', 'picked_up', 'in_transit', 'arrived', 'delivered', 'failed', 'returned', 'cancelled',
-  ] as DeliveryStatus[]) status!: DeliveryStatus;
+  @ApiProperty()
+  @IsEnum([
+    'unassigned',
+    'pending',
+    'picked_up',
+    'in_transit',
+    'arrived',
+    'delivered',
+    'failed',
+    'returned',
+    'cancelled',
+  ] as DeliveryStatus[])
+  status!: DeliveryStatus;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() location?: { lat: number; lng: number };
   @ApiPropertyOptional({
@@ -141,15 +200,33 @@ export class DeliveryStatusUpdateDto {
       'is marked delivered rather than at bill-photo capture. Posts NOTHING — ' +
       'approval records the cash. Ignored when nothing is due (prepaid).',
   })
-  @IsOptional() @IsEnum(DELIVERY_PAID_STATUSES) paidStatus?: DeliveryPaidStatus;
-  @ApiPropertyOptional({ example: '500', description: "Cash received, required when paidStatus is 'partial'." })
-  @IsOptional() @IsNumberString() amountCollected?: string;
+  @IsOptional()
+  @IsEnum(DELIVERY_PAID_STATUSES)
+  paidStatus?: DeliveryPaidStatus;
+  @ApiPropertyOptional({
+    example: '500',
+    description: "Cash received, required when paidStatus is 'partial'.",
+  })
+  @IsOptional()
+  @IsNumberString()
+  amountCollected?: string;
 }
 
 export class DeliveryQueryDto {
-  @ApiPropertyOptional() @IsOptional() @IsEnum([
-    'unassigned', 'pending', 'picked_up', 'in_transit', 'arrived', 'delivered', 'failed', 'returned', 'cancelled',
-  ] as DeliveryStatus[]) status?: DeliveryStatus;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEnum([
+    'unassigned',
+    'pending',
+    'picked_up',
+    'in_transit',
+    'arrived',
+    'delivered',
+    'failed',
+    'returned',
+    'cancelled',
+  ] as DeliveryStatus[])
+  status?: DeliveryStatus;
   @ApiPropertyOptional() @IsOptional() @IsUUID() personnelId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() customerId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() q?: string;
@@ -158,7 +235,16 @@ export class DeliveryQueryDto {
 }
 
 export class DeliveryIssueDto {
-  @ApiProperty() @IsEnum(['damaged', 'wrong_item', 'customer_refused', 'access_denied', 'payment_issue', 'other'] as DeliveryIssueType[]) issueType!: DeliveryIssueType;
+  @ApiProperty()
+  @IsEnum([
+    'damaged',
+    'wrong_item',
+    'customer_refused',
+    'access_denied',
+    'payment_issue',
+    'other',
+  ] as DeliveryIssueType[])
+  issueType!: DeliveryIssueType;
   @ApiProperty() @IsString() notes!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() photoUrl?: string;
 }
@@ -177,7 +263,12 @@ export class ConfirmDeliveryItemDto {
 export class ConfirmDeliveryDto {
   @ApiPropertyOptional() @IsOptional() customerVerified?: boolean;
   // Optional: when omitted, every line is treated as fully delivered.
-  @ApiPropertyOptional({ type: [ConfirmDeliveryItemDto] }) @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmDeliveryItemDto) deliveredItems?: ConfirmDeliveryItemDto[];
+  @ApiPropertyOptional({ type: [ConfirmDeliveryItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConfirmDeliveryItemDto)
+  deliveredItems?: ConfirmDeliveryItemDto[];
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() verifiedBy?: string;
   @ApiPropertyOptional({
@@ -185,7 +276,14 @@ export class ConfirmDeliveryDto {
     description:
       "Rider's payment answer. Posts NOTHING — approval records the cash. Ignored when nothing is due (prepaid).",
   })
-  @IsOptional() @IsEnum(DELIVERY_PAID_STATUSES) paidStatus?: DeliveryPaidStatus;
-  @ApiPropertyOptional({ example: '500', description: "Cash received, required when paidStatus is 'partial'." })
-  @IsOptional() @IsNumberString() amountCollected?: string;
+  @IsOptional()
+  @IsEnum(DELIVERY_PAID_STATUSES)
+  paidStatus?: DeliveryPaidStatus;
+  @ApiPropertyOptional({
+    example: '500',
+    description: "Cash received, required when paidStatus is 'partial'.",
+  })
+  @IsOptional()
+  @IsNumberString()
+  amountCollected?: string;
 }

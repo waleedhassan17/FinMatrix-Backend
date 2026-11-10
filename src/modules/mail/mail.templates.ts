@@ -124,7 +124,11 @@ export const emailTemplates = {
     };
   },
 
-  approved(displayName: string, companyName: string, appUrl?: string): RenderedEmail {
+  approved(
+    displayName: string,
+    companyName: string,
+    appUrl?: string,
+  ): RenderedEmail {
     const open = appUrl ? `${appUrl}/dashboard` : '';
     return {
       subject: `${companyName} has been approved 🎉`,
@@ -154,7 +158,11 @@ export const emailTemplates = {
   },
 
   /** Access restored after a deactivation. */
-  reactivated(displayName: string, companyName: string, appUrl?: string): RenderedEmail {
+  reactivated(
+    displayName: string,
+    companyName: string,
+    appUrl?: string,
+  ): RenderedEmail {
     const open = appUrl ? `${appUrl}/dashboard` : '';
     return {
       subject: `${companyName} is active again`,
@@ -168,7 +176,11 @@ export const emailTemplates = {
     };
   },
 
-  rejected(displayName: string, companyName: string, reason: string): RenderedEmail {
+  rejected(
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): RenderedEmail {
     return {
       subject: `Update on your FinMatrix registration`,
       html: layout(
@@ -202,7 +214,11 @@ export const emailTemplates = {
     };
   },
 
-  trialRequestedAdmin(companyName: string, ownerEmail: string, ownerPhone: string | null): RenderedEmail {
+  trialRequestedAdmin(
+    companyName: string,
+    ownerEmail: string,
+    ownerPhone: string | null,
+  ): RenderedEmail {
     return {
       subject: `Free trial request awaiting review: ${companyName}`,
       html: layout(
@@ -220,7 +236,11 @@ export const emailTemplates = {
     };
   },
 
-  trialApproved(displayName: string, companyName: string, trialEndsAt: Date): RenderedEmail {
+  trialApproved(
+    displayName: string,
+    companyName: string,
+    trialEndsAt: Date,
+  ): RenderedEmail {
     const ends = longDate(trialEndsAt);
     return {
       subject: 'Your 30-day FinMatrix trial is active',
@@ -240,7 +260,11 @@ export const emailTemplates = {
     };
   },
 
-  trialRejected(displayName: string, companyName: string, reason: string): RenderedEmail {
+  trialRejected(
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): RenderedEmail {
     return {
       subject: 'Update on your FinMatrix free trial request',
       html: layout(
@@ -257,7 +281,11 @@ export const emailTemplates = {
     };
   },
 
-  trialEnding(displayName: string, companyName: string, daysRemaining: number): RenderedEmail {
+  trialEnding(
+    displayName: string,
+    companyName: string,
+    daysRemaining: number,
+  ): RenderedEmail {
     const days = `${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
     return {
       subject: `Your FinMatrix trial ends in ${days}`,

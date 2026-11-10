@@ -44,9 +44,12 @@ export class JournalEntriesService {
       .createQueryBuilder('e')
       .where('e.companyId = :companyId', { companyId });
 
-    if (query.status) qb.andWhere('e.status = :status', { status: query.status });
-    if (query.startDate) qb.andWhere('e.date >= :startDate', { startDate: query.startDate });
-    if (query.endDate) qb.andWhere('e.date <= :endDate', { endDate: query.endDate });
+    if (query.status)
+      qb.andWhere('e.status = :status', { status: query.status });
+    if (query.startDate)
+      qb.andWhere('e.date >= :startDate', { startDate: query.startDate });
+    if (query.endDate)
+      qb.andWhere('e.date <= :endDate', { endDate: query.endDate });
     applyTextSearch(qb, query.search, companyId, {
       columns: ['e.reference', 'e.memo'],
     });
@@ -136,7 +139,12 @@ export class JournalEntriesService {
       // touch the reconciled row, but QuickBooks semantics (and our beginning
       // balance sanity) require an explicit admin undo of the reconciliation
       // before altering the underlying transaction.
-      await assertNotReconciled(manager, companyId, [entry.id], 'journal entry');
+      await assertNotReconciled(
+        manager,
+        companyId,
+        [entry.id],
+        'journal entry',
+      );
 
       if (entry.status === 'posted') {
         // Reversing entry: swap debit and credit on every line.

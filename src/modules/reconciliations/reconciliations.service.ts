@@ -97,7 +97,9 @@ export class ReconciliationsService {
           subType: a.subType,
           bookBalance: toDecimal(a.balance).toFixed(2),
           lastReconciledDate: last?.statementDate ?? null,
-          lastReconciledBalance: last ? toDecimal(last.statementEndingBalance).toFixed(2) : null,
+          lastReconciledBalance: last
+            ? toDecimal(last.statementEndingBalance).toFixed(2)
+            : null,
         };
       }),
     );
@@ -108,13 +110,17 @@ export class ReconciliationsService {
    * carried-in beginning balance — everything the reconcile screen needs.
    */
   async getUnreconciled(companyId: string, query: UnreconciledQueryDto) {
-    const account = await this.getReconcilableAccount(companyId, query.accountId);
+    const account = await this.getReconcilableAccount(
+      companyId,
+      query.accountId,
+    );
     const qb = this.glRepo
       .createQueryBuilder('g')
       .where('g.companyId = :companyId', { companyId })
       .andWhere('g.accountId = :accountId', { accountId: query.accountId })
       .andWhere('g.reconciliationId IS NULL');
-    if (query.endDate) qb.andWhere('g.date <= :endDate', { endDate: query.endDate });
+    if (query.endDate)
+      qb.andWhere('g.date <= :endDate', { endDate: query.endDate });
     qb.orderBy('g.date', 'ASC').addOrderBy('g.createdAt', 'ASC');
     const rows = await qb.getMany();
 
@@ -137,12 +143,16 @@ export class ReconciliationsService {
     // last statement's ending balance (someone touched reconciled history —
     // e.g. an out-of-band DB edit). Derived beginning == last statement
     // ending by construction, so any difference IS the broken amount.
-    const beginning = toDecimal(await this.beginningBalance(companyId, account.id));
+    const beginning = toDecimal(
+      await this.beginningBalance(companyId, account.id),
+    );
     const lastRecon = await this.reconRepo.findOne({
       where: { companyId, accountId: account.id },
       order: { statementDate: 'DESC', createdAt: 'DESC' },
     });
-    const lastEnding = lastRecon ? toDecimal(lastRecon.statementEndingBalance) : null;
+    const lastEnding = lastRecon
+      ? toDecimal(lastRecon.statementEndingBalance)
+      : null;
     const beginningMismatch =
       lastEnding !== null && !moneyEquals(beginning, lastEnding)
         ? subtractMoney(beginning.toFixed(4), lastEnding.toFixed(4)).toFixed(2)
@@ -154,7 +164,8 @@ export class ReconciliationsService {
       accountNumber: account.accountNumber,
       beginningBalance: beginning.toFixed(2),
       lastStatementDate: lastRecon?.statementDate ?? null,
-      lastStatementEndingBalance: lastEnding !== null ? lastEnding.toFixed(2) : null,
+      lastStatementEndingBalance:
+        lastEnding !== null ? lastEnding.toFixed(2) : null,
       // Non-null = WARN: beginning balance is off by this amount vs the last
       // reconciliation (reconciled history was altered outside the app).
       beginningMismatch,
@@ -255,7 +266,10 @@ export class ReconciliationsService {
       .getMany();
     const outstanding = outstandingRows.map(shape);
     const outstandingTotal = outstandingRows
-      .reduce((sum, g) => addMoney(sum, subtractMoney(g.debit, g.credit)), toDecimal('0'))
+      .reduce(
+        (sum, g) => addMoney(sum, subtractMoney(g.debit, g.credit)),
+        toDecimal('0'),
+      )
       .toFixed(2);
 
     return { ...recon, entries, outstanding, outstandingTotal };
@@ -266,7 +280,11 @@ export class ReconciliationsService {
    * statement (difference must be 0), then stamp those rows reconciled. This
    * marks/verifies only — it posts no journal entries.
    */
-  async create(companyId: string, userId: string, dto: CreateReconciliationDto) {
+  async create(
+    companyId: string,
+    userId: string,
+    dto: CreateReconciliationDto,
+  ) {
     const account = await this.getReconcilableAccount(companyId, dto.accountId);
 
     return this.dataSource.transaction(async (manager) => {
@@ -325,7 +343,10 @@ export class ReconciliationsService {
         toDecimal('0'),
       );
       const clearedBalance = addMoney(beginning, clearedNet);
-      const difference = subtractMoney(dto.statementEndingBalance, clearedBalance);
+      const difference = subtractMoney(
+        dto.statementEndingBalance,
+        clearedBalance,
+      );
 
       if (!moneyEquals(difference, toDecimal('0'))) {
         throw new BadRequestException({
@@ -338,7 +359,9 @@ export class ReconciliationsService {
         companyId,
         accountId: account.id,
         statementDate: dto.statementDate,
-        statementEndingBalance: toDecimal(dto.statementEndingBalance).toFixed(4),
+        statementEndingBalance: toDecimal(dto.statementEndingBalance).toFixed(
+          4,
+        ),
         beginningBalance: toDecimal(beginning).toFixed(4),
         clearedBalance: clearedBalance.toFixed(4),
         difference: difference.toFixed(4),

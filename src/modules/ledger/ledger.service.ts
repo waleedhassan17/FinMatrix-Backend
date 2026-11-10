@@ -54,7 +54,11 @@ export class LedgerService {
    * It now reads journal_entry_lines joined to their accounts, so it shows the
    * entries that exist, with the account each one really hit.
    */
-  private async buildLines(companyId: string, s: string, e: string): Promise<RawLine[]> {
+  private async buildLines(
+    companyId: string,
+    s: string,
+    e: string,
+  ): Promise<RawLine[]> {
     const rows = await this.dataSource.query(
       `SELECT je.date::text                                   AS date,
               je.created_at                                   AS "postedAt",
@@ -81,7 +85,10 @@ export class LedgerService {
       // The posting date is the accounting date and is a DATE column, so it
       // carries no time. created_at is when the entry was actually recorded —
       // that is the timestamp an audit trail needs.
-      postedAt: r.postedAt instanceof Date ? r.postedAt.toISOString() : String(r.postedAt ?? ''),
+      postedAt:
+        r.postedAt instanceof Date
+          ? r.postedAt.toISOString()
+          : String(r.postedAt ?? ''),
       reference: r.reference ?? '',
       accountCode: r.accountCode ?? '',
       accountName: r.accountName ?? '',
@@ -120,12 +127,20 @@ export class LedgerService {
       [companyId, s],
     );
     return new Map(
-      rows.map((r: any) => [r.accountCode, { accountName: r.accountName, balance: r2(num(r.balance)) }]),
+      rows.map((r: any) => [
+        r.accountCode,
+        { accountName: r.accountName, balance: r2(num(r.balance)) },
+      ]),
     );
   }
 
   /** Chronological ledger, optionally filtered to a single account code. */
-  async query(companyId: string, startDate?: string, endDate?: string, accountCode?: string) {
+  async query(
+    companyId: string,
+    startDate?: string,
+    endDate?: string,
+    accountCode?: string,
+  ) {
     const s = startDate || '1970-01-01';
     const e = endDate || businessToday();
     let lines = await this.buildLines(companyId, s, e);
@@ -136,7 +151,10 @@ export class LedgerService {
     // balance brought forward.
     const runningByAccount = new Map<string, number>();
     const entries = lines.map((l) => {
-      const prev = runningByAccount.get(l.accountCode) ?? opening.get(l.accountCode)?.balance ?? 0;
+      const prev =
+        runningByAccount.get(l.accountCode) ??
+        opening.get(l.accountCode)?.balance ??
+        0;
       const balance = r2(prev + l.debit - l.credit);
       runningByAccount.set(l.accountCode, balance);
       return {
@@ -174,7 +192,10 @@ export class LedgerService {
       balance: runningByAccount.get(o.accountCode) ?? o.balance,
     }));
 
-    const totals = entries.reduce((t, x) => ({ debit: t.debit + x.debit, credit: t.credit + x.credit }), { debit: 0, credit: 0 });
+    const totals = entries.reduce(
+      (t, x) => ({ debit: t.debit + x.debit, credit: t.credit + x.credit }),
+      { debit: 0, credit: 0 },
+    );
     return {
       range: { startDate: s, endDate: e },
       accountCode: accountCode ?? null,
@@ -191,7 +212,17 @@ export class LedgerService {
     const e = endDate || businessToday();
     const lines = await this.buildLines(companyId, s, e);
     const opening = await this.openingBalances(companyId, s);
-    const map = new Map<string, { accountCode: string; accountName: string; opening: number; debit: number; credit: number; entries: number }>();
+    const map = new Map<
+      string,
+      {
+        accountCode: string;
+        accountName: string;
+        opening: number;
+        debit: number;
+        credit: number;
+        entries: number;
+      }
+    >();
     for (const l of lines) {
       if (!map.has(l.accountCode)) {
         map.set(l.accountCode, {

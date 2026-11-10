@@ -18,6 +18,9 @@ NestFactory.create(AppModule, { logger: ['error'] })
     process.exit(0);
   })
   .catch((e: unknown) => {
-    console.error('BOOT_FAILED:', String((e as Error)?.message ?? e).slice(0, 1500));
+    console.error(
+      'BOOT_FAILED:',
+      String((e as Error)?.message ?? e).slice(0, 1500),
+    );
     process.exit(1);
   });

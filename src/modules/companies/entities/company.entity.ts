@@ -140,7 +140,12 @@ export class Company extends BaseEntity {
   // Chosen plan. Legacy keys free | standard | pro (pre-tiering) plus the six
   // tier plans (small_business|large_org|warehouse × 3mo|6mo) — see
   // billing/plan-config.ts, the single source of truth.
-  @Column({ type: 'varchar', length: 32, default: 'free', name: 'subscription_plan' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'free',
+    name: 'subscription_plan',
+  })
   subscriptionPlan!: string;
 
   // ── Subscription lifecycle (phase2.md) ────────────────────────────────────
@@ -148,17 +153,35 @@ export class Company extends BaseEntity {
   // whether the plan is current: active | expiring | expired. Free stays active
   // with a null expiry. Expiry NEVER deletes data — it only flips the account to
   // inactive (login → renew-only) until renewed.
-  @Column({ type: 'varchar', length: 16, default: 'active', name: 'subscription_status' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'active',
+    name: 'subscription_status',
+  })
   subscriptionStatus!: string;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'subscription_start_date' })
+  @Column({
+    type: 'timestamptz',
+    nullable: true,
+    name: 'subscription_start_date',
+  })
   subscriptionStartDate!: Date | null;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'subscription_expiry_date' })
+  @Column({
+    type: 'timestamptz',
+    nullable: true,
+    name: 'subscription_expiry_date',
+  })
   subscriptionExpiryDate!: Date | null;
 
   // none | submitted | paid | rejected
-  @Column({ type: 'varchar', length: 16, default: 'none', name: 'payment_status' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'none',
+    name: 'payment_status',
+  })
   paymentStatus!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'last_submission_id' })
@@ -206,7 +229,11 @@ export class Company extends BaseEntity {
   // The last trial-ending EMAIL milestone sent (7, 3 or 1 days left). In-app
   // reminders stay daily via subscriptionReminderOn; emails go out only when a
   // smaller milestone is crossed, so a missed cron run still sends the next one.
-  @Column({ type: 'smallint', nullable: true, name: 'trial_reminder_milestone' })
+  @Column({
+    type: 'smallint',
+    nullable: true,
+    name: 'trial_reminder_milestone',
+  })
   trialReminderMilestone!: number | null;
 
   // GST/Sales-tax registered: when true, input tax on bills is posted to a

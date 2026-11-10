@@ -18,7 +18,12 @@ export class Vendor extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 200, name: 'company_name' })
   companyName!: string;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'contact_person' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'contact_person',
+  })
   contactPerson!: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
@@ -30,7 +35,12 @@ export class Vendor extends BaseCompanyEntity {
   @Column({ type: 'jsonb', nullable: true })
   address!: Address | null;
 
-  @Column({ type: 'varchar', length: 32, default: 'net30', name: 'payment_terms' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'net30',
+    name: 'payment_terms',
+  })
   paymentTerms!: PaymentTerms;
 
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'tax_id' })
@@ -50,7 +60,12 @@ export class Vendor extends BaseCompanyEntity {
 
   // ── FinMatrix Connect (1790500000000-MessagingFoundation) ──
   /** The number WhatsApp messages go to, E.164 ('+923001234567'). */
-  @Column({ type: 'varchar', length: 16, nullable: true, name: 'whatsapp_e164' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'whatsapp_e164',
+  })
   whatsappE164!: string | null;
 
   /** When someone recorded this contact's consent to WhatsApp messages. */
@@ -81,6 +96,11 @@ export class Vendor extends BaseCompanyEntity {
   })
   whatsappUserId?: string | null;
 
-  @Column({ type: 'varchar', length: 2, nullable: true, name: 'preferred_language' })
+  @Column({
+    type: 'varchar',
+    length: 2,
+    nullable: true,
+    name: 'preferred_language',
+  })
   preferredLanguage!: 'en' | 'ur' | null;
 }

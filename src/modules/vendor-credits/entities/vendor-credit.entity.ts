@@ -11,7 +11,12 @@ export class VendorCredit extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'vendor_id' })
   vendorId!: string;
 
-  @Column({ type: 'varchar', length: 32, name: 'vendor_credit_number', nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    name: 'vendor_credit_number',
+    nullable: true,
+  })
   vendorCreditNumber!: string | null;
 
   @Column({ type: 'date' })
@@ -29,13 +34,25 @@ export class VendorCredit extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   subtotal!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   total!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'amount_applied' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'amount_applied',
+  })
   amountApplied!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })

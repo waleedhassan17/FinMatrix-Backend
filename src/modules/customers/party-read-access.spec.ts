@@ -1,4 +1,8 @@
-import { ExecutionContext, ForbiddenException, RequestMethod } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  RequestMethod,
+} from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -21,11 +25,24 @@ type Ctor = { prototype: Record<string, unknown>; name: string };
 const routesOf = (controller: Ctor) =>
   Object.getOwnPropertyNames(controller.prototype)
     .filter((name) => name !== 'constructor')
-    .map((name) => ({ name, handler: controller.prototype[name] as (...args: unknown[]) => unknown }))
-    .filter(({ handler }) => Reflect.getMetadata(PATH_METADATA, handler) !== undefined)
-    .map((r) => ({ ...r, method: Reflect.getMetadata(METHOD_METADATA, r.handler) as RequestMethod }));
+    .map((name) => ({
+      name,
+      handler: controller.prototype[name] as (...args: unknown[]) => unknown,
+    }))
+    .filter(
+      ({ handler }) =>
+        Reflect.getMetadata(PATH_METADATA, handler) !== undefined,
+    )
+    .map((r) => ({
+      ...r,
+      method: Reflect.getMetadata(METHOD_METADATA, r.handler) as RequestMethod,
+    }));
 
-const allowed = (controller: Ctor, handler: (...args: unknown[]) => unknown, role: string): boolean => {
+const allowed = (
+  controller: Ctor,
+  handler: (...args: unknown[]) => unknown,
+  role: string,
+): boolean => {
   const guard = new RolesGuard(new Reflector());
   const context = {
     getHandler: () => handler,
@@ -52,21 +69,32 @@ describe.each([
     expect(reads.length).toBeGreaterThanOrEqual(5);
   });
 
-  it.each(reads.map((r) => [r.name, r] as const))('refuses a delivery rider: %s', (_name, route) => {
-    expect(allowed(controller, route.handler, 'delivery')).toBe(false);
-  });
+  it.each(reads.map((r) => [r.name, r] as const))(
+    'refuses a delivery rider: %s',
+    (_name, route) => {
+      expect(allowed(controller, route.handler, 'delivery')).toBe(false);
+    },
+  );
 
-  it.each(reads.map((r) => [r.name, r] as const))('lets owners and staff read: %s', (_name, route) => {
-    expect(allowed(controller, route.handler, 'admin')).toBe(true);
-    expect(allowed(controller, route.handler, 'staff')).toBe(true);
-  });
+  it.each(reads.map((r) => [r.name, r] as const))(
+    'lets owners and staff read: %s',
+    (_name, route) => {
+      expect(allowed(controller, route.handler, 'admin')).toBe(true);
+      expect(allowed(controller, route.handler, 'staff')).toBe(true);
+    },
+  );
 
   it('keeps the narrower rules on writes: staff create and edit, only the owner deletes or deactivates', () => {
     for (const route of routes.filter((r) => r.method !== RequestMethod.GET)) {
       expect(allowed(controller, route.handler, 'delivery')).toBe(false);
       expect(allowed(controller, route.handler, 'admin')).toBe(true);
-      const staffMay = route.method === RequestMethod.POST || (route.method === RequestMethod.PATCH && !/toggle/i.test(route.name));
-      expect({ route: route.name, staff: allowed(controller, route.handler, 'staff') }).toEqual({
+      const staffMay =
+        route.method === RequestMethod.POST ||
+        (route.method === RequestMethod.PATCH && !/toggle/i.test(route.name));
+      expect({
+        route: route.name,
+        staff: allowed(controller, route.handler, 'staff'),
+      }).toEqual({
         route: route.name,
         staff: staffMay,
       });

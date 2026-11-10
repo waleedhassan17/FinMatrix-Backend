@@ -38,7 +38,10 @@ describe('rider username', () => {
     it('prefixes with the company code so two companies cannot collide', () => {
       // users.username is globally unique, so this is what keeps one company's
       // "imran" out of another's way.
-      const u = buildRiderUsernameBase({ inviteCode: 'FM2024', displayName: 'Imran Khan' });
+      const u = buildRiderUsernameBase({
+        inviteCode: 'FM2024',
+        displayName: 'Imran Khan',
+      });
       expect(u).toBe('fm2024.imran');
       ok(u);
     });
@@ -46,17 +49,25 @@ describe('rider username', () => {
     it('lowercases the invite code', () => {
       // The admin app sends an uppercase code; the rule is lowercase-only.
       ok(buildRiderUsernameBase({ inviteCode: 'ABCD99', displayName: 'Ali' }));
-      expect(buildRiderUsernameBase({ inviteCode: 'ABCD99', displayName: 'Ali' }))
-        .toBe('abcd99.ali');
+      expect(
+        buildRiderUsernameBase({ inviteCode: 'ABCD99', displayName: 'Ali' }),
+      ).toBe('abcd99.ali');
     });
 
     it('takes the first token of a multi-part name', () => {
-      expect(buildRiderUsernameBase({ inviteCode: 'fm', displayName: 'Saim Raza Khan' }))
-        .toBe('fm.saim');
+      expect(
+        buildRiderUsernameBase({
+          inviteCode: 'fm',
+          displayName: 'Saim Raza Khan',
+        }),
+      ).toBe('fm.saim');
     });
 
     it('falls back to the email local part when there is no name', () => {
-      const u = buildRiderUsernameBase({ inviteCode: 'fm', email: 'haseeb@metromatrix.com' });
+      const u = buildRiderUsernameBase({
+        inviteCode: 'fm',
+        email: 'haseeb@metromatrix.com',
+      });
       expect(u).toBe('fm.haseeb');
       ok(u);
     });
@@ -70,7 +81,10 @@ describe('rider username', () => {
     it('still produces a legal name when the name is entirely unrepresentable', () => {
       // A Urdu-only display name slugs to '', which must not yield "fm." —
       // a trailing dot passes the character class but reads as a bug.
-      const u = buildRiderUsernameBase({ inviteCode: 'fm', displayName: 'محمد' });
+      const u = buildRiderUsernameBase({
+        inviteCode: 'fm',
+        displayName: 'محمد',
+      });
       ok(u);
       expect(u.endsWith('.')).toBe(false);
     });
@@ -96,19 +110,25 @@ describe('rider username', () => {
 
   describe('allocateRiderUsername', () => {
     /** A fake EntityManager whose `users` table holds `taken`. */
-    const em = (taken: string[]) => ({
-      query: jest.fn(async (_sql: string, params: unknown[]) =>
-        taken.includes(String(params[0])) ? [{ '?column?': 1 }] : [],
-      ),
-    }) as never;
+    const em = (taken: string[]) =>
+      ({
+        query: jest.fn(async (_sql: string, params: unknown[]) =>
+          taken.includes(String(params[0])) ? [{ '?column?': 1 }] : [],
+        ),
+      }) as never;
 
     it('returns the base when it is free', async () => {
-      await expect(allocateRiderUsername(em([]), 'fm.imran')).resolves.toBe('fm.imran');
+      await expect(allocateRiderUsername(em([]), 'fm.imran')).resolves.toBe(
+        'fm.imran',
+      );
     });
 
     it('walks past the names already taken', async () => {
       await expect(
-        allocateRiderUsername(em(['fm.imran', 'fm.imran2', 'fm.imran3']), 'fm.imran'),
+        allocateRiderUsername(
+          em(['fm.imran', 'fm.imran2', 'fm.imran3']),
+          'fm.imran',
+        ),
       ).resolves.toBe('fm.imran4');
     });
 

@@ -1,5 +1,15 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -7,12 +17,22 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { SalesOrdersService } from './sales-orders.service';
 import {
-  ConvertSalesOrderDto, CreateSalesOrderDto, FulfillSalesOrderDto, ListSalesOrdersQueryDto, UpdateSalesOrderDto,
+  ConvertSalesOrderDto,
+  CreateSalesOrderDto,
+  FulfillSalesOrderDto,
+  ListSalesOrdersQueryDto,
+  UpdateSalesOrderDto,
 } from './dto/sales-order.dto';
-import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import {
+  ParsePaginationPipe,
+  PaginationParams,
+} from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { creditOverrideFrom } from '../../common/validation/credit-override.dto';
@@ -41,7 +61,10 @@ export class SalesOrdersController {
   }
 
   @Get(':orderId')
-  get(@CurrentCompany() companyId: string, @Param('orderId', ParseUUIDPipe) id: string) {
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) id: string,
+  ) {
     return this.salesOrders.getDetail(companyId, id);
   }
 
@@ -68,14 +91,22 @@ export class SalesOrdersController {
   @Post(':orderId/fulfill')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Record fulfillment quantities; recomputes open/partial/fulfilled.' })
+  @ApiOperation({
+    summary:
+      'Record fulfillment quantities; recomputes open/partial/fulfilled.',
+  })
   fulfill(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', ParseUUIDPipe) id: string,
     @Body() dto: FulfillSalesOrderDto,
   ) {
-    return this.salesOrders.fulfill(companyId, id, dto, creditOverrideFrom(dto.creditOverride, user));
+    return this.salesOrders.fulfill(
+      companyId,
+      id,
+      dto,
+      creditOverrideFrom(dto.creditOverride, user),
+    );
   }
 
   @Post(':orderId/convert-to-invoice')
@@ -89,11 +120,21 @@ export class SalesOrdersController {
     @Body() dto: ConvertSalesOrderDto,
   ) {
     if (user.role === 'admin') {
-      return this.salesOrders.convertToInvoice(companyId, user.id, id, dto, creditOverrideFrom(dto.creditOverride, user));
+      return this.salesOrders.convertToInvoice(
+        companyId,
+        user.id,
+        id,
+        dto,
+        creditOverrideFrom(dto.creditOverride, user),
+      );
     }
     // Converting posts an invoice, and staff invoices are signed off by the
     // owner (invoices.controller). This route used to let staff skip that.
-    const { orderNumber, payload } = await this.salesOrders.conversionPayload(companyId, id, dto);
+    const { orderNumber, payload } = await this.salesOrders.conversionPayload(
+      companyId,
+      id,
+      dto,
+    );
     return this.approvals.createRequest(
       'invoice',
       payload as unknown as Record<string, unknown>,
@@ -106,13 +147,19 @@ export class SalesOrdersController {
   @Post(':orderId/cancel')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  cancel(@CurrentCompany() companyId: string, @Param('orderId', ParseUUIDPipe) id: string) {
+  cancel(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) id: string,
+  ) {
     return this.salesOrders.cancel(companyId, id);
   }
 
   @Delete(':orderId')
   @Roles('admin')
-  remove(@CurrentCompany() companyId: string, @Param('orderId', ParseUUIDPipe) id: string) {
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) id: string,
+  ) {
     return this.salesOrders.delete(companyId, id);
   }
 }

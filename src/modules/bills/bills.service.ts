@@ -37,7 +37,12 @@ import {
 import { PostingService } from '../journal-entries/posting.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_AP, ACCT_COGS, ACCT_GRNI, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
+import {
+  ACCT_AP,
+  ACCT_COGS,
+  ACCT_GRNI,
+  ACCT_INPUT_TAX,
+} from '../accounts/accounts.constants';
 import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
 import { PurchaseOrderLine } from '../purchase-orders/entities/purchase-order-line.entity';
 import { BillStatus } from '../../types';
@@ -98,7 +103,12 @@ export interface BillSettlement {
   credits: SettledVendorCredit[];
   creditTotal: string;
   cashTotal: string;
-  bills: Array<{ id: string; billNumber: string | null; balance: string; status: string }>;
+  bills: Array<{
+    id: string;
+    billNumber: string | null;
+    balance: string;
+    status: string;
+  }>;
 }
 
 @Injectable()
@@ -131,7 +141,9 @@ export class BillsService {
    * means a bill becomes overdue the day it actually does, with no scheduler
    * and no stored state to drift.
    */
-  private withDerivedStatus<T extends { status: string; dueDate: string; balance: string }>(bill: T): T {
+  private withDerivedStatus<
+    T extends { status: string; dueDate: string; balance: string },
+  >(bill: T): T {
     const status = derivedStatus(bill, BILL_OPEN_STATUSES, businessToday());
     return status === bill.status ? bill : { ...bill, status };
   }
@@ -168,16 +180,26 @@ export class BillsService {
     const vendorList = vendorIds.length
       ? await this.vendorRepo.findByIds(vendorIds)
       : [];
-    const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
+    const vendorNameMap = Object.fromEntries(
+      vendorList.map((v) => [v.id, v.companyName]),
+    );
 
-    const summary = await documentListSummary(filtered(), 'b', BILL_OPEN_STATUSES, today);
+    const summary = await documentListSummary(
+      filtered(),
+      'b',
+      BILL_OPEN_STATUSES,
+      today,
+    );
 
     // `success` makes ResponseEnvelopeInterceptor pass this through whole —
     // see InvoicesService.list. `data` stays the same array.
     return {
       success: true as const,
       data: data.map((b) =>
-        this.withDerivedStatus({ ...b, vendorName: vendorNameMap[b.vendorId] ?? '' }),
+        this.withDerivedStatus({
+          ...b,
+          vendorName: vendorNameMap[b.vendorId] ?? '',
+        }),
       ),
       summary,
       pagination: {
@@ -205,7 +227,9 @@ export class BillsService {
 
     // Enrich lines with the account name/number so the app's bill detail
     // and edit screens can display which account each line posts to.
-    const accountIds = [...new Set(b.lines.map((l) => l.accountId).filter(Boolean))];
+    const accountIds = [
+      ...new Set(b.lines.map((l) => l.accountId).filter(Boolean)),
+    ];
     if (accountIds.length) {
       const accounts = await this.dataSource
         .getRepository(Account)
@@ -362,19 +386,26 @@ export class BillsService {
     // Auto-generate billNumber if caller omits it (mirrors invoice behaviour).
     let billNumber = dto.billNumber;
     if (!billNumber) {
-      billNumber = await nextDocumentNumber(manager, companyId, 'BILL', yearOf(dto.billDate));
+      billNumber = await nextDocumentNumber(
+        manager,
+        companyId,
+        'BILL',
+        yearOf(dto.billDate),
+      );
     }
 
     // Resolve missing accountId on lines → fallback to COGS account.
-    const cogsAccount = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
+    const cogsAccount = await this.accounts
+      .getByNumberOrFail(companyId, ACCT_COGS, manager)
+      .catch(() => null);
     const resolvedLines = dto.lines.map((l) => ({
       ...l,
       accountId: l.accountId ?? cogsAccount?.id ?? '',
-      amount: l.amount ?? (
-        l.quantity && l.unitPrice
+      amount:
+        l.amount ??
+        (l.quantity && l.unitPrice
           ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
-          : '0'
-      ),
+          : '0'),
     }));
 
     await this.assertLineAccountsValid(
@@ -431,7 +462,6 @@ export class BillsService {
     return bill;
   }
 
-
   async update(
     companyId: string,
     id: string,
@@ -460,15 +490,17 @@ export class BillsService {
       if (dto.memo !== undefined) bill.memo = dto.memo;
 
       if (dto.lines) {
-        const cogsAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager).catch(() => null);
+        const cogsAcct = await this.accounts
+          .getByNumberOrFail(companyId, ACCT_COGS, manager)
+          .catch(() => null);
         const resolvedUpdateLines = dto.lines.map((l) => ({
           ...l,
           accountId: l.accountId ?? cogsAcct?.id ?? '',
-          amount: l.amount ?? (
-            l.quantity && l.unitPrice
+          amount:
+            l.amount ??
+            (l.quantity && l.unitPrice
               ? toDecimal(l.quantity).times(toDecimal(l.unitPrice)).toFixed(4)
-              : '0'
-          ),
+              : '0'),
         }));
         await this.assertLineAccountsValid(
           manager,
@@ -664,7 +696,11 @@ export class BillsService {
     await manager.save(vendor);
 
     // Journal entry: DR AP, CR Bank
-    const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
+    const ap = await this.accounts.getByNumberOrFail(
+      companyId,
+      ACCT_AP,
+      manager,
+    );
     const entry = await this.posting.createEntry(manager, {
       companyId,
       createdBy: userId,
@@ -690,7 +726,16 @@ export class BillsService {
     });
     payment.journalEntryId = entry.id;
     await manager.save(payment);
-    await this.messaging.enqueue(manager, remittanceMessage({ companyId, vendorId: vendor.id, userId, payment, paymentDate: dto.paymentDate }));
+    await this.messaging.enqueue(
+      manager,
+      remittanceMessage({
+        companyId,
+        vendorId: vendor.id,
+        userId,
+        payment,
+        paymentDate: dto.paymentDate,
+      }),
+    );
 
     return payment;
   }
@@ -719,7 +764,10 @@ export class BillsService {
       lock: { mode: 'pessimistic_write' },
     });
     if (!vc) {
-      throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
+      throw new NotFoundException({
+        code: 'VENDOR_CREDIT_NOT_FOUND',
+        message: 'Vendor credit not found',
+      });
     }
     if (expectedVendorId && vc.vendorId !== expectedVendorId) {
       throw new BadRequestException({
@@ -728,11 +776,17 @@ export class BillsService {
       });
     }
     if (vc.status === 'void' || vc.status === 'closed') {
-      throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Vendor credit is ${vc.status}` });
+      throw new BadRequestException({
+        code: 'CREDIT_UNAVAILABLE',
+        message: `Vendor credit is ${vc.status}`,
+      });
     }
     const amt = toDecimal(amount);
     if (!isPositive(amt)) {
-      throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount applied must be positive' });
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The amount applied must be positive',
+      });
     }
     if (amt.greaterThan(toDecimal(vc.balance).plus(MONEY_TOLERANCE))) {
       throw new BadRequestException({
@@ -741,9 +795,14 @@ export class BillsService {
       });
     }
     // A vendor's credit can only settle that vendor's bill.
-    const target = await manager.findOne(Bill, { where: { id: billId, companyId } });
+    const target = await manager.findOne(Bill, {
+      where: { id: billId, companyId },
+    });
     if (!target) {
-      throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+      throw new NotFoundException({
+        code: 'BILL_NOT_FOUND',
+        message: 'Bill not found',
+      });
     }
     if (target.vendorId !== vc.vendorId) {
       throw new BadRequestException({
@@ -751,10 +810,19 @@ export class BillsService {
         message: 'That bill belongs to a different vendor.',
       });
     }
-    const bill = await this.applyCredit(manager, companyId, billId, amt.toFixed(4));
+    const bill = await this.applyCredit(
+      manager,
+      companyId,
+      billId,
+      amt.toFixed(4),
+    );
     vc.amountApplied = addMoney(vc.amountApplied, amt).toFixed(4);
-    vc.balance = toDecimal(vc.total).minus(toDecimal(vc.amountApplied)).toFixed(4);
-    vc.status = toDecimal(vc.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
+    vc.balance = toDecimal(vc.total)
+      .minus(toDecimal(vc.amountApplied))
+      .toFixed(4);
+    vc.status = toDecimal(vc.balance).lessThanOrEqualTo(0)
+      ? 'closed'
+      : 'applied';
     await manager.save(vc);
     return { credit: vc, bill };
   }
@@ -769,14 +837,26 @@ export class BillsService {
    * the cash leg as separate requests used to leave credits applied behind a
    * failed payment, and a retry spent them a second time.
    */
-  async settle(companyId: string, userId: string, dto: SettleBillsDto): Promise<BillSettlement> {
+  async settle(
+    companyId: string,
+    userId: string,
+    dto: SettleBillsDto,
+  ): Promise<BillSettlement> {
     return this.dataSource.transaction(async (manager) => {
-      const vendor = await manager.findOne(Vendor, { where: { id: dto.vendorId, companyId } });
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: dto.vendorId, companyId },
+      });
       if (!vendor) {
-        throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+        throw new NotFoundException({
+          code: 'VENDOR_NOT_FOUND',
+          message: 'Vendor not found',
+        });
       }
       const credits = Array.isArray(dto.credits) ? dto.credits : [];
-      const cashApps = dto.cash && Array.isArray(dto.cash.applications) ? dto.cash.applications : [];
+      const cashApps =
+        dto.cash && Array.isArray(dto.cash.applications)
+          ? dto.cash.applications
+          : [];
       if (credits.length === 0 && cashApps.length === 0) {
         throw new BadRequestException({
           code: 'NOTHING_TO_SETTLE',
@@ -787,7 +867,12 @@ export class BillsService {
       const used: SettledVendorCredit[] = [];
       for (const c of credits) {
         const { credit, bill } = await this.applyVendorCredit(
-          manager, companyId, c.vendorCreditId, c.billId, c.amount, vendor.id,
+          manager,
+          companyId,
+          c.vendorCreditId,
+          c.billId,
+          c.amount,
+          vendor.id,
         );
         used.push({
           vendorCreditId: credit.id,
@@ -810,15 +895,43 @@ export class BillsService {
           })
         : null;
 
-      const billIds = [...new Set([...credits.map((c) => c.billId), ...cashApps.map((a) => a.billId)])];
-      const bills = await manager.find(Bill, { where: { id: In(billIds), companyId } });
-      await this.messaging.enqueue(manager, remittanceMessage({ companyId, vendorId: vendor.id, userId, payment, credits: used, settlementId: randomUUID(), paymentDate: dto.paymentDate, merge: true }));
+      const billIds = [
+        ...new Set([
+          ...credits.map((c) => c.billId),
+          ...cashApps.map((a) => a.billId),
+        ]),
+      ];
+      const bills = await manager.find(Bill, {
+        where: { id: In(billIds), companyId },
+      });
+      await this.messaging.enqueue(
+        manager,
+        remittanceMessage({
+          companyId,
+          vendorId: vendor.id,
+          userId,
+          payment,
+          credits: used,
+          settlementId: randomUUID(),
+          paymentDate: dto.paymentDate,
+          merge: true,
+        }),
+      );
       return {
         payment,
         credits: used,
-        creditTotal: used.reduce((t, c) => t.plus(c.amount), new Decimal(0)).toFixed(4),
-        cashTotal: payment ? toDecimal(payment.totalAmount).toFixed(4) : '0.0000',
-        bills: bills.map((b) => ({ id: b.id, billNumber: b.billNumber, balance: b.balance, status: b.status })),
+        creditTotal: used
+          .reduce((t, c) => t.plus(c.amount), new Decimal(0))
+          .toFixed(4),
+        cashTotal: payment
+          ? toDecimal(payment.totalAmount).toFixed(4)
+          : '0.0000',
+        bills: bills.map((b) => ({
+          id: b.id,
+          billNumber: b.billNumber,
+          balance: b.balance,
+          status: b.status,
+        })),
       };
     });
   }
@@ -904,7 +1017,10 @@ export class BillsService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!bill) {
-        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+        throw new NotFoundException({
+          code: 'BILL_NOT_FOUND',
+          message: 'Bill not found',
+        });
       }
       bill.lines = await manager.find(BillLineItem, {
         where: { billId: bill.id },
@@ -916,9 +1032,14 @@ export class BillsService {
         });
       }
 
-      const vendor = await manager.findOne(Vendor, { where: { id: bill.vendorId, companyId } });
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: bill.vendorId, companyId },
+      });
       if (!vendor) {
-        throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+        throw new NotFoundException({
+          code: 'VENDOR_NOT_FOUND',
+          message: 'Vendor not found',
+        });
       }
 
       bill.status = 'open';
@@ -937,12 +1058,16 @@ export class BillsService {
         relations: { lines: true },
       });
       if (!bill) {
-        throw new NotFoundException({ code: 'BILL_NOT_FOUND', message: 'Bill not found' });
+        throw new NotFoundException({
+          code: 'BILL_NOT_FOUND',
+          message: 'Bill not found',
+        });
       }
       if (isPositive(bill.amountPaid)) {
         throw new BadRequestException({
           code: 'BILL_HAS_PAYMENTS',
-          message: 'Cannot delete a bill that has payments. Remove the payments first.',
+          message:
+            'Cannot delete a bill that has payments. Remove the payments first.',
         });
       }
 
@@ -971,7 +1096,10 @@ export class BillsService {
           });
         }
         // Bill creation increased the vendor balance by its total; undo that.
-        const vendor = await manager.findOneBy(Vendor, { id: bill.vendorId, companyId });
+        const vendor = await manager.findOneBy(Vendor, {
+          id: bill.vendorId,
+          companyId,
+        });
         if (vendor) {
           vendor.balance = subtractMoney(vendor.balance, bill.total).toFixed(4);
           await manager.save(vendor);
@@ -998,10 +1126,15 @@ export class BillsService {
     const po = await manager
       .createQueryBuilder(PurchaseOrder, 'o')
       .setLock('pessimistic_write')
-      .where('o.id = :id AND o.companyId = :companyId', { id: bill.purchaseOrderId, companyId })
+      .where('o.id = :id AND o.companyId = :companyId', {
+        id: bill.purchaseOrderId,
+        companyId,
+      })
       .getOne();
     if (!po) return;
-    const poLines = await manager.find(PurchaseOrderLine, { where: { orderId: po.id } });
+    const poLines = await manager.find(PurchaseOrderLine, {
+      where: { orderId: po.id },
+    });
     const byId = new Map(poLines.map((l) => [l.id, l]));
     for (const bl of bill.lines ?? []) {
       if (!bl.purchaseOrderLineId) continue;
@@ -1012,22 +1145,39 @@ export class BillsService {
         0,
       ).toFixed(4);
       if (bl.grniAmount !== null && bl.grniAmount !== undefined) {
-        line.grniCleared = toDecimal(line.grniCleared).minus(toDecimal(bl.grniAmount)).toFixed(4);
+        line.grniCleared = toDecimal(line.grniCleared)
+          .minus(toDecimal(bl.grniAmount))
+          .toFixed(4);
       }
       await manager.save(line);
     }
     if (po.status === 'closed') {
-      const all = poLines.every((l) => toDecimal(l.receivedQty).greaterThanOrEqualTo(toDecimal(l.orderedQty)));
+      const all = poLines.every((l) =>
+        toDecimal(l.receivedQty).greaterThanOrEqualTo(toDecimal(l.orderedQty)),
+      );
       const any = poLines.some((l) => toDecimal(l.receivedQty).greaterThan(0));
       po.status = all ? 'received' : any ? 'partial' : 'sent';
       await manager.save(po);
     }
   }
 
-  async listPayments(companyId: string, billId: string | undefined, page: number, limit: number) {
-    const qb = this.paymentRepo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
-    if (billId) qb.andWhere('p.id IN (SELECT bill_payment_id FROM bill_payment_applications WHERE bill_id = :bid)', { bid: billId });
-    qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC').addOrderBy('p.id', 'DESC');
+  async listPayments(
+    companyId: string,
+    billId: string | undefined,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.companyId = :cid', { cid: companyId });
+    if (billId)
+      qb.andWhere(
+        'p.id IN (SELECT bill_payment_id FROM bill_payment_applications WHERE bill_id = :bid)',
+        { bid: billId },
+      );
+    qb.orderBy('p.paymentDate', 'DESC')
+      .addOrderBy('p.createdAt', 'DESC')
+      .addOrderBy('p.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
     return pagedResponse(data, { page, limit, total });
@@ -1046,7 +1196,12 @@ export class BillsService {
   async createPaymentProof(
     companyId: string,
     userId: string,
-    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+    file: {
+      buffer: Buffer;
+      mimetype: string;
+      originalname: string;
+      size: number;
+    },
   ) {
     const proof = await this.proofRepo.save(
       this.proofRepo.create({
@@ -1162,7 +1317,11 @@ export class BillsService {
     bill: Bill,
     userId: string,
   ): Promise<void> {
-    const ap = await this.accounts.getByNumberOrFail(bill.companyId, ACCT_AP, manager);
+    const ap = await this.accounts.getByNumberOrFail(
+      bill.companyId,
+      ACCT_AP,
+      manager,
+    );
 
     // Input-tax treatment (FinMatrix.md §21). For a GST/sales-tax-registered
     // business, input tax on purchases is RECOVERABLE — it must sit in a
@@ -1217,7 +1376,11 @@ export class BillsService {
       }
     }
     if (!variance.isZero()) {
-      const cogs = await this.accounts.getByNumberOrFail(bill.companyId, ACCT_COGS, manager);
+      const cogs = await this.accounts.getByNumberOrFail(
+        bill.companyId,
+        ACCT_COGS,
+        manager,
+      );
       jLines.push({
         accountId: cogs.id,
         description: `Landed cost variance — Bill ${bill.billNumber}`,

@@ -109,9 +109,14 @@ export class InvoicesController {
   ) {
     const { creditOverride, ...invoice } = dto;
     if (user.role === 'admin') {
-      return this.invoices.create(companyId, user.id, invoice as CreateInvoiceDto, {
-        credit: { override: creditOverrideFrom(creditOverride, user) },
-      });
+      return this.invoices.create(
+        companyId,
+        user.id,
+        invoice as CreateInvoiceDto,
+        {
+          credit: { override: creditOverrideFrom(creditOverride, user) },
+        },
+      );
     }
     // Refuse unclassified lines now, not when the owner tries to approve.
     await this.invoices.assertLinesValid(companyId, dto.lines);

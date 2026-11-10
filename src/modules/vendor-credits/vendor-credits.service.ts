@@ -1,12 +1,22 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
-import { VendorCredit, VendorCreditStatus } from './entities/vendor-credit.entity';
+import {
+  VendorCredit,
+  VendorCreditStatus,
+} from './entities/vendor-credit.entity';
 import { VendorCreditLine } from './entities/vendor-credit-line.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import {
-  ApplyVendorCreditDto, CreateVendorCreditDto, ListVendorCreditsQueryDto, VendorCreditLineDto,
+  ApplyVendorCreditDto,
+  CreateVendorCreditDto,
+  ListVendorCreditsQueryDto,
+  VendorCreditLineDto,
 } from './dto/vendor-credit.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { addMoney, toDecimal } from '../../common/utils/money.util';
@@ -15,12 +25,20 @@ import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
-import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import {
+  ACCT_AP,
+  ACCT_COGS,
+  ACCT_INPUT_TAX,
+  ACCT_INVENTORY,
+} from '../accounts/accounts.constants';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { businessToday } from '../../common/utils/business-date.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class VendorCreditsService {
@@ -29,14 +47,21 @@ export class VendorCreditsService {
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
     private readonly bills: BillsService,
-    @InjectRepository(VendorCredit) private readonly repo: Repository<VendorCredit>,
+    @InjectRepository(VendorCredit)
+    private readonly repo: Repository<VendorCredit>,
     @InjectRepository(Vendor) private readonly vendorRepo: Repository<Vendor>,
   ) {}
 
-  async list(companyId: string, query: ListVendorCreditsQueryDto, pagination: PaginationParams) {
+  async list(
+    companyId: string,
+    query: ListVendorCreditsQueryDto,
+    pagination: PaginationParams,
+  ) {
     // Everything but the status tab: the summary counts every tab of these.
     const filtered = () => {
-      const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
+      const qb = this.repo
+        .createQueryBuilder('c')
+        .where('c.companyId = :companyId', { companyId });
       if (query.vendorId) qb.andWhere('c.vendorId = :v', { v: query.vendorId });
       applyTextSearch(qb, query.search, companyId, {
         columns: ['c.vendorCreditNumber'],
@@ -46,16 +71,24 @@ export class VendorCreditsService {
     };
     const qb = filtered();
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
-    qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
+    qb.orderBy('c.date', 'DESC')
+      .addOrderBy('c.createdAt', 'DESC')
+      .take(pagination.limit)
+      .skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
     const ids = [...new Set(data.map((c) => c.vendorId))];
     const vendors = ids.length ? await this.vendorRepo.findByIds(ids) : [];
-    const nameMap = Object.fromEntries(vendors.map((v) => [v.id, v.companyName]));
+    const nameMap = Object.fromEntries(
+      vendors.map((v) => [v.id, v.companyName]),
+    );
 
     // Over everything the search matches: counts per tab, and what the open
     // and part-used credits still hold.
-    const byStatus = await statusSummary(filtered(), 'c', { total: 'c.total', balance: 'c.balance' });
+    const byStatus = await statusSummary(filtered(), 'c', {
+      total: 'c.total',
+      balance: 'c.balance',
+    });
     const openBalance = ['open', 'applied']
       .reduce((sum, s) => sum + Number(byStatus.byStatus[s]?.balance ?? 0), 0)
       .toFixed(4);
@@ -68,19 +101,44 @@ export class VendorCreditsService {
   }
 
   async getById(companyId: string, id: string): Promise<VendorCredit> {
-    const vc = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
-    if (!vc) throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
+    const vc = await this.repo.findOne({
+      where: { id, companyId },
+      relations: { lines: true },
+    });
+    if (!vc)
+      throw new NotFoundException({
+        code: 'VENDOR_CREDIT_NOT_FOUND',
+        message: 'Vendor credit not found',
+      });
     vc.lines.sort((a, b) => a.lineOrder - b.lineOrder);
     return vc;
   }
 
-  async create(companyId: string, userId: string, dto: CreateVendorCreditDto): Promise<VendorCredit> {
+  async create(
+    companyId: string,
+    userId: string,
+    dto: CreateVendorCreditDto,
+  ): Promise<VendorCredit> {
     return this.dataSource.transaction(async (manager) => {
-      const vendor = await manager.findOne(Vendor, { where: { id: dto.vendorId, companyId } });
-      if (!vendor) throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: dto.vendorId, companyId },
+      });
+      if (!vendor)
+        throw new NotFoundException({
+          code: 'VENDOR_NOT_FOUND',
+          message: 'Vendor not found',
+        });
 
-      const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
-      const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
+      const cogs = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_COGS,
+        manager,
+      );
+      const inventoryAcct = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_INVENTORY,
+        manager,
+      );
 
       // A line may name an inventory item OR an expense account, never both by
       // accident. Pointing a non-stock line at 1200 would credit the control
@@ -99,33 +157,51 @@ export class VendorCreditsService {
         if (l.itemId && !toDecimal(l.quantity ?? '0').greaterThan(0)) {
           throw new BadRequestException({
             code: 'QUANTITY_REQUIRED',
-            message: 'A returned item needs the quantity going back to the supplier.',
+            message:
+              'A returned item needs the quantity going back to the supplier.',
           });
         }
       }
 
       const totals = this.computeTotals(dto.lines);
-      const number = await nextDocumentNumber(manager, companyId, 'VC', yearOf(dto.date));
+      const number = await nextDocumentNumber(
+        manager,
+        companyId,
+        'VC',
+        yearOf(dto.date),
+      );
 
       const vc = manager.create(VendorCredit, {
-        companyId, vendorId: dto.vendorId, vendorCreditNumber: number, date: dto.date,
-        originalBillId: dto.originalBillId ?? null, reason: dto.reason ?? null,
-        subtotal: totals.subtotal, taxAmount: totals.taxAmount, total: totals.total,
-        amountApplied: '0', balance: totals.total,
-        status: 'open' as VendorCreditStatus, journalEntryId: null, createdBy: userId,
+        companyId,
+        vendorId: dto.vendorId,
+        vendorCreditNumber: number,
+        date: dto.date,
+        originalBillId: dto.originalBillId ?? null,
+        reason: dto.reason ?? null,
+        subtotal: totals.subtotal,
+        taxAmount: totals.taxAmount,
+        total: totals.total,
+        amountApplied: '0',
+        balance: totals.total,
+        status: 'open' as VendorCreditStatus,
+        journalEntryId: null,
+        createdBy: userId,
       });
       await manager.save(vc);
-      vc.lines = dto.lines.map((l, i) => manager.create(VendorCreditLine, {
-        vendorCreditId: vc.id,
-        // Goods going back to the supplier leave Inventory; anything else is
-        // a money-only credit against its expense account.
-        accountId: l.itemId ? inventoryAcct.id : l.accountId ?? cogs.id,
-        itemId: l.itemId ?? null,
-        quantity: l.itemId ? toDecimal(l.quantity ?? '0').toFixed(4) : null,
-        description: l.description,
-        amount: toDecimal(l.amount).toFixed(4),
-        taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineOrder: i,
-      }));
+      vc.lines = dto.lines.map((l, i) =>
+        manager.create(VendorCreditLine, {
+          vendorCreditId: vc.id,
+          // Goods going back to the supplier leave Inventory; anything else is
+          // a money-only credit against its expense account.
+          accountId: l.itemId ? inventoryAcct.id : (l.accountId ?? cogs.id),
+          itemId: l.itemId ?? null,
+          quantity: l.itemId ? toDecimal(l.quantity ?? '0').toFixed(4) : null,
+          description: l.description,
+          amount: toDecimal(l.amount).toFixed(4),
+          taxRate: toDecimal(l.taxRate ?? '0').toFixed(4),
+          lineOrder: i,
+        }),
+      );
       await manager.save(vc.lines);
 
       // Relieve the stock in the same transaction as the journal entry, so the
@@ -136,77 +212,163 @@ export class VendorCreditsService {
       // the gross the vendor no longer owes us; CR the expense/inventory
       // account(s) for the net; CR Sales Tax Recoverable (1300) for the input
       // tax originally claimed on the bill, which is no longer recoverable.
-      const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
+      const ap = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_AP,
+        manager,
+      );
       const jeLines = [
-        { accountId: ap.id, description: `Vendor credit ${number}`, debit: totals.total, credit: '0', lineOrder: 0 },
-        ...vc.lines.map((l, i) => ({ accountId: l.accountId!, description: l.description, debit: '0', credit: l.amount, lineOrder: i + 1 })),
+        {
+          accountId: ap.id,
+          description: `Vendor credit ${number}`,
+          debit: totals.total,
+          credit: '0',
+          lineOrder: 0,
+        },
+        ...vc.lines.map((l, i) => ({
+          accountId: l.accountId!,
+          description: l.description,
+          debit: '0',
+          credit: l.amount,
+          lineOrder: i + 1,
+        })),
       ];
       if (toDecimal(totals.taxAmount).greaterThan(0)) {
-        const inputTax = await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_INPUT_TAX);
+        const inputTax = await this.accounts.getOrCreateSystemAccount(
+          manager,
+          companyId,
+          ACCT_INPUT_TAX,
+        );
         jeLines.push({
-          accountId: inputTax.id, description: 'Input tax reversed on vendor credit',
-          debit: '0', credit: totals.taxAmount, lineOrder: jeLines.length,
+          accountId: inputTax.id,
+          description: 'Input tax reversed on vendor credit',
+          debit: '0',
+          credit: totals.taxAmount,
+          lineOrder: jeLines.length,
         });
       }
       const entry = await this.posting.createEntry(manager, {
-        companyId, createdBy: userId, date: dto.date, memo: `Vendor credit ${number}`,
-        status: 'posted', lines: jeLines, sourceType: 'vendor_credit', sourceId: vc.id,
+        companyId,
+        createdBy: userId,
+        date: dto.date,
+        memo: `Vendor credit ${number}`,
+        status: 'posted',
+        lines: jeLines,
+        sourceType: 'vendor_credit',
+        sourceId: vc.id,
       });
       vc.journalEntryId = entry.id;
       await manager.save(vc);
 
       // The vendor owes us the gross, tax included.
-      vendor.balance = addMoney(vendor.balance, toDecimal(totals.total).negated().toFixed(4)).toFixed(4);
+      vendor.balance = addMoney(
+        vendor.balance,
+        toDecimal(totals.total).negated().toFixed(4),
+      ).toFixed(4);
       await manager.save(vendor);
       return vc;
     });
   }
 
-  async applyToBill(companyId: string, id: string, dto: ApplyVendorCreditDto): Promise<VendorCredit> {
+  async applyToBill(
+    companyId: string,
+    id: string,
+    dto: ApplyVendorCreditDto,
+  ): Promise<VendorCredit> {
     // One implementation, shared with a settlement that spends credit and cash
     // together (BillsService.settle), so both hold the same checks.
     return this.dataSource.transaction(async (manager) => {
-      const { credit } = await this.bills.applyVendorCredit(manager, companyId, id, dto.billId, dto.amount);
+      const { credit } = await this.bills.applyVendorCredit(
+        manager,
+        companyId,
+        id,
+        dto.billId,
+        dto.amount,
+      );
       return credit;
     });
   }
 
-  async void(companyId: string, id: string, userId: string): Promise<VendorCredit> {
+  async void(
+    companyId: string,
+    id: string,
+    userId: string,
+  ): Promise<VendorCredit> {
     return this.dataSource.transaction(async (manager) => {
-      const vc = await manager.findOne(VendorCredit, { where: { id, companyId }, relations: { lines: true } });
-      if (!vc) throw new NotFoundException({ code: 'VENDOR_CREDIT_NOT_FOUND', message: 'Vendor credit not found' });
+      const vc = await manager.findOne(VendorCredit, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!vc)
+        throw new NotFoundException({
+          code: 'VENDOR_CREDIT_NOT_FOUND',
+          message: 'Vendor credit not found',
+        });
       if (vc.status === 'void') {
-        throw new BadRequestException({ code: 'ALREADY_VOID', message: 'Vendor credit is already void' });
+        throw new BadRequestException({
+          code: 'ALREADY_VOID',
+          message: 'Vendor credit is already void',
+        });
       }
       if (toDecimal(vc.amountApplied).greaterThan(0)) {
-        throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a vendor credit that has been applied' });
+        throw new BadRequestException({
+          code: 'ALREADY_APPLIED',
+          message: 'Cannot void a vendor credit that has been applied',
+        });
       }
       if (vc.journalEntryId) {
         // Exact mirror of create(), including the input-tax leg, so the void
         // cancels the original entry to the cent.
-        const ap = await this.accounts.getByNumberOrFail(companyId, ACCT_AP, manager);
+        const ap = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_AP,
+          manager,
+        );
         const jeLines = [
           { accountId: ap.id, debit: '0', credit: vc.total, lineOrder: 0 },
-          ...vc.lines.map((l, i) => ({ accountId: l.accountId!, debit: l.amount, credit: '0', lineOrder: i + 1 })),
+          ...vc.lines.map((l, i) => ({
+            accountId: l.accountId!,
+            debit: l.amount,
+            credit: '0',
+            lineOrder: i + 1,
+          })),
         ];
         if (toDecimal(vc.taxAmount).greaterThan(0)) {
-          const inputTax = await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_INPUT_TAX);
+          const inputTax = await this.accounts.getOrCreateSystemAccount(
+            manager,
+            companyId,
+            ACCT_INPUT_TAX,
+          );
           jeLines.push({
-            accountId: inputTax.id, debit: vc.taxAmount, credit: '0', lineOrder: jeLines.length,
+            accountId: inputTax.id,
+            debit: vc.taxAmount,
+            credit: '0',
+            lineOrder: jeLines.length,
           });
         }
         await this.posting.createEntry(manager, {
-          companyId, createdBy: userId, date: businessToday(),
-          memo: `Void vendor credit ${vc.vendorCreditNumber}`, status: 'posted', lines: jeLines,
-          reversalOfId: vc.journalEntryId, sourceType: 'vendor_credit_void', sourceId: vc.id,
+          companyId,
+          createdBy: userId,
+          date: businessToday(),
+          memo: `Void vendor credit ${vc.vendorCreditNumber}`,
+          status: 'posted',
+          lines: jeLines,
+          reversalOfId: vc.journalEntryId,
+          sourceType: 'vendor_credit_void',
+          sourceId: vc.id,
         });
       }
       // The goods never went back to the supplier after all — put them on the
       // shelf, in the same transaction as the reversing entry above.
       await this.relieveReturnedStock(manager, companyId, vc, true);
 
-      const vendor = await manager.findOne(Vendor, { where: { id: vc.vendorId, companyId } });
-      if (vendor) { vendor.balance = addMoney(vendor.balance, vc.total).toFixed(4); await manager.save(vendor); }
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: vc.vendorId, companyId },
+      });
+      if (vendor) {
+        vendor.balance = addMoney(vendor.balance, vc.total).toFixed(4);
+        await manager.save(vendor);
+      }
       vc.status = 'void';
       vc.balance = '0';
       await manager.save(vc);
@@ -237,11 +399,16 @@ export class VendorCreditsService {
   async delete(companyId: string, id: string, userId: string) {
     const vc = await this.getById(companyId, id);
     if (vc.status !== 'open') {
-      throw new BadRequestException({ code: 'CANNOT_DELETE', message: 'Only open, unapplied vendor credits can be deleted' });
+      throw new BadRequestException({
+        code: 'CANNOT_DELETE',
+        message: 'Only open, unapplied vendor credits can be deleted',
+      });
     }
     // Reverse the ledger (via void) attributed to the acting user — never an
     // empty createdBy, which would fail the reversal JE's uuid column.
-    if (vc.journalEntryId) { await this.void(companyId, id, userId); }
+    if (vc.journalEntryId) {
+      await this.void(companyId, id, userId);
+    }
     await this.repo.remove(vc);
     return { id, deleted: true };
   }
@@ -272,7 +439,10 @@ export class VendorCreditsService {
       const item = await itemRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
-        .where('i.id = :id AND i.companyId = :cid', { id: line.itemId, cid: companyId })
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: line.itemId,
+          cid: companyId,
+        })
         .getOne();
       if (!item) {
         throw new NotFoundException({
@@ -326,5 +496,4 @@ export class VendorCreditsService {
       });
     }
   }
-
 }

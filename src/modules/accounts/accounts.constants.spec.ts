@@ -7,7 +7,9 @@ import {
 } from './accounts.constants';
 
 describe('system account definitions', () => {
-  const chart = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((a) => [a.accountNumber, a]));
+  const chart = new Map(
+    DEFAULT_CHART_OF_ACCOUNTS.map((a) => [a.accountNumber, a]),
+  );
 
   it('mirror the default chart exactly wherever both define an account', () => {
     // A new company is seeded from the chart; an older one gets the account
@@ -16,7 +18,12 @@ describe('system account definitions', () => {
     for (const [number, def] of Object.entries(SYSTEM_ACCOUNT_DEFS)) {
       const seeded = chart.get(number);
       if (!seeded) continue;
-      expect({ number, name: def.name, type: def.type, subType: def.subType }).toEqual({
+      expect({
+        number,
+        name: def.name,
+        type: def.type,
+        subType: def.subType,
+      }).toEqual({
         number,
         name: seeded.name,
         type: seeded.type,

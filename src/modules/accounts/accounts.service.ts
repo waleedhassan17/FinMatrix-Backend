@@ -110,7 +110,8 @@ export class AccountsService {
       .where('a.companyId = :companyId', { companyId });
 
     if (query.type) qb.andWhere('a.type = :type', { type: query.type });
-    if (query.subType) qb.andWhere('a.subType = :subType', { subType: query.subType });
+    if (query.subType)
+      qb.andWhere('a.subType = :subType', { subType: query.subType });
     if (query.isActive !== undefined) {
       qb.andWhere('a.isActive = :active', { active: query.isActive });
     }
@@ -147,7 +148,10 @@ export class AccountsService {
   }
 
   private withSystemFlag<T extends { accountNumber: string }>(account: T) {
-    return { ...account, isSystemAccount: SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber) };
+    return {
+      ...account,
+      isSystemAccount: SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber),
+    };
   }
 
   async getDetail(companyId: string, id: string) {
@@ -163,7 +167,10 @@ export class AccountsService {
       recentEntries,
       // Whether the edit form may unlock Type and Number, and why not.
       usage,
-      structure: structureOf(SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber), usage),
+      structure: structureOf(
+        SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber),
+        usage,
+      ),
     };
   }
 
@@ -376,7 +383,9 @@ export class AccountsService {
 
       const label = `${account.accountNumber} · ${account.name}`;
       const nextNumber =
-        dto.accountNumber !== undefined ? dto.accountNumber.trim() : account.accountNumber;
+        dto.accountNumber !== undefined
+          ? dto.accountNumber.trim()
+          : account.accountNumber;
       const nextType = dto.type ?? account.type;
       const nextSubType = dto.subType ?? account.subType;
       const typeChanges = nextType !== account.type;
@@ -478,7 +487,8 @@ export class AccountsService {
       if (dto.name !== undefined) account.name = dto.name;
       if (dto.description !== undefined) account.description = dto.description;
       if (dto.isActive !== undefined) {
-        if (account.isActive && !dto.isActive) this.assertCanDeactivate(account);
+        if (account.isActive && !dto.isActive)
+          this.assertCanDeactivate(account);
         account.isActive = dto.isActive;
       }
       const saved = await manager.save(account);
@@ -582,7 +592,9 @@ export class AccountsService {
     // 2. An account with posted ledger history must never be hard-deleted —
     //    that would orphan journal/GL references and break the financial
     //    statements. QuickBooks-style: deactivate (make inactive) instead.
-    const glCount = await this.glRepo.count({ where: { companyId, accountId: id } });
+    const glCount = await this.glRepo.count({
+      where: { companyId, accountId: id },
+    });
     if (glCount > 0) {
       throw new BadRequestException({
         code: 'ACCOUNT_HAS_TRANSACTIONS',
@@ -592,11 +604,14 @@ export class AccountsService {
     }
 
     // 3. Block deletion while sub-accounts still point at it.
-    const childCount = await this.repo.count({ where: { companyId, parentId: id } });
+    const childCount = await this.repo.count({
+      where: { companyId, parentId: id },
+    });
     if (childCount > 0) {
       throw new BadRequestException({
         code: 'ACCOUNT_HAS_CHILDREN',
-        message: 'This account has sub-accounts. Reassign or remove them first.',
+        message:
+          'This account has sub-accounts. Reassign or remove them first.',
       });
     }
 
@@ -621,7 +636,9 @@ export class AccountsService {
       expense: 0,
     };
     for (const a of accounts) {
-      totals[a.type] = toDecimal(totals[a.type]).plus(toDecimal(a.balance)).toFixed(4);
+      totals[a.type] = toDecimal(totals[a.type])
+        .plus(toDecimal(a.balance))
+        .toFixed(4);
       counts[a.type] += 1;
     }
     return { totals, counts, totalAccounts: accounts.length };

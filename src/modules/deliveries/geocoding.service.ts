@@ -67,7 +67,11 @@ export class GeocodingService {
         return null;
       }
       const data: any = await res.json();
-      if (data.status !== 'OK' || !Array.isArray(data.results) || !data.results.length) {
+      if (
+        data.status !== 'OK' ||
+        !Array.isArray(data.results) ||
+        !data.results.length
+      ) {
         this.logger.warn(`Geocoding status "${data.status}" for "${query}"`);
         return null;
       }
@@ -77,7 +81,9 @@ export class GeocodingService {
       }
       return { lat: loc.lat, lng: loc.lng };
     } catch (err) {
-      this.logger.warn(`Geocoding failed for "${query}": ${(err as Error).message}`);
+      this.logger.warn(
+        `Geocoding failed for "${query}": ${(err as Error).message}`,
+      );
       return null;
     }
   }

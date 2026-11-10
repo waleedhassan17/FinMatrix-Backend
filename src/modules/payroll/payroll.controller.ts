@@ -1,5 +1,16 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, Res, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,12 +23,22 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { PayrollService } from './payroll.service';
 import {
-  CreateEmployeeDto, CreatePayrollRunDto, ListEmployeesQueryDto, ProcessPayrollRunDto, UpdateEmployeeDto,
+  CreateEmployeeDto,
+  CreatePayrollRunDto,
+  ListEmployeesQueryDto,
+  ProcessPayrollRunDto,
+  UpdateEmployeeDto,
 } from './dto/payroll.dto';
-import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import {
+  ParsePaginationPipe,
+  PaginationParams,
+} from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('payroll')
@@ -29,7 +50,8 @@ export class PayrollController {
   constructor(
     private readonly svc: PayrollService,
     private readonly payslipPdf: PayslipPdfService,
-    @InjectRepository(Company) private readonly companyRepo: Repository<Company>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
   ) {}
 
   // ── Employees ──
@@ -45,25 +67,38 @@ export class PayrollController {
 
   @Get('employees/:id')
   @Roles('admin')
-  getEmployee(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  getEmployee(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.getEmployee(companyId, id);
   }
 
   @Post('employees')
   @Roles('admin')
-  createEmployee(@CurrentCompany() companyId: string, @Body() dto: CreateEmployeeDto) {
+  createEmployee(
+    @CurrentCompany() companyId: string,
+    @Body() dto: CreateEmployeeDto,
+  ) {
     return this.svc.createEmployee(companyId, dto);
   }
 
   @Patch('employees/:id')
   @Roles('admin')
-  updateEmployee(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateEmployeeDto) {
+  updateEmployee(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateEmployeeDto,
+  ) {
     return this.svc.updateEmployee(companyId, id, dto);
   }
 
   @Delete('employees/:id')
   @Roles('admin')
-  deleteEmployee(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  deleteEmployee(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.deleteEmployee(companyId, id);
   }
 
@@ -76,21 +111,33 @@ export class PayrollController {
 
   @Get('payroll/runs/:id')
   @Roles('admin')
-  getRun(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  getRun(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.getRun(companyId, id);
   }
 
   @Post('payroll/runs')
   @Roles('admin')
-  @ApiOperation({ summary: 'Build a payroll worksheet (defaults to all active employees).' })
-  createRun(@CurrentCompany() companyId: string, @CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePayrollRunDto) {
+  @ApiOperation({
+    summary: 'Build a payroll worksheet (defaults to all active employees).',
+  })
+  createRun(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreatePayrollRunDto,
+  ) {
     return this.svc.createRun(companyId, user.id, dto);
   }
 
   @Post('payroll/runs/:id/process')
   @Roles('admin')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Process payroll: post JE (DR wages, CR the bank or cash account + deductions), mark paid.' })
+  @ApiOperation({
+    summary:
+      'Process payroll: post JE (DR wages, CR the bank or cash account + deductions), mark paid.',
+  })
   processRun(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -103,20 +150,30 @@ export class PayrollController {
 
   @Delete('payroll/runs/:id')
   @Roles('admin')
-  deleteRun(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  deleteRun(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.deleteRun(companyId, id);
   }
 
   @Get('payroll/runs/:runId/payslip/:employeeId/pdf')
   @Roles('admin')
-  @ApiOperation({ summary: 'Official PDF payslip for one employee on a processed run (figures from the posted entry).' })
+  @ApiOperation({
+    summary:
+      'Official PDF payslip for one employee on a processed run (figures from the posted entry).',
+  })
   async payslipPdfStream(
     @CurrentCompany() companyId: string,
     @Param('runId', ParseUUIDPipe) runId: string,
     @Param('employeeId', ParseUUIDPipe) employeeId: string,
     @Res() res: Response,
   ) {
-    const { run, item, employee } = await this.svc.getPayslipData(companyId, runId, employeeId);
+    const { run, item, employee } = await this.svc.getPayslipData(
+      companyId,
+      runId,
+      employeeId,
+    );
     const company = await this.companyRepo.findOneByOrFail({ id: companyId });
 
     const safe = (v: string) => v.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);

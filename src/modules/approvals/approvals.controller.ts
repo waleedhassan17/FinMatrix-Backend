@@ -9,7 +9,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
 import {
@@ -83,7 +88,10 @@ export class ApprovalsController {
   @Roles('admin')
   @HttpCode(200)
   @ApiOperation({ summary: 'Approve or reject a request (owner only)' })
-  @ApiResponse({ status: 403, description: 'Staff, or the requester themselves' })
+  @ApiResponse({
+    status: 403,
+    description: 'Staff, or the requester themselves',
+  })
   decide(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,

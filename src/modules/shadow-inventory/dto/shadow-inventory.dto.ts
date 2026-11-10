@@ -11,5 +11,8 @@ export class CreateSnapshotDto {
 
 export class UpdateSnapshotDto {
   @ApiPropertyOptional() @IsOptional() @IsNumberString() currentQty?: string;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['synced', 'pending'] as ShadowSyncStatus[]) syncStatus?: ShadowSyncStatus;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEnum(['synced', 'pending'] as ShadowSyncStatus[])
+  syncStatus?: ShadowSyncStatus;
 }

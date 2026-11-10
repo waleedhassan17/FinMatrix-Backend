@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -45,7 +50,13 @@ export class PlanOverrideService implements OnModuleInit {
       loadPlanOverrides(
         rows
           .filter((r) => isPlanKey(r.planKey))
-          .map((r) => [r.planKey as PlanKey, toPatch(r)] as [PlanKey, PlanOverridePatch]),
+          .map(
+            (r) =>
+              [r.planKey as PlanKey, toPatch(r)] as [
+                PlanKey,
+                PlanOverridePatch,
+              ],
+          ),
       );
       this.logger.log(`Plan overrides loaded: ${rows.length}`);
     } catch (e) {
@@ -177,7 +188,8 @@ function toPatch(row: PlanOverride | null | undefined): PlanOverridePatch {
   if (!row) return {};
   const patch: PlanOverridePatch = {};
   if (row.label !== null) patch.label = row.label;
-  if (row.monthlyMinorUnits !== null) patch.monthlyMinorUnits = row.monthlyMinorUnits;
+  if (row.monthlyMinorUnits !== null)
+    patch.monthlyMinorUnits = row.monthlyMinorUnits;
   if (row.priceMinorUnits !== null) patch.priceMinorUnits = row.priceMinorUnits;
   if (row.deliveryPersonnelLimit !== null) {
     patch.deliveryPersonnelLimit = row.deliveryPersonnelLimit;

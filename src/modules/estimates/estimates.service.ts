@@ -1,8 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
-import { Estimate, DiscountType, EstimateStatus } from './entities/estimate.entity';
+import {
+  Estimate,
+  DiscountType,
+  EstimateStatus,
+} from './entities/estimate.entity';
 import { EstimateLineItem } from './entities/estimate-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
@@ -21,10 +29,19 @@ import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { InvoicesService } from '../invoices/invoices.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
-import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
-import { assertSalesLinesClassified, lineKindOf } from '../../common/utils/sales-lines.util';
+import {
+  addDaysIso,
+  businessToday,
+} from '../../common/utils/business-date.util';
+import {
+  assertSalesLinesClassified,
+  lineKindOf,
+} from '../../common/utils/sales-lines.util';
 import { CreditOverride } from '../../common/utils/credit-control.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 
 interface LineCalc {
   description: string;
@@ -45,17 +62,28 @@ export class EstimatesService {
     private readonly invoices: InvoicesService,
     private readonly salesOrders: SalesOrdersService,
     @InjectRepository(Estimate) private readonly repo: Repository<Estimate>,
-    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
   ) {}
 
-  async list(companyId: string, query: ListEstimatesQueryDto, pagination: PaginationParams) {
+  async list(
+    companyId: string,
+    query: ListEstimatesQueryDto,
+    pagination: PaginationParams,
+  ) {
     // Everything but the status tab: the summary counts every tab of these.
     const filtered = () => {
-      const qb = this.repo.createQueryBuilder('e').where('e.companyId = :companyId', { companyId });
-      if (query.customerId) qb.andWhere('e.customerId = :c', { c: query.customerId });
+      const qb = this.repo
+        .createQueryBuilder('e')
+        .where('e.companyId = :companyId', { companyId });
+      if (query.customerId)
+        qb.andWhere('e.customerId = :c', { c: query.customerId });
       if (query.startDate && query.endDate) {
         // Named apart from the status's `:s`: one name holds one value per query.
-        qb.andWhere('e.estimateDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
+        qb.andWhere('e.estimateDate BETWEEN :startDate AND :endDate', {
+          startDate: query.startDate,
+          endDate: query.endDate,
+        });
       }
       applyTextSearch(qb, query.search, companyId, {
         columns: ['e.estimateNumber', 'e.notes'],
@@ -69,8 +97,12 @@ export class EstimatesService {
     qb.take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
-    const customerIds = [...new Set(data.map((e) => e.customerId).filter(Boolean))];
-    const customers = customerIds.length ? await this.customerRepo.findByIds(customerIds) : [];
+    const customerIds = [
+      ...new Set(data.map((e) => e.customerId).filter(Boolean)),
+    ];
+    const customers = customerIds.length
+      ? await this.customerRepo.findByIds(customerIds)
+      : [];
     const nameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
 
     // Over everything the search matches — the tabs' counts — not the page.
@@ -85,21 +117,47 @@ export class EstimatesService {
   }
 
   async getById(companyId: string, id: string): Promise<Estimate> {
-    const est = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
-    if (!est) throw new NotFoundException({ code: 'ESTIMATE_NOT_FOUND', message: 'Estimate not found' });
+    const est = await this.repo.findOne({
+      where: { id, companyId },
+      relations: { lines: true },
+    });
+    if (!est)
+      throw new NotFoundException({
+        code: 'ESTIMATE_NOT_FOUND',
+        message: 'Estimate not found',
+      });
     est.lines.sort((a, b) => a.lineOrder - b.lineOrder);
     return est;
   }
 
-  async create(companyId: string, userId: string, dto: CreateEstimateDto): Promise<Estimate> {
+  async create(
+    companyId: string,
+    userId: string,
+    dto: CreateEstimateDto,
+  ): Promise<Estimate> {
     return this.dataSource.transaction(async (manager) => {
-      const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
-      if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      const customer = await manager.findOne(Customer, {
+        where: { id: dto.customerId, companyId },
+      });
+      if (!customer)
+        throw new NotFoundException({
+          code: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer not found',
+        });
       await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
       await assertSalesLinesClassified(manager, companyId, dto.lines);
 
-      const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
-      const estimateNumber = await nextDocumentNumber(manager, companyId, 'EST', yearOf(dto.estimateDate));
+      const totals = this.computeTotals(
+        dto.lines,
+        dto.discountType,
+        dto.discountValue,
+      );
+      const estimateNumber = await nextDocumentNumber(
+        manager,
+        companyId,
+        'EST',
+        yearOf(dto.estimateDate),
+      );
 
       const estimate = manager.create(Estimate, {
         companyId,
@@ -121,35 +179,61 @@ export class EstimatesService {
       });
       await manager.save(estimate);
 
-      const lines = totals.lines.map((l) => manager.create(EstimateLineItem, { estimateId: estimate.id, ...l }));
+      const lines = totals.lines.map((l) =>
+        manager.create(EstimateLineItem, { estimateId: estimate.id, ...l }),
+      );
       await manager.save(lines);
       estimate.lines = lines;
       return estimate;
     });
   }
 
-  async update(companyId: string, id: string, dto: UpdateEstimateDto): Promise<Estimate> {
+  async update(
+    companyId: string,
+    id: string,
+    dto: UpdateEstimateDto,
+  ): Promise<Estimate> {
     return this.dataSource.transaction(async (manager) => {
-      const estimate = await manager.findOne(Estimate, { where: { id, companyId }, relations: { lines: true } });
-      if (!estimate) throw new NotFoundException({ code: 'ESTIMATE_NOT_FOUND', message: 'Estimate not found' });
+      const estimate = await manager.findOne(Estimate, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!estimate)
+        throw new NotFoundException({
+          code: 'ESTIMATE_NOT_FOUND',
+          message: 'Estimate not found',
+        });
       if (estimate.status === 'converted') {
-        throw new BadRequestException({ code: 'CANNOT_EDIT_CONVERTED', message: 'Converted estimates cannot be edited' });
+        throw new BadRequestException({
+          code: 'CANNOT_EDIT_CONVERTED',
+          message: 'Converted estimates cannot be edited',
+        });
       }
 
-      if (dto.estimateDate !== undefined) estimate.estimateDate = dto.estimateDate;
+      if (dto.estimateDate !== undefined)
+        estimate.estimateDate = dto.estimateDate;
       if (dto.expiryDate !== undefined) estimate.expiryDate = dto.expiryDate;
       if (dto.notes !== undefined) estimate.notes = dto.notes;
 
-      if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
+      if (
+        dto.lines ||
+        dto.discountType !== undefined ||
+        dto.discountValue !== undefined
+      ) {
         if (dto.lines) {
           await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
           await assertSalesLinesClassified(manager, companyId, dto.lines);
         }
-        const nextLines = dto.lines ?? estimate.lines.map<EstimateLineDto>((l) => ({
-          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-          taxRate: l.taxRate, accountId: l.accountId ?? undefined,
-          itemId: l.itemId ?? undefined,
-        }));
+        const nextLines =
+          dto.lines ??
+          estimate.lines.map<EstimateLineDto>((l) => ({
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            accountId: l.accountId ?? undefined,
+            itemId: l.itemId ?? undefined,
+          }));
         const dType = dto.discountType ?? estimate.discountType;
         const dValue = dto.discountValue ?? estimate.discountValue;
         const totals = this.computeTotals(nextLines, dType, dValue);
@@ -176,14 +260,24 @@ export class EstimatesService {
         }
       }
       await manager.save(estimate);
-      return (await manager.findOne(Estimate, { where: { id, companyId }, relations: { lines: true } }))!;
+      return (await manager.findOne(Estimate, {
+        where: { id, companyId },
+        relations: { lines: true },
+      }))!;
     });
   }
 
-  async setStatus(companyId: string, id: string, dto: EstimateStatusDto): Promise<Estimate> {
+  async setStatus(
+    companyId: string,
+    id: string,
+    dto: EstimateStatusDto,
+  ): Promise<Estimate> {
     const estimate = await this.getById(companyId, id);
     if (estimate.status === 'converted') {
-      throw new BadRequestException({ code: 'ALREADY_CONVERTED', message: 'Estimate already converted' });
+      throw new BadRequestException({
+        code: 'ALREADY_CONVERTED',
+        message: 'Estimate already converted',
+      });
     }
     estimate.status = dto.status;
     await this.repo.save(estimate);
@@ -191,7 +285,11 @@ export class EstimatesService {
   }
 
   /** What converting this estimate would invoice — filed for approval when staff convert. */
-  async conversionPayload(companyId: string, id: string, dto: ConvertEstimateDto) {
+  async conversionPayload(
+    companyId: string,
+    id: string,
+    dto: ConvertEstimateDto,
+  ) {
     const estimate = await this.getById(companyId, id);
     this.assertConvertible(estimate);
     return {
@@ -205,8 +303,12 @@ export class EstimatesService {
         discountValue: estimate.discountValue,
         notes: `Converted from estimate ${estimate.estimateNumber}`,
         lines: estimate.lines.map((l) => ({
-          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-          taxRate: l.taxRate, itemId: l.itemId ?? undefined, lineKind: lineKindOf(l.itemId),
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxRate: l.taxRate,
+          itemId: l.itemId ?? undefined,
+          lineKind: lineKindOf(l.itemId),
         })),
       },
     };
@@ -223,26 +325,34 @@ export class EstimatesService {
     this.assertConvertible(estimate);
     const today = businessToday();
     const due = dto.dueDate ?? addDaysIso(businessToday(), 30);
-    const invoice = await this.invoices.create(companyId, userId, {
-      customerId: estimate.customerId,
-      invoiceDate: today,
-      dueDate: due,
-      discountType: estimate.discountType,
-      discountValue: estimate.discountValue,
-      status: 'sent',
-      notes: `Converted from estimate ${estimate.estimateNumber}`,
-      // itemId rides along: the invoice is created as 'sent', so it posts, and
-      // posting is where the quoted item finally means something -- Dr COGS /
-      // Cr Inventory and a stock movement per line. Note this makes conversion
-      // refusable (INSUFFICIENT_STOCK) where it used to always succeed, which
-      // is the same rule a directly-raised invoice has always followed.
-      lines: estimate.lines.map((l) => ({
-        description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-        taxRate: l.taxRate, accountId: l.accountId ?? undefined,
-        itemId: l.itemId ?? undefined,
-        lineKind: lineKindOf(l.itemId),
-      })),
-    }, { credit: { override: creditOverride } });
+    const invoice = await this.invoices.create(
+      companyId,
+      userId,
+      {
+        customerId: estimate.customerId,
+        invoiceDate: today,
+        dueDate: due,
+        discountType: estimate.discountType,
+        discountValue: estimate.discountValue,
+        status: 'sent',
+        notes: `Converted from estimate ${estimate.estimateNumber}`,
+        // itemId rides along: the invoice is created as 'sent', so it posts, and
+        // posting is where the quoted item finally means something -- Dr COGS /
+        // Cr Inventory and a stock movement per line. Note this makes conversion
+        // refusable (INSUFFICIENT_STOCK) where it used to always succeed, which
+        // is the same rule a directly-raised invoice has always followed.
+        lines: estimate.lines.map((l) => ({
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxRate: l.taxRate,
+          accountId: l.accountId ?? undefined,
+          itemId: l.itemId ?? undefined,
+          lineKind: lineKindOf(l.itemId),
+        })),
+      },
+      { credit: { override: creditOverride } },
+    );
     await this.markConverted(estimate, 'invoice', invoice.id);
     return { estimate: await this.getById(companyId, id), invoice };
   }
@@ -267,8 +377,11 @@ export class EstimatesService {
         // A sales order posts nothing either, so this is still just carrying
         // the link one hop further along — to the invoice that will post it.
         lines: estimate.lines.map((l) => ({
-          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-          taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxRate: l.taxRate,
+          accountId: l.accountId ?? undefined,
           itemId: l.itemId ?? undefined,
           lineKind: lineKindOf(l.itemId),
         })),
@@ -285,7 +398,10 @@ export class EstimatesService {
   async delete(companyId: string, id: string) {
     const est = await this.getById(companyId, id);
     if (est.status === 'converted') {
-      throw new BadRequestException({ code: 'CANNOT_DELETE_CONVERTED', message: 'Converted estimates cannot be deleted' });
+      throw new BadRequestException({
+        code: 'CANNOT_DELETE_CONVERTED',
+        message: 'Converted estimates cannot be deleted',
+      });
     }
     await this.repo.remove(est);
     return { id, deleted: true };
@@ -294,14 +410,24 @@ export class EstimatesService {
   // ── helpers ──
   private assertConvertible(estimate: Estimate) {
     if (estimate.status === 'converted') {
-      throw new BadRequestException({ code: 'ALREADY_CONVERTED', message: 'Estimate has already been converted' });
+      throw new BadRequestException({
+        code: 'ALREADY_CONVERTED',
+        message: 'Estimate has already been converted',
+      });
     }
     if (estimate.status === 'declined') {
-      throw new BadRequestException({ code: 'ESTIMATE_DECLINED', message: 'Declined estimates cannot be converted' });
+      throw new BadRequestException({
+        code: 'ESTIMATE_DECLINED',
+        message: 'Declined estimates cannot be converted',
+      });
     }
   }
 
-  private async markConverted(estimate: Estimate, type: 'invoice' | 'sales_order', targetId: string) {
+  private async markConverted(
+    estimate: Estimate,
+    type: 'invoice' | 'sales_order',
+    targetId: string,
+  ) {
     estimate.status = 'converted';
     estimate.convertedToType = type;
     estimate.convertedToId = targetId;
@@ -327,7 +453,9 @@ export class EstimatesService {
     companyId: string,
     lines: { itemId?: string }[],
   ): Promise<void> {
-    const ids = [...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    const ids = [
+      ...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id)),
+    ];
     if (ids.length === 0) return;
     const found = await manager.getRepository(InventoryItem).find({
       where: { id: In(ids), companyId },
@@ -336,7 +464,8 @@ export class EstimatesService {
     if (found.length !== ids.length) {
       throw new BadRequestException({
         code: 'ITEM_NOT_FOUND',
-        message: 'One or more line items reference an inventory item that does not exist',
+        message:
+          'One or more line items reference an inventory item that does not exist',
       });
     }
   }
@@ -345,7 +474,13 @@ export class EstimatesService {
     lines: EstimateLineDto[],
     discountType: 'percent' | 'amount' | 'none' | undefined,
     discountValue: string | undefined,
-  ): { subtotal: string; discountAmount: string; taxAmount: string; total: string; lines: LineCalc[] } {
+  ): {
+    subtotal: string;
+    discountAmount: string;
+    taxAmount: string;
+    total: string;
+    lines: LineCalc[];
+  } {
     const calc: LineCalc[] = [];
     let subtotal = new Decimal(0);
     let taxTotal = new Decimal(0);
@@ -358,19 +493,32 @@ export class EstimatesService {
       subtotal = subtotal.plus(base);
       taxTotal = taxTotal.plus(tax);
       calc.push({
-        description: l.description, quantity: qty.toFixed(4), unitPrice: price.toFixed(4),
-        taxRate: taxRate.toFixed(4), taxAmount: tax.toFixed(4), lineTotal: base.plus(tax).toFixed(4),
-        accountId: l.accountId ?? null, itemId: l.itemId ?? null, lineOrder: i,
+        description: l.description,
+        quantity: qty.toFixed(4),
+        unitPrice: price.toFixed(4),
+        taxRate: taxRate.toFixed(4),
+        taxAmount: tax.toFixed(4),
+        lineTotal: base.plus(tax).toFixed(4),
+        accountId: l.accountId ?? null,
+        itemId: l.itemId ?? null,
+        lineOrder: i,
       });
     });
     let discountAmount = new Decimal(0);
-    if (discountType === 'percent') discountAmount = subtotal.times(toDecimal(discountValue ?? 0)).dividedBy(100);
-    else if (discountType === 'amount') discountAmount = toDecimal(discountValue ?? 0);
+    if (discountType === 'percent')
+      discountAmount = subtotal
+        .times(toDecimal(discountValue ?? 0))
+        .dividedBy(100);
+    else if (discountType === 'amount')
+      discountAmount = toDecimal(discountValue ?? 0);
     if (discountAmount.greaterThan(subtotal)) discountAmount = subtotal;
     const total = subtotal.minus(discountAmount).plus(taxTotal);
     return {
-      subtotal: subtotal.toFixed(4), discountAmount: discountAmount.toFixed(4),
-      taxAmount: taxTotal.toFixed(4), total: total.toFixed(4), lines: calc,
+      subtotal: subtotal.toFixed(4),
+      discountAmount: discountAmount.toFixed(4),
+      taxAmount: taxTotal.toFixed(4),
+      total: total.toFixed(4),
+      lines: calc,
     };
   }
 }

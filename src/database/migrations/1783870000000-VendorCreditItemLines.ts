@@ -35,7 +35,11 @@ export class VendorCreditItemLines1783870000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "vendor_credit_lines" DROP COLUMN IF EXISTS "quantity"`);
-    await queryRunner.query(`ALTER TABLE "vendor_credit_lines" DROP COLUMN IF EXISTS "item_id"`);
+    await queryRunner.query(
+      `ALTER TABLE "vendor_credit_lines" DROP COLUMN IF EXISTS "quantity"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "vendor_credit_lines" DROP COLUMN IF EXISTS "item_id"`,
+    );
   }
 }

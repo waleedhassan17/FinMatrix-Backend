@@ -16,7 +16,13 @@ export class Budget extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 16, default: 'draft' })
   status!: BudgetStatus;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_budget' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_budget',
+  })
   totalBudget!: string;
 
   @Column({ type: 'uuid', name: 'created_by' })

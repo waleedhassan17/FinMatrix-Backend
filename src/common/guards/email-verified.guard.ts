@@ -13,7 +13,9 @@ import { assertEmailVerified } from '../utils/email-verified.util';
 @Injectable()
 export class EmailVerifiedGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
+    const req = context
+      .switchToHttp()
+      .getRequest<Request & { user?: AuthenticatedUser }>();
     assertEmailVerified(req.user);
     return true;
   }

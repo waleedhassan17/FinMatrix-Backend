@@ -29,37 +29,101 @@ export class InventoryItem extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   category!: string | null;
 
-  @Column({ type: 'varchar', length: 32, default: 'unit', name: 'unit_of_measure' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'unit',
+    name: 'unit_of_measure',
+  })
   unitOfMeasure!: string;
 
-  @Column({ type: 'varchar', length: 16, default: 'average', name: 'cost_method' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'average',
+    name: 'cost_method',
+  })
   costMethod!: InventoryCostMethod;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_cost' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_cost',
+  })
   unitCost!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'selling_price' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'selling_price',
+  })
   sellingPrice!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'quantity_on_hand' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'quantity_on_hand',
+  })
   quantityOnHand!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'quantity_on_order' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'quantity_on_order',
+  })
   quantityOnOrder!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'quantity_committed' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'quantity_committed',
+  })
   quantityCommitted!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'reorder_point' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'reorder_point',
+  })
   reorderPoint!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'reorder_quantity' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'reorder_quantity',
+  })
   reorderQuantity!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'min_stock' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'min_stock',
+  })
   minStock!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'max_stock' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'max_stock',
+  })
   maxStock!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'source_agency_id' })
@@ -74,7 +138,12 @@ export class InventoryItem extends BaseCompanyEntity {
   @Column({ type: 'boolean', default: false, name: 'lot_tracking' })
   lotTracking!: boolean;
 
-  @Column({ type: 'varchar', length: 128, nullable: true, name: 'barcode_data' })
+  @Column({
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+    name: 'barcode_data',
+  })
   barcodeData!: string | null;
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })

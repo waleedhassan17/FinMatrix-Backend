@@ -43,26 +43,26 @@ import { MailService } from '../mail/mail.service';
 import { COMPANY_STATUS, isCompanyApproved } from '../../types';
 
 const PLAN_TIER_FEATURES: Record<string, string[]> = {
-    small_business: [
-      'Invoices, bills, payments & estimates',
-      'Customers, vendors & chart of accounts',
-      'Tax tracking + core reports (P&L, BS, TB, aging)',
-    ],
-    // Each list stands on its own. "Everything in <tier>" pointed buyers at a
-    // tier that is not on sale, so they were told a plan includes something
-    // they could not see. Four lines at most — the app's plan card shows four.
-    large_org: [
-      'Invoices, bills, payments, tax & core reports',
-      'Payroll, employees & payslips',
-      'Budgets vs actual, team roles & bank reconciliation',
-      'Optional inventory (per-company toggle)',
-    ],
-    warehouse: [
-      'Complete accounting: invoices, bills, payments, tax & reports',
-      'Payroll, budgets, bank reconciliation & team roles',
-      'Full inventory + purchase orders (GRNI 3-way match)',
-      'Deliveries with rider app, admin approval & Goods-in-Transit accounting',
-    ],
+  small_business: [
+    'Invoices, bills, payments & estimates',
+    'Customers, vendors & chart of accounts',
+    'Tax tracking + core reports (P&L, BS, TB, aging)',
+  ],
+  // Each list stands on its own. "Everything in <tier>" pointed buyers at a
+  // tier that is not on sale, so they were told a plan includes something
+  // they could not see. Four lines at most — the app's plan card shows four.
+  large_org: [
+    'Invoices, bills, payments, tax & core reports',
+    'Payroll, employees & payslips',
+    'Budgets vs actual, team roles & bank reconciliation',
+    'Optional inventory (per-company toggle)',
+  ],
+  warehouse: [
+    'Complete accounting: invoices, bills, payments, tax & reports',
+    'Payroll, budgets, bank reconciliation & team roles',
+    'Full inventory + purchase orders (GRNI 3-way match)',
+    'Deliveries with rider app, admin approval & Goods-in-Transit accounting',
+  ],
 };
 
 @Injectable()
@@ -70,11 +70,15 @@ export class SuperAdminService {
   private readonly logger = new Logger(SuperAdminService.name);
 
   constructor(
-    @InjectRepository(Company) private readonly companyRepo: Repository<Company>,
-    @InjectRepository(UserCompany) private readonly userCompanyRepo: Repository<UserCompany>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
+    @InjectRepository(UserCompany)
+    private readonly userCompanyRepo: Repository<UserCompany>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
-    @InjectRepository(SubscriptionPlan) private readonly planRepo: Repository<SubscriptionPlan>,
-    @InjectRepository(CompanySubscription) private readonly subRepo: Repository<CompanySubscription>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly planRepo: Repository<SubscriptionPlan>,
+    @InjectRepository(CompanySubscription)
+    private readonly subRepo: Repository<CompanySubscription>,
     private readonly dataSource: DataSource,
     private readonly mail: MailService,
     private readonly planOverrides: PlanOverrideService,
@@ -91,12 +95,16 @@ export class SuperAdminService {
   }
 
   async seedSuperAdmin(email: string, password: string, displayName: string) {
-    const existing = await this.userRepo.findOne({ where: { email: email.toLowerCase() } });
+    const existing = await this.userRepo.findOne({
+      where: { email: email.toLowerCase() },
+    });
     if (existing) {
       if (existing.role === 'super_admin') {
         return { message: 'Super admin already exists', id: existing.id };
       }
-      throw new ConflictException('Email already in use by a different account');
+      throw new ConflictException(
+        'Email already in use by a different account',
+      );
     }
 
     const cost = 12;
@@ -143,7 +151,12 @@ export class SuperAdminService {
       activeSubscriptions,
     ] = await Promise.all([
       this.companyRepo.count(),
-      countByStatuses(['pending', 'pending_approval', 'email_verified', 'unverified']),
+      countByStatuses([
+        'pending',
+        'pending_approval',
+        'email_verified',
+        'unverified',
+      ]),
       countByStatuses(['active', 'approved']),
       countByStatuses(['inactive', 'suspended']),
       this.companyRepo.count({ where: { status: 'rejected' } }),
@@ -189,7 +202,7 @@ export class SuperAdminService {
         totalSubscriptions,
         activeSubscriptions,
       },
-      recentRegistrations: recentRegistrations.map(c => ({
+      recentRegistrations: recentRegistrations.map((c) => ({
         id: c.id,
         name: c.name,
         industry: c.industry,
@@ -218,7 +231,9 @@ export class SuperAdminService {
     isTrial?: boolean,
     search?: string,
   ) {
-    const qb = this.companyRepo.createQueryBuilder('c').orderBy('c.createdAt', 'DESC');
+    const qb = this.companyRepo
+      .createQueryBuilder('c')
+      .orderBy('c.createdAt', 'DESC');
 
     if (status && status !== 'all') {
       if (status === 'active' || status === 'approved') {
@@ -267,7 +282,9 @@ export class SuperAdminService {
     // per company (member count, active subscription) — forty round-trips to
     // draw one page of twenty.
     const ids = companies.map((c) => c.id);
-    const ownerIds = [...new Set(companies.map((c) => c.createdBy).filter(Boolean))];
+    const ownerIds = [
+      ...new Set(companies.map((c) => c.createdBy).filter(Boolean)),
+    ];
     const [memberRows, subscriptions, owners] = ids.length
       ? await Promise.all([
           this.userCompanyRepo
@@ -281,11 +298,17 @@ export class SuperAdminService {
             where: { companyId: In(ids), status: 'active' },
             relations: { plan: true },
           }),
-          ownerIds.length ? this.userRepo.findBy({ id: In(ownerIds) }) : Promise.resolve([]),
+          ownerIds.length
+            ? this.userRepo.findBy({ id: In(ownerIds) })
+            : Promise.resolve([]),
         ])
       : [[], [], []];
-    const memberCount = new Map(memberRows.map((r) => [r.companyId, Number(r.count)]));
-    const planName = new Map(subscriptions.map((s) => [s.companyId, s.plan?.name ?? null]));
+    const memberCount = new Map(
+      memberRows.map((r) => [r.companyId, Number(r.count)]),
+    );
+    const planName = new Map(
+      subscriptions.map((s) => [s.companyId, s.plan?.name ?? null]),
+    );
     const ownerById = new Map(owners.map((o) => [o.id, o]));
 
     const enriched = companies.map((c) => {
@@ -328,7 +351,9 @@ export class SuperAdminService {
   }
 
   async getCompanyDetail(companyId: string) {
-    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
     if (!company) throw new NotFoundException('Company not found');
 
     const members = await this.userCompanyRepo
@@ -361,7 +386,7 @@ export class SuperAdminService {
             isEmailVerified: owner.isEmailVerified,
           }
         : null,
-      members: members.map(m => ({
+      members: members.map((m) => ({
         id: m.user?.id,
         email: m.user?.email,
         displayName: m.user?.displayName,
@@ -379,15 +404,23 @@ export class SuperAdminService {
    */
   async updateFeatureOverride(
     companyId: string,
-    dto: { allFeaturesUnlocked?: boolean; companyType?: string; inventoryEnabled?: boolean },
+    dto: {
+      allFeaturesUnlocked?: boolean;
+      companyType?: string;
+      inventoryEnabled?: boolean;
+    },
     reviewerId: string,
   ) {
-    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
     if (!company) throw new NotFoundException('Company not found');
 
-    if (dto.allFeaturesUnlocked !== undefined) company.allFeaturesUnlocked = dto.allFeaturesUnlocked;
+    if (dto.allFeaturesUnlocked !== undefined)
+      company.allFeaturesUnlocked = dto.allFeaturesUnlocked;
     if (dto.companyType !== undefined) company.companyType = dto.companyType;
-    if (dto.inventoryEnabled !== undefined) company.inventoryEnabled = dto.inventoryEnabled;
+    if (dto.inventoryEnabled !== undefined)
+      company.inventoryEnabled = dto.inventoryEnabled;
     company.reviewedBy = reviewerId;
     company.reviewedAt = new Date();
     await this.companyRepo.save(company);
@@ -406,7 +439,9 @@ export class SuperAdminService {
     dto: UpdateCompanyStatusDto,
     reviewerId: string,
   ) {
-    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
     if (!company) throw new NotFoundException('Company not found');
 
     // Normalise onto stored values: "active" == approved (reads as active);
@@ -423,11 +458,14 @@ export class SuperAdminService {
     }
 
     const wasApproved = isCompanyApproved(company.status);
-    const wasInactive = company.status === 'inactive' || company.status === 'suspended';
+    const wasInactive =
+      company.status === 'inactive' || company.status === 'suspended';
 
     company.status = newStatus;
     company.rejectionReason =
-      newStatus === COMPANY_STATUS.REJECTED ? dto.rejectionReason ?? null : null;
+      newStatus === COMPANY_STATUS.REJECTED
+        ? (dto.rejectionReason ?? null)
+        : null;
     company.reviewedBy = reviewerId;
     company.reviewedAt = new Date();
     await this.companyRepo.save(company);
@@ -445,11 +483,23 @@ export class SuperAdminService {
     // one sent nothing — the owner learned of it from a failed sign-in.
     if (owner?.email) {
       if (isCompanyApproved(newStatus) && wasInactive) {
-        await this.mail.sendReactivatedEmail(owner.email, owner.displayName, company.name);
+        await this.mail.sendReactivatedEmail(
+          owner.email,
+          owner.displayName,
+          company.name,
+        );
       } else if (isCompanyApproved(newStatus) && !wasApproved) {
-        await this.mail.sendApprovalEmail(owner.email, owner.displayName, company.name);
+        await this.mail.sendApprovalEmail(
+          owner.email,
+          owner.displayName,
+          company.name,
+        );
       } else if (newStatus === 'inactive' && wasApproved) {
-        await this.mail.sendDeactivatedEmail(owner.email, owner.displayName, company.name);
+        await this.mail.sendDeactivatedEmail(
+          owner.email,
+          owner.displayName,
+          company.name,
+        );
       } else if (newStatus === COMPANY_STATUS.REJECTED) {
         await this.mail.sendRejectionEmail(
           owner.email,
@@ -504,7 +554,9 @@ export class SuperAdminService {
       const p = getPlanConfig(rawKey);
       const key = p.key;
       const i = index ?? TIER_PLAN_KEYS.indexOf(key as never);
-      const override = isPlanKey(key) ? getPlanOverride(key as PlanKey) : undefined;
+      const override = isPlanKey(key)
+        ? getPlanOverride(key as PlanKey)
+        : undefined;
       return {
         // Legacy shape (id/name/priceMonthly/priceYearly/features/…):
         id: p.key,
@@ -608,16 +660,23 @@ export class SuperAdminService {
     return this.planToView(planId);
   }
 
-  private async legacyUpdateSubscriptionPlan(planId: string, dto: Partial<CreateSubscriptionPlanDto>) {
+  private async legacyUpdateSubscriptionPlan(
+    planId: string,
+    dto: Partial<CreateSubscriptionPlanDto>,
+  ) {
     const plan = await this.planRepo.findOne({ where: { id: planId } });
     if (!plan) throw new NotFoundException('Plan not found');
 
     if (dto.name !== undefined) plan.name = dto.name;
-    if (dto.description !== undefined) plan.description = dto.description ?? null;
-    if (dto.priceMonthly !== undefined) plan.priceMonthly = String(dto.priceMonthly);
-    if (dto.priceYearly !== undefined) plan.priceYearly = String(dto.priceYearly);
+    if (dto.description !== undefined)
+      plan.description = dto.description ?? null;
+    if (dto.priceMonthly !== undefined)
+      plan.priceMonthly = String(dto.priceMonthly);
+    if (dto.priceYearly !== undefined)
+      plan.priceYearly = String(dto.priceYearly);
     if (dto.maxUsers !== undefined) plan.maxUsers = dto.maxUsers;
-    if (dto.maxInvoices !== undefined) plan.maxInvoices = dto.maxInvoices ?? null;
+    if (dto.maxInvoices !== undefined)
+      plan.maxInvoices = dto.maxInvoices ?? null;
     if (dto.features !== undefined) plan.features = dto.features ?? null;
     if (dto.isActive !== undefined) plan.isActive = dto.isActive;
     if (dto.sortOrder !== undefined) plan.sortOrder = dto.sortOrder ?? 0;
@@ -646,7 +705,9 @@ export class SuperAdminService {
       where: { planId, status: 'active' },
     });
     if (activeSubCount > 0) {
-      throw new BadRequestException('Cannot delete a plan with active subscriptions');
+      throw new BadRequestException(
+        'Cannot delete a plan with active subscriptions',
+      );
     }
 
     await this.planRepo.remove(plan);
@@ -690,7 +751,9 @@ export class SuperAdminService {
   }
 
   async assignSubscription(dto: AssignSubscriptionDto, assignedBy: string) {
-    const company = await this.companyRepo.findOne({ where: { id: dto.companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { id: dto.companyId },
+    });
     if (!company) throw new NotFoundException('Company not found');
 
     const plan = await this.planRepo.findOne({ where: { id: dto.planId } });

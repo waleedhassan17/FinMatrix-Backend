@@ -61,7 +61,9 @@ let TOKEN = '';
 let COMPANY = '';
 
 async function req(method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
   // The API throttles (THROTTLE_LIMIT requests per THROTTLE_TTL). Running the
@@ -79,7 +81,9 @@ async function req(method: string, path: string, body?: unknown) {
       // turn off. Wait out the whole window for auth; back off more gently for
       // everything else, which only trips the global limit.
       const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
-      console.log(`    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`);
+      console.log(
+        `    (throttled on ${path} — waiting ${Math.round(wait / 1000)}s)`,
+      );
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -102,7 +106,10 @@ async function main() {
 
   console.log(`\nFinMatrix Void / Reversal (G7) → ${API}\n`);
 
-  const login = await req('POST', '/auth/signin', { email: EMAIL, password: PASSWORD });
+  const login = await req('POST', '/auth/signin', {
+    email: EMAIL,
+    password: PASSWORD,
+  });
   TOKEN = data(login)?.tokens?.accessToken ?? '';
   COMPANY = data(login)?.companyId ?? '';
   ok('admin signs in', !!TOKEN && !!COMPANY, login.status);
@@ -168,9 +175,18 @@ async function main() {
 
   const invariants = async (label: string) => {
     const checks: Array<[string, string]> = [
-      ['I1', `SELECT 1 FROM journal_entry_lines HAVING sum(debit) <> sum(credit)`],
-      ['I2', `SELECT 1 FROM journal_entry_lines GROUP BY entry_id HAVING sum(debit) <> sum(credit)`],
-      ['I3', `SELECT 1 FROM journal_entries e JOIN (SELECT entry_id, sum(debit) d, sum(credit) c FROM journal_entry_lines GROUP BY entry_id) l ON l.entry_id=e.id WHERE e.total_debits <> l.d OR e.total_credits <> l.c`],
+      [
+        'I1',
+        `SELECT 1 FROM journal_entry_lines HAVING sum(debit) <> sum(credit)`,
+      ],
+      [
+        'I2',
+        `SELECT 1 FROM journal_entry_lines GROUP BY entry_id HAVING sum(debit) <> sum(credit)`,
+      ],
+      [
+        'I3',
+        `SELECT 1 FROM journal_entries e JOIN (SELECT entry_id, sum(debit) d, sum(credit) c FROM journal_entry_lines GROUP BY entry_id) l ON l.entry_id=e.id WHERE e.total_debits <> l.d OR e.total_credits <> l.c`,
+      ],
       ['I8', `SELECT 1 FROM invoices WHERE total - amount_paid <> balance`],
       ['I11', `SELECT 1 FROM inventory_items WHERE quantity_on_hand < 0`],
     ];
@@ -181,7 +197,8 @@ async function main() {
   };
 
   // Master data
-  const customer = (data(await req('GET', '/customers?limit=1')) as any)?.data?.[0];
+  const customer = (data(await req('GET', '/customers?limit=1')) as any)
+    ?.data?.[0];
   const vendorRes = data(await req('GET', '/vendors?limit=1')) as any;
   const vendor = vendorRes?.data?.[0] ?? vendorRes?.[0];
   const itemsRes = data(await req('GET', '/inventory/items?limit=50')) as any;
@@ -189,13 +206,17 @@ async function main() {
     (i: any) => n(i.unitCost) > 0 && n(i.quantityOnHand) > 20,
   );
   const accountsRes = data(await req('GET', '/accounts?limit=200')) as any;
-  const accounts = accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
+  const accounts =
+    accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
   const cashAcct = accounts.find((a: any) => a.accountNumber === '1000');
   const revAcct = accounts.find((a: any) => a.accountNumber === '4000');
   ok('master data resolved', !!customer && !!vendor && !!item && !!cashAcct, {
-    customer: !!customer, vendor: !!vendor, item: !!item,
+    customer: !!customer,
+    vendor: !!vendor,
+    item: !!item,
   });
-  if (!customer || !vendor || !item || !cashAcct) throw new Error('missing master data');
+  if (!customer || !vendor || !item || !cashAcct)
+    throw new Error('missing master data');
 
   await invariants('baseline');
 
@@ -212,7 +233,15 @@ async function main() {
         invoiceDate: TODAY,
         dueDate: '2099-12-31',
         status: 'sent',
-        lines: [{ description: item.name, quantity: '3', unitPrice: '500', taxRate: '0', itemId: item.id }],
+        lines: [
+          {
+            description: item.name,
+            quantity: '3',
+            unitPrice: '500',
+            taxRate: '0',
+            itemId: item.id,
+          },
+        ],
       }),
     ) as any;
     ok('A invoice posted', !!inv?.id, inv);
@@ -220,11 +249,15 @@ async function main() {
     ok('A AR rose', near((await acct('1100')) - ar0, 1500));
 
     const before = await entryCount();
-    const voided = await req('POST', `/invoices/${inv.id}/void`, { reason: 'G7 void test' });
+    const voided = await req('POST', `/invoices/${inv.id}/void`, {
+      reason: 'G7 void test',
+    });
     ok('A void accepted', okStatus(voided), voided.body);
 
-    ok('A a reversing entry was CREATED, not the original mutated',
-      (await entryCount()) > before);
+    ok(
+      'A a reversing entry was CREATED, not the original mutated',
+      (await entryCount()) > before,
+    );
     const { rows: orig } = await db.query(
       `SELECT status FROM journal_entries WHERE id = $1`,
       [inv.journalEntryId],
@@ -232,11 +265,14 @@ async function main() {
     ok('A the original entry is retained', orig.length === 1, orig);
 
     ok('A stock restocked', near(await itemQty(item.id), qty0), {
-      before: qty0, after: await itemQty(item.id),
+      before: qty0,
+      after: await itemQty(item.id),
     });
     ok('A AR back to where it started', near(await acct('1100'), ar0));
-    ok('A every account net back to where it started',
-      (await trialBalance()) === tb0);
+    ok(
+      'A every account net back to where it started',
+      (await trialBalance()) === tb0,
+    );
   }
   await invariants('after invoice void');
 
@@ -249,7 +285,15 @@ async function main() {
         invoiceDate: TODAY,
         dueDate: '2099-12-31',
         status: 'sent',
-        lines: [{ description: 'G7 pay target', quantity: '1', unitPrice: '600', taxRate: '0', lineKind: 'service' }],
+        lines: [
+          {
+            description: 'G7 pay target',
+            quantity: '1',
+            unitPrice: '600',
+            taxRate: '0',
+            lineKind: 'service',
+          },
+        ],
       }),
     ) as any;
 
@@ -269,19 +313,32 @@ async function main() {
       `SELECT status, balance::float8 AS b FROM invoices WHERE id = $1`,
       [payTarget.id],
     );
-    ok('B invoice marked paid', paid[0]?.status === 'paid' && near(n(paid[0]?.b), 0), paid[0]);
+    ok(
+      'B invoice marked paid',
+      paid[0]?.status === 'paid' && near(n(paid[0]?.b), 0),
+      paid[0],
+    );
 
     const del = await req('DELETE', `/payments/${pay.id}`);
     ok('B payment delete accepted', okStatus(del), del.body);
-    ok('B reversing entry recorded', await reversalExists('payment_void', pay.id));
+    ok(
+      'B reversing entry recorded',
+      await reversalExists('payment_void', pay.id),
+    );
 
     const { rows: reopened } = await db.query(
       `SELECT status, balance::float8 AS b FROM invoices WHERE id = $1`,
       [payTarget.id],
     );
-    ok('B invoice reopened with its balance restored',
-      near(n(reopened[0]?.b), 600), reopened[0]);
-    ok('B every account net back to pre-payment', (await trialBalance()) === tb0);
+    ok(
+      'B invoice reopened with its balance restored',
+      near(n(reopened[0]?.b), 600),
+      reopened[0],
+    );
+    ok(
+      'B every account net back to pre-payment',
+      (await trialBalance()) === tb0,
+    );
   }
   await invariants('after payment delete');
 
@@ -296,12 +353,20 @@ async function main() {
         billNumber: `G7-BILL-${Date.now()}`,
         billDate: TODAY,
         dueDate: '2099-12-31',
-        lines: [{ description: 'G7 bill', quantity: '1', unitPrice: '450', lineKind: 'service' }],
+        lines: [
+          {
+            description: 'G7 bill',
+            quantity: '1',
+            unitPrice: '450',
+            lineKind: 'service',
+          },
+        ],
       }),
     ) as any;
     ok('C bill posted', !!bill?.id, bill);
     ok('C AP rose', near(ap0 - (await acct('2000')), 450), {
-      before: ap0, after: await acct('2000'),
+      before: ap0,
+      after: await acct('2000'),
     });
 
     const del = await req('DELETE', `/bills/${bill.id}`);
@@ -312,7 +377,9 @@ async function main() {
   await invariants('after bill delete');
 
   // ══ D. Credit memo ═════════════════════════════════════════════
-  console.log('\n— D: credit memo void (revenue, tax and restock all reversed)');
+  console.log(
+    '\n— D: credit memo void (revenue, tax and restock all reversed)',
+  );
   {
     const tb0 = await trialBalance();
     const qty0 = await itemQty(item.id);
@@ -321,15 +388,29 @@ async function main() {
         customerId: customer.id,
         date: TODAY,
         reason: 'G7 void test',
-        lines: [{ description: item.name, quantity: '2', unitPrice: '400', taxRate: '17', itemId: item.id }],
+        lines: [
+          {
+            description: item.name,
+            quantity: '2',
+            unitPrice: '400',
+            taxRate: '17',
+            itemId: item.id,
+          },
+        ],
       }),
     ) as any;
     ok('D credit memo posted', !!cm?.id, cm);
-    ok('D stock restocked by the return', near(await itemQty(item.id), qty0 + 2));
+    ok(
+      'D stock restocked by the return',
+      near(await itemQty(item.id), qty0 + 2),
+    );
 
     const voided = await req('POST', `/credit-memos/${cm.id}/void`, {});
     ok('D void accepted', okStatus(voided), voided.body);
-    ok('D reversing entry recorded', await reversalExists('credit_memo_void', cm.id));
+    ok(
+      'D reversing entry recorded',
+      await reversalExists('credit_memo_void', cm.id),
+    );
     ok('D stock pulled back out', near(await itemQty(item.id), qty0));
     ok('D every account net back to pre-memo', (await trialBalance()) === tb0);
   }
@@ -349,15 +430,26 @@ async function main() {
       }),
     ) as any;
     ok('E vendor credit posted', !!vc?.id, vc);
-    ok('E input tax reversed on issue', near(inputTax0 - (await acct('1300')), 51), {
-      before: inputTax0, after: await acct('1300'),
-    });
+    ok(
+      'E input tax reversed on issue',
+      near(inputTax0 - (await acct('1300')), 51),
+      {
+        before: inputTax0,
+        after: await acct('1300'),
+      },
+    );
 
     const voided = await req('POST', `/vendor-credits/${vc.id}/void`, {});
     ok('E void accepted', okStatus(voided), voided.body);
-    ok('E reversing entry recorded', await reversalExists('vendor_credit_void', vc.id));
+    ok(
+      'E reversing entry recorded',
+      await reversalExists('vendor_credit_void', vc.id),
+    );
     ok('E input tax restored', near(await acct('1300'), inputTax0));
-    ok('E every account net back to pre-credit', (await trialBalance()) === tb0);
+    ok(
+      'E every account net back to pre-credit',
+      (await trialBalance()) === tb0,
+    );
   }
   await invariants('after vendor credit void');
 
@@ -389,8 +481,11 @@ async function main() {
       `SELECT status, void_reason FROM journal_entries WHERE id = $1`,
       [je.id],
     );
-    ok('F original marked void and RETAINED with a reason',
-      after[0]?.status === 'void' && !!after[0]?.void_reason, after[0]);
+    ok(
+      'F original marked void and RETAINED with a reason',
+      after[0]?.status === 'void' && !!after[0]?.void_reason,
+      after[0],
+    );
 
     const { rows: rev } = await db.query(
       `SELECT l.debit::float8 AS d, l.credit::float8 AS c, a.account_number AS acct
@@ -402,8 +497,11 @@ async function main() {
     );
     const cashLine = rev.find((r: any) => r.acct === '1000');
     const revLine = rev.find((r: any) => r.acct === '4000');
-    ok('F the reversal swaps the debit and the credit',
-      near(n(cashLine?.c), 250) && near(n(revLine?.d), 250), rev);
+    ok(
+      'F the reversal swaps the debit and the credit',
+      near(n(cashLine?.c), 250) && near(n(revLine?.d), 250),
+      rev,
+    );
     ok('F every account net back to pre-entry', (await trialBalance()) === tb0);
   }
   await invariants('after journal entry void');
@@ -428,15 +526,31 @@ async function main() {
     const rev = await req('POST', `/inventory/adjustments/${adj.id}/reverse`);
     ok('G reversal accepted', okStatus(rev), rev.body);
     ok('G stock restored', near(await itemQty(item.id), qty0), {
-      before: qty0, after: await itemQty(item.id),
+      before: qty0,
+      after: await itemQty(item.id),
     });
-    ok('G Inventory 1200 back to where it started', near(await acct('1200'), inv0), {
-      before: inv0, after: await acct('1200'),
-    });
-    ok('G every account net back to pre-adjustment', (await trialBalance()) === tb0);
+    ok(
+      'G Inventory 1200 back to where it started',
+      near(await acct('1200'), inv0),
+      {
+        before: inv0,
+        after: await acct('1200'),
+      },
+    );
+    ok(
+      'G every account net back to pre-adjustment',
+      (await trialBalance()) === tb0,
+    );
 
-    const again = await req('POST', `/inventory/adjustments/${(data(rev) as any).adjustment.id}/reverse`);
-    ok('G a reversal cannot itself be reversed', again.status === 400, again.body);
+    const again = await req(
+      'POST',
+      `/inventory/adjustments/${(data(rev) as any).adjustment.id}/reverse`,
+    );
+    ok(
+      'G a reversal cannot itself be reversed',
+      again.status === 400,
+      again.body,
+    );
   }
   await invariants('after adjustment reversal');
 
@@ -469,12 +583,19 @@ async function main() {
 
     const del = await req('DELETE', `/taxes/payments/${tp.id}`);
     ok('H delete accepted', okStatus(del), del.body);
-    ok('H reversing entry recorded', await reversalExists('tax_payment_void', tp.id));
+    ok(
+      'H reversing entry recorded',
+      await reversalExists('tax_payment_void', tp.id),
+    );
     ok('H liability restored', near(await acct('2300'), payable0), {
-      before: payable0, after: await acct('2300'),
+      before: payable0,
+      after: await acct('2300'),
     });
     ok('H cash restored', near(await acct('1000'), cash0));
-    ok('H every account net back to pre-payment', (await trialBalance()) === tb0);
+    ok(
+      'H every account net back to pre-payment',
+      (await trialBalance()) === tb0,
+    );
   }
   await invariants('after tax payment delete');
 
@@ -484,8 +605,11 @@ async function main() {
   const doubleVoid = await req('POST', `/journal-entries/${voidedJeId}/void`, {
     reason: 'second attempt',
   });
-  ok('I voiding an already-void entry is refused',
-    doubleVoid.status === 400 && errCode(doubleVoid) === 'ALREADY_VOID', doubleVoid.body);
+  ok(
+    'I voiding an already-void entry is refused',
+    doubleVoid.status === 400 && errCode(doubleVoid) === 'ALREADY_VOID',
+    doubleVoid.body,
+  );
 
   // Post an entry, close the books over its date, then try to void it.
   const lockable = data(
@@ -503,10 +627,14 @@ async function main() {
   const lockedVoid = await req('POST', `/journal-entries/${lockable.id}/void`, {
     reason: 'G7 locked void',
   });
-  ok('I voiding into a closed period is refused → PERIOD_LOCKED',
-    errCode(lockedVoid) === 'PERIOD_LOCKED', {
-      status: lockedVoid.status, body: lockedVoid.body,
-    });
+  ok(
+    'I voiding into a closed period is refused → PERIOD_LOCKED',
+    errCode(lockedVoid) === 'PERIOD_LOCKED',
+    {
+      status: lockedVoid.status,
+      body: lockedVoid.body,
+    },
+  );
   await req('POST', `/companies/${COMPANY}/period-reopen`);
 
   // Reconciled documents are locked by assertNotReconciled; prove the guard is
@@ -532,13 +660,21 @@ async function main() {
         WHERE company_id = $2 AND source_id = $3`,
       [reconRow[0].id, COMPANY, recon.id],
     );
-    const reconciledVoid = await req('POST', `/journal-entries/${recon.id}/void`, {
-      reason: 'G7 reconciled void',
-    });
-    ok('I voiding a reconciled document is refused → TRANSACTION_RECONCILED',
-      errCode(reconciledVoid) === 'TRANSACTION_RECONCILED', {
-        status: reconciledVoid.status, body: reconciledVoid.body,
-      });
+    const reconciledVoid = await req(
+      'POST',
+      `/journal-entries/${recon.id}/void`,
+      {
+        reason: 'G7 reconciled void',
+      },
+    );
+    ok(
+      'I voiding a reconciled document is refused → TRANSACTION_RECONCILED',
+      errCode(reconciledVoid) === 'TRANSACTION_RECONCILED',
+      {
+        status: reconciledVoid.status,
+        body: reconciledVoid.body,
+      },
+    );
     await db.query(
       `UPDATE general_ledger SET reconciliation_id = NULL
         WHERE company_id = $1 AND source_id = $2`,
@@ -547,7 +683,9 @@ async function main() {
   } else {
     ok('I (skipped) no reconciliation on file to stamp against', true);
   }
-  await req('POST', `/journal-entries/${recon.id}/void`, { reason: 'G7 cleanup' });
+  await req('POST', `/journal-entries/${recon.id}/void`, {
+    reason: 'G7 cleanup',
+  });
 
   await invariants('final');
 

@@ -1,5 +1,14 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -7,7 +16,10 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { CreditMemosService } from './credit-memos.service';
 import {
@@ -16,9 +28,11 @@ import {
   ListCreditMemosQueryDto,
   RefundCreditMemoDto,
 } from './dto/credit-memo.dto';
-import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import {
+  ParsePaginationPipe,
+  PaginationParams,
+} from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
-
 
 /**
  * One line describing what approving this credit memo will actually do.
@@ -73,7 +87,10 @@ export class CreditMemosController {
   }
 
   @Get(':id')
-  get(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.getById(companyId, id);
   }
 
@@ -92,7 +109,8 @@ export class CreditMemosController {
     // createAndApply is a no-op beyond create() unless applyToInvoiceId is
     // set, so this one call covers both an ordinary credit memo and a delivery
     // reversal — and staff's approved request runs the very same method.
-    if (user.role === 'admin') return this.svc.createAndApply(companyId, user.id, dto);
+    if (user.role === 'admin')
+      return this.svc.createAndApply(companyId, user.id, dto);
     // A refund's account is checked now, not when the owner approves.
     const refundFrom = dto.refundRemainderToCash
       ? await this.svc.refundAccountLabel(companyId, dto.refundAccountId)
@@ -112,14 +130,17 @@ export class CreditMemosController {
   @Post(':id/apply')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Apply available credit to an outstanding invoice.' })
+  @ApiOperation({
+    summary: 'Apply available credit to an outstanding invoice.',
+  })
   apply(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApplyCreditMemoDto,
   ) {
-    if (user.role === 'admin') return this.svc.applyToInvoice(companyId, id, dto);
+    if (user.role === 'admin')
+      return this.svc.applyToInvoice(companyId, id, dto);
     return this.approvals.createRequest(
       'credit_memo',
       { action: 'apply', creditMemoId: id, ...dto },
@@ -133,7 +154,10 @@ export class CreditMemosController {
   @Post(':id/refund')
   @Roles('admin', 'staff')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Refund the remaining credit balance to the customer, from a cash or bank account (1000 Cash by default).' })
+  @ApiOperation({
+    summary:
+      'Refund the remaining credit balance to the customer, from a cash or bank account (1000 Cash by default).',
+  })
   async refund(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -141,8 +165,12 @@ export class CreditMemosController {
     // Optional so a client that sends no body keeps refunding from Cash.
     @Body() dto: RefundCreditMemoDto = {},
   ) {
-    if (user.role === 'admin') return this.svc.refund(companyId, id, user.id, dto.bankAccountId);
-    const from = await this.svc.refundAccountLabel(companyId, dto.bankAccountId);
+    if (user.role === 'admin')
+      return this.svc.refund(companyId, id, user.id, dto.bankAccountId);
+    const from = await this.svc.refundAccountLabel(
+      companyId,
+      dto.bankAccountId,
+    );
     return this.approvals.createRequest(
       'credit_memo',
       {

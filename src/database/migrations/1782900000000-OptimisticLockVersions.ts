@@ -19,7 +19,11 @@ export class OptimisticLockVersions1782900000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "invoices" DROP COLUMN IF EXISTS "version"`);
-    await queryRunner.query(`ALTER TABLE "bills" DROP COLUMN IF EXISTS "version"`);
+    await queryRunner.query(
+      `ALTER TABLE "invoices" DROP COLUMN IF EXISTS "version"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "bills" DROP COLUMN IF EXISTS "version"`,
+    );
   }
 }

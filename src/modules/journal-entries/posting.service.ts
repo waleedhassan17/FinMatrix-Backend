@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import Decimal from 'decimal.js';
 import { Account } from '../accounts/entities/account.entity';
@@ -6,10 +10,7 @@ import { Company } from '../companies/entities/company.entity';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { JournalEntry } from './entities/journal-entry.entity';
 import { JournalEntryLine } from './entities/journal-entry-line.entity';
-import {
-  moneyEquals,
-  toDecimal,
-} from '../../common/utils/money.util';
+import { moneyEquals, toDecimal } from '../../common/utils/money.util';
 import { AccountType } from '../../types';
 import { formatJournalRef } from '../../common/utils/reference-generator.util';
 
@@ -155,7 +156,10 @@ export class PostingService {
     }
 
     const accounts = await manager.find(Account, {
-      where: Array.from(accountIds).map((id) => ({ id, companyId: input.companyId })),
+      where: Array.from(accountIds).map((id) => ({
+        id,
+        companyId: input.companyId,
+      })),
     });
     if (accounts.length !== accountIds.size) {
       throw new NotFoundException({
@@ -290,8 +294,15 @@ export class PostingService {
     const deltas = new Map<string, Decimal>();
     for (const l of entry.lines) {
       const acc = accountMap.get(l.accountId)!;
-      const delta = this.signedDelta(acc.type, toDecimal(l.debit), toDecimal(l.credit));
-      deltas.set(l.accountId, (deltas.get(l.accountId) ?? new Decimal(0)).plus(delta));
+      const delta = this.signedDelta(
+        acc.type,
+        toDecimal(l.debit),
+        toDecimal(l.credit),
+      );
+      deltas.set(
+        l.accountId,
+        (deltas.get(l.accountId) ?? new Decimal(0)).plus(delta),
+      );
     }
 
     // Apply to account balances with an atomic SQL increment instead of a

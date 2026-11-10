@@ -92,7 +92,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // Read off the row already loaded above, so enforcing verification costs
       // no query. Same rule sign-in used to gate on: only an owner with an
       // address to confirm can be unverified.
-      emailVerified: !(user.role === 'admin' && !!user.email && !user.isEmailVerified),
+      emailVerified: !(
+        user.role === 'admin' &&
+        !!user.email &&
+        !user.isEmailVerified
+      ),
     };
   }
 }

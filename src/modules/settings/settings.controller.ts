@@ -52,10 +52,7 @@ export class SettingsController {
 
   @Patch()
   @Roles('admin')
-  update(
-    @CurrentCompany() companyId: string,
-    @Body() dto: UpdateSettingsDto,
-  ) {
+  update(@CurrentCompany() companyId: string, @Body() dto: UpdateSettingsDto) {
     return this.svc.update(companyId, dto);
   }
 
@@ -79,7 +76,9 @@ export class SettingsController {
   @Get('company-profile')
   @Roles('admin', 'staff')
   async companyProfile(@CurrentCompany() companyId: string) {
-    const company = await this.companies.getById('system', companyId).catch(() => null);
+    const company = await this.companies
+      .getById('system', companyId)
+      .catch(() => null);
     return company ?? { companyId };
   }
 
@@ -89,7 +88,9 @@ export class SettingsController {
     @CurrentCompany() companyId: string,
     @Body() dto: any,
   ) {
-    return this.companies.update('system', companyId, dto).catch(() => ({ companyId, ...dto }));
+    return this.companies
+      .update('system', companyId, dto)
+      .catch(() => ({ companyId, ...dto }));
   }
 
   // Companies list for user
@@ -212,7 +213,10 @@ export class SettingsController {
   ) {
     const local = (dto.email ?? '').split('@')[0]?.toLowerCase() ?? '';
     // Strip anything the username rule rejects, then pad a too-short handle.
-    const username = (local.replace(/[^a-z0-9._-]/g, '') || 'member').padEnd(3, '0');
+    const username = (local.replace(/[^a-z0-9._-]/g, '') || 'member').padEnd(
+      3,
+      '0',
+    );
     return this.companyUsers.create(
       companyId,
       {
@@ -266,7 +270,9 @@ export class SettingsController {
     @Query('format') format: string,
     @Query('entities') entities: string,
   ) {
-    return { downloadUrl: `https://example.com/export/${format}?entities=${entities}` };
+    return {
+      downloadUrl: `https://example.com/export/${format}?entities=${entities}`,
+    };
   }
 
   @Post('import')

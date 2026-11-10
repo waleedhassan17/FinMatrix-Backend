@@ -13,7 +13,12 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'customer_id' })
   customerId!: string;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'customer_name' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'customer_name',
+  })
   customerName!: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
@@ -47,7 +52,12 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'date', nullable: true, name: 'preferred_date' })
   preferredDate!: string | null;
 
-  @Column({ type: 'varchar', length: 64, nullable: true, name: 'preferred_time_slot' })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    name: 'preferred_time_slot',
+  })
   preferredTimeSlot!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true, name: 'assigned_at' })
@@ -79,7 +89,13 @@ export class Delivery extends BaseCompanyEntity {
 
   // Paid before dispatch, fully or in part. Recorded at creation as a receipt
   // held in 2400 Customer Advances and applied to the invoice at approval.
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'advance_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'advance_amount',
+  })
   advanceAmount!: string;
 
   // The receipt holding the advance. NULL on legacy prepaid rows, whose
@@ -89,7 +105,13 @@ export class Delivery extends BaseCompanyEntity {
 
   // Cash taken at the door: the rider's figure until approval, then the
   // amount approval actually recorded.
-  @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true, name: 'amount_collected' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    nullable: true,
+    name: 'amount_collected',
+  })
   amountCollected!: string | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'sales_order_id' })
@@ -106,7 +128,12 @@ export class Delivery extends BaseCompanyEntity {
 
   // 'none' → 'in_transit' (Stage 1 posted) → 'committed' (Stage 3 posted)
   //                                        ↘ 'returned' (rejected/reversed)
-  @Column({ type: 'varchar', length: 16, default: 'none', name: 'ledger_status' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'none',
+    name: 'ledger_status',
+  })
   ledgerStatus!: 'none' | 'in_transit' | 'committed' | 'returned';
 
   // -------- Bill-photo capture (replaces digital signature) --------
@@ -116,10 +143,19 @@ export class Delivery extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true, name: 'bill_photo_storage_key' })
   billPhotoStorageKey!: string | null;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'bill_photo_captured_at' })
+  @Column({
+    type: 'timestamptz',
+    nullable: true,
+    name: 'bill_photo_captured_at',
+  })
   billPhotoCapturedAt!: Date | null;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'bill_signed_by' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'bill_signed_by',
+  })
   billSignedBy!: string | null;
 
   @OneToMany(() => DeliveryItem, (i) => i.delivery, { cascade: true })

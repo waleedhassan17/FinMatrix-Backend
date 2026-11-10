@@ -92,12 +92,22 @@ export class BillPhotoCaptureAndApproval1777612800000 implements MigrationInterf
   public async down(queryRunner: QueryRunner): Promise<void> {
     // Reverse order
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_inv_req_delivery"`);
-    await queryRunner.query(`ALTER TABLE "inventory_approval_audit_entries" DROP CONSTRAINT IF EXISTS "FK_inv_audit_request"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_inv_audit_company_created"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_inv_audit_request_created"`);
-    await queryRunner.query(`DROP TABLE IF EXISTS "inventory_approval_audit_entries"`);
+    await queryRunner.query(
+      `ALTER TABLE "inventory_approval_audit_entries" DROP CONSTRAINT IF EXISTS "FK_inv_audit_request"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_inv_audit_company_created"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_inv_audit_request_created"`,
+    );
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "inventory_approval_audit_entries"`,
+    );
 
-    await queryRunner.query(`ALTER TABLE "inventory_update_request_lines" DROP COLUMN IF EXISTS "item_name"`);
+    await queryRunner.query(
+      `ALTER TABLE "inventory_update_request_lines" DROP COLUMN IF EXISTS "item_name"`,
+    );
 
     await queryRunner.query(`
       ALTER TABLE "inventory_update_requests"

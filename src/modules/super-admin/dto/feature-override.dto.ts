@@ -19,7 +19,9 @@ export class FeatureOverrideDto {
   @IsIn(['small_business', 'large_org', 'warehouse'])
   companyType?: string;
 
-  @ApiPropertyOptional({ description: 'Large-org per-company inventory toggle.' })
+  @ApiPropertyOptional({
+    description: 'Large-org per-company inventory toggle.',
+  })
   @IsOptional()
   @IsBoolean()
   inventoryEnabled?: boolean;

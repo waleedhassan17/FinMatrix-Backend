@@ -24,14 +24,25 @@ describe('FinancialAuditSubscriber', () => {
   const makeDataSource = () =>
     ({
       subscribers: [],
-      getRepository: () => ({ save: (rows: AuditTrailEntry[]) => saveImpl(rows) }),
+      getRepository: () => ({
+        save: (rows: AuditTrailEntry[]) => saveImpl(rows),
+      }),
     }) as unknown as DataSource;
 
   const insertEvent = (target: EntityMetadata['target'], entity: unknown) =>
     ({ queryRunner: txRunner, metadata: { target }, entity }) as any;
 
-  const updateEvent = (target: EntityMetadata['target'], databaseEntity: unknown, entity: unknown) =>
-    ({ queryRunner: txRunner, metadata: { target }, databaseEntity, entity }) as any;
+  const updateEvent = (
+    target: EntityMetadata['target'],
+    databaseEntity: unknown,
+    entity: unknown,
+  ) =>
+    ({
+      queryRunner: txRunner,
+      metadata: { target },
+      databaseEntity,
+      entity,
+    }) as any;
 
   const commit = async () => {
     subscriber.afterTransactionCommit({ queryRunner: txRunner } as any);
@@ -52,7 +63,12 @@ describe('FinancialAuditSubscriber', () => {
   it('collapses a create plus its follow-up saves into ONE create row', async () => {
     // Mirrors credit-memos/invoices: save the document, post the journal
     // entry, then save again to attach journal_entry_id.
-    const draft = { id: INVOICE, companyId: COMPANY, status: 'sent', total: '250.0000' };
+    const draft = {
+      id: INVOICE,
+      companyId: COMPANY,
+      status: 'sent',
+      total: '250.0000',
+    };
     subscriber.afterInsert(insertEvent(Invoice, draft));
     subscriber.afterUpdate(
       updateEvent(Invoice, draft, { ...draft, journalEntryId: 'je-1' }),
@@ -84,8 +100,12 @@ describe('FinancialAuditSubscriber', () => {
   });
 
   it('keeps distinct documents in one transaction as separate rows', async () => {
-    subscriber.afterInsert(insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }));
-    subscriber.afterInsert(insertEvent(CreditMemo, { id: 'cm-1', companyId: COMPANY }));
+    subscriber.afterInsert(
+      insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }),
+    );
+    subscriber.afterInsert(
+      insertEvent(CreditMemo, { id: 'cm-1', companyId: COMPANY }),
+    );
     await commit();
 
     expect(saved.map((r) => r.resourceType).sort()).toEqual([
@@ -104,7 +124,9 @@ describe('FinancialAuditSubscriber', () => {
   });
 
   it('discards the buffer when the transaction rolls back', async () => {
-    subscriber.afterInsert(insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }));
+    subscriber.afterInsert(
+      insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }),
+    );
     subscriber.afterTransactionRollback({ queryRunner: txRunner } as any);
     await commit();
 
@@ -115,7 +137,9 @@ describe('FinancialAuditSubscriber', () => {
     saveImpl = async () => {
       throw new Error('audit_trail is unreachable');
     };
-    subscriber.afterInsert(insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }));
+    subscriber.afterInsert(
+      insertEvent(Invoice, { id: INVOICE, companyId: COMPANY }),
+    );
 
     // The posting has already committed; a bookkeeping failure must not throw.
     await expect(commit()).resolves.toBeUndefined();
@@ -152,7 +176,11 @@ describe('FinancialAuditSubscriber', () => {
       await commit();
 
       expect(saved).toHaveLength(1);
-      expect(saved[0]).toMatchObject({ resourceType: 'customer', module: 'customers', action: 'update' });
+      expect(saved[0]).toMatchObject({
+        resourceType: 'customer',
+        module: 'customers',
+        action: 'update',
+      });
       expect(saved[0].afterValues).toMatchObject({
         creditLimit: '100000',
         billingAddress: { city: 'Karachi', country: 'Pakistan' },
@@ -161,7 +189,11 @@ describe('FinancialAuditSubscriber', () => {
 
     it('drops a save that only moved the balance — one line per posting is not history', async () => {
       subscriber.afterUpdate(
-        updateEvent(Customer, base, { ...base, balance: '1800.0000', updatedAt: new Date() }),
+        updateEvent(Customer, base, {
+          ...base,
+          balance: '1800.0000',
+          updatedAt: new Date(),
+        }),
       );
       await commit();
 
@@ -184,12 +216,23 @@ describe('FinancialAuditSubscriber', () => {
     });
 
     it('records a vendor being deactivated', async () => {
-      const vendor = { id: CUSTOMER, companyId: COMPANY, companyName: 'Habib Oil', isActive: true, balance: '0' };
-      subscriber.afterUpdate(updateEvent(Vendor, vendor, { ...vendor, isActive: false }));
+      const vendor = {
+        id: CUSTOMER,
+        companyId: COMPANY,
+        companyName: 'Habib Oil',
+        isActive: true,
+        balance: '0',
+      };
+      subscriber.afterUpdate(
+        updateEvent(Vendor, vendor, { ...vendor, isActive: false }),
+      );
       await commit();
 
       expect(saved).toHaveLength(1);
-      expect(saved[0]).toMatchObject({ resourceType: 'vendor', action: 'update' });
+      expect(saved[0]).toMatchObject({
+        resourceType: 'vendor',
+        action: 'update',
+      });
     });
   });
 });

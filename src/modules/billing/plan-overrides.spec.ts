@@ -28,7 +28,9 @@ describe('with no overrides loaded', () => {
     const p = getPlanConfig(KEY);
     expect(p.monthlyMinorUnits).toBe(PLAN_CONFIG[KEY].monthlyMinorUnits);
     expect(p.priceMinorUnits).toBe(PLAN_CONFIG[KEY].priceMinorUnits);
-    expect(p.deliveryPersonnelLimit).toBe(PLAN_CONFIG[KEY].deliveryPersonnelLimit);
+    expect(p.deliveryPersonnelLimit).toBe(
+      PLAN_CONFIG[KEY].deliveryPersonnelLimit,
+    );
     expect(p.label).toBe(PLAN_CONFIG[KEY].label);
   });
 
@@ -43,7 +45,9 @@ describe('with no overrides loaded', () => {
 
 describe('an edited price', () => {
   it('is what getPlanConfig returns — the same call billing makes', () => {
-    loadPlanOverrides([[KEY, { monthlyMinorUnits: 999900, priceMinorUnits: 5999400 }]]);
+    loadPlanOverrides([
+      [KEY, { monthlyMinorUnits: 999900, priceMinorUnits: 5999400 }],
+    ]);
 
     const p = getPlanConfig(KEY);
     expect(p.monthlyMinorUnits).toBe(999900);
@@ -63,7 +67,9 @@ describe('an edited price', () => {
     loadPlanOverrides([[KEY, { monthlyMinorUnits: 1 }]]);
 
     const p = getPlanConfig(KEY);
-    expect(p.deliveryPersonnelLimit).toBe(PLAN_CONFIG[KEY].deliveryPersonnelLimit);
+    expect(p.deliveryPersonnelLimit).toBe(
+      PLAN_CONFIG[KEY].deliveryPersonnelLimit,
+    );
     expect(p.durationMonths).toBe(PLAN_CONFIG[KEY].durationMonths);
     expect(p.currency).toBe(PLAN_CONFIG[KEY].currency);
   });
@@ -73,7 +79,14 @@ describe('an edited price', () => {
     // PlanOverridePatch; a cast proves the merge ignores them even if one
     // reached the map somehow.
     loadPlanOverrides([
-      [KEY, { companyType: 'small_business', durationMonths: 99, currency: 'USD' } as never],
+      [
+        KEY,
+        {
+          companyType: 'small_business',
+          durationMonths: 99,
+          currency: 'USD',
+        } as never,
+      ],
     ]);
 
     const p = getPlanConfig(KEY);

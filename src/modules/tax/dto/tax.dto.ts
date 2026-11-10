@@ -1,4 +1,11 @@
-import { IsString, IsOptional, IsNumberString, IsBoolean, IsUUID, Length } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsNumberString,
+  IsBoolean,
+  IsUUID,
+  Length,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
@@ -16,8 +23,15 @@ export class CreateTaxRateDto {
 }
 
 export class UpdateTaxRateDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 200) name?: string;
-  @ApiPropertyOptional({ example: '17' }) @IsOptional() @IsTaxRate() rate?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  name?: string;
+  @ApiPropertyOptional({ example: '17' })
+  @IsOptional()
+  @IsTaxRate()
+  rate?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() type?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() taxType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() authority?: string;

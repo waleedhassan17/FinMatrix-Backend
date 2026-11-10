@@ -24,17 +24,35 @@ import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { BillsService, PoBillLineLink } from '../bills/bills.service';
 import { Bill } from '../bills/entities/bill.entity';
-import { PostingService, PostingLineInput } from '../journal-entries/posting.service';
+import {
+  PostingService,
+  PostingLineInput,
+} from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_COGS, ACCT_GRNI, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import {
+  ACCT_COGS,
+  ACCT_GRNI,
+  ACCT_INVENTORY,
+} from '../accounts/accounts.constants';
 import { Account } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { PurchaseOrderStatus } from '../../types';
-import { addDaysIso, businessToday, termsDays } from '../../common/utils/business-date.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  addDaysIso,
+  businessToday,
+  termsDays,
+} from '../../common/utils/business-date.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 import { MessagingService } from '../messaging/messaging.service';
-import { DeliverOption, isPoWithdrawal, purchaseOrderStatusMessage } from '../messaging/document-messages';
+import {
+  DeliverOption,
+  isPoWithdrawal,
+  purchaseOrderStatusMessage,
+} from '../messaging/document-messages';
 
 const round4 = (d: Decimal) => d.toDecimalPlaces(4, Decimal.ROUND_HALF_UP);
 
@@ -99,7 +117,9 @@ export class PurchaseOrdersService {
     const vendorList = vendorIds.length
       ? await this.dataSource.getRepository(Vendor).findByIds(vendorIds)
       : [];
-    const vendorNameMap = Object.fromEntries(vendorList.map((v) => [v.id, v.companyName]));
+    const vendorNameMap = Object.fromEntries(
+      vendorList.map((v) => [v.id, v.companyName]),
+    );
 
     // Over everything the search matches. "On order": sent, or received in
     // part — ordered and not yet in.
@@ -127,7 +147,10 @@ export class PurchaseOrdersService {
       relations: { lines: true },
     });
     if (!po) {
-      throw new NotFoundException({ code: 'NOT_FOUND', message: 'PO not found' });
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'PO not found',
+      });
     }
     po.lines.sort((a, b) => a.lineOrder - b.lineOrder);
     // Every bill raised from this PO, newest last. billId / billNumber stay as
@@ -164,7 +187,9 @@ export class PurchaseOrdersService {
     for (const l of lines) {
       const gross = (qty: string) => {
         const base = round4(toDecimal(qty).times(toDecimal(l.unitCost)));
-        return base.plus(round4(base.times(toDecimal(l.taxRate)).dividedBy(100)));
+        return base.plus(
+          round4(base.times(toDecimal(l.taxRate)).dividedBy(100)),
+        );
       };
       received = received.plus(gross(l.receivedQty));
       billed = billed.plus(gross(l.billedQty ?? '0'));
@@ -182,14 +207,24 @@ export class PurchaseOrdersService {
     opts: CreatePurchaseOrderOptions = {},
   ): Promise<PurchaseOrder> {
     return this.dataSource.transaction(async (manager) => {
-      const vendor = await manager.findOne(Vendor, { where: { id: dto.vendorId, companyId } });
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: dto.vendorId, companyId },
+      });
       if (!vendor) {
-        throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+        throw new NotFoundException({
+          code: 'VENDOR_NOT_FOUND',
+          message: 'Vendor not found',
+        });
       }
       await this.assertLinesClassified(manager, companyId, dto.lines, opts);
       const { subtotal, tax, calc } = this.computeLines(dto.lines);
 
-      const poNumber = await nextDocumentNumber(manager, companyId, 'PO', yearOf(dto.orderDate));
+      const poNumber = await nextDocumentNumber(
+        manager,
+        companyId,
+        'PO',
+        yearOf(dto.orderDate),
+      );
       const po = manager.create(PurchaseOrder, {
         companyId,
         vendorId: dto.vendorId,
@@ -213,8 +248,16 @@ export class PurchaseOrdersService {
   }
 
   /** Check a PO's lines without creating anything (a staff request is filed only if they pass). */
-  async assertLinesValid(companyId: string, lines: PurchaseOrderLineDto[]): Promise<void> {
-    await this.assertLinesClassified(this.dataSource.manager, companyId, lines, {});
+  async assertLinesValid(
+    companyId: string,
+    lines: PurchaseOrderLineDto[],
+  ): Promise<void> {
+    await this.assertLinesClassified(
+      this.dataSource.manager,
+      companyId,
+      lines,
+      {},
+    );
   }
 
   private computeLines(lines: PurchaseOrderLineDto[]) {
@@ -261,7 +304,9 @@ export class PurchaseOrdersService {
     lines: PurchaseOrderLineDto[],
     opts: CreatePurchaseOrderOptions,
   ): Promise<void> {
-    const itemIds = [...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    const itemIds = [
+      ...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id)),
+    ];
     if (itemIds.length) {
       const found = await manager.find(InventoryItem, {
         where: { id: In(itemIds), companyId },
@@ -270,17 +315,25 @@ export class PurchaseOrdersService {
       if (found.length !== itemIds.length) {
         throw new BadRequestException({
           code: 'ITEM_NOT_FOUND',
-          message: 'One or more lines reference an inventory item that does not exist',
+          message:
+            'One or more lines reference an inventory item that does not exist',
         });
       }
     }
-    const accountIds = [...new Set(lines.map((l) => l.accountId).filter((id): id is string => !!id))];
+    const accountIds = [
+      ...new Set(
+        lines.map((l) => l.accountId).filter((id): id is string => !!id),
+      ),
+    ];
     if (accountIds.length) {
-      const found = await manager.find(Account, { where: { id: In(accountIds), companyId } });
+      const found = await manager.find(Account, {
+        where: { id: In(accountIds), companyId },
+      });
       if (found.length !== accountIds.length) {
         throw new BadRequestException({
           code: 'ACCOUNT_NOT_FOUND',
-          message: "A line's expense account does not exist in this company's chart of accounts",
+          message:
+            "A line's expense account does not exist in this company's chart of accounts",
         });
       }
       const inactive = found.find((a) => !a.isActive);
@@ -309,14 +362,21 @@ export class PurchaseOrdersService {
     }
   }
 
-  private async lockPo(manager: EntityManager, companyId: string, id: string): Promise<PurchaseOrder> {
+  private async lockPo(
+    manager: EntityManager,
+    companyId: string,
+    id: string,
+  ): Promise<PurchaseOrder> {
     const po = await manager
       .createQueryBuilder(PurchaseOrder, 'o')
       .setLock('pessimistic_write')
       .where('o.id = :id AND o.companyId = :companyId', { id, companyId })
       .getOne();
     if (!po) {
-      throw new NotFoundException({ code: 'NOT_FOUND', message: 'PO not found' });
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'PO not found',
+      });
     }
     po.lines = await manager.find(PurchaseOrderLine, {
       where: { orderId: po.id },
@@ -418,7 +478,10 @@ export class PurchaseOrdersService {
         const item = await itemRepo
           .createQueryBuilder('i')
           .setLock('pessimistic_write')
-          .where('i.id = :id AND i.companyId = :companyId', { id: line.itemId, companyId })
+          .where('i.id = :id AND i.companyId = :companyId', {
+            id: line.itemId,
+            companyId,
+          })
           .getOne();
         if (!item) {
           throw new BadRequestException({
@@ -428,7 +491,11 @@ export class PurchaseOrdersService {
         }
 
         const base = round4(delta.abs().times(toDecimal(line.unitCost)));
-        const landed = netOfTax ? base : base.plus(round4(base.times(toDecimal(line.taxRate)).dividedBy(100)));
+        const landed = netOfTax
+          ? base
+          : base.plus(
+              round4(base.times(toDecimal(line.taxRate)).dividedBy(100)),
+            );
         const onHand = toDecimal(item.quantityOnHand);
         // The signed amount this receipt moves account 1200 by, captured in
         // whichever branch below computes it. Recorded on the stock movement so
@@ -445,7 +512,9 @@ export class PurchaseOrdersService {
             item.unitCost = value.dividedBy(newQty).toFixed(4);
           }
           item.quantityOnHand = newQty.toFixed(4);
-          line.grniAccrued = toDecimal(line.grniAccrued).plus(landed).toFixed(4);
+          line.grniAccrued = toDecimal(line.grniAccrued)
+            .plus(landed)
+            .toFixed(4);
           bump(ACCT_INVENTORY, landed);
           bump(ACCT_GRNI, landed.negated());
           inventoryImpact = landed;
@@ -457,10 +526,14 @@ export class PurchaseOrdersService {
           const qtyOut = delta.negated();
           assertSufficientStock(item.name, onHand, qtyOut);
           const stockValue = round4(qtyOut.times(toDecimal(item.unitCost)));
-          const accruedLeft = toDecimal(line.grniAccrued).minus(toDecimal(line.grniCleared));
+          const accruedLeft = toDecimal(line.grniAccrued).minus(
+            toDecimal(line.grniCleared),
+          );
           const grniReversal = Decimal.min(landed, Decimal.max(accruedLeft, 0));
           item.quantityOnHand = onHand.minus(qtyOut).toFixed(4);
-          line.grniAccrued = toDecimal(line.grniAccrued).minus(grniReversal).toFixed(4);
+          line.grniAccrued = toDecimal(line.grniAccrued)
+            .minus(grniReversal)
+            .toFixed(4);
           bump(ACCT_INVENTORY, stockValue.negated());
           bump(ACCT_GRNI, grniReversal);
           bump(ACCT_COGS, stockValue.minus(grniReversal));
@@ -503,8 +576,16 @@ export class PurchaseOrdersService {
         if (amount.abs().lessThan(MONEY_TOLERANCE)) continue;
         const account =
           accountNumber === ACCT_GRNI
-            ? await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_GRNI)
-            : await this.accounts.getByNumberOrFail(companyId, accountNumber, manager);
+            ? await this.accounts.getOrCreateSystemAccount(
+                manager,
+                companyId,
+                ACCT_GRNI,
+              )
+            : await this.accounts.getByNumberOrFail(
+                companyId,
+                accountNumber,
+                manager,
+              );
         entryLines.push({
           accountId: account.id,
           description: descriptions[accountNumber],
@@ -552,9 +633,12 @@ export class PurchaseOrdersService {
       const po = await this.lockPo(manager, companyId, id);
       this.assertIssued(po, 'bill it');
 
-      const vendor = await manager.findOne(Vendor, { where: { id: po.vendorId, companyId } });
+      const vendor = await manager.findOne(Vendor, {
+        where: { id: po.vendorId, companyId },
+      });
       const billDate = dto.billDate ?? businessToday();
-      const dueDate = dto.dueDate ?? addDaysIso(billDate, termsDays(vendor?.paymentTerms));
+      const dueDate =
+        dto.dueDate ?? addDaysIso(billDate, termsDays(vendor?.paymentTerms));
       if (dueDate < billDate) {
         throw new BadRequestException({
           code: 'VALIDATION_FAILED',
@@ -562,19 +646,45 @@ export class PurchaseOrdersService {
         });
       }
 
-      const grni = await this.accounts.getOrCreateSystemAccount(manager, companyId, ACCT_GRNI);
-      const billLines: Array<{ accountId: string; description: string; amount: string; taxRate: string }> = [];
+      const grni = await this.accounts.getOrCreateSystemAccount(
+        manager,
+        companyId,
+        ACCT_GRNI,
+      );
+      const billLines: Array<{
+        accountId: string;
+        description: string;
+        amount: string;
+        taxRate: string;
+      }> = [];
       const links: PoBillLineLink[] = [];
-      const updates: Array<{ line: PurchaseOrderLine; qty: Decimal; grni: Decimal | null }> = [];
+      const updates: Array<{
+        line: PurchaseOrderLine;
+        qty: Decimal;
+        grni: Decimal | null;
+      }> = [];
 
       for (const line of po.lines) {
-        const qty = toDecimal(line.receivedQty).minus(toDecimal(line.billedQty));
+        const qty = toDecimal(line.receivedQty).minus(
+          toDecimal(line.billedQty),
+        );
         if (!qty.greaterThan(0)) continue;
         const amount = round4(qty.times(toDecimal(line.unitCost)));
         if (line.itemId) {
-          const grniAmount = toDecimal(line.grniAccrued).minus(toDecimal(line.grniCleared));
-          billLines.push({ accountId: grni.id, description: line.description, amount: amount.toFixed(4), taxRate: line.taxRate });
-          links.push({ purchaseOrderLineId: line.id, quantity: qty.toFixed(4), grniAmount: grniAmount.toFixed(4) });
+          const grniAmount = toDecimal(line.grniAccrued).minus(
+            toDecimal(line.grniCleared),
+          );
+          billLines.push({
+            accountId: grni.id,
+            description: line.description,
+            amount: amount.toFixed(4),
+            taxRate: line.taxRate,
+          });
+          links.push({
+            purchaseOrderLineId: line.id,
+            quantity: qty.toFixed(4),
+            grniAmount: grniAmount.toFixed(4),
+          });
           updates.push({ line, qty, grni: grniAmount });
         } else {
           const accountId = line.accountId ?? dto.defaultAccountId;
@@ -585,15 +695,29 @@ export class PurchaseOrdersService {
               details: { lineId: line.id },
             });
           }
-          billLines.push({ accountId, description: line.description, amount: amount.toFixed(4), taxRate: line.taxRate });
-          links.push({ purchaseOrderLineId: line.id, quantity: qty.toFixed(4), grniAmount: null });
+          billLines.push({
+            accountId,
+            description: line.description,
+            amount: amount.toFixed(4),
+            taxRate: line.taxRate,
+          });
+          links.push({
+            purchaseOrderLineId: line.id,
+            quantity: qty.toFixed(4),
+            grniAmount: null,
+          });
           updates.push({ line, qty, grni: null });
         }
       }
       if (billLines.length === 0) {
         throw new BadRequestException({
           code: 'NOTHING_TO_BILL',
-          message: toDecimal(po.lines.reduce((s, l) => s.plus(toDecimal(l.receivedQty)), new Decimal(0))).isZero()
+          message: toDecimal(
+            po.lines.reduce(
+              (s, l) => s.plus(toDecimal(l.receivedQty)),
+              new Decimal(0),
+            ),
+          ).isZero()
             ? `Nothing has been received on ${po.poNumber} yet.`
             : `Everything received on ${po.poNumber} has already been billed.`,
         });
@@ -618,7 +742,10 @@ export class PurchaseOrdersService {
 
       for (const u of updates) {
         u.line.billedQty = toDecimal(u.line.billedQty).plus(u.qty).toFixed(4);
-        if (u.grni) u.line.grniCleared = toDecimal(u.line.grniCleared).plus(u.grni).toFixed(4);
+        if (u.grni)
+          u.line.grniCleared = toDecimal(u.line.grniCleared)
+            .plus(u.grni)
+            .toFixed(4);
         await manager.save(u.line);
       }
       po.status = this.deriveStatus(po.lines);
@@ -636,7 +763,10 @@ export class PurchaseOrdersService {
   async update(companyId: string, id: string, dto: CreatePurchaseOrderDto) {
     await this.dataSource.transaction(async (manager) => {
       const po = await this.lockPo(manager, companyId, id);
-      if (po.status === 'closed' || po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0))) {
+      if (
+        po.status === 'closed' ||
+        po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0))
+      ) {
         // Rebuilding the lines used to reset received quantities to zero while
         // the stock and GRNI they had posted stayed put.
         throw new BadRequestException({
@@ -645,9 +775,14 @@ export class PurchaseOrdersService {
         });
       }
       if (dto.vendorId && dto.vendorId !== po.vendorId) {
-        const vendor = await manager.findOne(Vendor, { where: { id: dto.vendorId, companyId } });
+        const vendor = await manager.findOne(Vendor, {
+          where: { id: dto.vendorId, companyId },
+        });
         if (!vendor) {
-          throw new NotFoundException({ code: 'VENDOR_NOT_FOUND', message: 'Vendor not found' });
+          throw new NotFoundException({
+            code: 'VENDOR_NOT_FOUND',
+            message: 'Vendor not found',
+          });
         }
         po.vendorId = dto.vendorId;
       }
@@ -661,7 +796,9 @@ export class PurchaseOrdersService {
         po.taxAmount = tax.toFixed(4);
         po.total = subtotal.plus(tax).toFixed(4);
         await manager.delete(PurchaseOrderLine, { orderId: po.id });
-        const lines = calc.map((l) => manager.create(PurchaseOrderLine, { ...l, orderId: po.id }));
+        const lines = calc.map((l) =>
+          manager.create(PurchaseOrderLine, { ...l, orderId: po.id }),
+        );
         await manager.save(lines);
         po.lines = lines;
       }
@@ -673,8 +810,13 @@ export class PurchaseOrdersService {
   async delete(companyId: string, id: string) {
     return this.dataSource.transaction(async (manager) => {
       const po = await this.lockPo(manager, companyId, id);
-      const billed = await manager.count(Bill, { where: { companyId, purchaseOrderId: po.id } });
-      if (billed > 0 || po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0))) {
+      const billed = await manager.count(Bill, {
+        where: { companyId, purchaseOrderId: po.id },
+      });
+      if (
+        billed > 0 ||
+        po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0))
+      ) {
         throw new BadRequestException({
           code: 'PO_HAS_RECEIPTS',
           message: `${po.poNumber} has goods received or bills against it. Close it instead of deleting it.`,
@@ -709,9 +851,14 @@ export class PurchaseOrdersService {
       const po = await this.lockPo(manager, companyId, id);
       if (po.status === status) return;
       const previousStatus = po.status;
-      const anyReceived = po.lines.some((l) => toDecimal(l.receivedQty).greaterThan(0));
+      const anyReceived = po.lines.some((l) =>
+        toDecimal(l.receivedQty).greaterThan(0),
+      );
       const refuse = (message: string) => {
-        throw new BadRequestException({ code: 'INVALID_STATUS_TRANSITION', message });
+        throw new BadRequestException({
+          code: 'INVALID_STATUS_TRANSITION',
+          message,
+        });
       };
       switch (status) {
         case 'sent':
@@ -725,12 +872,15 @@ export class PurchaseOrdersService {
           break;
         case 'draft':
           if (po.status !== 'sent' || anyReceived) {
-            refuse(`${po.poNumber} can only go back to a requisition before anything is received.`);
+            refuse(
+              `${po.poNumber} can only go back to a requisition before anything is received.`,
+            );
           }
           po.status = 'draft';
           break;
         case 'closed': {
-          if (po.status === 'draft') refuse('A requisition cannot be closed. Delete it instead.');
+          if (po.status === 'draft')
+            refuse('A requisition cannot be closed. Delete it instead.');
           const unbilled = po.lines.some((l) =>
             toDecimal(l.receivedQty).greaterThan(toDecimal(l.billedQty)),
           );
@@ -744,13 +894,24 @@ export class PurchaseOrdersService {
           break;
         }
         default:
-          refuse(`'${status}' follows from goods received and cannot be set directly.`);
+          refuse(
+            `'${status}' follows from goods received and cannot be set directly.`,
+          );
       }
       await manager.save(po);
       if (isPoWithdrawal(previousStatus, po.status, anyReceived)) {
-        await this.messaging.cancelQueued(manager, companyId, 'purchase_order', po.id, { reason: 'po_withdrawn' });
+        await this.messaging.cancelQueued(
+          manager,
+          companyId,
+          'purchase_order',
+          po.id,
+          { reason: 'po_withdrawn' },
+        );
       }
-      await this.messaging.enqueue(manager, purchaseOrderStatusMessage(po, previousStatus, anyReceived, opts));
+      await this.messaging.enqueue(
+        manager,
+        purchaseOrderStatusMessage(po, previousStatus, anyReceived, opts),
+      );
     });
     return this.getById(companyId, id);
   }

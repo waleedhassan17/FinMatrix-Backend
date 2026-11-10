@@ -24,7 +24,9 @@ export class BillPaymentApplication {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   amount!: string;
 
-  @ManyToOne(() => BillPayment, (bp) => bp.applications, { onDelete: 'CASCADE' })
+  @ManyToOne(() => BillPayment, (bp) => bp.applications, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'bill_payment_id' })
   billPayment!: BillPayment;
 }

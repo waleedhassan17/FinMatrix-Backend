@@ -104,7 +104,9 @@ export class QaFixesSchema1787320000000 implements MigrationInterface {
         ADD COLUMN IF NOT EXISTS "quantity" numeric(18,4) NULL,
         ADD COLUMN IF NOT EXISTS "grni_amount" numeric(18,4) NULL
     `);
-    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_bills_purchase_order_id"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "UQ_bills_purchase_order_id"`,
+    );
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_bills_purchase_order_id"
         ON "bills" ("purchase_order_id")
@@ -204,7 +206,9 @@ export class QaFixesSchema1787320000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_bills_purchase_order_id"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_bills_purchase_order_id"`,
+    );
     await queryRunner.query(`
       ALTER TABLE "bill_line_items"
         DROP COLUMN IF EXISTS "purchase_order_line_id",
@@ -222,7 +226,9 @@ export class QaFixesSchema1787320000000 implements MigrationInterface {
         DROP COLUMN IF EXISTS "applied_on",
         DROP COLUMN IF EXISTS "journal_entry_id"
     `);
-    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_payments_company_payment_number"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "UQ_payments_company_payment_number"`,
+    );
     await queryRunner.query(`
       ALTER TABLE "payments"
         DROP COLUMN IF EXISTS "payment_number",

@@ -16,12 +16,20 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { BillingService } from './billing.service';
 import { BankDetailsQueryDto, SubmitPaymentDto } from './dto/billing.dto';
 import { isPlanKey, PlanKey } from './plan-config';
 
-const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const ALLOWED_MIMES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+];
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB
 
 /**
@@ -42,16 +50,23 @@ export class BillingController {
    * signin), so resolve via the user's membership when missing.
    */
   private async companyIdOf(user: AuthenticatedUser): Promise<string> {
-    const cid = await this.billing.resolveCompanyId(user.id, user.companyId ?? null);
+    const cid = await this.billing.resolveCompanyId(
+      user.id,
+      user.companyId ?? null,
+    );
     if (!cid) {
-      throw new ForbiddenException('You must belong to a company to manage billing.');
+      throw new ForbiddenException(
+        'You must belong to a company to manage billing.',
+      );
     }
     return cid;
   }
 
   private assertAdmin(user: AuthenticatedUser) {
     if (user.role !== 'admin') {
-      throw new ForbiddenException('Only a company administrator can manage billing.');
+      throw new ForbiddenException(
+        'Only a company administrator can manage billing.',
+      );
     }
   }
 
@@ -65,7 +80,10 @@ export class BillingController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('companyType') companyType?: string,
   ) {
-    return this.billing.getPlansForType(await this.companyIdOf(user), companyType);
+    return this.billing.getPlansForType(
+      await this.companyIdOf(user),
+      companyType,
+    );
   }
 
   @Get('status')

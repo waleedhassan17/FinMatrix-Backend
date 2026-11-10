@@ -33,7 +33,11 @@ export function statementBalances(
 }
 
 /** Whether an event's date falls inside the period, both ends included. */
-export const inPeriod = (date: string, startDate: string, endDate: string): boolean => {
+export const inPeriod = (
+  date: string,
+  startDate: string,
+  endDate: string,
+): boolean => {
   const day = String(date).slice(0, 10);
   return day >= startDate && day <= endDate;
 };

@@ -32,14 +32,18 @@ function isValidTimeZone(zone: string): boolean {
 
 export function businessTimezone(preferred?: string | null): string {
   const zone = (preferred ?? '').trim();
-  if (zone && zone.toUpperCase() !== 'UTC' && isValidTimeZone(zone)) return zone;
+  if (zone && zone.toUpperCase() !== 'UTC' && isValidTimeZone(zone))
+    return zone;
   const fromEnv = (process.env.BUSINESS_TIMEZONE ?? '').trim();
   if (fromEnv && isValidTimeZone(fromEnv)) return fromEnv;
   return DEFAULT_BUSINESS_TIMEZONE;
 }
 
 /** `YYYY-MM-DD` for `now` in the business time zone. */
-export function businessToday(preferred?: string | null, now: Date = new Date()): string {
+export function businessToday(
+  preferred?: string | null,
+  now: Date = new Date(),
+): string {
   // en-CA formats a date as YYYY-MM-DD.
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: businessTimezone(preferred),
@@ -52,7 +56,9 @@ export function businessToday(preferred?: string | null, now: Date = new Date())
 /** Calendar arithmetic on an ISO date, free of any time zone. */
 export function addDaysIso(isoDate: string, days: number): string {
   const [y, m, d] = isoDate.slice(0, 10).split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d) + days * 86_400_000).toISOString().slice(0, 10);
+  return new Date(Date.UTC(y, m - 1, d) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 /**
@@ -93,7 +99,10 @@ export const PAYMENT_TERMS_DAYS: Record<string, number> = {
   net_60: 60,
 };
 
-export function termsDays(terms: string | null | undefined, fallback = 30): number {
+export function termsDays(
+  terms: string | null | undefined,
+  fallback = 30,
+): number {
   if (!terms) return fallback;
   const days = PAYMENT_TERMS_DAYS[terms];
   return days === undefined ? fallback : days;

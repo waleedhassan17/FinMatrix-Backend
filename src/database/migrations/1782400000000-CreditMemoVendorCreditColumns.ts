@@ -21,8 +21,12 @@ export class CreditMemoVendorCreditColumns1782400000000 implements MigrationInte
         ADD COLUMN IF NOT EXISTS "status" character varying(16) NOT NULL DEFAULT 'open',
         ADD COLUMN IF NOT EXISTS "created_by" uuid
     `);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_credit_memos_company_status" ON "credit_memos" ("company_id","status")`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_vendor_credits_company_status" ON "vendor_credits" ("company_id","status")`);
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_credit_memos_company_status" ON "credit_memos" ("company_id","status")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_vendor_credits_company_status" ON "vendor_credits" ("company_id","status")`,
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

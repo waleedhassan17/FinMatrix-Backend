@@ -1,4 +1,11 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { SalesOrder } from './sales-order.entity';
 
 @Entity('sales_order_line_items')
@@ -16,19 +23,49 @@ export class SalesOrderLineItem {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 1 })
   quantity!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'quantity_fulfilled' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'quantity_fulfilled',
+  })
   quantityFulfilled!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_price' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_price',
+  })
   unitPrice!: string;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 8,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'line_total' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'line_total',
+  })
   lineTotal!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'account_id' })

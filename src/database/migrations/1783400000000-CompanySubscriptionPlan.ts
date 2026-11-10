@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (free | standard | pro). Only 'free' is selectable now; paid tiers are
  * display-only. Idempotent.
  */
-export class CompanySubscriptionPlan1783400000000
-  implements MigrationInterface
-{
+export class CompanySubscriptionPlan1783400000000 implements MigrationInterface {
   name = 'CompanySubscriptionPlan1783400000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

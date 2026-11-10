@@ -13,12 +13,21 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UseGuards } from '@nestjs/common';
 import { AgenciesService } from './agencies.service';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, SyncInventoryDto, AddAgencyItemDto } from './dto/agency.dto';
+import {
+  CreateAgencyDto,
+  UpdateAgencyDto,
+  AgencyQueryDto,
+  SyncInventoryDto,
+  AddAgencyItemDto,
+} from './dto/agency.dto';
 import { HttpCode } from '@nestjs/common';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
@@ -52,10 +61,7 @@ export class AgenciesController {
 
   @Post()
   @Roles('admin')
-  create(
-    @CurrentCompany() companyId: string,
-    @Body() dto: CreateAgencyDto,
-  ) {
+  create(@CurrentCompany() companyId: string, @Body() dto: CreateAgencyDto) {
     return this.svc.create(companyId, dto);
   }
 
@@ -93,9 +99,14 @@ export class AgenciesController {
   assignInventory(
     @CurrentCompany() companyId: string,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() payload: { itemId: string, quantity: string },
+    @Body() payload: { itemId: string; quantity: string },
   ) {
-    return this.svc.assignInventory(companyId, id, payload.itemId, payload.quantity);
+    return this.svc.assignInventory(
+      companyId,
+      id,
+      payload.itemId,
+      payload.quantity,
+    );
   }
 
   @Post(':id/sync-inventory')

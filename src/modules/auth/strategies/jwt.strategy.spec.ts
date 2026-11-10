@@ -28,8 +28,14 @@ describe('JwtStrategy (signout denylist)', () => {
       providers: [
         JwtStrategy,
         { provide: UsersService, useValue: users },
-        { provide: ConfigService, useValue: { getOrThrow: jest.fn(() => 'secret') } },
-        { provide: getRepositoryToken(RevokedAccessToken), useValue: revokedRepo },
+        {
+          provide: ConfigService,
+          useValue: { getOrThrow: jest.fn(() => 'secret') },
+        },
+        {
+          provide: getRepositoryToken(RevokedAccessToken),
+          useValue: revokedRepo,
+        },
       ],
     }).compile();
 
@@ -37,8 +43,14 @@ describe('JwtStrategy (signout denylist)', () => {
   });
 
   it('marks an owner who has not confirmed their email as unverified', async () => {
-    users.findById.mockResolvedValue({ ...activeUser, role: 'admin', isEmailVerified: false });
-    await expect(strategy.validate(payload())).resolves.toMatchObject({ emailVerified: false });
+    users.findById.mockResolvedValue({
+      ...activeUser,
+      role: 'admin',
+      isEmailVerified: false,
+    });
+    await expect(strategy.validate(payload())).resolves.toMatchObject({
+      emailVerified: false,
+    });
   });
 
   it('never marks an account with no email to confirm as unverified', async () => {
@@ -49,16 +61,22 @@ describe('JwtStrategy (signout denylist)', () => {
       isActive: true,
       isEmailVerified: false,
     });
-    await expect(strategy.validate(payload())).resolves.toMatchObject({ emailVerified: true });
+    await expect(strategy.validate(payload())).resolves.toMatchObject({
+      emailVerified: true,
+    });
   });
 
   it('accepts a token whose jti is not denylisted', async () => {
-    await expect(strategy.validate(payload())).resolves.toMatchObject({ id: 'u1' });
+    await expect(strategy.validate(payload())).resolves.toMatchObject({
+      id: 'u1',
+    });
   });
 
   it('rejects a signed-out (denylisted) token with 401', async () => {
     revokedRepo.exists.mockResolvedValue(true);
-    await expect(strategy.validate(payload())).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(strategy.validate(payload())).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
     // users lookup must not even run for a revoked token
     expect(users.findById).not.toHaveBeenCalled();
   });
@@ -74,39 +92,49 @@ describe('JwtStrategy (signout denylist)', () => {
   );
 
   it('skips the denylist check for legacy tokens without a jti', async () => {
-    await expect(strategy.validate(payload({ jti: undefined }))).resolves.toMatchObject({
+    await expect(
+      strategy.validate(payload({ jti: undefined })),
+    ).resolves.toMatchObject({
       id: 'u1',
     });
     expect(revokedRepo.exists).not.toHaveBeenCalled();
   });
 
   it('rejects a refresh token presented as an access token', async () => {
-    await expect(strategy.validate(payload({ typ: 'refresh' }))).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      strategy.validate(payload({ typ: 'refresh' })),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(users.findById).not.toHaveBeenCalled();
   });
 
   it('accepts an access token', async () => {
-    await expect(strategy.validate(payload({ typ: 'access' }))).resolves.toMatchObject({
+    await expect(
+      strategy.validate(payload({ typ: 'access' })),
+    ).resolves.toMatchObject({
       id: 'u1',
     });
   });
 
   it('keeps accepting a legacy (typ-less) 15-minute access token', async () => {
     await expect(
-      strategy.validate(payload({ typ: undefined, iat: 1_000, exp: 1_000 + 900 })),
+      strategy.validate(
+        payload({ typ: undefined, iat: 1_000, exp: 1_000 + 900 }),
+      ),
     ).resolves.toMatchObject({ id: 'u1' });
   });
 
   it('rejects a legacy (typ-less) 30-day token: that was a refresh token', async () => {
     await expect(
-      strategy.validate(payload({ typ: undefined, iat: 1_000, exp: 1_000 + 30 * 86_400 })),
+      strategy.validate(
+        payload({ typ: undefined, iat: 1_000, exp: 1_000 + 30 * 86_400 }),
+      ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('still rejects inactive users', async () => {
     users.findById.mockResolvedValue({ ...activeUser, isActive: false });
-    await expect(strategy.validate(payload())).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(strategy.validate(payload())).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 });

@@ -84,7 +84,12 @@ export interface InvoiceSettlement {
   credits: SettledCustomerCredit[];
   creditTotal: string;
   cashTotal: string;
-  invoices: Array<{ id: string; invoiceNumber: string; balance: string; status: string }>;
+  invoices: Array<{
+    id: string;
+    invoiceNumber: string;
+    balance: string;
+    status: string;
+  }>;
 }
 
 @Injectable()
@@ -121,11 +126,10 @@ export class PaymentsService {
     manager?: EntityManager,
   ): Promise<{ total: string; advances: CustomerAdvance[] }> {
     const runner = manager ?? this.dataSource.manager;
-    const rows: UnappliedReceiptRow[] = await runner.query(UNAPPLIED_RECEIPTS_SQL, [
-      companyId,
-      customerId,
-      MONEY_TOLERANCE.toFixed(4),
-    ]);
+    const rows: UnappliedReceiptRow[] = await runner.query(
+      UNAPPLIED_RECEIPTS_SQL,
+      [companyId, customerId, MONEY_TOLERANCE.toFixed(4)],
+    );
     const advances = rows.map((r) => ({
       paymentId: r.id,
       paymentNumber: r.payment_number,
@@ -134,7 +138,10 @@ export class PaymentsService {
       unapplied: toDecimal(r.unapplied).toFixed(4),
       advancePosted: !!r.advance_posted,
     }));
-    const total = advances.reduce((sum, a) => sum.plus(a.unapplied), new Decimal(0));
+    const total = advances.reduce(
+      (sum, a) => sum.plus(a.unapplied),
+      new Decimal(0),
+    );
     return { total: total.toFixed(4), advances };
   }
 
@@ -149,7 +156,8 @@ export class PaymentsService {
       const qb = this.repo
         .createQueryBuilder('p')
         .where('p.companyId = :companyId', { companyId });
-      if (query.customerId) qb.andWhere('p.customerId = :c', { c: query.customerId });
+      if (query.customerId)
+        qb.andWhere('p.customerId = :c', { c: query.customerId });
       if (query.invoiceId)
         qb.andWhere(
           `p.id IN (SELECT pa."payment_id" FROM payment_applications pa WHERE pa."invoice_id" = :invId)`,
@@ -219,10 +227,15 @@ export class PaymentsService {
     if (payments.length === 0) return [];
     const customerIds = [...new Set(payments.map((p) => p.customerId))];
     const invoiceIds = [
-      ...new Set(payments.flatMap((p) => (p.applications ?? []).map((a) => a.invoiceId))),
+      ...new Set(
+        payments.flatMap((p) => (p.applications ?? []).map((a) => a.invoiceId)),
+      ),
     ];
     const [customers, invoices] = await Promise.all([
-      this.customerRepo.find({ where: { companyId, id: In(customerIds) }, select: ['id', 'name'] }),
+      this.customerRepo.find({
+        where: { companyId, id: In(customerIds) },
+        select: ['id', 'name'],
+      }),
       invoiceIds.length
         ? this.dataSource.getRepository(Invoice).find({
             where: { companyId, id: In(invoiceIds) },
@@ -249,7 +262,9 @@ export class PaymentsService {
           }),
         ),
         amountApplied: applied.toFixed(4),
-        unapplied: Decimal.max(toDecimal(p.amount).minus(applied), 0).toFixed(4),
+        unapplied: Decimal.max(toDecimal(p.amount).minus(applied), 0).toFixed(
+          4,
+        ),
       });
     });
   }
@@ -333,7 +348,12 @@ export class PaymentsService {
     } else if (dto.holdAsAdvance) {
       applications = [];
     } else {
-      applications = await this.autoApply(manager, companyId, customer.id, amount.toFixed(4));
+      applications = await this.autoApply(
+        manager,
+        companyId,
+        customer.id,
+        amount.toFixed(4),
+      );
     }
 
     // Resolve the GL account to debit: the account the caller chose, checked
@@ -373,7 +393,12 @@ export class PaymentsService {
     const appliedNumbers: string[] = [];
     let applied = new Decimal(0);
     for (const app of applications) {
-      await this.assertInvoiceBelongsToCustomer(manager, companyId, app.invoiceId, customer.id);
+      await this.assertInvoiceBelongsToCustomer(
+        manager,
+        companyId,
+        app.invoiceId,
+        customer.id,
+      );
       const invoice = await this.invoices.applyPayment(
         manager,
         companyId,
@@ -415,7 +440,11 @@ export class PaymentsService {
       },
     ];
     if (applied.greaterThan(MONEY_TOLERANCE)) {
-      const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
+      const ar = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_AR,
+        manager,
+      );
       lines.push({
         accountId: ar.id,
         description: `Applied to ${appliedNumbers.join(', ')}`,
@@ -451,8 +480,17 @@ export class PaymentsService {
     });
     payment.journalEntryId = entry.id;
     await manager.save(payment);
-    await this.messaging.cancelQueued(manager, companyId, 'invoice', appEntities.map((a) => a.invoiceId), { events: REMINDER_EVENTS, reason: 'payment_recorded' });
-    await this.messaging.enqueue(manager, paymentReceivedMessage(payment, customer.balance, userId));
+    await this.messaging.cancelQueued(
+      manager,
+      companyId,
+      'invoice',
+      appEntities.map((a) => a.invoiceId),
+      { events: REMINDER_EVENTS, reason: 'payment_recorded' },
+    );
+    await this.messaging.enqueue(
+      manager,
+      paymentReceivedMessage(payment, customer.balance, userId),
+    );
 
     return payment;
   }
@@ -501,10 +539,16 @@ export class PaymentsService {
       const payment = await manager
         .createQueryBuilder(Payment, 'p')
         .setLock('pessimistic_write')
-        .where('p.id = :id AND p.companyId = :companyId', { id: paymentId, companyId })
+        .where('p.id = :id AND p.companyId = :companyId', {
+          id: paymentId,
+          companyId,
+        })
         .getOne();
       if (!payment) {
-        throw new NotFoundException({ code: 'PAYMENT_NOT_FOUND', message: 'Payment not found' });
+        throw new NotFoundException({
+          code: 'PAYMENT_NOT_FOUND',
+          message: 'Payment not found',
+        });
       }
       const holder = await this.openDeliveryHoldingAdvance(manager, payment.id);
       if (holder && holder.id !== opts.forDeliveryId) {
@@ -515,7 +559,9 @@ export class PaymentsService {
             'It is applied when that delivery is approved; cancel the delivery to free it.',
         });
       }
-      const existing = await manager.find(PaymentApplication, { where: { paymentId } });
+      const existing = await manager.find(PaymentApplication, {
+        where: { paymentId },
+      });
       const alreadyApplied = existing.reduce(
         (sum, a) => sum.plus(toDecimal(a.amountApplied)),
         new Decimal(0),
@@ -554,8 +600,18 @@ export class PaymentsService {
       const applications: PaymentApplication[] = [];
       const numbers: string[] = [];
       for (const a of dto.applications) {
-        await this.assertInvoiceBelongsToCustomer(manager, companyId, a.invoiceId, payment.customerId);
-        const invoice = await this.invoices.applyPayment(manager, companyId, a.invoiceId, a.amount);
+        await this.assertInvoiceBelongsToCustomer(
+          manager,
+          companyId,
+          a.invoiceId,
+          payment.customerId,
+        );
+        const invoice = await this.invoices.applyPayment(
+          manager,
+          companyId,
+          a.invoiceId,
+          a.amount,
+        );
         await this.refreshDeliveryPaidStatus(manager, companyId, invoice);
         numbers.push(invoice.invoiceNumber);
         applications.push(
@@ -578,7 +634,11 @@ export class PaymentsService {
           companyId,
           ACCT_CUSTOMER_ADVANCES,
         );
-        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
+        const ar = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_AR,
+          manager,
+        );
         const total = requested.toFixed(4);
         const entry = await this.posting.createEntry(manager, {
           companyId,
@@ -589,13 +649,27 @@ export class PaymentsService {
           sourceType: 'payment_application',
           sourceId: payment.id,
           lines: [
-            { accountId: advances.id, description: 'Customer advance applied', debit: total, credit: '0', lineOrder: 0 },
-            { accountId: ar.id, description: `Applied to ${numbers.join(', ')}`, debit: '0', credit: total, lineOrder: 1 },
+            {
+              accountId: advances.id,
+              description: 'Customer advance applied',
+              debit: total,
+              credit: '0',
+              lineOrder: 0,
+            },
+            {
+              accountId: ar.id,
+              description: `Applied to ${numbers.join(', ')}`,
+              debit: '0',
+              credit: total,
+              lineOrder: 1,
+            },
           ],
         });
         for (const app of applications) app.journalEntryId = entry.id;
         if (customer) {
-          customer.balance = subtractMoney(customer.balance, requested).toFixed(4);
+          customer.balance = subtractMoney(customer.balance, requested).toFixed(
+            4,
+          );
           await manager.save(customer);
         }
       }
@@ -619,21 +693,34 @@ export class PaymentsService {
    * date, so its checks hold unchanged: not before the money arrived, not in
    * the future, not an advance still held for an open delivery.
    */
-  async settle(companyId: string, userId: string, dto: SettleInvoicesDto): Promise<InvoiceSettlement> {
+  async settle(
+    companyId: string,
+    userId: string,
+    dto: SettleInvoicesDto,
+  ): Promise<InvoiceSettlement> {
     const result = await this.dataSource.transaction(async (manager) => {
-      const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
+      const customer = await manager.findOne(Customer, {
+        where: { id: dto.customerId, companyId },
+      });
       if (!customer) {
-        throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+        throw new NotFoundException({
+          code: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer not found',
+        });
       }
       const credits = Array.isArray(dto.credits) ? dto.credits : [];
       const cashAmount = dto.cash ? toDecimal(dto.cash.amount) : new Decimal(0);
       if (dto.cash && !isPositive(cashAmount)) {
-        throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount received must be positive' });
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'The amount received must be positive',
+        });
       }
       if (credits.length === 0 && !dto.cash) {
         throw new BadRequestException({
           code: 'NOTHING_TO_SETTLE',
-          message: 'Choose credit on account to use, or enter the amount received.',
+          message:
+            'Choose credit on account to use, or enter the amount received.',
         });
       }
 
@@ -644,9 +731,14 @@ export class PaymentsService {
         byReceipt.set(c.id, [...(byReceipt.get(c.id) ?? []), c]);
       }
       for (const [paymentId, uses] of byReceipt) {
-        const receipt = await manager.findOne(Payment, { where: { id: paymentId, companyId } });
+        const receipt = await manager.findOne(Payment, {
+          where: { id: paymentId, companyId },
+        });
         if (!receipt) {
-          throw new NotFoundException({ code: 'PAYMENT_NOT_FOUND', message: 'That advance was not found.' });
+          throw new NotFoundException({
+            code: 'PAYMENT_NOT_FOUND',
+            message: 'That advance was not found.',
+          });
         }
         if (receipt.customerId !== customer.id) {
           throw new BadRequestException({
@@ -655,18 +747,44 @@ export class PaymentsService {
           });
         }
         await this.applyInTransaction(manager, companyId, userId, paymentId, {
-          applications: uses.map((u) => ({ invoiceId: u.invoiceId, amount: u.amount })),
+          applications: uses.map((u) => ({
+            invoiceId: u.invoiceId,
+            amount: u.amount,
+          })),
           date: dto.paymentDate,
         });
         for (const u of uses) {
-          used.push({ kind: 'advance', id: paymentId, reference: receipt.paymentNumber, invoiceId: u.invoiceId, amount: toDecimal(u.amount).toFixed(4) });
+          used.push({
+            kind: 'advance',
+            id: paymentId,
+            reference: receipt.paymentNumber,
+            invoiceId: u.invoiceId,
+            amount: toDecimal(u.amount).toFixed(4),
+          });
         }
       }
       // Credit memos.
       for (const c of credits.filter((x) => x.kind === 'credit_memo')) {
-        await this.assertInvoiceBelongsToCustomer(manager, companyId, c.invoiceId, customer.id);
-        const memo = await this.creditMemos.applyInTransaction(manager, companyId, c.id, c.invoiceId, c.amount);
-        used.push({ kind: 'credit_memo', id: memo.id, reference: memo.creditMemoNumber, invoiceId: c.invoiceId, amount: toDecimal(c.amount).toFixed(4) });
+        await this.assertInvoiceBelongsToCustomer(
+          manager,
+          companyId,
+          c.invoiceId,
+          customer.id,
+        );
+        const memo = await this.creditMemos.applyInTransaction(
+          manager,
+          companyId,
+          c.id,
+          c.invoiceId,
+          c.amount,
+        );
+        used.push({
+          kind: 'credit_memo',
+          id: memo.id,
+          reference: memo.creditMemoNumber,
+          invoiceId: c.invoiceId,
+          amount: toDecimal(c.amount).toFixed(4),
+        });
       }
 
       // Then the new money, over what the credits left.
@@ -685,24 +803,39 @@ export class PaymentsService {
         : null;
 
       const invoiceIds = [
-        ...new Set([...credits.map((c) => c.invoiceId), ...(payment?.applications ?? []).map((a) => a.invoiceId)]),
+        ...new Set([
+          ...credits.map((c) => c.invoiceId),
+          ...(payment?.applications ?? []).map((a) => a.invoiceId),
+        ]),
       ];
       const invoices = invoiceIds.length
-        ? await manager.find(Invoice, { where: { id: In(invoiceIds), companyId } })
+        ? await manager.find(Invoice, {
+            where: { id: In(invoiceIds), companyId },
+          })
         : [];
       return {
         paymentId: payment?.id ?? null,
         credits: used,
-        creditTotal: used.reduce((t, c) => t.plus(c.amount), new Decimal(0)).toFixed(4),
+        creditTotal: used
+          .reduce((t, c) => t.plus(c.amount), new Decimal(0))
+          .toFixed(4),
         cashTotal: payment ? toDecimal(payment.amount).toFixed(4) : '0.0000',
-        invoices: invoices.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber, balance: i.balance, status: i.status })),
+        invoices: invoices.map((i) => ({
+          id: i.id,
+          invoiceNumber: i.invoiceNumber,
+          balance: i.balance,
+          status: i.status,
+        })),
       };
     });
 
     // Read back after the commit, with the names and unapplied figure a
     // receipt page shows.
     const { paymentId, ...rest } = result;
-    return { payment: paymentId ? await this.getById(companyId, paymentId) : null, ...rest };
+    return {
+      payment: paymentId ? await this.getById(companyId, paymentId) : null,
+      ...rest,
+    };
   }
 
   /**
@@ -721,7 +854,10 @@ export class PaymentsService {
       select: ['id', 'customerId', 'invoiceNumber'],
     });
     if (!invoice) {
-      throw new NotFoundException({ code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' });
+      throw new NotFoundException({
+        code: 'INVOICE_NOT_FOUND',
+        message: 'Invoice not found',
+      });
     }
     if (invoice.customerId !== customerId) {
       throw new BadRequestException({
@@ -773,7 +909,10 @@ export class PaymentsService {
     manager: EntityManager,
     paymentId: string,
   ): Promise<{ id: string; referenceNo: string | null } | null> {
-    const [row] = await manager.query(`${OPEN_DELIVERY_ADVANCE_SQL('$1')} LIMIT 1`, [paymentId]);
+    const [row] = await manager.query(
+      `${OPEN_DELIVERY_ADVANCE_SQL('$1')} LIMIT 1`,
+      [paymentId],
+    );
     return row ? { id: row.id, referenceNo: row.reference_no ?? null } : null;
   }
 
@@ -829,10 +968,22 @@ export class PaymentsService {
           lock: { mode: 'pessimistic_write' },
         });
         if (!invoice) continue;
-        const reducedPaid = subtractMoney(invoice.amountPaid, app.amountApplied);
-        invoice.amountPaid = (reducedPaid.lessThan(0) ? toDecimal('0') : reducedPaid).toFixed(4);
-        invoice.balance = subtractMoney(invoice.total, invoice.amountPaid).toFixed(4);
-        if (toDecimal(invoice.amountPaid).greaterThanOrEqualTo(toDecimal(invoice.total))) {
+        const reducedPaid = subtractMoney(
+          invoice.amountPaid,
+          app.amountApplied,
+        );
+        invoice.amountPaid = (
+          reducedPaid.lessThan(0) ? toDecimal('0') : reducedPaid
+        ).toFixed(4);
+        invoice.balance = subtractMoney(
+          invoice.total,
+          invoice.amountPaid,
+        ).toFixed(4);
+        if (
+          toDecimal(invoice.amountPaid).greaterThanOrEqualTo(
+            toDecimal(invoice.total),
+          )
+        ) {
           invoice.status = 'paid';
         } else if (invoice.dueDate < today) {
           invoice.status = 'overdue';
@@ -854,18 +1005,28 @@ export class PaymentsService {
         where: { id: payment.customerId, companyId },
       });
       if (customer) {
-        const restore = payment.advancePosted ? applied : toDecimal(payment.amount);
+        const restore = payment.advancePosted
+          ? applied
+          : toDecimal(payment.amount);
         customer.balance = addMoney(customer.balance, restore).toFixed(4);
         await manager.save(customer);
       }
 
-      const label = payment.paymentNumber ?? payment.reference ?? payment.id.slice(0, 8);
+      const label =
+        payment.paymentNumber ?? payment.reference ?? payment.id.slice(0, 8);
       if (payment.journalEntryId) {
-        await this.postMirror(manager, companyId, userId, today, payment.journalEntryId, {
-          memo: `Delete receipt ${label}`,
-          sourceType: 'payment_void',
-          sourceId: payment.id,
-        });
+        await this.postMirror(
+          manager,
+          companyId,
+          userId,
+          today,
+          payment.journalEntryId,
+          {
+            memo: `Delete receipt ${label}`,
+            sourceType: 'payment_void',
+            sourceId: payment.id,
+          },
+        );
       }
       const applicationEntries = [
         ...new Set(
@@ -929,7 +1090,11 @@ export class PaymentsService {
     customerId: string,
     amount: string,
   ): Promise<PaymentApplicationDto[]> {
-    const outstanding = await this.invoices.outstandingForCustomer(companyId, customerId, manager);
+    const outstanding = await this.invoices.outstandingForCustomer(
+      companyId,
+      customerId,
+      manager,
+    );
     const apps: PaymentApplicationDto[] = [];
     let remaining = toDecimal(amount);
     for (const inv of outstanding) {

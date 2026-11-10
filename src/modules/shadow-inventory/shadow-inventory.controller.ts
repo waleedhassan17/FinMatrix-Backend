@@ -1,12 +1,29 @@
-import { Body, Controller, Get, Param, ParseIntPipe, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ShadowInventoryService } from './shadow-inventory.service';
-import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
+import {
+  CreateSnapshotDto,
+  UpdateSnapshotDto,
+} from './dto/shadow-inventory.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('Shadow Inventory')
@@ -26,16 +43,13 @@ export class ShadowInventoryController {
     @Query('page', new ParseIntPipe({ optional: true })) page = 1,
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
-    const pid = (user.role === 'delivery') ? user.id : personnelId;
+    const pid = user.role === 'delivery' ? user.id : personnelId;
     return this.svc.list(companyId, pid, page, limit);
   }
 
   @Post()
   @Roles('delivery')
-  create(
-    @CurrentCompany() companyId: string,
-    @Body() dto: CreateSnapshotDto,
-  ) {
+  create(@CurrentCompany() companyId: string, @Body() dto: CreateSnapshotDto) {
     return this.svc.create(companyId, dto);
   }
 

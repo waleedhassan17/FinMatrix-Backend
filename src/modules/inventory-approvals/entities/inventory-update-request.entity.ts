@@ -3,7 +3,11 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { InventoryRequestStatus, ShadowSyncStatus } from '../../../types';
 import { InventoryUpdateRequestLine } from './inventory-update-request-line.entity';
 
-export type ProofVerificationMethod = 'otp' | 'customer_id' | 'manual' | 'bill_photo';
+export type ProofVerificationMethod =
+  | 'otp'
+  | 'customer_id'
+  | 'manual'
+  | 'bill_photo';
 
 @Entity('inventory_update_requests')
 @Index(['companyId', 'status'])
@@ -34,7 +38,12 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
    * roles change and the badge has to reflect the authority that actually
    * approved this delivery. Null on rows approved before the column existed.
    */
-  @Column({ type: 'varchar', length: 16, nullable: true, name: 'reviewer_role' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'reviewer_role',
+  })
   reviewerRole!: string | null;
 
   /**
@@ -54,17 +63,32 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   rejectReason!: string | null;
 
   // ---- Denormalized snapshot fields (set at submission, immutable) ----
-  @Column({ type: 'varchar', length: 64, nullable: true, name: 'delivery_reference' })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    name: 'delivery_reference',
+  })
   deliveryReference!: string | null;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'personnel_name' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'personnel_name',
+  })
   personnelName!: string | null;
 
   @Column({ type: 'varchar', length: 200, nullable: true, name: 'route_label' })
   routeLabel!: string | null;
 
   // ---- Shadow-inventory sync state ----
-  @Column({ type: 'varchar', length: 16, default: 'pending', name: 'shadow_status' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'pending',
+    name: 'shadow_status',
+  })
   shadowStatus!: ShadowSyncStatus | 'pending' | 'rejected';
 
   // ---- Reviewer comment (modern alias for approvalNotes/rejectReason) ----
@@ -72,13 +96,28 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   reviewerComment!: string | null;
 
   // ---- Proof block (the customer-signed bill photo) ----
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'proof_signed_by' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'proof_signed_by',
+  })
   proofSignedBy!: string | null;
 
-  @Column({ type: 'varchar', length: 32, default: 'bill_photo', name: 'proof_verification_method' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'bill_photo',
+    name: 'proof_verification_method',
+  })
   proofVerificationMethod!: ProofVerificationMethod;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'proof_verified_by' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'proof_verified_by',
+  })
   proofVerifiedBy!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true, name: 'proof_verified_at' })
@@ -87,10 +126,18 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true, name: 'proof_bill_photo_url' })
   proofBillPhotoUrl!: string | null;
 
-  @Column({ type: 'text', nullable: true, name: 'proof_bill_photo_storage_key' })
+  @Column({
+    type: 'text',
+    nullable: true,
+    name: 'proof_bill_photo_storage_key',
+  })
   proofBillPhotoStorageKey!: string | null;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'proof_bill_photo_captured_at' })
+  @Column({
+    type: 'timestamptz',
+    nullable: true,
+    name: 'proof_bill_photo_captured_at',
+  })
   proofBillPhotoCapturedAt!: Date | null;
 
   // The rider's own payment answer, as submitted. The delivery carries the
@@ -98,7 +145,13 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 8, nullable: true, name: 'paid_status' })
   paidStatus!: string | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true, name: 'amount_collected' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    nullable: true,
+    name: 'amount_collected',
+  })
   amountCollected!: string | null;
 
   // Journal entry posted on approval (Dr COGS / Cr Inventory). Reversed and
@@ -106,6 +159,8 @@ export class InventoryUpdateRequest extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
 
-  @OneToMany(() => InventoryUpdateRequestLine, (l) => l.request, { cascade: true })
+  @OneToMany(() => InventoryUpdateRequestLine, (l) => l.request, {
+    cascade: true,
+  })
   lines!: InventoryUpdateRequestLine[];
 }

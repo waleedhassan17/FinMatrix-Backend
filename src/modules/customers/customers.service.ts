@@ -1,5 +1,9 @@
 import { applyWhatsappContactFields } from '../../common/utils/whatsapp-contact.util';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { Customer } from './entities/customer.entity';
@@ -25,7 +29,10 @@ import {
   partyCodeTaken,
   peekNextPartyCode,
 } from '../../common/utils/party-code.util';
-import { activeFilterOf, orderPartyList } from '../../common/utils/party-list.util';
+import {
+  activeFilterOf,
+  orderPartyList,
+} from '../../common/utils/party-list.util';
 import { GeocodingService } from '../deliveries/geocoding.service';
 import { Address } from './entities/customer.entity';
 import { assessCredit } from '../../common/utils/credit-control.util';
@@ -36,7 +43,14 @@ import { assessCredit } from '../../common/utils/credit-control.util';
  * lost to decorator ordering.
  */
 function normalizeAddress(
-  addr?: { street?: string; city?: string; state?: string; postalCode?: string; zipCode?: string; country?: string } | null,
+  addr?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    zipCode?: string;
+    country?: string;
+  } | null,
 ): Address | null {
   if (!addr) return null;
   const { zipCode, ...rest } = addr;
@@ -71,7 +85,11 @@ export class CustomersService {
     applyTextSearch(qb, query.search, companyId, {
       columns: ['c.code', 'c.name', 'c.email', 'c.company', 'c.phone'],
     });
-    orderPartyList(qb, 'c', { sort: query.sort, nameProperty: 'name', search: query.search });
+    orderPartyList(qb, 'c', {
+      sort: query.sort,
+      nameProperty: 'name',
+      search: query.search,
+    });
     qb.take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
@@ -146,7 +164,10 @@ export class CustomersService {
       this.invoiceRepo
         .createQueryBuilder('i')
         .select('COALESCE(SUM(i.total), 0)', 'total')
-        .where('i.companyId = :companyId AND i.customerId = :id', { companyId, id })
+        .where('i.companyId = :companyId AND i.customerId = :id', {
+          companyId,
+          id,
+        })
         .andWhere("i.status NOT IN ('draft', 'void')")
         .getRawOne<{ total: string }>(),
     ]);
@@ -175,7 +196,11 @@ export class CustomersService {
     };
   }
 
-  async create(companyId: string, dto: CreateCustomerDto, userId?: string | null): Promise<Customer> {
+  async create(
+    companyId: string,
+    dto: CreateCustomerDto,
+    userId?: string | null,
+  ): Promise<Customer> {
     const billing = normalizeAddress(dto.billingAddress);
     const shipping =
       dto.shippingAddress?.sameAsBilling && billing
@@ -210,7 +235,9 @@ export class CustomersService {
 
   /** The ID a new customer would get now, for the form's placeholder. */
   async nextCode(companyId: string) {
-    return { code: await peekNextPartyCode(this.repo.manager, companyId, 'customer') };
+    return {
+      code: await peekNextPartyCode(this.repo.manager, companyId, 'customer'),
+    };
   }
 
   /**
@@ -218,10 +245,15 @@ export class CustomersService {
    * the series number is held until the row is written, and given back if the
    * save fails. A typed ID someone else already has is refused by name.
    */
-  private async saveWithCode(companyId: string, entity: Customer, typed: string | null): Promise<Customer> {
+  private async saveWithCode(
+    companyId: string,
+    entity: Customer,
+    typed: string | null,
+  ): Promise<Customer> {
     try {
       return await this.repo.manager.transaction(async (m) => {
-        if (typed) await assertPartyCodeFree(m, companyId, 'customer', typed, entity.id);
+        if (typed)
+          await assertPartyCodeFree(m, companyId, 'customer', typed, entity.id);
         entity.code = typed ?? (await nextPartyCode(m, companyId, 'customer'));
         return m.getRepository(Customer).save(entity);
       });
@@ -231,7 +263,13 @@ export class CustomersService {
         throw partyCodeTaken(
           'customer',
           entity.code,
-          await partyCodeHolder(this.repo.manager, companyId, 'customer', entity.code, entity.id),
+          await partyCodeHolder(
+            this.repo.manager,
+            companyId,
+            'customer',
+            entity.code,
+            entity.id,
+          ),
         );
       }
       throw err;
@@ -243,7 +281,9 @@ export class CustomersService {
    * Deliveries fall back to these coordinates when their own geocode fails.
    */
   private async applyShippingGeocode(c: Customer): Promise<void> {
-    const query = GeocodingService.formatAddress(c.shippingAddress ?? c.billingAddress);
+    const query = GeocodingService.formatAddress(
+      c.shippingAddress ?? c.billingAddress,
+    );
     if (!query) {
       c.shippingLat = null;
       c.shippingLng = null;
@@ -272,7 +312,8 @@ export class CustomersService {
     if (dto.company !== undefined) c.company = dto.company;
     if (dto.email !== undefined) c.email = dto.email;
     if (dto.phone !== undefined) c.phone = dto.phone;
-    if (dto.billingAddress !== undefined) c.billingAddress = normalizeAddress(dto.billingAddress);
+    if (dto.billingAddress !== undefined)
+      c.billingAddress = normalizeAddress(dto.billingAddress);
     if (dto.shippingAddress !== undefined) {
       c.shippingAddress = dto.shippingAddress?.sameAsBilling
         ? (normalizeAddress(dto.billingAddress) ?? c.billingAddress)
@@ -284,7 +325,8 @@ export class CustomersService {
     if (dto.isActive !== undefined) c.isActive = dto.isActive;
     if (dto.contactPerson !== undefined) c.contactPerson = dto.contactPerson;
     if (dto.taxId !== undefined) c.taxId = dto.taxId;
-    if (dto.collectionsPaused !== undefined) c.collectionsPaused = dto.collectionsPaused;
+    if (dto.collectionsPaused !== undefined)
+      c.collectionsPaused = dto.collectionsPaused;
     applyWhatsappContactFields(c, dto, { userId, previousPhone });
     if (addressChanged) await this.applyShippingGeocode(c);
     // An empty ID on an edit keeps the one the customer has: every customer
@@ -349,7 +391,11 @@ export class CustomersService {
       this.invoiceRepo.count({ where: { companyId, customerId: id } }),
       this.paymentRepo.count({ where: { companyId, customerId: id } }),
     ]);
-    if (invoiceCount > 0 || paymentCount > 0 || !toDecimal(c.balance).isZero()) {
+    if (
+      invoiceCount > 0 ||
+      paymentCount > 0 ||
+      !toDecimal(c.balance).isZero()
+    ) {
       throw new BadRequestException({
         code: 'CUSTOMER_HAS_ACTIVITY',
         message:
@@ -388,7 +434,10 @@ export class CustomersService {
 
     const invoices = await this.invoiceRepo
       .createQueryBuilder('i')
-      .where('i.companyId = :companyId AND i.customerId = :id', { companyId, id })
+      .where('i.companyId = :companyId AND i.customerId = :id', {
+        companyId,
+        id,
+      })
       .andWhere("i.status NOT IN ('draft', 'void')")
       .orderBy('i.invoiceDate', 'ASC')
       .addOrderBy('i.invoiceNumber', 'ASC')
@@ -397,21 +446,31 @@ export class CustomersService {
       where: { companyId, customerId: id },
       order: { paymentDate: 'ASC' },
     });
-    const creditMemos: Array<{ id: string; creditMemoNumber: string | null; date: string; total: string; status: string }> =
-      await q.query(
-        `SELECT m.id, m.credit_memo_number AS "creditMemoNumber", m.date::text AS date,
+    const creditMemos: Array<{
+      id: string;
+      creditMemoNumber: string | null;
+      date: string;
+      total: string;
+      status: string;
+    }> = await q.query(
+      `SELECT m.id, m.credit_memo_number AS "creditMemoNumber", m.date::text AS date,
                 m.total::numeric AS total, m.status
            FROM credit_memos m
           WHERE m.company_id = $1 AND m.customer_id = $2 AND m.status NOT IN ('draft', 'void')
           ORDER BY m.date ASC, m.credit_memo_number ASC`,
-        [companyId, id],
-      );
+      [companyId, id],
+    );
     // A refund pays a credit back out in cash, so it puts the customer's
     // balance back up. The ledger holds it: A/R debited, dated the day it was
     // paid, against the memo it came from.
-    const refunds: Array<{ id: string; creditMemoId: string; creditMemoNumber: string | null; date: string; amount: string }> =
-      await q.query(
-        `SELECT g.id, m.id AS "creditMemoId", m.credit_memo_number AS "creditMemoNumber",
+    const refunds: Array<{
+      id: string;
+      creditMemoId: string;
+      creditMemoNumber: string | null;
+      date: string;
+      amount: string;
+    }> = await q.query(
+      `SELECT g.id, m.id AS "creditMemoId", m.credit_memo_number AS "creditMemoNumber",
                 g.date::text AS date, g.debit::numeric AS amount
            FROM general_ledger g
            JOIN accounts a ON a.id = g.account_id
@@ -420,14 +479,23 @@ export class CustomersService {
             AND g.source_type = 'credit_memo_refund' AND a.account_number = '1100'
             AND g.debit > 0 AND m.status NOT IN ('draft', 'void')
           ORDER BY g.date ASC`,
-        [companyId, id],
-      );
+      [companyId, id],
+    );
 
     const { opening, closing } = statementBalances(
       [
-        ...invoices.map((i) => ({ date: i.invoiceDate, amount: toDecimal(i.total) })),
-        ...payments.map((p) => ({ date: p.paymentDate, amount: toDecimal(p.amount).negated() })),
-        ...creditMemos.map((m) => ({ date: m.date, amount: toDecimal(m.total).negated() })),
+        ...invoices.map((i) => ({
+          date: i.invoiceDate,
+          amount: toDecimal(i.total),
+        })),
+        ...payments.map((p) => ({
+          date: p.paymentDate,
+          amount: toDecimal(p.amount).negated(),
+        })),
+        ...creditMemos.map((m) => ({
+          date: m.date,
+          amount: toDecimal(m.total).negated(),
+        })),
         ...refunds.map((r) => ({ date: r.date, amount: toDecimal(r.amount) })),
       ],
       startDate,
@@ -441,7 +509,10 @@ export class CustomersService {
     const inRangeMemos = within(creditMemos, (m) => m.date);
     const inRangeRefunds = within(refunds, (r) => r.date);
     const sum = (values: Array<string | number>) =>
-      values.reduce((acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)), toDecimal(0));
+      values.reduce(
+        (acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)),
+        toDecimal(0),
+      );
 
     return {
       customer: { id: customer.id, name: customer.name, email: customer.email },
@@ -449,8 +520,14 @@ export class CustomersService {
       openingBalance: opening.toFixed(4),
       invoices: inRangeInvoices,
       payments: inRangePayments,
-      creditMemos: inRangeMemos.map((m) => ({ ...m, total: toDecimal(m.total).toFixed(4) })),
-      refunds: inRangeRefunds.map((r) => ({ ...r, amount: toDecimal(r.amount).toFixed(4) })),
+      creditMemos: inRangeMemos.map((m) => ({
+        ...m,
+        total: toDecimal(m.total).toFixed(4),
+      })),
+      refunds: inRangeRefunds.map((r) => ({
+        ...r,
+        amount: toDecimal(r.amount).toFixed(4),
+      })),
       totals: {
         invoiced: sum(inRangeInvoices.map((i) => i.total)).toFixed(4),
         received: sum(inRangePayments.map((p) => p.amount)).toFixed(4),

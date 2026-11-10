@@ -22,7 +22,10 @@ export class BillLineDto {
   @ApiPropertyOptional() @IsOptional() @IsNumberString() amount?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() quantity?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumberString() unitPrice?: string;
-  @ApiPropertyOptional({ example: '17', description: 'Tax percent, typed by hand (0–100).' })
+  @ApiPropertyOptional({
+    example: '17',
+    description: 'Tax percent, typed by hand (0–100).',
+  })
   @IsOptional()
   @IsTaxRate()
   taxRate?: string;
@@ -64,7 +67,9 @@ export class UpdateBillDto {
 }
 
 export class ListBillsQueryDto {
-  @ApiPropertyOptional({ enum: ['draft', 'open', 'partial', 'paid', 'overdue', 'void'] })
+  @ApiPropertyOptional({
+    enum: ['draft', 'open', 'partial', 'paid', 'overdue', 'void'],
+  })
   @IsOptional()
   @IsIn(['draft', 'open', 'partial', 'paid', 'overdue', 'void'])
   status?: BillStatus;
@@ -81,7 +86,9 @@ export class BillPaymentApplicationDto {
 export class PayBillsDto {
   @ApiProperty() @IsUUID() vendorId!: string;
   @ApiProperty() @IsDateString() paymentDate!: string;
-  @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
+  @ApiProperty({ enum: PAYMENT_METHODS })
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod!: PaymentMethod;
   @ApiProperty() @IsUUID() bankAccountId!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
 
@@ -118,16 +125,20 @@ export class VendorCreditUseDto {
 
 /** The cash leg of a settlement: what leaves the bank, and the proof of it. */
 export class SettleBillsCashDto {
-  @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
+  @ApiProperty({ enum: PAYMENT_METHODS })
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod!: PaymentMethod;
   @ApiProperty() @IsUUID() bankAccountId!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
 
   @ApiProperty({ description: 'Id returned by POST /bill-payments/proofs' })
   @IsNotEmpty({
-    message: 'A payment proof (receipt or screenshot) is required to record a bill payment.',
+    message:
+      'A payment proof (receipt or screenshot) is required to record a bill payment.',
   })
   @IsUUID(undefined, {
-    message: 'A payment proof (receipt or screenshot) is required to record a bill payment.',
+    message:
+      'A payment proof (receipt or screenshot) is required to record a bill payment.',
   })
   proofId!: string;
 
@@ -163,4 +174,3 @@ export class SettleBillsDto {
   @Type(() => SettleBillsCashDto)
   cash?: SettleBillsCashDto;
 }
-

@@ -49,7 +49,6 @@ export class ShippingAddressDto extends AddressDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() sameAsBilling?: boolean;
 }
 
-
 /** List orders. `code` is natural order: C-2 before C-10. */
 export const PARTY_SORTS = ['recent', 'code', 'name', 'balance'] as const;
 export type PartySort = (typeof PARTY_SORTS)[number];
@@ -62,7 +61,8 @@ export class CreateCustomerDto {
 
   @ApiPropertyOptional({
     example: 'C-0007',
-    description: 'Customer ID. Left out or empty, the next one in the series is assigned.',
+    description:
+      'Customer ID. Left out or empty, the next one in the series is assigned.',
   })
   @IsOptional()
   @IsString()
@@ -103,13 +103,20 @@ export class CreateCustomerDto {
   @ApiPropertyOptional() @IsOptional() @IsString() taxId?: string;
 
   // ── FinMatrix Connect ──
-  @ApiPropertyOptional({ example: '0300 1234567', description: 'WhatsApp number. Left out: derived from phone. Empty: cleared.' })
+  @ApiPropertyOptional({
+    example: '0300 1234567',
+    description:
+      'WhatsApp number. Left out: derived from phone. Empty: cleared.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(32)
   whatsappPhone?: string;
 
-  @ApiPropertyOptional({ description: 'true records consent to WhatsApp messages now; false withdraws it.' })
+  @ApiPropertyOptional({
+    description:
+      'true records consent to WhatsApp messages now; false withdraws it.',
+  })
   @IsOptional()
   @IsBoolean()
   whatsappOptIn?: boolean;
@@ -119,7 +126,10 @@ export class CreateCustomerDto {
   @IsIn(['en', 'ur'])
   preferredLanguage?: 'en' | 'ur';
 
-  @ApiPropertyOptional({ description: 'Stops WhatsApp payment reminders and statements for this customer.' })
+  @ApiPropertyOptional({
+    description:
+      'Stops WhatsApp payment reminders and statements for this customer.',
+  })
   @IsOptional()
   @IsBoolean()
   collectionsPaused?: boolean;

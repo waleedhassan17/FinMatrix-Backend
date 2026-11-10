@@ -47,7 +47,11 @@ import { ApprovalsCoreModule } from '../approvals/approvals-core.module';
     ItemImageUrlsInterceptor,
     InventoryImportService,
   ],
-  controllers: [InventoryController, InventoryImportController, ItemMediaController],
+  controllers: [
+    InventoryController,
+    InventoryImportController,
+    ItemMediaController,
+  ],
   exports: [InventoryService, MediaUrlSigner],
 })
 export class InventoryModule {}

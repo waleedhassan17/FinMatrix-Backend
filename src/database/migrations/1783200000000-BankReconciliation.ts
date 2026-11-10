@@ -56,11 +56,21 @@ export class BankReconciliation1783200000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_general_ledger_reconciliation"`);
-    await queryRunner.query(`ALTER TABLE "general_ledger" DROP COLUMN IF EXISTS "reconciliation_id"`);
-    await queryRunner.query(`ALTER TABLE "general_ledger" DROP COLUMN IF EXISTS "cleared"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_reconciliations_company_account_date"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_reconciliations_company"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_general_ledger_reconciliation"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "general_ledger" DROP COLUMN IF EXISTS "reconciliation_id"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "general_ledger" DROP COLUMN IF EXISTS "cleared"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_reconciliations_company_account_date"`,
+    );
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_reconciliations_company"`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS "reconciliations"`);
   }
 }

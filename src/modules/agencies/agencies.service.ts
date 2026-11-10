@@ -7,7 +7,13 @@ import { toDecimal } from '../../common/utils/money.util';
 import { Agency } from './entities/agency.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { recordMovementAtAverage } from '../../common/utils/inventory-movement.util';
-import { CreateAgencyDto, UpdateAgencyDto, AgencyQueryDto, AgencyInventoryItemDto, AddAgencyItemDto } from './dto/agency.dto';
+import {
+  CreateAgencyDto,
+  UpdateAgencyDto,
+  AgencyQueryDto,
+  AgencyInventoryItemDto,
+  AddAgencyItemDto,
+} from './dto/agency.dto';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
@@ -21,10 +27,18 @@ export class AgenciesService {
     private readonly inventory: InventoryService,
   ) {}
 
-  async list(companyId: string, query: AgencyQueryDto, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('a').where('a.companyId = :cid', { cid: companyId });
+  async list(
+    companyId: string,
+    query: AgencyQueryDto,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.repo
+      .createQueryBuilder('a')
+      .where('a.companyId = :cid', { cid: companyId });
     if (query.type) qb.andWhere('a.type = :t', { t: query.type });
-    if (query.isConnected !== undefined) qb.andWhere('a.isConnected = :c', { c: query.isConnected });
+    if (query.isConnected !== undefined)
+      qb.andWhere('a.isConnected = :c', { c: query.isConnected });
     if (query.q) qb.andWhere('(a.name ILIKE :q)', { q: `%${query.q}%` });
     qb.orderBy('a.createdAt', 'DESC').addOrderBy('a.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -68,23 +82,33 @@ export class AgenciesService {
     return this.repo.save(item);
   }
 
-  async assignInventory(companyId: string, id: string, itemId: string, quantity: string) {
+  async assignInventory(
+    companyId: string,
+    id: string,
+    itemId: string,
+    quantity: string,
+  ) {
     // Verify the agency exists
     const agency = await this.getById(companyId, id);
 
     // Look up the inventory item and link it to this agency
-    const invItem = await this.itemRepo.findOne({ where: { id: itemId, companyId } });
-    if (!invItem) throw new NotFoundException(`Inventory item ${itemId} not found`);
+    const invItem = await this.itemRepo.findOne({
+      where: { id: itemId, companyId },
+    });
+    if (!invItem)
+      throw new NotFoundException(`Inventory item ${itemId} not found`);
 
     // Set/update the sourceAgencyId so this item is linked to the agency
     invItem.sourceAgencyId = agency.id;
     await this.itemRepo.save(invItem);
 
     // Also reflect in the agency's JSONB inventory array
-    const existingInv: AgencyInventoryItemDto[] = Array.isArray((agency as any).inventory)
+    const existingInv: AgencyInventoryItemDto[] = Array.isArray(
+      (agency as any).inventory,
+    )
       ? [...(agency as any).inventory]
       : [];
-    const existingIdx = existingInv.findIndex(i => i.itemId === itemId);
+    const existingIdx = existingInv.findIndex((i) => i.itemId === itemId);
     const inventoryEntry: AgencyInventoryItemDto = {
       itemId: invItem.id,
       itemName: invItem.name,
@@ -150,30 +174,30 @@ export class AgenciesService {
     // quantityOnHand x unitCost appeared on Inventory Valuation while GL 1200
     // stayed flat, which is exactly the drift invariant I13 exists to catch.
     return this.dataSource.transaction(async (em) => {
-    const item = em.getRepository(InventoryItem).create({
-      companyId,
-      sourceAgencyId: agency.id,
-      name: dto.name,
-      sku: dto.sku,
-      category: dto.category ?? null,
-      unitCost: dto.unitCost ?? '0',
-      sellingPrice: dto.sellingPrice ?? '0',
-      quantityOnHand: dto.quantityOnHand ?? '0',
-      quantityOnOrder: '0',
-      quantityCommitted: '0',
-      reorderPoint: '0',
-      reorderQuantity: '0',
-      minStock: '0',
-      maxStock: '0',
-      unitOfMeasure: dto.unitOfMeasure ?? 'unit',
-      costMethod: 'average',
-      serialTracking: false,
-      lotTracking: false,
-      barcodeData: null,
-      isActive: true,
-      description: null,
-      locationId: null,
-    });
+      const item = em.getRepository(InventoryItem).create({
+        companyId,
+        sourceAgencyId: agency.id,
+        name: dto.name,
+        sku: dto.sku,
+        category: dto.category ?? null,
+        unitCost: dto.unitCost ?? '0',
+        sellingPrice: dto.sellingPrice ?? '0',
+        quantityOnHand: dto.quantityOnHand ?? '0',
+        quantityOnOrder: '0',
+        quantityCommitted: '0',
+        reorderPoint: '0',
+        reorderQuantity: '0',
+        minStock: '0',
+        maxStock: '0',
+        unitOfMeasure: dto.unitOfMeasure ?? 'unit',
+        costMethod: 'average',
+        serialTracking: false,
+        lotTracking: false,
+        barcodeData: null,
+        isActive: true,
+        description: null,
+        locationId: null,
+      });
       const saved = await em.getRepository(InventoryItem).save(item);
 
       const qty = toDecimal(saved.quantityOnHand);
@@ -192,13 +216,24 @@ export class AgenciesService {
           createdBy: userId,
         });
         // Same posting the inventory module uses: Dr 1200 / Cr 3900 (§3.12).
-        await this.inventory.postOpeningStockJe(em, companyId, userId, saved, qty, date);
+        await this.inventory.postOpeningStockJe(
+          em,
+          companyId,
+          userId,
+          saved,
+          qty,
+          date,
+        );
       }
       return saved;
     });
   }
 
-  async syncInventory(companyId: string, id: string, inventory: AgencyInventoryItemDto[]) {
+  async syncInventory(
+    companyId: string,
+    id: string,
+    inventory: AgencyInventoryItemDto[],
+  ) {
     const item = await this.getById(companyId, id);
 
     item.inventory = inventory as any;

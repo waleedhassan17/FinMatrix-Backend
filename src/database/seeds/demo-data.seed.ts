@@ -27,9 +27,7 @@ import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { InvoiceLineItem } from '../../modules/invoices/entities/invoice-line-item.entity';
 import { Bill } from '../../modules/bills/entities/bill.entity';
 import { BillLineItem } from '../../modules/bills/entities/bill-line-item.entity';
-import {
-  DEFAULT_CHART_OF_ACCOUNTS,
-} from '../../modules/accounts/accounts.constants';
+import { DEFAULT_CHART_OF_ACCOUNTS } from '../../modules/accounts/accounts.constants';
 import { generateInviteCode } from '../../common/utils/reference-generator.util';
 
 loadEnv();
@@ -89,7 +87,10 @@ async function run() {
           email: 'imran@finmatrix.pk',
           username: await allocateRiderUsername(
             m,
-            buildRiderUsernameBase({ inviteCode: 'demo', displayName: 'Imran Delivery' }),
+            buildRiderUsernameBase({
+              inviteCode: 'demo',
+              displayName: 'Imran Delivery',
+            }),
           ),
           passwordHash: delivHash,
           displayName: 'Imran Delivery',
@@ -102,7 +103,10 @@ async function run() {
     } else if (!delivery.username) {
       delivery.username = await allocateRiderUsername(
         m,
-        buildRiderUsernameBase({ inviteCode: 'demo', displayName: 'Imran Delivery' }),
+        buildRiderUsernameBase({
+          inviteCode: 'demo',
+          displayName: 'Imran Delivery',
+        }),
       );
       await m.save(delivery);
     }
@@ -114,7 +118,11 @@ async function run() {
         m.create(Company, {
           name: 'Ali Traders',
           industry: 'Retail',
-          address: { street: '1 Main Road', city: 'Lahore', country: 'Pakistan' },
+          address: {
+            street: '1 Main Road',
+            city: 'Lahore',
+            country: 'Pakistan',
+          },
           phone: '+92-42-1111111',
           email: 'contact@alitraders.pk',
           taxId: 'NTN-12345',
@@ -175,12 +183,16 @@ async function run() {
     }
 
     const accountByNumber = new Map<string, Account>();
-    for (const a of await m.find(Account, { where: { companyId: company.id } })) {
+    for (const a of await m.find(Account, {
+      where: { companyId: company.id },
+    })) {
       accountByNumber.set(a.accountNumber, a);
     }
 
     // --- Customers
-    const existingCustomers = await m.countBy(Customer, { companyId: company.id });
+    const existingCustomers = await m.countBy(Customer, {
+      companyId: company.id,
+    });
     if (existingCustomers === 0) {
       const customerNames = [
         'Khan Electronics',
@@ -245,9 +257,15 @@ async function run() {
     console.log('> Demo seed finished:');
     console.log('    admin@finmatrix.pk  / Admin123!');
     console.log('    imran@finmatrix.pk  / Delivery123!');
-    console.log(`    company "Ali Traders"   invite code: ${company.inviteCode}`);
-    console.log('  Note: invoices/bills/payments are created via API for demo realism.');
-    console.log('  Use the admin account to POST them via Swagger at /api/docs.');
+    console.log(
+      `    company "Ali Traders"   invite code: ${company.inviteCode}`,
+    );
+    console.log(
+      '  Note: invoices/bills/payments are created via API for demo realism.',
+    );
+    console.log(
+      '  Use the admin account to POST them via Swagger at /api/docs.',
+    );
   });
 
   await ds.destroy();

@@ -44,22 +44,40 @@ import {
   grossOf,
   resolveCollection,
 } from './delivery-collection.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 import { likeContains } from '../../common/utils/like.util';
 import { MessagingService } from '../messaging/messaging.service';
 import { deliveryUpdateMessage } from '../messaging/document-messages';
 
-const DELIVERY_STATUSES = ['unassigned', 'pending', 'picked_up', 'in_transit', 'arrived', 'delivered', 'failed', 'returned', 'cancelled'];
+const DELIVERY_STATUSES = [
+  'unassigned',
+  'pending',
+  'picked_up',
+  'in_transit',
+  'arrived',
+  'delivered',
+  'failed',
+  'returned',
+  'cancelled',
+];
 /** `statuses=a,b` → the known ones; unknown words are ignored, not an error. */
 const parseStatusList = (raw?: string): string[] =>
-  (raw ?? '').split(',').map((x) => x.trim()).filter((x) => DELIVERY_STATUSES.includes(x));
+  (raw ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => DELIVERY_STATUSES.includes(x));
 
 /**
  * The advance a new delivery asks for: `advanceAmount` when given, the whole
  * order when only `prePaid` is set, otherwise none. Exported for the
  * controller, which routes a staff member's advance to the owner.
  */
-export function requestedAdvance(dto: Pick<CreateDeliveryDto, 'advanceAmount' | 'prePaid' | 'items'>): {
+export function requestedAdvance(
+  dto: Pick<CreateDeliveryDto, 'advanceAmount' | 'prePaid' | 'items'>,
+): {
   gross: Decimal;
   advance: Decimal;
 } {
@@ -76,7 +94,6 @@ export function requestedAdvance(dto: Pick<CreateDeliveryDto, 'advanceAmount' | 
   }
   return { gross, advance: dto.prePaid ? gross : new Decimal(0) };
 }
-
 
 // Server-enforced status machine (phase3 Chunk 1): only these transitions
 // are legal. Skipping ahead (e.g. pending → delivered) is rejected, and a
@@ -99,13 +116,20 @@ const LEGAL_TRANSITIONS: Record<string, DeliveryStatus[]> = {
 export class DeliveriesService {
   constructor(
     @InjectRepository(Delivery) private readonly repo: Repository<Delivery>,
-    @InjectRepository(DeliveryItem) private readonly itemRepo: Repository<DeliveryItem>,
-    @InjectRepository(DeliveryStatusHistory) private readonly historyRepo: Repository<DeliveryStatusHistory>,
-    @InjectRepository(DeliveryIssue) private readonly issueRepo: Repository<DeliveryIssue>,
-    @InjectRepository(DeliverySignature) private readonly signatureRepo: Repository<DeliverySignature>,
-    @InjectRepository(DeliveryLocationLog) private readonly locationLogRepo: Repository<DeliveryLocationLog>,
-    @InjectRepository(DeliveryPersonnelProfile) private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
-    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(DeliveryItem)
+    private readonly itemRepo: Repository<DeliveryItem>,
+    @InjectRepository(DeliveryStatusHistory)
+    private readonly historyRepo: Repository<DeliveryStatusHistory>,
+    @InjectRepository(DeliveryIssue)
+    private readonly issueRepo: Repository<DeliveryIssue>,
+    @InjectRepository(DeliverySignature)
+    private readonly signatureRepo: Repository<DeliverySignature>,
+    @InjectRepository(DeliveryLocationLog)
+    private readonly locationLogRepo: Repository<DeliveryLocationLog>,
+    @InjectRepository(DeliveryPersonnelProfile)
+    private readonly personnelRepo: Repository<DeliveryPersonnelProfile>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
     private readonly geocoding: GeocodingService,
@@ -121,15 +145,28 @@ export class DeliveriesService {
   private async resolveDestination(
     companyId: string,
     customerId: string,
-  ): Promise<{ address: string | null; destLat: number | null; destLng: number | null; geocodedAt: Date | null }> {
-    const customer = await this.customerRepo.findOne({ where: { id: customerId, companyId } });
+  ): Promise<{
+    address: string | null;
+    destLat: number | null;
+    destLng: number | null;
+    geocodedAt: Date | null;
+  }> {
+    const customer = await this.customerRepo.findOne({
+      where: { id: customerId, companyId },
+    });
     const address = GeocodingService.formatAddress(
       customer?.shippingAddress ?? customer?.billingAddress ?? null,
     );
-    if (!address) return { address: null, destLat: null, destLng: null, geocodedAt: null };
+    if (!address)
+      return { address: null, destLat: null, destLng: null, geocodedAt: null };
     const geo = await this.geocoding.geocode(address);
     if (geo) {
-      return { address, destLat: geo.lat, destLng: geo.lng, geocodedAt: new Date() };
+      return {
+        address,
+        destLat: geo.lat,
+        destLng: geo.lng,
+        geocodedAt: new Date(),
+      };
     }
     // Geocode failed (missing key / network / unresolvable address) — fall
     // back to the coordinates stored on the customer record, if any.
@@ -144,17 +181,30 @@ export class DeliveriesService {
     return { address, destLat: null, destLng: null, geocodedAt: null };
   }
 
-  async list(companyId: string, query: DeliveryQueryDto, page: number, limit: number, user?: { id: string; role: string }) {
+  async list(
+    companyId: string,
+    query: DeliveryQueryDto,
+    page: number,
+    limit: number,
+    user?: { id: string; role: string },
+  ) {
     // Everything but the status tab, and no join: the summary counts every
     // tab of these, and joined items would multiply its rows.
     const filtered = () => {
-      const qb = this.repo.createQueryBuilder('d').where('d.companyId = :cid', { cid: companyId });
+      const qb = this.repo
+        .createQueryBuilder('d')
+        .where('d.companyId = :cid', { cid: companyId });
       // Role-based filtering: delivery personnel only see their own
-      if (user && (user.role === 'delivery' || user.role === 'delivery_personnel')) {
+      if (
+        user &&
+        (user.role === 'delivery' || user.role === 'delivery_personnel')
+      ) {
         qb.andWhere('d.personnelId = :uid', { uid: user.id });
       }
-      if (query.personnelId) qb.andWhere('d.personnelId = :pid', { pid: query.personnelId });
-      if (query.customerId) qb.andWhere('d.customerId = :cust', { cust: query.customerId });
+      if (query.personnelId)
+        qb.andWhere('d.personnelId = :pid', { pid: query.personnelId });
+      if (query.customerId)
+        qb.andWhere('d.customerId = :cust', { cust: query.customerId });
       // `q` was declared and never applied, so a search matched every delivery.
       const q = query.q?.trim();
       if (q) {
@@ -171,12 +221,13 @@ export class DeliveriesService {
     if (query.status) qb.andWhere('d.status = :s', { s: query.status });
     // A tab can be a group of statuses ("on the road" = several).
     const statuses = parseStatusList(query.statuses);
-    if (statuses.length) qb.andWhere('d.status IN (:...sts)', { sts: statuses });
+    if (statuses.length)
+      qb.andWhere('d.status IN (:...sts)', { sts: statuses });
     qb.orderBy('d.createdAt', 'DESC').addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [rawData, total] = await qb.getManyAndCount();
 
-    const data = rawData.map(d => ({
+    const data = rawData.map((d) => ({
       ...d,
       assignedTo: d.personnelId,
       scheduledDate: d.preferredDate,
@@ -188,7 +239,10 @@ export class DeliveriesService {
   }
 
   async getById(companyId: string, id: string) {
-    const d = await this.repo.findOne({ where: { id, companyId }, relations: ['items'] });
+    const d = await this.repo.findOne({
+      where: { id, companyId },
+      relations: ['items'],
+    });
     if (!d) throw new NotFoundException('Delivery not found');
     return d;
   }
@@ -222,7 +276,11 @@ export class DeliveriesService {
         updated++;
       }
     }
-    return { scanned: pending.length, updated, geocodingConfigured: this.geocoding.isConfigured };
+    return {
+      scanned: pending.length,
+      updated,
+      geocodingConfigured: this.geocoding.isConfigured,
+    };
   }
 
   /**
@@ -257,9 +315,11 @@ export class DeliveriesService {
     }
     // Agreeing with the order total to the paisa is the order total, so the
     // delivery reads as fully prepaid rather than owing a sub-paisa balance.
-    const advance = asked.greaterThanOrEqualTo(gross.minus(COLLECTION_TOLERANCE)) && asked.greaterThan(MONEY_TOLERANCE)
-      ? gross
-      : asked;
+    const advance =
+      asked.greaterThanOrEqualTo(gross.minus(COLLECTION_TOLERANCE)) &&
+      asked.greaterThan(MONEY_TOLERANCE)
+        ? gross
+        : asked;
 
     // Resolve + geocode the destination before opening the DB transaction
     // (network call must not hold a transaction open). A manual override
@@ -278,7 +338,8 @@ export class DeliveriesService {
     return this.dataSource.transaction(async (em) => {
       // A rider the plan has paused (or the owner deactivated) cannot be
       // handed work — checked before any stock is touched.
-      if (dto.personnelId) await assertRiderAssignable(em, companyId, dto.personnelId);
+      if (dto.personnelId)
+        await assertRiderAssignable(em, companyId, dto.personnelId);
       // Before anything is written: a delivery that cannot be fulfilled should
       // never exist. Inside the transaction so a concurrent create cannot slip
       // between the check and the insert.
@@ -337,17 +398,24 @@ export class DeliveriesService {
         const preparer = opts.preparedBy
           ? await em.findOne(User, { where: { id: opts.preparedBy } })
           : null;
-        const receipt = await this.payments.receiveInTransaction(em, companyId, userId, {
-          customerId: dto.customerId,
-          paymentDate: businessToday(),
-          paymentMethod: 'cash',
-          amount: advance.toFixed(4),
-          reference: d.referenceNo ?? undefined,
-          memo:
-            `Advance for delivery ${d.referenceNo ?? d.id}` +
-            (preparer ? ` — prepared by ${preparer.displayName}, approved by owner` : ''),
-          holdAsAdvance: true,
-        });
+        const receipt = await this.payments.receiveInTransaction(
+          em,
+          companyId,
+          userId,
+          {
+            customerId: dto.customerId,
+            paymentDate: businessToday(),
+            paymentMethod: 'cash',
+            amount: advance.toFixed(4),
+            reference: d.referenceNo ?? undefined,
+            memo:
+              `Advance for delivery ${d.referenceNo ?? d.id}` +
+              (preparer
+                ? ` — prepared by ${preparer.displayName}, approved by owner`
+                : ''),
+            holdAsAdvance: true,
+          },
+        );
         d.advanceAmount = advance.toFixed(4);
         d.advancePaymentId = receipt.id;
         d.prepaid = advance.greaterThanOrEqualTo(gross.minus(MONEY_TOLERANCE));
@@ -366,7 +434,13 @@ export class DeliveriesService {
       // delivery itself.
       let ledgerResult = null;
       if (dto.personnelId) {
-        ledgerResult = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
+        ledgerResult = await this.ledger.commitStockOnAssign(
+          em,
+          companyId,
+          userId,
+          d.id,
+          { creditOverride },
+        );
       }
 
       const fresh = await repo.findOne({ where: { id: d.id, companyId } });
@@ -464,9 +538,17 @@ export class DeliveriesService {
     companyId: string,
     itemIds: string[],
     excludeDeliveryId?: string,
-  ): Promise<Map<string, { name: string; onHand: number; promised: number; available: number }>> {
+  ): Promise<
+    Map<
+      string,
+      { name: string; onHand: number; promised: number; available: number }
+    >
+  > {
     const ids = [...new Set(itemIds.filter(Boolean))];
-    const out = new Map<string, { name: string; onHand: number; promised: number; available: number }>();
+    const out = new Map<
+      string,
+      { name: string; onHand: number; promised: number; available: number }
+    >();
     if (ids.length === 0) return out;
 
     const rows: Array<{
@@ -496,7 +578,12 @@ export class DeliveriesService {
     for (const r of rows) {
       const onHand = parseFloat(r.on_hand) || 0;
       const promised = parseFloat(r.promised) || 0;
-      out.set(r.id, { name: r.name, onHand, promised, available: onHand - promised });
+      out.set(r.id, {
+        name: r.name,
+        onHand,
+        promised,
+        available: onHand - promised,
+      });
     }
     return out;
   }
@@ -514,7 +601,12 @@ export class DeliveriesService {
   private async assertStockAvailable(
     em: EntityManager,
     companyId: string,
-    lines: Array<{ itemId?: string; itemName?: string; quantity?: any; orderedQty?: any }>,
+    lines: Array<{
+      itemId?: string;
+      itemName?: string;
+      quantity?: any;
+      orderedQty?: any;
+    }>,
     excludeDeliveryId?: string,
   ): Promise<void> {
     const wanted = new Map<string, number>();
@@ -525,7 +617,12 @@ export class DeliveriesService {
     }
     if (wanted.size === 0) return;
 
-    const avail = await this.availableByItem(em, companyId, [...wanted.keys()], excludeDeliveryId);
+    const avail = await this.availableByItem(
+      em,
+      companyId,
+      [...wanted.keys()],
+      excludeDeliveryId,
+    );
     const problems: string[] = [];
 
     for (const [itemId, qty] of wanted) {
@@ -564,30 +661,38 @@ export class DeliveriesService {
     // One transaction for the whole batch: either every delivery is assigned
     // AND its stock committed to Goods in Transit, or none is (e.g. one item
     // short on stock → the admin sees the error and nothing half-happens).
-    const { deliveries, ledgerResults } = await this.dataSource.transaction(async (em) => {
-      await assertRiderAssignable(em, companyId, personnelId);
-      const repo = em.getRepository(Delivery);
-      const rows = await repo.find({
-        where: deliveryIds.map((id) => ({ id, companyId })),
-        relations: ['items'],
-      });
-      for (const d of rows) {
-        d.personnelId = personnelId;
-        if (d.status === 'unassigned' || d.status === 'pending') {
-          d.status = 'pending';
-          d.assignedAt = new Date();
+    const { deliveries, ledgerResults } = await this.dataSource.transaction(
+      async (em) => {
+        await assertRiderAssignable(em, companyId, personnelId);
+        const repo = em.getRepository(Delivery);
+        const rows = await repo.find({
+          where: deliveryIds.map((id) => ({ id, companyId })),
+          relations: ['items'],
+        });
+        for (const d of rows) {
+          d.personnelId = personnelId;
+          if (d.status === 'unassigned' || d.status === 'pending') {
+            d.status = 'pending';
+            d.assignedAt = new Date();
+          }
         }
-      }
-      await repo.save(rows);
+        await repo.save(rows);
 
-      // STAGE 1 (phase1.md): dispatch posts Dr Goods in Transit / Cr
-      // Inventory and creates the Sales Order — atomic with the assignment.
-      const results: Record<string, unknown> = {};
-      for (const d of rows) {
-        results[d.id] = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
-      }
-      return { deliveries: rows, ledgerResults: results };
-    });
+        // STAGE 1 (phase1.md): dispatch posts Dr Goods in Transit / Cr
+        // Inventory and creates the Sales Order — atomic with the assignment.
+        const results: Record<string, unknown> = {};
+        for (const d of rows) {
+          results[d.id] = await this.ledger.commitStockOnAssign(
+            em,
+            companyId,
+            userId,
+            d.id,
+            { creditOverride },
+          );
+        }
+        return { deliveries: rows, ledgerResults: results };
+      },
+    );
 
     // Notify the delivery personnel for each newly assigned delivery
     for (const d of deliveries) {
@@ -602,7 +707,7 @@ export class DeliveriesService {
     }
 
     return {
-      deliveries: deliveries.map(d => ({
+      deliveries: deliveries.map((d) => ({
         ...d,
         assignedTo: d.personnelId,
         scheduledDate: d.preferredDate,
@@ -620,11 +725,15 @@ export class DeliveriesService {
   ) {
     return this.dataSource.transaction(async (em) => {
       const repo = em.getRepository(Delivery);
-      const d = await repo.findOne({ where: { id, companyId }, relations: ['items'] });
+      const d = await repo.findOne({
+        where: { id, companyId },
+        relations: ['items'],
+      });
       if (!d) throw new NotFoundException('Delivery not found');
       let newlyAssigned = false;
       if (dto.personnelId !== undefined && dto.personnelId !== d.personnelId) {
-        if (dto.personnelId) await assertRiderAssignable(em, companyId, dto.personnelId);
+        if (dto.personnelId)
+          await assertRiderAssignable(em, companyId, dto.personnelId);
         d.personnelId = dto.personnelId;
         if (dto.personnelId && d.status === 'unassigned') {
           d.status = 'pending';
@@ -639,7 +748,9 @@ export class DeliveriesService {
       const saved = await repo.save(d);
       // STAGE 1 (phase1.md) when the edit is what assigns the rider.
       const ledger = newlyAssigned
-        ? await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride })
+        ? await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, {
+            creditOverride,
+          })
         : null;
       return { ...saved, ledger };
     });
@@ -655,19 +766,27 @@ export class DeliveriesService {
       const repo = em.getRepository(Delivery);
       const d = await repo.findOne({ where: { id, companyId } });
       if (!d) throw new NotFoundException('Delivery not found');
-      if (d.status !== 'unassigned') throw new BadRequestException('Delivery already assigned');
+      if (d.status !== 'unassigned')
+        throw new BadRequestException('Delivery already assigned');
       const personnel = await em.getRepository(DeliveryPersonnelProfile).find({
         where: { companyId, isAvailable: true, status: 'active' },
         order: { currentLoad: 'ASC' },
         take: 1,
       });
-      if (!personnel.length) throw new BadRequestException('No available personnel');
+      if (!personnel.length)
+        throw new BadRequestException('No available personnel');
       d.personnelId = personnel[0].userId;
       d.status = 'pending';
       d.assignedAt = new Date();
       const saved = await repo.save(d);
       // STAGE 1 (phase1.md): dispatch consequence of the auto-assignment.
-      const ledger = await this.ledger.commitStockOnAssign(em, companyId, userId, d.id, { creditOverride });
+      const ledger = await this.ledger.commitStockOnAssign(
+        em,
+        companyId,
+        userId,
+        d.id,
+        { creditOverride },
+      );
       return { ...saved, ledger };
     });
   }
@@ -691,7 +810,8 @@ export class DeliveriesService {
       if (!d) throw new NotFoundException('Delivery not found');
 
       // Riders may only update deliveries assigned to them.
-      const isRider = userRole === 'delivery' || userRole === 'delivery_personnel';
+      const isRider =
+        userRole === 'delivery' || userRole === 'delivery_personnel';
       if (isRider && d.personnelId !== userId) {
         throw new ForbiddenException({
           code: 'NOT_YOUR_DELIVERY',
@@ -701,7 +821,8 @@ export class DeliveriesService {
       if (isRider && dto.status === 'cancelled') {
         throw new ForbiddenException({
           code: 'RIDER_CANNOT_CANCEL',
-          message: 'Delivery personnel cannot cancel a delivery. Report an issue instead.',
+          message:
+            'Delivery personnel cannot cancel a delivery. Report an issue instead.',
         });
       }
 
@@ -732,9 +853,15 @@ export class DeliveriesService {
       // figure must fit what is due, and once approval has posted from the
       // answer nothing here may rewrite it.
       if (dto.paidStatus && acceptsCollectionAnswer(d)) {
-        await this.applyCollectionAnswer(em, d, dto.paidStatus, dto.amountCollected);
+        await this.applyCollectionAnswer(
+          em,
+          d,
+          dto.paidStatus,
+          dto.amountCollected,
+        );
       }
-      if (dto.status === 'cancelled') d.cancelReason = dto.notes ?? 'Cancelled by user';
+      if (dto.status === 'cancelled')
+        d.cancelReason = dto.notes ?? 'Cancelled by user';
       if (dto.status === 'delivered') d.completedAt = new Date();
       await repo.save(d);
 
@@ -759,15 +886,27 @@ export class DeliveriesService {
           changedBy: userId,
         }),
       );
-      await this.messaging.enqueue(em, deliveryUpdateMessage(d, dto.status, userId));
+      await this.messaging.enqueue(
+        em,
+        deliveryUpdateMessage(d, dto.status, userId),
+      );
       return d;
     });
   }
 
-  async getHistory(companyId: string, deliveryId: string, page: number, limit: number) {
-    const qb = this.historyRepo.createQueryBuilder('h')
+  async getHistory(
+    companyId: string,
+    deliveryId: string,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.historyRepo
+      .createQueryBuilder('h')
       .innerJoin(Delivery, 'd', 'd.id = h.deliveryId')
-      .where('d.companyId = :cid AND h.deliveryId = :did', { cid: companyId, did: deliveryId })
+      .where('d.companyId = :cid AND h.deliveryId = :did', {
+        cid: companyId,
+        did: deliveryId,
+      })
       .orderBy('h.timestamp', 'DESC')
       .addOrderBy('h.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -775,7 +914,12 @@ export class DeliveriesService {
     return pagedResponse(data, { page, limit, total });
   }
 
-  async reportIssue(companyId: string, deliveryId: string, dto: DeliveryIssueDto, userId: string) {
+  async reportIssue(
+    companyId: string,
+    deliveryId: string,
+    dto: DeliveryIssueDto,
+    userId: string,
+  ) {
     // Confirms the delivery exists in this company before recording against it.
     await this.getById(companyId, deliveryId);
     const issue = this.issueRepo.create({
@@ -789,10 +933,19 @@ export class DeliveriesService {
     return this.issueRepo.save(issue);
   }
 
-  async listIssues(companyId: string, deliveryId: string, page: number, limit: number) {
-    const qb = this.issueRepo.createQueryBuilder('i')
+  async listIssues(
+    companyId: string,
+    deliveryId: string,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.issueRepo
+      .createQueryBuilder('i')
       .innerJoin(Delivery, 'd', 'd.id = i.deliveryId')
-      .where('d.companyId = :cid AND i.deliveryId = :did', { cid: companyId, did: deliveryId })
+      .where('d.companyId = :cid AND i.deliveryId = :did', {
+        cid: companyId,
+        did: deliveryId,
+      })
       .orderBy('i.createdAt', 'DESC')
       .addOrderBy('i.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -800,10 +953,21 @@ export class DeliveriesService {
     return pagedResponse(data, { page, limit, total });
   }
 
-  async myDeliveries(companyId: string, personnelId: string, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('d')
-      .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
-      .andWhere('d.status IN (:...statuses)', { statuses: ['pending', 'picked_up', 'in_transit', 'arrived'] })
+  async myDeliveries(
+    companyId: string,
+    personnelId: string,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.repo
+      .createQueryBuilder('d')
+      .where('d.companyId = :cid AND d.personnelId = :pid', {
+        cid: companyId,
+        pid: personnelId,
+      })
+      .andWhere('d.status IN (:...statuses)', {
+        statuses: ['pending', 'picked_up', 'in_transit', 'arrived'],
+      })
       .orderBy('d.createdAt', 'DESC')
       .addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -811,7 +975,11 @@ export class DeliveriesService {
     return pagedResponse(data, { page, limit, total });
   }
 
-  async captureSignature(companyId: string, deliveryId: string, dto: CaptureSignatureDto) {
+  async captureSignature(
+    companyId: string,
+    deliveryId: string,
+    dto: CaptureSignatureDto,
+  ) {
     const d = await this.getById(companyId, deliveryId);
     const sig = this.signatureRepo.create({
       deliveryId: d.id,
@@ -831,7 +999,8 @@ export class DeliveriesService {
     userRole?: string,
   ) {
     const d = await this.getById(companyId, deliveryId);
-    const isRider = userRole === 'delivery' || userRole === 'delivery_personnel';
+    const isRider =
+      userRole === 'delivery' || userRole === 'delivery_personnel';
     if (isRider && d.personnelId !== userId) {
       throw new ForbiddenException({
         code: 'NOT_YOUR_DELIVERY',
@@ -845,14 +1014,24 @@ export class DeliveriesService {
       const delivered = dto.deliveredItems?.length
         ? new Map(dto.deliveredItems.map((i) => [i.itemId, i.deliveredQty]))
         : undefined;
-      await this.applyCollectionAnswer(this.repo.manager, d, dto.paidStatus, dto.amountCollected, delivered);
+      await this.applyCollectionAnswer(
+        this.repo.manager,
+        d,
+        dto.paidStatus,
+        dto.amountCollected,
+        delivered,
+      );
     }
 
     // Idempotent replay: confirming an already-delivered delivery succeeds
     // without changing anything (a retried/double-tapped confirm must not
     // error or double-advance).
     if (d.status === 'delivered') {
-      return { deliveryId: d.id, status: 'delivered', completedAt: d.completedAt };
+      return {
+        deliveryId: d.id,
+        status: 'delivered',
+        completedAt: d.completedAt,
+      };
     }
     // Allow completion from any active (non-terminal) status. A courier may mark
     // a delivery received without explicitly stepping through every milestone.
@@ -868,7 +1047,10 @@ export class DeliveriesService {
       for (const item of dto.deliveredItems) {
         await this.itemRepo.update(
           { deliveryId: d.id, itemId: item.itemId },
-          { deliveredQty: item.deliveredQty, returnedQty: item.returnedQty ?? '0' },
+          {
+            deliveredQty: item.deliveredQty,
+            returnedQty: item.returnedQty ?? '0',
+          },
         );
       }
     } else {
@@ -894,7 +1076,11 @@ export class DeliveriesService {
     });
     await this.historyRepo.save(history);
 
-    return { deliveryId: d.id, status: 'delivered', completedAt: d.completedAt };
+    return {
+      deliveryId: d.id,
+      status: 'delivered',
+      completedAt: d.completedAt,
+    };
   }
 
   /**
@@ -909,7 +1095,11 @@ export class DeliveriesService {
     amountCollected: string | undefined,
     deliveredByItem?: Map<string, string>,
   ): Promise<void> {
-    const lines = d.items ?? (await em.getRepository(DeliveryItem).find({ where: { deliveryId: d.id } }));
+    const lines =
+      d.items ??
+      (await em
+        .getRepository(DeliveryItem)
+        .find({ where: { deliveryId: d.id } }));
     const gross = deliveredGross(lines, deliveredByItem);
     const settled = resolveCollection({
       gross,
@@ -922,10 +1112,21 @@ export class DeliveriesService {
     await em.getRepository(Delivery).save(d);
   }
 
-  async myHistory(companyId: string, personnelId: string, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('d')
-      .where('d.companyId = :cid AND d.personnelId = :pid', { cid: companyId, pid: personnelId })
-      .andWhere('d.status IN (:...statuses)', { statuses: ['delivered', 'failed', 'returned', 'cancelled'] })
+  async myHistory(
+    companyId: string,
+    personnelId: string,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.repo
+      .createQueryBuilder('d')
+      .where('d.companyId = :cid AND d.personnelId = :pid', {
+        cid: companyId,
+        pid: personnelId,
+      })
+      .andWhere('d.status IN (:...statuses)', {
+        statuses: ['delivered', 'failed', 'returned', 'cancelled'],
+      })
       .orderBy('d.completedAt', 'DESC')
       .addOrderBy('d.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -943,7 +1144,7 @@ export class DeliveriesService {
     });
     return {
       deliveryId,
-      points: points.map(p => ({
+      points: points.map((p) => ({
         lat: p.lat,
         lng: p.lng,
         heading: p.heading,
@@ -969,13 +1170,17 @@ export class DeliveriesService {
       .getMany();
 
     // All personnel with location data
-    const allPersonnel = await this.personnelRepo.find({ where: { companyId } });
+    const allPersonnel = await this.personnelRepo.find({
+      where: { companyId },
+    });
 
-    const personnelMap = new Map(allPersonnel.map(p => [p.userId, p]));
+    const personnelMap = new Map(allPersonnel.map((p) => [p.userId, p]));
 
     // Build markers — one per active delivery that has a located DP
-    const markers = activeDeliveries.map(d => {
-      const personnel = d.personnelId ? personnelMap.get(d.personnelId) : undefined;
+    const markers = activeDeliveries.map((d) => {
+      const personnel = d.personnelId
+        ? personnelMap.get(d.personnelId)
+        : undefined;
       return {
         deliveryId: d.id,
         status: d.status,
@@ -996,13 +1201,17 @@ export class DeliveriesService {
               vehicleType: personnel.vehicleType,
               rating: personnel.rating,
               isAvailable: personnel.isAvailable,
-              lat: personnel.currentLat ? parseFloat(personnel.currentLat) : null,
-              lng: personnel.currentLng ? parseFloat(personnel.currentLng) : null,
+              lat: personnel.currentLat
+                ? parseFloat(personnel.currentLat)
+                : null,
+              lng: personnel.currentLng
+                ? parseFloat(personnel.currentLng)
+                : null,
               heading: personnel.heading,
               speed: personnel.speed,
               accuracy: personnel.accuracy,
               locationUpdatedAt: personnel.locationUpdatedAt,
-                // GPS recency, NOT duty. `isAvailable` above is the duty state;
+              // GPS recency, NOT duty. `isAvailable` above is the duty state;
               // the monitor reads that for "who is working" and this for "whose
               // phone is reporting". See presence.constants.
               isOnline: isLocationLive(personnel.locationUpdatedAt, now),
@@ -1015,14 +1224,18 @@ export class DeliveriesService {
     const allForSummary = await this.repo.find({ where: { companyId } });
     const summary = {
       total: allForSummary.length,
-      pending: allForSummary.filter(d => d.status === 'pending').length,
-      inTransit: allForSummary.filter(d => ['picked_up', 'in_transit', 'arrived'].includes(d.status)).length,
-      delivered: allForSummary.filter(d => d.status === 'delivered').length,
-      failed: allForSummary.filter(d => d.status === 'failed').length,
-      unassigned: allForSummary.filter(d => d.status === 'unassigned').length,
+      pending: allForSummary.filter((d) => d.status === 'pending').length,
+      inTransit: allForSummary.filter((d) =>
+        ['picked_up', 'in_transit', 'arrived'].includes(d.status),
+      ).length,
+      delivered: allForSummary.filter((d) => d.status === 'delivered').length,
+      failed: allForSummary.filter((d) => d.status === 'failed').length,
+      unassigned: allForSummary.filter((d) => d.status === 'unassigned').length,
     };
 
-    const locatedPersonnel = allPersonnel.filter(p => p.currentLat !== null).length;
+    const locatedPersonnel = allPersonnel.filter(
+      (p) => p.currentLat !== null,
+    ).length;
 
     return { markers, summary, locatedPersonnel };
   }

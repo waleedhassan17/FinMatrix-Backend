@@ -86,17 +86,21 @@ export class CompanyUsersService {
       ).map((c) => c.userId),
     );
 
-    return rows
-      // Riders live on their own screen, with their own profile fields.
-      .filter((m) => m.role === 'admin' || m.role === 'staff')
-      .map((m) => this.toView(m, credentialed.has(m.userId)));
+    return (
+      rows
+        // Riders live on their own screen, with their own profile fields.
+        .filter((m) => m.role === 'admin' || m.role === 'staff')
+        .map((m) => this.toView(m, credentialed.has(m.userId)))
+    );
   }
 
   async create(
     companyId: string,
     dto: CreateCompanyUserDto,
     actorUserId: string,
-  ): Promise<CompanyUserView & { credentials: { username: string; password: string } }> {
+  ): Promise<
+    CompanyUserView & { credentials: { username: string; password: string } }
+  > {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email?.trim().toLowerCase() ?? null;
 
@@ -112,7 +116,10 @@ export class CompanyUsersService {
           message: `The username "${username}" is already in use. Choose another.`,
         });
       }
-      if (email && (await em.getRepository(User).findOne({ where: { email } }))) {
+      if (
+        email &&
+        (await em.getRepository(User).findOne({ where: { email } }))
+      ) {
         throw new ConflictException({
           code: 'EMAIL_EXISTS',
           message: 'An account with this email already exists',
@@ -146,7 +153,13 @@ export class CompanyUsersService {
         }),
       );
 
-      await this.storeCredential(em, companyId, user.id, dto.password, actorUserId);
+      await this.storeCredential(
+        em,
+        companyId,
+        user.id,
+        dto.password,
+        actorUserId,
+      );
       return user;
     });
 
@@ -242,7 +255,9 @@ export class CompanyUsersService {
       await this.audit.record({
         companyId,
         actorUserId,
-        action: isActive ? 'company_user_activated' : 'company_user_deactivated',
+        action: isActive
+          ? 'company_user_activated'
+          : 'company_user_deactivated',
         targetType: 'user',
         targetId: userId,
       });
@@ -302,7 +317,11 @@ export class CompanyUsersService {
     companyId: string,
     userId: string,
     actorUserId: string,
-  ): Promise<{ userId: string; username: string | null; password: string | null }> {
+  ): Promise<{
+    userId: string;
+    username: string | null;
+    password: string | null;
+  }> {
     const membership = await this.getMembershipOrFail(
       this.dataSource.manager,
       companyId,
@@ -363,7 +382,15 @@ export class CompanyUsersService {
       await repo.save(existing);
       return;
     }
-    await repo.save(repo.create({ companyId, userId, secret, issuedBy, issuedAt: new Date() }));
+    await repo.save(
+      repo.create({
+        companyId,
+        userId,
+        secret,
+        issuedBy,
+        issuedAt: new Date(),
+      }),
+    );
   }
 
   /**
@@ -431,7 +458,10 @@ export class CompanyUsersService {
       where: { companyId, userId },
       relations: { user: true },
     });
-    if (!membership || (membership.role !== 'admin' && membership.role !== 'staff')) {
+    if (
+      !membership ||
+      (membership.role !== 'admin' && membership.role !== 'staff')
+    ) {
       throw new NotFoundException({
         code: 'USER_NOT_FOUND',
         message: 'No such team member in this company.',
@@ -440,7 +470,10 @@ export class CompanyUsersService {
     return membership;
   }
 
-  private toView(m: UserCompany, hasStoredCredential: boolean): CompanyUserView {
+  private toView(
+    m: UserCompany,
+    hasStoredCredential: boolean,
+  ): CompanyUserView {
     return {
       id: m.userId,
       name: m.user?.displayName ?? '',

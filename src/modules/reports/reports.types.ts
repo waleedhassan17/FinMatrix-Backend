@@ -13,7 +13,12 @@
 import type { CashFlowLineKey, CashFlowSectionKey } from './cash-flow-classify';
 import type { AccountGroupKey, StatementGroupKey } from './statement-groups';
 
-export type { CashFlowLineKey, CashFlowSectionKey, AccountGroupKey, StatementGroupKey };
+export type {
+  CashFlowLineKey,
+  CashFlowSectionKey,
+  AccountGroupKey,
+  StatementGroupKey,
+};
 
 /** One account's contribution to a statement section, sign already applied. */
 export interface PnlLine {
@@ -241,7 +246,10 @@ export interface CashFlowMonth {
  */
 export type TrialBalanceMode = 'movement' | 'closing' | 'working';
 
-export type TrialBalanceFlag = 'abnormal_balance' | 'contra_assumed' | 'obe_nonzero';
+export type TrialBalanceFlag =
+  | 'abnormal_balance'
+  | 'contra_assumed'
+  | 'obe_nonzero';
 
 // ── KPIs ─────────────────────────────────────────────────────────────
 
@@ -254,7 +262,11 @@ export type KpiUnit = 'money' | 'ratio' | 'days' | 'months' | 'percent';
  *  - negative_equity: debt-to-equity is meaningless when equity ≤ 0;
  *  - cash_positive: runway is unbounded while cash is not falling.
  */
-export type KpiStatus = 'ok' | 'no_denominator' | 'negative_equity' | 'cash_positive';
+export type KpiStatus =
+  | 'ok'
+  | 'no_denominator'
+  | 'negative_equity'
+  | 'cash_positive';
 
 /**
  * How a figure reads against a rule of thumb — see kpi-benchmarks.ts, the one
@@ -319,7 +331,12 @@ export interface LedgerEntry {
 
 /** GET /reports/accounts/:accountCode/register */
 export interface AccountRegister {
-  account: { accountCode: string; accountName: string; accountType: string; subType: string | null };
+  account: {
+    accountCode: string;
+    accountName: string;
+    accountType: string;
+    subType: string | null;
+  };
   range: { startDate: string; endDate: string };
   /** 'cumulative' for balance-sheet accounts; 'fiscalYearToDate' for P&L. */
   openingBasis: 'cumulative' | 'fiscalYearToDate';
@@ -338,7 +355,12 @@ export interface AccountRegister {
 
 /** GET /reports/accounts/:accountCode/movement */
 export interface AccountMovement {
-  account: { accountCode: string; accountName: string; accountType: string; subType: string | null };
+  account: {
+    accountCode: string;
+    accountName: string;
+    accountType: string;
+    subType: string | null;
+  };
   range: { startDate: string; endDate: string };
   compareRange: { startDate: string; endDate: string };
   current: number;
@@ -347,9 +369,19 @@ export interface AccountMovement {
   change: number;
   changePct: number | null;
   /** Sorted by |change|; 'Unattributed' = no counterparty; 'Other' = beyond limit. Σ change = change. */
-  byCounterparty: Array<{ name: string; current: number; prior: number; change: number }>;
+  byCounterparty: Array<{
+    name: string;
+    current: number;
+    prior: number;
+    change: number;
+  }>;
   /** Σ change = change. */
-  bySourceType: Array<{ sourceLabel: string; current: number; prior: number; change: number }>;
+  bySourceType: Array<{
+    sourceLabel: string;
+    current: number;
+    prior: number;
+    change: number;
+  }>;
 }
 
 /** GET /reports/balance-sheet/retained-earnings */
@@ -360,7 +392,12 @@ export interface RetainedEarningsBreakdown {
   /** Posted directly to the Retained Earnings account (0 when there is none). */
   postedTo3100: number;
   priorYearsEarnings: number;
-  byFiscalYear: Array<{ fiscalYear: number; startDate: string; endDate: string; netIncome: number }>;
+  byFiscalYear: Array<{
+    fiscalYear: number;
+    startDate: string;
+    endDate: string;
+    netIncome: number;
+  }>;
   /** Equals the balance sheet's Retained Earnings line exactly. */
   total: number;
 }
@@ -373,13 +410,15 @@ export interface CashFlowLineEntries {
   range: { startDate: string; endDate: string };
   lineAmount: number;
   /** Cash rows, newest first. `amount` is debit-positive cash. Σ allocatedAmount = lineAmount. */
-  entries: Array<LedgerEntry & {
-    cashAccountCode: string;
-    cashAccountName: string | null;
-    allocatedAmount: number;
-    /** 0–100. Below 100 when the posting's cash was split across lines. */
-    allocationPct: number;
-  }>;
+  entries: Array<
+    LedgerEntry & {
+      cashAccountCode: string;
+      cashAccountName: string | null;
+      allocatedAmount: number;
+      /** 0–100. Below 100 when the posting's cash was split across lines. */
+      allocationPct: number;
+    }
+  >;
   total: number;
   page: number;
   limit: number;
@@ -435,9 +474,12 @@ export interface TrialBalanceV2 {
   /** mode=working */
   balanced?: { opening: boolean; period: boolean; closing: boolean };
   totals?: {
-    openingDebit: number; openingCredit: number;
-    periodDebit: number; periodCredit: number;
-    closingDebit: number; closingCredit: number;
+    openingDebit: number;
+    openingCredit: number;
+    periodDebit: number;
+    periodCredit: number;
+    closingDebit: number;
+    closingCredit: number;
   };
   warnings?: Array<{ code: 'CROSSES_FISCAL_YEAR' | string; message: string }>;
 }
@@ -572,21 +614,40 @@ export interface InventoryHealth {
   asOfDate: string;
   basis: 'onHandAtAverageCost' | 'movementRecord';
   belowReorder: Array<{
-    itemId: string; name: string; sku: string;
-    qtyOnHand: number; reorderPoint: number; reorderQuantity: number;
+    itemId: string;
+    name: string;
+    sku: string;
+    qtyOnHand: number;
+    reorderPoint: number;
+    reorderQuantity: number;
     /** max(reorderQuantity, reorderPoint − qtyOnHand) */
     suggestedOrderQty: number;
     stockValue: number | null;
   }>;
   aging: {
-    byLastInbound: Array<{ key: 'd0_30' | 'd31_90' | 'd91_180' | 'd180_plus' | 'noMovement'; label: string; count: number; value: number }>;
-    byLastOutbound: Array<{ key: 'd0_30' | 'd31_90' | 'd91_180' | 'd180_plus' | 'noMovement'; label: string; count: number; value: number }>;
+    byLastInbound: Array<{
+      key: 'd0_30' | 'd31_90' | 'd91_180' | 'd180_plus' | 'noMovement';
+      label: string;
+      count: number;
+      value: number;
+    }>;
+    byLastOutbound: Array<{
+      key: 'd0_30' | 'd31_90' | 'd91_180' | 'd180_plus' | 'noMovement';
+      label: string;
+      count: number;
+      value: number;
+    }>;
   };
   deadStock: {
     thresholdDays: 180;
     items: Array<{
-      itemId: string; name: string; sku: string; qtyOnHand: number; stockValue: number | null;
-      lastOutboundDate: string | null; daysSinceOutbound: number | null;
+      itemId: string;
+      name: string;
+      sku: string;
+      qtyOnHand: number;
+      stockValue: number | null;
+      lastOutboundDate: string | null;
+      daysSinceOutbound: number | null;
     }>;
     totalValue: number;
   };
@@ -596,18 +657,39 @@ export interface InventoryHealth {
   dio: Kpi;
   /** Items on hand and their value, per location ('Unassigned' when none). */
   byLocation: Array<{ location: string; value: number; count: number }>;
-  totals: { itemCount: number; itemsOnHand: number; stockValue: number; valuationTotal: number };
+  totals: {
+    itemCount: number;
+    itemsOnHand: number;
+    stockValue: number;
+    valuationTotal: number;
+  };
 }
 
 /** GET /reports/inventory-valuation?asOfDate=… (absent: the old shape). */
 export interface InventoryValuationAsOf {
   asOfDate: string;
   rows: Array<{
-    itemId: string; itemName: string; sku: string; category: string;
-    qty: number; cost: number | null; value: number | null; valueKnown: boolean;
+    itemId: string;
+    itemName: string;
+    sku: string;
+    category: string;
+    qty: number;
+    cost: number | null;
+    value: number | null;
+    valueKnown: boolean;
   }>;
   byCategory: Array<{ category: string; totalValue: number }>;
   totalValue: number;
-  coverage: { movements: number; valued: number; pct: number; unvaluedItems: number };
-  ledgerTie: { gl1200: number; valuation: number; gap: number; includesGoodsInTransit: false };
+  coverage: {
+    movements: number;
+    valued: number;
+    pct: number;
+    unvaluedItems: number;
+  };
+  ledgerTie: {
+    gl1200: number;
+    valuation: number;
+    gap: number;
+    includesGoodsInTransit: false;
+  };
 }

@@ -1,17 +1,32 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumberString, IsOptional, IsString, IsUUID, ValidateNested,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsIn,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  IsUUID,
+  ValidateNested,
 } from 'class-validator';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
-import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
+import {
+  SALES_LINE_KINDS,
+  SalesLineKind,
+} from '../../../common/utils/sales-lines.util';
 import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
 
 export class SalesOrderLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
-  @ApiPropertyOptional({ example: '12.5' }) @IsOptional() @IsTaxRate() taxRate?: string;
+  @ApiPropertyOptional({ example: '12.5' })
+  @IsOptional()
+  @IsTaxRate()
+  taxRate?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() accountId?: string;
 
   @ApiPropertyOptional({
@@ -38,17 +53,27 @@ export class SalesOrderLineDto {
 export class CreateSalesOrderDto {
   @ApiProperty() @IsUUID() customerId!: string;
   @ApiProperty({ example: '2026-04-23' }) @IsDateString() orderDate!: string;
-  @ApiPropertyOptional({ example: '2026-05-10' }) @IsOptional() @IsDateString() expectedDate?: string;
+  @ApiPropertyOptional({ example: '2026-05-10' })
+  @IsOptional()
+  @IsDateString()
+  expectedDate?: string;
 
   @ApiPropertyOptional({ enum: ['percent', 'amount', 'none'], default: 'none' })
-  @IsOptional() @IsIn(['percent', 'amount', 'none'])
+  @IsOptional()
+  @IsIn(['percent', 'amount', 'none'])
   discountType?: 'percent' | 'amount' | 'none';
 
-  @ApiPropertyOptional({ example: '0' }) @IsOptional() @IsNumberString() discountValue?: string;
+  @ApiPropertyOptional({ example: '0' })
+  @IsOptional()
+  @IsNumberString()
+  discountValue?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 
   @ApiProperty({ type: [SalesOrderLineDto] })
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => SalesOrderLineDto)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => SalesOrderLineDto)
   lines!: SalesOrderLineDto[];
 
   @ApiPropertyOptional({
@@ -56,19 +81,26 @@ export class CreateSalesOrderDto {
       'Save even though some items ask for more than is available. Without it a ' +
       'shortfall answers 409 BACKORDER_CONFIRMATION_REQUIRED listing the items.',
   })
-  @IsOptional() @IsBoolean() acceptBackorder?: boolean;
+  @IsOptional()
+  @IsBoolean()
+  acceptBackorder?: boolean;
 }
 
 export class UpdateSalesOrderDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() orderDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() expectedDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsIn(['percent', 'amount', 'none'])
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsIn(['percent', 'amount', 'none'])
   discountType?: 'percent' | 'amount' | 'none';
   @ApiPropertyOptional() @IsOptional() @IsNumberString() discountValue?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 
   @ApiPropertyOptional({ type: [SalesOrderLineDto] })
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => SalesOrderLineDto)
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SalesOrderLineDto)
   lines?: SalesOrderLineDto[];
 
   @ApiPropertyOptional() @IsOptional() @IsBoolean() acceptBackorder?: boolean;
@@ -76,7 +108,8 @@ export class UpdateSalesOrderDto {
 
 export class ListSalesOrdersQueryDto {
   @ApiPropertyOptional()
-  @IsOptional() @IsIn(['open', 'partial', 'fulfilled', 'invoiced', 'cancelled'])
+  @IsOptional()
+  @IsIn(['open', 'partial', 'fulfilled', 'invoiced', 'cancelled'])
   status?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() customerId?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() startDate?: string;
@@ -86,18 +119,26 @@ export class ListSalesOrdersQueryDto {
 
 export class FulfillLineDto {
   @ApiProperty() @IsUUID() lineId!: string;
-  @ApiProperty({ example: '5', description: 'Total quantity fulfilled so far for this line.' })
-  @IsNumberString() quantityFulfilled!: string;
+  @ApiProperty({
+    example: '5',
+    description: 'Total quantity fulfilled so far for this line.',
+  })
+  @IsNumberString()
+  quantityFulfilled!: string;
 }
 
 export class FulfillSalesOrderDto {
   @ApiProperty({ type: [FulfillLineDto] })
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => FulfillLineDto)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => FulfillLineDto)
   lines!: FulfillLineDto[];
 
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()
@@ -106,11 +147,15 @@ export class FulfillSalesOrderDto {
 }
 
 export class ConvertSalesOrderDto {
-  @ApiPropertyOptional({ example: '2026-05-23' }) @IsOptional() @IsDateString() dueDate?: string;
+  @ApiPropertyOptional({ example: '2026-05-23' })
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
 
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()

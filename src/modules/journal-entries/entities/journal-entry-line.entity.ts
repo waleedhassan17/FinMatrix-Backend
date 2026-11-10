@@ -20,7 +20,10 @@ import { JournalEntry } from './journal-entry.entity';
  */
 @Entity('journal_entry_lines')
 @Index(['entryId', 'lineOrder'])
-@Check('chk_line_shape', '(debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0)')
+@Check(
+  'chk_line_shape',
+  '(debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0)',
+)
 @Check('chk_non_negative', 'debit >= 0 AND credit >= 0')
 export class JournalEntryLine {
   @PrimaryGeneratedColumn('uuid')

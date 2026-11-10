@@ -91,12 +91,18 @@ export async function stockPositions(
   const positions = new Map<string, StockPosition>();
   if (ids.length === 0) return positions;
 
-  const items: Array<{ id: string; name: string; sku: string; quantity_on_hand: string }> = await manager.query(
+  const items: Array<{
+    id: string;
+    name: string;
+    sku: string;
+    quantity_on_hand: string;
+  }> = await manager.query(
     `SELECT id, name, sku, quantity_on_hand FROM inventory_items WHERE company_id = $1 AND id = ANY($2::uuid[])`,
     [companyId, ids],
   );
-  const committedRows: Array<{ item_id: string; committed: string }> = await manager.query(
-    `SELECT l.item_id, SUM(l.quantity) AS committed
+  const committedRows: Array<{ item_id: string; committed: string }> =
+    await manager.query(
+      `SELECT l.item_id, SUM(l.quantity) AS committed
        FROM sales_order_line_items l
        JOIN sales_orders o ON o.id = l.sales_order_id
       WHERE o.company_id = $1
@@ -105,9 +111,11 @@ export async function stockPositions(
         AND ($3::uuid IS NULL OR o.id <> $3::uuid)
         AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.sales_order_id = o.id)
       GROUP BY l.item_id`,
-    [companyId, ids, opts.excludeSalesOrderId ?? null],
+      [companyId, ids, opts.excludeSalesOrderId ?? null],
+    );
+  const committed = new Map(
+    committedRows.map((r) => [r.item_id, toDecimal(r.committed)]),
   );
-  const committed = new Map(committedRows.map((r) => [r.item_id, toDecimal(r.committed)]));
   for (const item of items) {
     const onHand = toDecimal(item.quantity_on_hand);
     const promised = committed.get(item.id) ?? new Decimal(0);
@@ -143,9 +151,17 @@ export async function backorderLines(
   const requested = new Map<string, Decimal>();
   for (const l of lines) {
     if (!l.itemId) continue;
-    requested.set(l.itemId, (requested.get(l.itemId) ?? new Decimal(0)).plus(toDecimal(l.quantity)));
+    requested.set(
+      l.itemId,
+      (requested.get(l.itemId) ?? new Decimal(0)).plus(toDecimal(l.quantity)),
+    );
   }
-  const positions = await stockPositions(manager, companyId, [...requested.keys()], opts);
+  const positions = await stockPositions(
+    manager,
+    companyId,
+    [...requested.keys()],
+    opts,
+  );
   const out: BackorderLine[] = [];
   for (const [itemId, qty] of requested) {
     const pos = positions.get(itemId);

@@ -21,22 +21,36 @@ import { formatYearlyRef } from './reference-generator.util';
  * transaction, a create that rolls back gives its number back — the invoice run
  * stays gap-free.
  */
-export type DocumentSeries = 'INV' | 'EST' | 'SO' | 'PO' | 'BILL' | 'CM' | 'VC' | 'RCT';
+export type DocumentSeries =
+  | 'INV'
+  | 'EST'
+  | 'SO'
+  | 'PO'
+  | 'BILL'
+  | 'CM'
+  | 'VC'
+  | 'RCT';
 
-const SERIES_SOURCE: Record<DocumentSeries, { table: string; column: string }> = {
-  INV: { table: 'invoices', column: 'invoice_number' },
-  EST: { table: 'estimates', column: 'estimate_number' },
-  SO: { table: 'sales_orders', column: 'order_number' },
-  PO: { table: 'purchase_orders', column: 'po_number' },
-  BILL: { table: 'bills', column: 'bill_number' },
-  CM: { table: 'credit_memos', column: 'credit_memo_number' },
-  VC: { table: 'vendor_credits', column: 'vendor_credit_number' },
-  RCT: { table: 'payments', column: 'payment_number' },
-};
+const SERIES_SOURCE: Record<DocumentSeries, { table: string; column: string }> =
+  {
+    INV: { table: 'invoices', column: 'invoice_number' },
+    EST: { table: 'estimates', column: 'estimate_number' },
+    SO: { table: 'sales_orders', column: 'order_number' },
+    PO: { table: 'purchase_orders', column: 'po_number' },
+    BILL: { table: 'bills', column: 'bill_number' },
+    CM: { table: 'credit_memos', column: 'credit_memo_number' },
+    VC: { table: 'vendor_credits', column: 'vendor_credit_number' },
+    RCT: { table: 'payments', column: 'payment_number' },
+  };
 
 /** TypeORM hands back `[rows, rowCount]` for UPDATE … RETURNING on Postgres. */
 function returnedRows(raw: unknown): ObjectLiteral[] {
-  if (Array.isArray(raw) && raw.length === 2 && Array.isArray(raw[0]) && typeof raw[1] === 'number') {
+  if (
+    Array.isArray(raw) &&
+    raw.length === 2 &&
+    Array.isArray(raw[0]) &&
+    typeof raw[1] === 'number'
+  ) {
     return raw[0] as ObjectLiteral[];
   }
   return (raw as ObjectLiteral[]) ?? [];

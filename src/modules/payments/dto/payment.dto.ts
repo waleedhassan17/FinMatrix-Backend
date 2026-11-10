@@ -30,7 +30,9 @@ export class PaymentApplicationDto {
 export class ReceivePaymentDto {
   @ApiProperty() @IsUUID() customerId!: string;
   @ApiProperty() @IsDateString() paymentDate!: string;
-  @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
+  @ApiProperty({ enum: PAYMENT_METHODS })
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod!: PaymentMethod;
   @ApiProperty({ example: '100' }) @IsNumberString() amount!: string;
   @ApiPropertyOptional({
     description:
@@ -89,7 +91,9 @@ export class CustomerCreditUseDto {
   @IsIn(['advance', 'credit_memo'])
   kind!: 'advance' | 'credit_memo';
 
-  @ApiProperty({ description: 'The receipt holding the advance, or the credit memo.' })
+  @ApiProperty({
+    description: 'The receipt holding the advance, or the credit memo.',
+  })
   @IsUUID()
   id!: string;
 
@@ -100,7 +104,9 @@ export class CustomerCreditUseDto {
 /** The new-money leg of a settlement: a receipt, exactly as POST /payments takes one. */
 export class SettleInvoicesCashDto {
   @ApiProperty({ example: '100' }) @IsNumberString() amount!: string;
-  @ApiProperty({ enum: PAYMENT_METHODS }) @IsIn(PAYMENT_METHODS) paymentMethod!: PaymentMethod;
+  @ApiProperty({ enum: PAYMENT_METHODS })
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod!: PaymentMethod;
   @ApiPropertyOptional() @IsOptional() @IsUUID() bankAccountId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() reference?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() memo?: string;

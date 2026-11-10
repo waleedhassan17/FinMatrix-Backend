@@ -27,7 +27,12 @@ import { BadRequestException } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 
 /** Delivery statuses that mean work is assigned and not yet finished. */
-export const OPEN_DELIVERY_STATUSES = ['pending', 'picked_up', 'in_transit', 'arrived'] as const;
+export const OPEN_DELIVERY_STATUSES = [
+  'pending',
+  'picked_up',
+  'in_transit',
+  'arrived',
+] as const;
 
 export interface SeatCandidate {
   userId: string;
@@ -44,10 +49,15 @@ export interface SeatPlan {
 }
 
 /** Pure ranking — which candidates keep a seat under `limit`. */
-export function planRiderSeats(candidates: SeatCandidate[], limit: number): SeatPlan {
+export function planRiderSeats(
+  candidates: SeatCandidate[],
+  limit: number,
+): SeatPlan {
   const ranked = [...candidates].sort((a, b) => {
-    if (a.hasOpenDelivery !== b.hasOpenDelivery) return a.hasOpenDelivery ? -1 : 1;
-    const byAge = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    if (a.hasOpenDelivery !== b.hasOpenDelivery)
+      return a.hasOpenDelivery ? -1 : 1;
+    const byAge =
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     if (byAge !== 0) return byAge;
     return a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0;
   });

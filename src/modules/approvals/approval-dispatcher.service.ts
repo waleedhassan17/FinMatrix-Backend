@@ -63,7 +63,10 @@ export class ApprovalDispatcher {
     payload: Payload,
     companyId: string,
     reviewerId: string,
-    opts: { creditOverride?: CreditOverride | null; requestedBy?: string | null } = {},
+    opts: {
+      creditOverride?: CreditOverride | null;
+      requestedBy?: string | null;
+    } = {},
   ): Promise<DispatchResult> {
     switch (type) {
       // ── Dr/Cr Inventory against the reason's offset account ──────────────
@@ -110,20 +113,28 @@ export class ApprovalDispatcher {
             this.requireId(creditMemoId, 'creditMemoId'),
             rest as any,
           );
-          return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
+          return {
+            id: memo.id,
+            journalEntryId: (memo as any)?.journalEntryId ?? null,
+          };
         }
         if (action === 'refund') {
           // The account the staff member chose; absent on requests raised
           // before there was a choice, which refund from Cash as they always did.
           const bankAccountId =
-            typeof rest.bankAccountId === 'string' ? rest.bankAccountId : undefined;
+            typeof rest.bankAccountId === 'string'
+              ? rest.bankAccountId
+              : undefined;
           const memo = await this.creditMemos.refund(
             companyId,
             this.requireId(creditMemoId, 'creditMemoId'),
             reviewerId,
             bankAccountId,
           );
-          return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
+          return {
+            id: memo.id,
+            journalEntryId: (memo as any)?.journalEntryId ?? null,
+          };
         }
         // createAndApply, not create: a delivery reversal carries
         // applyToInvoiceId so the original invoice is settled in the same
@@ -134,7 +145,10 @@ export class ApprovalDispatcher {
           reviewerId,
           rest as any,
         );
-        return { id: memo.id, journalEntryId: (memo as any)?.journalEntryId ?? null };
+        return {
+          id: memo.id,
+          journalEntryId: (memo as any)?.journalEntryId ?? null,
+        };
       }
 
       // ── Supplier return / correction ─────────────────────────────────────
@@ -146,10 +160,20 @@ export class ApprovalDispatcher {
             this.requireId(vendorCreditId, 'vendorCreditId'),
             rest as any,
           );
-          return { id: credit.id, journalEntryId: (credit as any)?.journalEntryId ?? null };
+          return {
+            id: credit.id,
+            journalEntryId: (credit as any)?.journalEntryId ?? null,
+          };
         }
-        const credit = await this.vendorCredits.create(companyId, reviewerId, rest as any);
-        return { id: credit.id, journalEntryId: (credit as any)?.journalEntryId ?? null };
+        const credit = await this.vendorCredits.create(
+          companyId,
+          reviewerId,
+          rest as any,
+        );
+        return {
+          id: credit.id,
+          journalEntryId: (credit as any)?.journalEntryId ?? null,
+        };
       }
 
       // ── Reverse something already posted ─────────────────────────────────
@@ -200,13 +224,22 @@ export class ApprovalDispatcher {
         // Credit and cash together, all or nothing — replayed as asked. settle
         // reads only its named fields, so the `action` marker rides along.
         if (payload.action === 'settle') {
-          const settled = await this.bills.settle(companyId, reviewerId, payload as any);
+          const settled = await this.bills.settle(
+            companyId,
+            reviewerId,
+            payload as any,
+          );
           return {
-            id: settled.payment?.id ?? settled.credits[0]?.vendorCreditId ?? null,
+            id:
+              settled.payment?.id ?? settled.credits[0]?.vendorCreditId ?? null,
             journalEntryId: settled.payment?.journalEntryId ?? null,
           };
         }
-        const payment = await this.bills.pay(companyId, reviewerId, payload as any);
+        const payment = await this.bills.pay(
+          companyId,
+          reviewerId,
+          payload as any,
+        );
         return {
           id: payment.id,
           journalEntryId: (payment as any)?.journalEntryId ?? null,
@@ -231,7 +264,10 @@ export class ApprovalDispatcher {
             { dueDate: payload.dueDate },
             opts.creditOverride ?? null,
           );
-          return { id: invoice.id, journalEntryId: (invoice as any)?.journalEntryId ?? null };
+          return {
+            id: invoice.id,
+            journalEntryId: (invoice as any)?.journalEntryId ?? null,
+          };
         }
         if (payload.sourceEstimateId) {
           const { invoice } = await this.estimates.convertToInvoice(
@@ -241,7 +277,10 @@ export class ApprovalDispatcher {
             { dueDate: payload.dueDate },
             opts.creditOverride ?? null,
           );
-          return { id: invoice.id, journalEntryId: (invoice as any)?.journalEntryId ?? null };
+          return {
+            id: invoice.id,
+            journalEntryId: (invoice as any)?.journalEntryId ?? null,
+          };
         }
         // Requests filed before invoice lines had to name an item or say
         // 'service' carry no lineKind: approve them as they were asked for.
@@ -251,7 +290,9 @@ export class ApprovalDispatcher {
           reviewerId,
           payload as any,
           {
-            treatFreeTextAsService: lines.every((l) => l?.lineKind === undefined),
+            treatFreeTextAsService: lines.every(
+              (l) => l?.lineKind === undefined,
+            ),
             credit: { override: opts.creditOverride ?? null },
           },
         );
@@ -271,7 +312,11 @@ export class ApprovalDispatcher {
       case 'invoice_payment': {
         // Credit on account and new money together, all or nothing.
         if (payload.action === 'settle') {
-          const settled = await this.payments.settle(companyId, reviewerId, payload as any);
+          const settled = await this.payments.settle(
+            companyId,
+            reviewerId,
+            payload as any,
+          );
           return {
             id: settled.payment?.id ?? settled.credits[0]?.id ?? null,
             journalEntryId: settled.payment?.journalEntryId ?? null,
@@ -291,7 +336,10 @@ export class ApprovalDispatcher {
           const entryIds = (applied.applications ?? [])
             .map((a) => a.journalEntryId)
             .filter((id): id is string => !!id);
-          return { id: applied.id, journalEntryId: entryIds[entryIds.length - 1] ?? null };
+          return {
+            id: applied.id,
+            journalEntryId: entryIds[entryIds.length - 1] ?? null,
+          };
         }
         const payment = await this.payments.receive(
           companyId,
@@ -309,7 +357,9 @@ export class ApprovalDispatcher {
         // account carries no lineKind at all. It is approved as it was asked
         // for; its free-text lines get an account when they are billed.
         const lines: any[] = Array.isArray(payload.lines) ? payload.lines : [];
-        const filedBeforeLineKinds = lines.every((l) => l?.lineKind === undefined);
+        const filedBeforeLineKinds = lines.every(
+          (l) => l?.lineKind === undefined,
+        );
         const po = await this.purchaseOrders.create(companyId, payload as any, {
           allowUnclassifiedLines: filedBeforeLineKinds,
         });
@@ -322,7 +372,11 @@ export class ApprovalDispatcher {
       // which is what puts it under the period lock.
       case 'delivery_undo': {
         const requestId = this.requireId(payload.requestId, 'requestId');
-        await this.deliveryApprovals.undoApproval(companyId, requestId, reviewerId);
+        await this.deliveryApprovals.undoApproval(
+          companyId,
+          requestId,
+          reviewerId,
+        );
         // journalEntryId stays null on purpose: undoApproval posts its
         // reversal and then clears the link on the inventory_update_request,
         // returning the formatted request rather than the new entry's id. The
@@ -346,7 +400,10 @@ export class ApprovalDispatcher {
           opts.creditOverride ?? null,
           { preparedBy: opts.requestedBy ?? null },
         );
-        return { id: created.id, journalEntryId: created.advance?.journalEntryId ?? null };
+        return {
+          id: created.id,
+          journalEntryId: created.advance?.journalEntryId ?? null,
+        };
       }
 
       default: {

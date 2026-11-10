@@ -32,9 +32,15 @@ export class EstimatesAndSalesOrders1782200000000 implements MigrationInterface 
         "created_by" uuid NOT NULL,
         CONSTRAINT "PK_estimates" PRIMARY KEY ("id")
       )`);
-    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "UQ_estimates_company_number" ON "estimates" ("company_id","estimate_number")`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_estimates_company_status" ON "estimates" ("company_id","status")`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_estimates_company_customer" ON "estimates" ("company_id","customer_id")`);
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "UQ_estimates_company_number" ON "estimates" ("company_id","estimate_number")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_estimates_company_status" ON "estimates" ("company_id","status")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_estimates_company_customer" ON "estimates" ("company_id","customer_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "estimate_line_items" (
@@ -51,7 +57,9 @@ export class EstimatesAndSalesOrders1782200000000 implements MigrationInterface 
         CONSTRAINT "PK_estimate_line_items" PRIMARY KEY ("id"),
         CONSTRAINT "FK_estimate_line_items_estimate" FOREIGN KEY ("estimate_id") REFERENCES "estimates"("id") ON DELETE CASCADE
       )`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_estimate_line_items_estimate" ON "estimate_line_items" ("estimate_id")`);
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_estimate_line_items_estimate" ON "estimate_line_items" ("estimate_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "sales_orders" (
@@ -76,9 +84,15 @@ export class EstimatesAndSalesOrders1782200000000 implements MigrationInterface 
         "created_by" uuid NOT NULL,
         CONSTRAINT "PK_sales_orders" PRIMARY KEY ("id")
       )`);
-    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "UQ_sales_orders_company_number" ON "sales_orders" ("company_id","order_number")`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_sales_orders_company_status" ON "sales_orders" ("company_id","status")`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_sales_orders_company_customer" ON "sales_orders" ("company_id","customer_id")`);
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "UQ_sales_orders_company_number" ON "sales_orders" ("company_id","order_number")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_sales_orders_company_status" ON "sales_orders" ("company_id","status")`,
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_sales_orders_company_customer" ON "sales_orders" ("company_id","customer_id")`,
+    );
 
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "sales_order_line_items" (
@@ -96,7 +110,9 @@ export class EstimatesAndSalesOrders1782200000000 implements MigrationInterface 
         CONSTRAINT "PK_sales_order_line_items" PRIMARY KEY ("id"),
         CONSTRAINT "FK_sales_order_line_items_order" FOREIGN KEY ("sales_order_id") REFERENCES "sales_orders"("id") ON DELETE CASCADE
       )`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_sales_order_line_items_order" ON "sales_order_line_items" ("sales_order_id")`);
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_sales_order_line_items_order" ON "sales_order_line_items" ("sales_order_id")`,
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

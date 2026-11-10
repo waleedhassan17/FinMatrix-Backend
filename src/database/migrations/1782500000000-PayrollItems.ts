@@ -20,7 +20,9 @@ export class PayrollItems1782500000000 implements MigrationInterface {
         CONSTRAINT "PK_payroll_items" PRIMARY KEY ("id"),
         CONSTRAINT "FK_payroll_items_run" FOREIGN KEY ("payroll_run_id") REFERENCES "payroll_runs"("id") ON DELETE CASCADE
       )`);
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_payroll_items_run" ON "payroll_items" ("payroll_run_id")`);
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_payroll_items_run" ON "payroll_items" ("payroll_run_id")`,
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

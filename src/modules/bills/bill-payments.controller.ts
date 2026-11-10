@@ -53,8 +53,7 @@ const ALLOWED_MIMES = [
 // UPLOAD_MAX_SIZE_MB is declared in env.validation.ts with a default of 5 but
 // was never read anywhere; this wires it up rather than inventing a third
 // hardcoded limit (bill-photo carries its own 8 MB constant).
-const MAX_FILE_SIZE =
-  Number(process.env.UPLOAD_MAX_SIZE_MB ?? 5) * 1024 * 1024;
+const MAX_FILE_SIZE = Number(process.env.UPLOAD_MAX_SIZE_MB ?? 5) * 1024 * 1024;
 
 @ApiTags('bill-payments')
 @ApiBearerAuth()
@@ -98,7 +97,9 @@ export class BillPaymentsController {
    */
   @Post('proofs')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Upload a payment proof; returns an id for POST /bill-payments.' })
+  @ApiOperation({
+    summary: 'Upload a payment proof; returns an id for POST /bill-payments.',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -157,7 +158,10 @@ export class BillPaymentsController {
     @Param('proofId', ParseUUIDPipe) proofId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const { file, proof } = await this.bills.readPaymentProof(companyId, proofId);
+    const { file, proof } = await this.bills.readPaymentProof(
+      companyId,
+      proofId,
+    );
     res.set({
       'Content-Type': file.mimeType ?? proof.mimeType,
       'Content-Disposition': `inline; filename="${proof.originalName.replace(/"/g, '')}"`,

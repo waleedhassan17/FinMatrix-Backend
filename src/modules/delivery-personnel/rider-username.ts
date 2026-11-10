@@ -59,7 +59,9 @@ export const buildRiderUsernameBase = (args: {
   email?: string | null;
 }): string => {
   const code = slugifyRiderName(args.inviteCode) || 'rider';
-  const fromName = slugifyRiderName((args.displayName ?? '').trim().split(/\s+/)[0]);
+  const fromName = slugifyRiderName(
+    (args.displayName ?? '').trim().split(/\s+/)[0],
+  );
   const fromEmail = slugifyRiderName((args.email ?? '').split('@')[0]);
   const who = fromName || fromEmail || 'rider';
 
@@ -101,7 +103,12 @@ export const allocateRiderUsername = async (
  */
 export const ensureRiderUsername = async (
   em: EntityManager,
-  user: { id: string; username?: string | null; displayName?: string | null; email?: string | null },
+  user: {
+    id: string;
+    username?: string | null;
+    displayName?: string | null;
+    email?: string | null;
+  },
   inviteCode?: string | null,
 ): Promise<string> => {
   if (user.username) return user.username;
@@ -113,6 +120,9 @@ export const ensureRiderUsername = async (
       email: user.email,
     }),
   );
-  await em.query('UPDATE users SET username = $1 WHERE id = $2', [username, user.id]);
+  await em.query('UPDATE users SET username = $1 WHERE id = $2', [
+    username,
+    user.id,
+  ]);
   return username;
 };

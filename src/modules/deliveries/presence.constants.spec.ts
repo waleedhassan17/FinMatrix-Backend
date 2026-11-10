@@ -9,11 +9,15 @@ describe('rider presence', () => {
   const agoMs = (ms: number) => new Date(now - ms);
 
   it('is live just inside the window', () => {
-    expect(isLocationLive(agoMs(LOCATION_LIVE_WINDOW_MS - 1_000), now)).toBe(true);
+    expect(isLocationLive(agoMs(LOCATION_LIVE_WINDOW_MS - 1_000), now)).toBe(
+      true,
+    );
   });
 
   it('is not live just outside it', () => {
-    expect(isLocationLive(agoMs(LOCATION_LIVE_WINDOW_MS + 1_000), now)).toBe(false);
+    expect(isLocationLive(agoMs(LOCATION_LIVE_WINDOW_MS + 1_000), now)).toBe(
+      false,
+    );
   });
 
   it('is not live on the boundary itself', () => {

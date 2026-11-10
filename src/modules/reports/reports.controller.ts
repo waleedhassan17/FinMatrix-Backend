@@ -39,12 +39,25 @@ import { AgingDetailQueryDto } from './dto/aging-detail-query.dto';
  */
 const LEGACY_KEYS = {
   balanceSheet: [
-    'asOfDate', 'assets', 'liabilities', 'equity',
-    'totalAssets', 'totalLiabilities', 'totalEquity', 'isBalanced',
+    'asOfDate',
+    'assets',
+    'liabilities',
+    'equity',
+    'totalAssets',
+    'totalLiabilities',
+    'totalEquity',
+    'isBalanced',
   ],
   cashFlow: [
-    'range', 'operating', 'investing', 'financing', 'netChange',
-    'beginningCash', 'endingCash', 'monthlyTrend', 'operatingIndirect',
+    'range',
+    'operating',
+    'investing',
+    'financing',
+    'netChange',
+    'beginningCash',
+    'endingCash',
+    'monthlyTrend',
+    'operatingIndirect',
   ],
   trialBalance: ['range', 'rows', 'totalDebits', 'totalCredits', 'isBalanced'],
   aging: ['asOfDate', 'preset', 'buckets', 'rows', 'totals'],
@@ -161,7 +174,14 @@ export class ReportsController {
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
   ) {
     const { s, e } = this.range(startDate, endDate);
-    return this.svc.statementLineEntries(companyId, accountCode, s, e, page, limit);
+    return this.svc.statementLineEntries(
+      companyId,
+      accountCode,
+      s,
+      e,
+      page,
+      limit,
+    );
   }
 
   /**
@@ -172,9 +192,22 @@ export class ReportsController {
    */
   @Get('balance-sheet')
   @Roles('admin', 'staff')
-  @ApiQuery({ name: 'asOfDate', required: false, description: 'YYYY-MM-DD; default today' })
-  @ApiQuery({ name: 'compareTo', required: false, description: 'v2 — YYYY-MM-DD, before asOfDate' })
-  @ApiQuery({ name: 'includeZero', required: false, description: "v2 — 'true' lists active accounts with no balance in `sections`" })
+  @ApiQuery({
+    name: 'asOfDate',
+    required: false,
+    description: 'YYYY-MM-DD; default today',
+  })
+  @ApiQuery({
+    name: 'compareTo',
+    required: false,
+    description: 'v2 — YYYY-MM-DD, before asOfDate',
+  })
+  @ApiQuery({
+    name: 'includeZero',
+    required: false,
+    description:
+      "v2 — 'true' lists active accounts with no balance in `sections`",
+  })
   async balanceSheet(
     @CurrentCompany() companyId: string,
     @Query('asOfDate') asOfDate: string,
@@ -197,7 +230,13 @@ export class ReportsController {
     const data = await this.svc.balanceSheet(companyId, asOf, compareTo, {
       includeZero: includeZero === 'true',
     });
-    return this.send(data, format, res, 'balance-sheet', LEGACY_KEYS.balanceSheet);
+    return this.send(
+      data,
+      format,
+      res,
+      'balance-sheet',
+      LEGACY_KEYS.balanceSheet,
+    );
   }
 
   /**
@@ -207,8 +246,14 @@ export class ReportsController {
   @Get('balance-sheet/retained-earnings')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Retained earnings by fiscal year (v2)' })
-  @ApiQuery({ name: 'asOfDate', required: false, description: 'YYYY-MM-DD; default today' })
-  @ApiOkResponse({ description: '{ fiscalYearStart, postedTo3100, byFiscalYear[], total }' })
+  @ApiQuery({
+    name: 'asOfDate',
+    required: false,
+    description: 'YYYY-MM-DD; default today',
+  })
+  @ApiOkResponse({
+    description: '{ fiscalYearStart, postedTo3100, byFiscalYear[], total }',
+  })
   async retainedEarnings(
     @CurrentCompany() companyId: string,
     @Query('asOfDate') asOfDate?: string,
@@ -232,7 +277,10 @@ export class ReportsController {
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false, description: 'max 200' })
   @ApiQuery({ name: 'order', required: false, enum: ['asc', 'desc'] })
-  @ApiOkResponse({ description: '{ account, range, openingBalance, periodDebit, periodCredit, closingBalance, entries[], total, page, limit }' })
+  @ApiOkResponse({
+    description:
+      '{ account, range, openingBalance, periodDebit, periodCredit, closingBalance, entries[], total, page, limit }',
+  })
   async accountRegister(
     @CurrentCompany() companyId: string,
     @Param('accountCode') accountCode: string,
@@ -243,11 +291,20 @@ export class ReportsController {
     @Query('order') order?: string,
   ) {
     if (order !== undefined && order !== 'asc' && order !== 'desc') {
-      throw new BadRequestException({ code: 'INVALID_ORDER', message: "order must be 'asc' or 'desc'." });
+      throw new BadRequestException({
+        code: 'INVALID_ORDER',
+        message: "order must be 'asc' or 'desc'.",
+      });
     }
     const { s, e } = this.checkedRange(startDate, endDate);
     return this.svc.accountRegister(
-      companyId, this.checkedAccountCode(accountCode), s, e, page, limit, order ?? 'asc',
+      companyId,
+      this.checkedAccountCode(accountCode),
+      s,
+      e,
+      page,
+      limit,
+      order ?? 'asc',
     );
   }
 
@@ -263,8 +320,14 @@ export class ReportsController {
   @ApiQuery({ name: 'endDate', required: true })
   @ApiQuery({ name: 'compareStartDate', required: false })
   @ApiQuery({ name: 'compareEndDate', required: false })
-  @ApiQuery({ name: 'limit', required: false, description: 'counterparties before Other; default 10' })
-  @ApiOkResponse({ description: '{ current, prior, change, byCounterparty[], bySourceType[] }' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'counterparties before Other; default 10',
+  })
+  @ApiOkResponse({
+    description: '{ current, prior, change, byCounterparty[], bySourceType[] }',
+  })
   async accountMovement(
     @CurrentCompany() companyId: string,
     @Param('accountCode') accountCode: string,
@@ -292,7 +355,13 @@ export class ReportsController {
       cmp = this.checkedRange(compareStartDate, compareEndDate);
     }
     return this.svc.accountMovement(
-      companyId, this.checkedAccountCode(accountCode), s, e, cmp.s, cmp.e, limit,
+      companyId,
+      this.checkedAccountCode(accountCode),
+      s,
+      e,
+      cmp.s,
+      cmp.e,
+      limit,
     );
   }
 
@@ -304,11 +373,17 @@ export class ReportsController {
    * that pass fails, the aging report must still answer exactly as it always
    * did, so the KPI comes back null and the failure is logged, never a 500.
    */
-  private async bestEffortKpi(companyId: string, key: 'dso' | 'dpo', asOf: string) {
+  private async bestEffortKpi(
+    companyId: string,
+    key: 'dso' | 'dpo',
+    asOf: string,
+  ) {
     try {
       return await this.kpi.healthKpi(companyId, key, asOf);
     } catch (err) {
-      this.logger.warn(`aging insights: ${key} unavailable for ${companyId}: ${(err as Error)?.message}`);
+      this.logger.warn(
+        `aging insights: ${key} unavailable for ${companyId}: ${(err as Error)?.message}`,
+      );
       return null;
     }
   }
@@ -322,11 +397,22 @@ export class ReportsController {
   ) {
     // v2 insights are JSON-only: the CSV export keeps its exact columns.
     const json = (query.format ?? 'json') !== 'csv';
-    const data: any = await this.svc.arAging(companyId, query, { withInsights: json });
+    const data: any = await this.svc.arAging(companyId, query, {
+      withInsights: json,
+    });
     if (json && data.insights) {
-      data.insights = { dso: await this.bestEffortKpi(companyId, 'dso', data.asOfDate), ...data.insights };
+      data.insights = {
+        dso: await this.bestEffortKpi(companyId, 'dso', data.asOfDate),
+        ...data.insights,
+      };
     }
-    return this.send(data, query.format ?? 'json', res, 'ar-aging', LEGACY_KEYS.aging);
+    return this.send(
+      data,
+      query.format ?? 'json',
+      res,
+      'ar-aging',
+      LEGACY_KEYS.aging,
+    );
   }
 
   @Get('ap-aging')
@@ -337,11 +423,22 @@ export class ReportsController {
     @Res() res: Response,
   ) {
     const json = (query.format ?? 'json') !== 'csv';
-    const data: any = await this.svc.apAging(companyId, query, { withInsights: json });
+    const data: any = await this.svc.apAging(companyId, query, {
+      withInsights: json,
+    });
     if (json && data.insights) {
-      data.insights = { dpo: await this.bestEffortKpi(companyId, 'dpo', data.asOfDate), ...data.insights };
+      data.insights = {
+        dpo: await this.bestEffortKpi(companyId, 'dpo', data.asOfDate),
+        ...data.insights,
+      };
     }
-    return this.send(data, query.format ?? 'json', res, 'ap-aging', LEGACY_KEYS.aging);
+    return this.send(
+      data,
+      query.format ?? 'json',
+      res,
+      'ap-aging',
+      LEGACY_KEYS.aging,
+    );
   }
 
   /**
@@ -369,7 +466,12 @@ export class ReportsController {
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
   ) {
     return this.svc.arAgingPartyDocuments(
-      companyId, customerId, query, query.bucket, page, limit,
+      companyId,
+      customerId,
+      query,
+      query.bucket,
+      page,
+      limit,
     );
   }
 
@@ -384,7 +486,12 @@ export class ReportsController {
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
   ) {
     return this.svc.apAgingPartyDocuments(
-      companyId, vendorId, query, query.bucket, page, limit,
+      companyId,
+      vendorId,
+      query,
+      query.bucket,
+      page,
+      limit,
     );
   }
 
@@ -423,7 +530,11 @@ export class ReportsController {
    */
   @Get('inventory-valuation')
   @Roles('admin', 'staff')
-  @ApiQuery({ name: 'asOfDate', required: false, description: 'v2 — YYYY-MM-DD' })
+  @ApiQuery({
+    name: 'asOfDate',
+    required: false,
+    description: 'v2 — YYYY-MM-DD',
+  })
   async inventoryValuation(
     @CurrentCompany() companyId: string,
     @Query('format') format = 'json',
@@ -431,9 +542,18 @@ export class ReportsController {
     @Query('asOfDate') asOfDate?: string,
   ) {
     const data = asOfDate
-      ? await this.svc.inventoryValuation(companyId, this.checkedDate('asOfDate', asOfDate))
+      ? await this.svc.inventoryValuation(
+          companyId,
+          this.checkedDate('asOfDate', asOfDate),
+        )
       : await this.svc.inventoryValuation(companyId);
-    return this.send(data, format, res, 'inventory-valuation', LEGACY_KEYS.inventoryValuation);
+    return this.send(
+      data,
+      format,
+      res,
+      'inventory-valuation',
+      LEGACY_KEYS.inventoryValuation,
+    );
   }
 
   /**
@@ -445,8 +565,15 @@ export class ReportsController {
   @Get('inventory-health')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Inventory health (v2)' })
-  @ApiQuery({ name: 'asOfDate', required: false, description: 'YYYY-MM-DD; default today' })
-  @ApiOkResponse({ description: '{ belowReorder[], aging, deadStock, turnover, dio, byLocation[], totals }' })
+  @ApiQuery({
+    name: 'asOfDate',
+    required: false,
+    description: 'YYYY-MM-DD; default today',
+  })
+  @ApiOkResponse({
+    description:
+      '{ belowReorder[], aging, deadStock, turnover, dio, byLocation[], totals }',
+  })
   async inventoryHealth(
     @CurrentCompany() companyId: string,
     @Query('asOfDate') asOfDate?: string,
@@ -461,7 +588,11 @@ export class ReportsController {
   @Get('financial-health')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Financial health KPIs (v2)' })
-  @ApiQuery({ name: 'asOfDate', required: false, description: 'YYYY-MM-DD; default today' })
+  @ApiQuery({
+    name: 'asOfDate',
+    required: false,
+    description: 'YYYY-MM-DD; default today',
+  })
   @ApiOkResponse({ description: '{ asOfDate, kpis: Kpi[] }' })
   async financialHealth(
     @CurrentCompany() companyId: string,
@@ -481,11 +612,26 @@ export class ReportsController {
   @Get('analytics')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Owner cockpit analytics (v2)' })
-  @ApiQuery({ name: 'startDate', required: false, description: 'default: start of the fiscal year' })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    description: 'default: start of the fiscal year',
+  })
   @ApiQuery({ name: 'endDate', required: false, description: 'default: today' })
-  @ApiQuery({ name: 'expenseTop', required: false, description: 'v2 — expense accounts named before Other (3–10, default 8)' })
-  @ApiQuery({ name: 'customerTop', required: false, description: 'v2 — customers named before Other (3–10, default 10)' })
-  @ApiOkResponse({ description: '{ range, comparisonRange, series[], kpis[], expenseByAccount[], salesByCustomer, budgetVsActual, health, insights[] }' })
+  @ApiQuery({
+    name: 'expenseTop',
+    required: false,
+    description: 'v2 — expense accounts named before Other (3–10, default 8)',
+  })
+  @ApiQuery({
+    name: 'customerTop',
+    required: false,
+    description: 'v2 — customers named before Other (3–10, default 10)',
+  })
+  @ApiOkResponse({
+    description:
+      '{ range, comparisonRange, series[], kpis[], expenseByAccount[], salesByCustomer, budgetVsActual, health, insights[] }',
+  })
   async analytics(
     @CurrentCompany() companyId: string,
     @Query('startDate') startDate?: string,
@@ -614,7 +760,12 @@ export class ReportsController {
     // Format only: an inverted range has always come back empty here, and a
     // shipped client that sends one should keep getting that, not a 400.
     const { s, e } = this.checkedRange(startDate, endDate, false);
-    const allowed = ['grossProfit', 'revenue', 'marginPct', 'stockValue'] as const;
+    const allowed = [
+      'grossProfit',
+      'revenue',
+      'marginPct',
+      'stockValue',
+    ] as const;
     const key = (allowed as readonly string[]).includes(sort ?? '')
       ? (sort as (typeof allowed)[number])
       : 'grossProfit';
@@ -629,8 +780,17 @@ export class ReportsController {
    */
   @Get('trial-balance')
   @Roles('admin', 'staff')
-  @ApiQuery({ name: 'mode', required: false, enum: ['movement', 'closing', 'working'] })
-  @ApiQuery({ name: 'includeZero', required: false, description: "v2, with mode — 'true' lists active accounts with nothing in any column" })
+  @ApiQuery({
+    name: 'mode',
+    required: false,
+    enum: ['movement', 'closing', 'working'],
+  })
+  @ApiQuery({
+    name: 'includeZero',
+    required: false,
+    description:
+      "v2, with mode — 'true' lists active accounts with nothing in any column",
+  })
   async trialBalance(
     @CurrentCompany() companyId: string,
     @Query('startDate') startDate: string,
@@ -658,7 +818,13 @@ export class ReportsController {
     const data = await this.svc.trialBalance(companyId, s, e, mode, {
       includeZero: includeZero === 'true',
     });
-    return this.send(data, format, res, 'trial-balance', LEGACY_KEYS.trialBalance);
+    return this.send(
+      data,
+      format,
+      res,
+      'trial-balance',
+      LEGACY_KEYS.trialBalance,
+    );
   }
 
   @Get('cash-flow')
@@ -686,12 +852,18 @@ export class ReportsController {
   @Get('cash-flow/lines/:lineKey/entries')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Cash rows behind a cash-flow line (v2)' })
-  @ApiParam({ name: 'lineKey', description: 'e.g. op.customers, inv.fixed_assets, fin.loans' })
+  @ApiParam({
+    name: 'lineKey',
+    description: 'e.g. op.customers, inv.fixed_assets, fin.loans',
+  })
   @ApiQuery({ name: 'startDate', required: false })
   @ApiQuery({ name: 'endDate', required: false, description: 'default today' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false, description: 'max 200' })
-  @ApiOkResponse({ description: '{ lineKey, label, section, lineAmount, entries[], total, page, limit }' })
+  @ApiOkResponse({
+    description:
+      '{ lineKey, label, section, lineAmount, entries[], total, page, limit }',
+  })
   async cashFlowLineEntries(
     @CurrentCompany() companyId: string,
     @Param('lineKey') lineKey: string,
@@ -791,16 +963,26 @@ export class ReportsController {
     legacyKeys?: readonly string[],
   ) {
     if (format === 'csv') {
-      if (legacyKeys && data && typeof data === 'object' && !Array.isArray(data)) {
+      if (
+        legacyKeys &&
+        data &&
+        typeof data === 'object' &&
+        !Array.isArray(data)
+      ) {
         data = Object.fromEntries(
           legacyKeys
             .filter((k) => k in (data as Record<string, unknown>))
             .map((k) => [k, (data as Record<string, unknown>)[k]]),
         );
       }
-      const csv = Array.isArray(data) ? this.svc.toCsv(data as Record<string, unknown>[]) : this.svc.toCsv([data as Record<string, unknown>]);
+      const csv = Array.isArray(data)
+        ? this.svc.toCsv(data as Record<string, unknown>[])
+        : this.svc.toCsv([data as Record<string, unknown>]);
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}.csv"`,
+      );
       res.send(csv);
       return;
     }

@@ -22,7 +22,13 @@ export class BillPayment extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 64, nullable: true })
   reference!: string | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_amount',
+  })
   totalAmount!: string;
 
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
@@ -37,12 +43,19 @@ export class BillPayment extends BaseCompanyEntity {
    * is a convenience for the client and is composed from APP_URL at upload
    * time, so it can drift if that setting changes.
    */
-  @Column({ type: 'varchar', length: 255, nullable: true, name: 'proof_storage_key' })
+  @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    name: 'proof_storage_key',
+  })
   proofStorageKey!: string | null;
 
   @Column({ type: 'varchar', length: 512, nullable: true, name: 'proof_url' })
   proofUrl!: string | null;
 
-  @OneToMany(() => BillPaymentApplication, (a) => a.billPayment, { cascade: true })
+  @OneToMany(() => BillPaymentApplication, (a) => a.billPayment, {
+    cascade: true,
+  })
   applications!: BillPaymentApplication[];
 }

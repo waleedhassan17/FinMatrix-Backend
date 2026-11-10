@@ -70,13 +70,17 @@ export class CreateReconciliationDto {
   @IsDateString()
   statementDate!: string;
 
-  @ApiProperty({ example: '15250.00', description: "Statement's ending balance." })
+  @ApiProperty({
+    example: '15250.00',
+    description: "Statement's ending balance.",
+  })
   @IsNumberString()
   statementEndingBalance!: string;
 
   @ApiProperty({
     type: [String],
-    description: 'IDs of the GL entries that appear as cleared on the statement.',
+    description:
+      'IDs of the GL entries that appear as cleared on the statement.',
   })
   @IsArray()
   @ArrayMinSize(0)

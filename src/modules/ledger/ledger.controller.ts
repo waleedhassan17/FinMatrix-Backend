@@ -1,4 +1,10 @@
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompanyGuard } from '../../common/guards/company.guard';
@@ -16,20 +22,34 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * The party view's inputs, refused in words rather than as a SQL cast error.
  * The account view has always taken its dates unchecked; it is left as it is.
  */
-function partyArgs(type?: string, startDate?: string, endDate?: string, partyId?: string) {
+function partyArgs(
+  type?: string,
+  startDate?: string,
+  endDate?: string,
+  partyId?: string,
+) {
   if (type !== 'customer' && type !== 'vendor') {
     throw new BadRequestException({
       code: 'INVALID_LEDGER_PARTY',
       message: 'party must be "customer" or "vendor".',
     });
   }
-  for (const [name, value] of [['startDate', startDate], ['endDate', endDate]] as const) {
+  for (const [name, value] of [
+    ['startDate', startDate],
+    ['endDate', endDate],
+  ] as const) {
     if (value && !ISO_DATE.test(value)) {
-      throw new BadRequestException({ code: 'INVALID_DATE', message: `${name} must be a date (YYYY-MM-DD).` });
+      throw new BadRequestException({
+        code: 'INVALID_DATE',
+        message: `${name} must be a date (YYYY-MM-DD).`,
+      });
     }
   }
   if (partyId && !UUID.test(partyId)) {
-    throw new BadRequestException({ code: 'INVALID_PARTY_ID', message: 'partyId must be a customer or vendor id.' });
+    throw new BadRequestException({
+      code: 'INVALID_PARTY_ID',
+      message: 'partyId must be a customer or vendor id.',
+    });
   }
   return { type: type as LedgerPartyType, partyId: partyId || undefined };
 }
@@ -65,7 +85,13 @@ export class LedgerController {
   ) {
     if (party !== undefined && party !== '') {
       const args = partyArgs(party, startDate, endDate, partyId);
-      return this.parties.ledger(companyId, args.type, startDate, endDate, args.partyId);
+      return this.parties.ledger(
+        companyId,
+        args.type,
+        startDate,
+        endDate,
+        args.partyId,
+      );
     }
     return this.ledger.query(companyId, startDate, endDate, account);
   }
@@ -73,7 +99,10 @@ export class LedgerController {
   /** Every customer or vendor with its figures for the period — the picker's list. */
   @Get('parties')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Per-party roll-up for the general ledger picker (type=customer|vendor).' })
+  @ApiOperation({
+    summary:
+      'Per-party roll-up for the general ledger picker (type=customer|vendor).',
+  })
   partyList(
     @CurrentCompany() companyId: string,
     @Query('type') type?: string,

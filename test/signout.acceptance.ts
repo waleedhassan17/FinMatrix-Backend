@@ -48,8 +48,13 @@ const ROLES: Array<{ name: string; email?: string; password?: string }> = [
 let pass = 0;
 let fail = 0;
 const ok = (name: string, cond: boolean, detail = '') => {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name} ${detail}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name} ${detail}`);
+  }
 };
 
 async function req(
@@ -64,7 +69,11 @@ async function req(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   let parsed: any = null;
-  try { parsed = await res.json(); } catch { /* empty body */ }
+  try {
+    parsed = await res.json();
+  } catch {
+    /* empty body */
+  }
   return { status: res.status, body: parsed };
 }
 
@@ -81,7 +90,10 @@ async function signin(email: string, password: string) {
   };
 }
 
-async function runRole(role: { name: string; email?: string; password?: string }, checkAlias: boolean) {
+async function runRole(
+  role: { name: string; email?: string; password?: string },
+  checkAlias: boolean,
+) {
   console.log(`\n── ${role.name} (${role.email}) ──`);
   if (!role.email || !role.password) {
     console.log('  ~ skipped (no credentials provided)');
@@ -90,40 +102,90 @@ async function runRole(role: { name: string; email?: string; password?: string }
 
   // 1. signin + me
   const s1 = await signin(role.email, role.password);
-  ok('signin issues an access + refresh pair', s1.status === 200 && !!s1.accessToken && !!s1.refreshToken, `status=${s1.status}`);
+  ok(
+    'signin issues an access + refresh pair',
+    s1.status === 200 && !!s1.accessToken && !!s1.refreshToken,
+    `status=${s1.status}`,
+  );
   if (!s1.accessToken || !s1.refreshToken) return;
 
   const me1 = await req('GET', '/auth/me', undefined, bearer(s1.accessToken));
-  ok('/auth/me works before logout', me1.status === 200, `status=${me1.status}`);
+  ok(
+    '/auth/me works before logout',
+    me1.status === 200,
+    `status=${me1.status}`,
+  );
 
   // 2. logout
-  const lo = await req('POST', '/auth/logout', undefined, bearer(s1.accessToken));
+  const lo = await req(
+    'POST',
+    '/auth/logout',
+    undefined,
+    bearer(s1.accessToken),
+  );
   ok('POST /auth/logout returns 200', lo.status === 200, `status=${lo.status}`);
 
   // 3. old access token now rejected
   const me2 = await req('GET', '/auth/me', undefined, bearer(s1.accessToken));
-  ok('old access token is rejected after logout (401)', me2.status === 401, `status=${me2.status}`);
+  ok(
+    'old access token is rejected after logout (401)',
+    me2.status === 401,
+    `status=${me2.status}`,
+  );
 
   // 4. old refresh token now rejected
-  const rf = await req('POST', '/auth/refresh-token', { refreshToken: s1.refreshToken });
-  ok('old refresh token is rejected after logout (401)', rf.status === 401, `status=${rf.status}`);
+  const rf = await req('POST', '/auth/refresh-token', {
+    refreshToken: s1.refreshToken,
+  });
+  ok(
+    'old refresh token is rejected after logout (401)',
+    rf.status === 401,
+    `status=${rf.status}`,
+  );
 
   // 5. idempotent: logging out again with the dead token still succeeds
-  const lo2 = await req('POST', '/auth/logout', undefined, bearer(s1.accessToken));
-  ok('repeated logout with a dead token still returns 200 (idempotent)', lo2.status === 200, `status=${lo2.status}`);
+  const lo2 = await req(
+    'POST',
+    '/auth/logout',
+    undefined,
+    bearer(s1.accessToken),
+  );
+  ok(
+    'repeated logout with a dead token still returns 200 (idempotent)',
+    lo2.status === 200,
+    `status=${lo2.status}`,
+  );
 
   // 6. fresh signin issues a new working token
   const s2 = await signin(role.email, role.password);
   const me3 = s2.accessToken
     ? await req('GET', '/auth/me', undefined, bearer(s2.accessToken))
     : { status: 0 };
-  ok('a fresh signin issues a new working token', s2.status === 200 && me3.status === 200, `signin=${s2.status} me=${me3.status}`);
+  ok(
+    'a fresh signin issues a new working token',
+    s2.status === 200 && me3.status === 200,
+    `signin=${s2.status} me=${me3.status}`,
+  );
 
   // 7. '/auth/signout' alias (once is enough)
   if (checkAlias && s2.accessToken) {
-    const alias = await req('POST', '/auth/signout', undefined, bearer(s2.accessToken));
-    const meAfter = await req('GET', '/auth/me', undefined, bearer(s2.accessToken));
-    ok("'/auth/signout' alias also revokes the token", alias.status === 200 && meAfter.status === 401, `signout=${alias.status} me=${meAfter.status}`);
+    const alias = await req(
+      'POST',
+      '/auth/signout',
+      undefined,
+      bearer(s2.accessToken),
+    );
+    const meAfter = await req(
+      'GET',
+      '/auth/me',
+      undefined,
+      bearer(s2.accessToken),
+    );
+    ok(
+      "'/auth/signout' alias also revokes the token",
+      alias.status === 200 && meAfter.status === 401,
+      `signout=${alias.status} me=${meAfter.status}`,
+    );
   } else if (s2.accessToken) {
     // leave no live session behind
     await req('POST', '/auth/logout', undefined, bearer(s2.accessToken));
@@ -131,7 +193,11 @@ async function runRole(role: { name: string; email?: string; password?: string }
 
   // logout with no Authorization header at all is still a 200 no-op
   const bare = await req('POST', '/auth/logout');
-  ok('logout without a token is a 200 no-op', bare.status === 200, `status=${bare.status}`);
+  ok(
+    'logout without a token is a 200 no-op',
+    bare.status === 200,
+    `status=${bare.status}`,
+  );
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -40,7 +40,9 @@ export class AccountsController {
 
   @Get()
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'List accounts with filters. Includes summary totals.' })
+  @ApiOperation({
+    summary: 'List accounts with filters. Includes summary totals.',
+  })
   list(
     @CurrentCompany() companyId: string,
     @Query() query: ListAccountsQueryDto,

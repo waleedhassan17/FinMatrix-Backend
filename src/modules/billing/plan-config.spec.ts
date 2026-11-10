@@ -23,7 +23,8 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
     expect(PLAN_CONFIG.standard.durationMonths).toBe(6);
     expect(PLAN_CONFIG.standard.priceMinorUnits).toBe(600000);
     expect(PLAN_CONFIG.standard.priceMinorUnits).toBe(
-      PLAN_CONFIG.standard.monthlyMinorUnits * PLAN_CONFIG.standard.durationMonths!,
+      PLAN_CONFIG.standard.monthlyMinorUnits *
+        PLAN_CONFIG.standard.durationMonths!,
     );
     expect(PLAN_CONFIG.standard.deliveryPersonnelLimit).toBe(3);
   });
@@ -60,7 +61,9 @@ describe('PLAN_CONFIG (phase2.md contract)', () => {
 });
 
 describe('Offered tier plans (PKR)', () => {
-  const expected: Array<[string, string | null, number, number, number, number]> = [
+  const expected: Array<
+    [string, string | null, number, number, number, number]
+  > = [
     // key, companyType, durationMonths, monthly Rs, total Rs, personnel limit
     // WAREHOUSE-ONLY: small_business/large_org are retired to companyType
     // null — still resolvable for the companies on them, never offered.
@@ -95,12 +98,16 @@ describe('Offered tier plans (PKR)', () => {
     const plans = plansForType('warehouse');
     expect(plans).toHaveLength(6);
     expect(
-      [...new Set(plans.map((p) => p.deliveryPersonnelLimit))].sort((a, b) => a - b),
+      [...new Set(plans.map((p) => p.deliveryPersonnelLimit))].sort(
+        (a, b) => a - b,
+      ),
     ).toEqual([3, 5, 10]);
     // Each limit is available in both billing periods.
     for (const limit of [3, 5, 10]) {
       const forLimit = plans.filter((p) => p.deliveryPersonnelLimit === limit);
-      expect(forLimit.map((p) => p.durationMonths).sort((a, b) => a! - b!)).toEqual([6, 12]);
+      expect(
+        forLimit.map((p) => p.durationMonths).sort((a, b) => a! - b!),
+      ).toEqual([6, 12]);
     }
   });
 
@@ -110,7 +117,9 @@ describe('Offered tier plans (PKR)', () => {
         .filter((p) => p.durationMonths === months)
         .sort((a, b) => a.deliveryPersonnelLimit - b.deliveryPersonnelLimit);
       for (let i = 1; i < rung.length; i++) {
-        expect(rung[i].monthlyMinorUnits).toBeGreaterThan(rung[i - 1].monthlyMinorUnits);
+        expect(rung[i].monthlyMinorUnits).toBeGreaterThan(
+          rung[i - 1].monthlyMinorUnits,
+        );
       }
     }
   });
@@ -145,9 +154,13 @@ describe('Offered tier plans (PKR)', () => {
     for (const type of ['small_business', 'large_org', 'warehouse']) {
       for (const p of plansForType(type)) {
         expect(p.priceMinorUnits).toBeGreaterThan(0);
-        expect(['free', 'standard', 'pro', 'warehouse_3mo', 'warehouse_6mo']).not.toContain(
-          p.key,
-        );
+        expect([
+          'free',
+          'standard',
+          'pro',
+          'warehouse_3mo',
+          'warehouse_6mo',
+        ]).not.toContain(p.key);
       }
     }
     expect(plansForType(null)).toHaveLength(0); // legacy/retired not selectable
@@ -175,7 +188,9 @@ describe('free trial plan', () => {
     expect(trial.priceMinorUnits).toBe(0);
     expect(trial.companyType).toBeNull();
     for (const type of ['small_business', 'large_org', 'warehouse', null]) {
-      expect(plansForType(type).map((p) => p.key)).not.toContain(TRIAL_PLAN_KEY);
+      expect(plansForType(type).map((p) => p.key)).not.toContain(
+        TRIAL_PLAN_KEY,
+      );
     }
   });
 

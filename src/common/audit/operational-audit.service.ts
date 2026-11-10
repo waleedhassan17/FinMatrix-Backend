@@ -44,7 +44,12 @@ export class OperationalAuditService {
     }
   }
 
-  async listForTarget(companyId: string, targetType: string, targetId: string, limit = 50) {
+  async listForTarget(
+    companyId: string,
+    targetType: string,
+    targetId: string,
+    limit = 50,
+  ) {
     return this.repo.find({
       where: { companyId, targetType, targetId },
       order: { createdAt: 'DESC' },

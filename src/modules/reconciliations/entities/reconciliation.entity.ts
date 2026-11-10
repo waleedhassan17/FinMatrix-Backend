@@ -26,11 +26,23 @@ export class Reconciliation extends BaseCompanyEntity {
 
   // Reconciled balance carried in from prior reconciliations (sum of all
   // previously-reconciled rows for the account).
-  @Column({ type: 'decimal', precision: 18, scale: 4, name: 'beginning_balance', default: 0 })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    name: 'beginning_balance',
+    default: 0,
+  })
   beginningBalance!: string;
 
   // Beginning balance + net of the rows cleared in this session.
-  @Column({ type: 'decimal', precision: 18, scale: 4, name: 'cleared_balance', default: 0 })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    name: 'cleared_balance',
+    default: 0,
+  })
   clearedBalance!: string;
 
   // statementEndingBalance − clearedBalance (must be ~0 to finalise).

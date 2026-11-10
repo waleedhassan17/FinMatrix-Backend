@@ -40,10 +40,21 @@ export class Employee extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   salary!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'hourly_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'hourly_rate',
+  })
   hourlyRate!: string;
 
-  @Column({ type: 'varchar', length: 16, default: 'monthly', name: 'pay_frequency' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    default: 'monthly',
+    name: 'pay_frequency',
+  })
   payFrequency!: string;
 
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'tax_id' })

@@ -19,7 +19,11 @@ import { grossValue } from '../../common/utils/credit-control.util';
  */
 
 export type DeliveryPaidStatus = 'paid' | 'partial' | 'unpaid';
-export const DELIVERY_PAID_STATUSES: DeliveryPaidStatus[] = ['paid', 'partial', 'unpaid'];
+export const DELIVERY_PAID_STATUSES: DeliveryPaidStatus[] = [
+  'paid',
+  'partial',
+  'unpaid',
+];
 
 /**
  * Cash is counted in paisa. A figure that agrees with the amount due to the
@@ -58,14 +62,22 @@ const money = (d: Decimal) => d.toFixed(4);
  * is PARTIAL, nothing paid is NOT PAID. Once a delivery is approved its
  * paidStatus is always this — never a separate answer that can drift.
  */
-export function invoicePaidStatus(invoice: { balance: string; amountPaid: string }): DeliveryPaidStatus {
+export function invoicePaidStatus(invoice: {
+  balance: string;
+  amountPaid: string;
+}): DeliveryPaidStatus {
   if (!toDecimal(invoice.balance).greaterThan(MONEY_TOLERANCE)) return 'paid';
-  return toDecimal(invoice.amountPaid).greaterThan(MONEY_TOLERANCE) ? 'partial' : 'unpaid';
+  return toDecimal(invoice.amountPaid).greaterThan(MONEY_TOLERANCE)
+    ? 'partial'
+    : 'unpaid';
 }
 
 function split(gross: Decimal.Value, advance: Decimal.Value) {
   const g = Decimal.max(toDecimal(gross as never), 0);
-  const advanceApplied = Decimal.min(Decimal.max(toDecimal(advance as never), 0), g);
+  const advanceApplied = Decimal.min(
+    Decimal.max(toDecimal(advance as never), 0),
+    g,
+  );
   return { advanceApplied, due: g.minus(advanceApplied) };
 }
 
@@ -91,7 +103,12 @@ export function collectionFromAmount(
 ): Collection {
   const { advanceApplied, due } = split(gross, advance);
   if (!due.greaterThan(MONEY_TOLERANCE)) {
-    return { paidStatus: 'paid', amountCollected: money(new Decimal(0)), amountDue: money(due), advanceApplied: money(advanceApplied) };
+    return {
+      paidStatus: 'paid',
+      amountCollected: money(new Decimal(0)),
+      amountDue: money(due),
+      advanceApplied: money(advanceApplied),
+    };
   }
 
   let collected: Decimal;
@@ -113,10 +130,20 @@ export function collectionFromAmount(
   if (collected.greaterThanOrEqualTo(due.minus(COLLECTION_TOLERANCE))) {
     // Agrees with the amount due to the paisa: record exactly what was owed,
     // so the invoice closes instead of carrying a sub-paisa residue.
-    return { paidStatus: 'paid', amountCollected: money(due), amountDue: money(due), advanceApplied: money(advanceApplied) };
+    return {
+      paidStatus: 'paid',
+      amountCollected: money(due),
+      amountDue: money(due),
+      advanceApplied: money(advanceApplied),
+    };
   }
   if (!collected.greaterThan(MONEY_TOLERANCE)) {
-    return { paidStatus: 'unpaid', amountCollected: money(new Decimal(0)), amountDue: money(due), advanceApplied: money(advanceApplied) };
+    return {
+      paidStatus: 'unpaid',
+      amountCollected: money(new Decimal(0)),
+      amountDue: money(due),
+      advanceApplied: money(advanceApplied),
+    };
   }
   return {
     paidStatus: 'partial',
@@ -148,7 +175,11 @@ export function resolveCollection(input: {
   const base = { amountDue: money(due), advanceApplied: money(advanceApplied) };
 
   if (!due.greaterThan(MONEY_TOLERANCE)) {
-    return { ...base, paidStatus: 'paid', amountCollected: money(new Decimal(0)) };
+    return {
+      ...base,
+      paidStatus: 'paid',
+      amountCollected: money(new Decimal(0)),
+    };
   }
 
   const status = input.paidStatus ?? 'unpaid';
@@ -156,15 +187,25 @@ export function resolveCollection(input: {
     case 'paid':
       return { ...base, paidStatus: 'paid', amountCollected: money(due) };
     case 'unpaid':
-      return { ...base, paidStatus: 'unpaid', amountCollected: money(new Decimal(0)) };
+      return {
+        ...base,
+        paidStatus: 'unpaid',
+        amountCollected: money(new Decimal(0)),
+      };
     case 'partial': {
       const raw = input.amountCollected;
       if (raw === undefined || raw === null || String(raw).trim() === '') {
-        outOfRange(`Enter how much the customer paid of the ${fmt(due)} due.`, due);
+        outOfRange(
+          `Enter how much the customer paid of the ${fmt(due)} due.`,
+          due,
+        );
       }
       const settled = collectionFromAmount(input.gross, input.advance, raw);
       if (settled.paidStatus === 'unpaid') {
-        outOfRange('A partial payment must be more than zero. Choose NOT PAID if the customer paid nothing.', due);
+        outOfRange(
+          'A partial payment must be more than zero. Choose NOT PAID if the customer paid nothing.',
+          due,
+        );
       }
       return settled;
     }
@@ -190,7 +231,9 @@ export interface DeliveryLineLike {
  * Units that left on the van. orderedQty is canonical; rows written before the
  * DTO fix carried the amount in `quantity` (see DeliveryLedgerService.lineQty).
  */
-export function dispatchedQty(line: Pick<DeliveryLineLike, 'orderedQty' | 'quantity'>): Decimal {
+export function dispatchedQty(
+  line: Pick<DeliveryLineLike, 'orderedQty' | 'quantity'>,
+): Decimal {
   const ordered = toDecimal(line.orderedQty as never);
   return ordered.greaterThan(0) ? ordered : toDecimal(line.quantity as never);
 }
@@ -222,10 +265,15 @@ export function deliveredGross(
  * so it covers any sale the delivery can make.
  */
 export function deliveryAdvance(
-  delivery: { prepaid: boolean; advancePaymentId: string | null; advanceAmount: string | null },
+  delivery: {
+    prepaid: boolean;
+    advancePaymentId: string | null;
+    advanceAmount: string | null;
+  },
   gross: Decimal.Value,
 ): Decimal {
-  if (delivery.prepaid && !delivery.advancePaymentId) return toDecimal(gross as never);
+  if (delivery.prepaid && !delivery.advancePaymentId)
+    return toDecimal(gross as never);
   return toDecimal(delivery.advanceAmount ?? '0');
 }
 
@@ -234,6 +282,10 @@ export function deliveryAdvance(
  * the delivery was cancelled/returned) the answer is history: approval posted
  * from it and the invoice now decides.
  */
-export function acceptsCollectionAnswer(delivery: { ledgerStatus: string }): boolean {
-  return delivery.ledgerStatus === 'none' || delivery.ledgerStatus === 'in_transit';
+export function acceptsCollectionAnswer(delivery: {
+  ledgerStatus: string;
+}): boolean {
+  return (
+    delivery.ledgerStatus === 'none' || delivery.ledgerStatus === 'in_transit'
+  );
 }

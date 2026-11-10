@@ -30,7 +30,9 @@ export class CompanyGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context
       .switchToHttp()
-      .getRequest<Request & { user?: AuthenticatedUser; companyId?: string | null }>();
+      .getRequest<
+        Request & { user?: AuthenticatedUser; companyId?: string | null }
+      >();
 
     // Before anything company-shaped: an unverified owner holds a session only
     // so they can wait on the verify screen, never to use the books.

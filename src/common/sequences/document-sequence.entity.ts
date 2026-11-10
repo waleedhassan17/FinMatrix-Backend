@@ -8,13 +8,25 @@ import { Column, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
  */
 @Entity('document_sequences')
 export class DocumentSequence {
-  @PrimaryColumn({ type: 'uuid', name: 'company_id', primaryKeyConstraintName: 'PK_document_sequences' })
+  @PrimaryColumn({
+    type: 'uuid',
+    name: 'company_id',
+    primaryKeyConstraintName: 'PK_document_sequences',
+  })
   companyId!: string;
 
-  @PrimaryColumn({ type: 'varchar', length: 16, name: 'doc_type', primaryKeyConstraintName: 'PK_document_sequences' })
+  @PrimaryColumn({
+    type: 'varchar',
+    length: 16,
+    name: 'doc_type',
+    primaryKeyConstraintName: 'PK_document_sequences',
+  })
   docType!: string;
 
-  @PrimaryColumn({ type: 'int', primaryKeyConstraintName: 'PK_document_sequences' })
+  @PrimaryColumn({
+    type: 'int',
+    primaryKeyConstraintName: 'PK_document_sequences',
+  })
   year!: number;
 
   @Column({ type: 'int', name: 'last_value', default: 0 })

@@ -23,19 +23,45 @@ export class InventoryUpdateRequestLine {
   @Column({ type: 'varchar', length: 200, nullable: true, name: 'item_name' })
   itemName!: string | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'before_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'before_qty',
+  })
   beforeQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'delivered_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'delivered_qty',
+  })
   deliveredQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'returned_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'returned_qty',
+  })
   returnedQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'after_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'after_qty',
+  })
   afterQty!: string;
 
-  @ManyToOne(() => InventoryUpdateRequest, (r) => r.lines, { onDelete: 'CASCADE' })
+  @ManyToOne(() => InventoryUpdateRequest, (r) => r.lines, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'request_id' })
   request!: InventoryUpdateRequest;
 }

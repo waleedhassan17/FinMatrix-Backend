@@ -1,14 +1,25 @@
 import sharp from 'sharp';
-import { DISPLAY_EDGE, THUMB_EDGE, processItemImage } from './item-image.processor';
+import {
+  DISPLAY_EDGE,
+  THUMB_EDGE,
+  processItemImage,
+} from './item-image.processor';
 
 /** A solid-colour image of the given size and format. */
-const image = (width: number, height: number, format: 'jpeg' | 'png' | 'webp', alpha = false) =>
+const image = (
+  width: number,
+  height: number,
+  format: 'jpeg' | 'png' | 'webp',
+  alpha = false,
+) =>
   sharp({
     create: {
       width,
       height,
       channels: alpha ? 4 : 3,
-      background: alpha ? { r: 0, g: 0, b: 0, alpha: 0 } : { r: 200, g: 120, b: 40 },
+      background: alpha
+        ? { r: 0, g: 0, b: 0, alpha: 0 }
+        : { r: 200, g: 120, b: 40 },
     },
   })
     [format]()
@@ -27,7 +38,10 @@ describe('processItemImage', () => {
 
   it('shrinks a large photo, keeping its shape, and never enlarges a small one', async () => {
     const big = await processItemImage(await image(4000, 3000, 'jpeg'));
-    expect([big.display.width, big.display.height]).toEqual([DISPLAY_EDGE, 1200]);
+    expect([big.display.width, big.display.height]).toEqual([
+      DISPLAY_EDGE,
+      1200,
+    ]);
 
     const small = await processItemImage(await image(200, 100, 'jpeg'));
     expect([small.display.width, small.display.height]).toEqual([200, 100]);
@@ -38,7 +52,12 @@ describe('processItemImage', () => {
     // Orientation 6 = "rotate 90° clockwise to display": how a phone saves a
     // portrait photo. The stored pixels are landscape.
     const portraitFromPhone = await sharp({
-      create: { width: 40, height: 20, channels: 3, background: { r: 10, g: 20, b: 30 } },
+      create: {
+        width: 40,
+        height: 20,
+        channels: 3,
+        background: { r: 10, g: 20, b: 30 },
+      },
     })
       .jpeg()
       .withMetadata({ orientation: 6 })
@@ -53,12 +72,16 @@ describe('processItemImage', () => {
 
   it('puts a transparent PNG on white, since JPEG has no alpha', async () => {
     const out = await processItemImage(await image(10, 10, 'png', true));
-    const { data } = await sharp(out.display.buffer).raw().toBuffer({ resolveWithObject: true });
+    const { data } = await sharp(out.display.buffer)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
     expect([data[0], data[1], data[2]].every((v) => v > 245)).toBe(true);
   });
 
   it('refuses bytes that are not an image, with a 415 a person can read', async () => {
-    await expect(processItemImage(Buffer.from('%PDF-1.7 not a photo'))).rejects.toMatchObject({
+    await expect(
+      processItemImage(Buffer.from('%PDF-1.7 not a photo')),
+    ).rejects.toMatchObject({
       status: 415,
       response: { code: 'IMAGE_UNREADABLE' },
     });
@@ -66,7 +89,12 @@ describe('processItemImage', () => {
 
   it('refuses an image format it does not store, decided from the bytes', async () => {
     const gif = await sharp({
-      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+      create: {
+        width: 4,
+        height: 4,
+        channels: 3,
+        background: { r: 0, g: 0, b: 0 },
+      },
     })
       .gif()
       .toBuffer();

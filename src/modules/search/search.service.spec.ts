@@ -33,7 +33,11 @@ const setup = () => {
   const dataSource = {
     manager: {
       query: jest.fn().mockResolvedValue([
-        { company_type: 'warehouse', inventory_enabled: true, all_features_unlocked: true },
+        {
+          company_type: 'warehouse',
+          inventory_enabled: true,
+          all_features_unlocked: true,
+        },
       ]),
     },
     query: jest.fn().mockResolvedValue([]),
@@ -64,7 +68,12 @@ describe('SearchService — a delivery rider', () => {
 
   it('gets nothing by asking for customers and vendors by name', async () => {
     const { svc, customers, vendors } = setup();
-    const { results } = await svc.search('c1', 'ali', 'customers,vendors,invoices,bills', 'delivery');
+    const { results } = await svc.search(
+      'c1',
+      'ali',
+      'customers,vendors,invoices,bills',
+      'delivery',
+    );
 
     expect(results).toEqual({});
     expect(customers.createQueryBuilder).not.toHaveBeenCalled();
@@ -73,7 +82,12 @@ describe('SearchService — a delivery rider', () => {
 
   it('still searches customers and vendors for staff', async () => {
     const { svc, customers, vendors } = setup();
-    const { results } = await svc.search('c1', 'ali', 'customers,vendors', 'staff');
+    const { results } = await svc.search(
+      'c1',
+      'ali',
+      'customers,vendors',
+      'staff',
+    );
 
     expect(Object.keys(results).sort()).toEqual(['customers', 'vendors']);
     expect(customers.createQueryBuilder).toHaveBeenCalled();

@@ -33,9 +33,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * Posts nothing, and changes no existing row.
  */
-export class InventoryMovementValueRequired1789920000000
-  implements MigrationInterface
-{
+export class InventoryMovementValueRequired1789920000000 implements MigrationInterface {
   name = 'InventoryMovementValueRequired1789920000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

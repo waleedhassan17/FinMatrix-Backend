@@ -41,9 +41,15 @@ export class CompanyTiering1783750000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "companies" DROP COLUMN IF EXISTS "all_features_unlocked"`);
-    await queryRunner.query(`ALTER TABLE "companies" DROP COLUMN IF EXISTS "inventory_enabled"`);
-    await queryRunner.query(`ALTER TABLE "companies" DROP COLUMN IF EXISTS "company_type"`);
+    await queryRunner.query(
+      `ALTER TABLE "companies" DROP COLUMN IF EXISTS "all_features_unlocked"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "companies" DROP COLUMN IF EXISTS "inventory_enabled"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "companies" DROP COLUMN IF EXISTS "company_type"`,
+    );
     // varchar(32) → varchar(16) is safe to leave widened; narrowing could
     // truncate data, so the down-script intentionally keeps the wider column.
   }

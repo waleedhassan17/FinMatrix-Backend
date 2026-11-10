@@ -65,7 +65,9 @@ async function run() {
     where: { name: 'MetroMatrix' },
   });
   if (!company) {
-    console.error('✗ MetroMatrix company not found. Run seed:metromatrix first.');
+    console.error(
+      '✗ MetroMatrix company not found. Run seed:metromatrix first.',
+    );
     await app.close();
     process.exit(1);
   }
@@ -77,19 +79,30 @@ async function run() {
   console.log(`  company=${cid}  admin=${uid}`);
 
   // ── 1. Reset transactional + master data (keep company/users/COA) ──
-  const del = (sql: string) => ds.query(sql, [cid]).catch((e) => {
-    console.warn('   (skip)', e.message);
-  });
-  await del(`DELETE FROM payment_applications WHERE payment_id IN (SELECT id FROM payments WHERE company_id=$1)`);
+  const del = (sql: string) =>
+    ds.query(sql, [cid]).catch((e) => {
+      console.warn('   (skip)', e.message);
+    });
+  await del(
+    `DELETE FROM payment_applications WHERE payment_id IN (SELECT id FROM payments WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM payments WHERE company_id=$1`);
   await del(`DELETE FROM bill_payments WHERE company_id=$1`);
-  await del(`DELETE FROM invoice_line_items WHERE invoice_id IN (SELECT id FROM invoices WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM invoice_line_items WHERE invoice_id IN (SELECT id FROM invoices WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM invoices WHERE company_id=$1`);
-  await del(`DELETE FROM bill_line_items WHERE bill_id IN (SELECT id FROM bills WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM bill_line_items WHERE bill_id IN (SELECT id FROM bills WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM bills WHERE company_id=$1`);
-  await del(`DELETE FROM purchase_order_lines WHERE order_id IN (SELECT id FROM purchase_orders WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM purchase_order_lines WHERE order_id IN (SELECT id FROM purchase_orders WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM purchase_orders WHERE company_id=$1`);
-  await del(`DELETE FROM journal_entry_lines WHERE entry_id IN (SELECT id FROM journal_entries WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM journal_entry_lines WHERE entry_id IN (SELECT id FROM journal_entries WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM journal_entries WHERE company_id=$1`);
   await del(`DELETE FROM general_ledger WHERE company_id=$1`);
   await del(`DELETE FROM inventory_movements WHERE company_id=$1`);
@@ -98,14 +111,26 @@ async function run() {
   // Delivery module: old rows reference customers/items that are recreated
   // below — leaving them produces a broken-looking demo.
   await del(`DELETE FROM inventory_approval_audit_entries WHERE company_id=$1`);
-  await del(`DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM inventory_update_requests WHERE company_id=$1`);
   await del(`DELETE FROM shadow_inventory_snapshots WHERE company_id=$1`);
-  await del(`DELETE FROM delivery_location_logs WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
-  await del(`DELETE FROM delivery_status_history WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
-  await del(`DELETE FROM delivery_issues WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
-  await del(`DELETE FROM delivery_signatures WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
-  await del(`DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`);
+  await del(
+    `DELETE FROM delivery_location_logs WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`,
+  );
+  await del(
+    `DELETE FROM delivery_status_history WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`,
+  );
+  await del(
+    `DELETE FROM delivery_issues WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`,
+  );
+  await del(
+    `DELETE FROM delivery_signatures WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`,
+  );
+  await del(
+    `DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE company_id=$1)`,
+  );
   await del(`DELETE FROM deliveries WHERE company_id=$1`);
   await del(`UPDATE agencies SET inventory = '[]'::jsonb WHERE company_id=$1`);
   await del(`DELETE FROM customers WHERE company_id=$1`);
@@ -113,7 +138,9 @@ async function run() {
   await del(`DELETE FROM inventory_items WHERE company_id=$1`);
   await del(`DELETE FROM tax_rates WHERE company_id=$1`);
   // Reset all account running balances to their opening balance.
-  await del(`UPDATE accounts SET balance = opening_balance WHERE company_id=$1`);
+  await del(
+    `UPDATE accounts SET balance = opening_balance WHERE company_id=$1`,
+  );
   console.log('  ✓ reset transactional + master data');
 
   // ── 2. Master data ──
@@ -127,45 +154,112 @@ async function run() {
       { name: 'City Wholesale', city: 'Multan' },
     ].map((c, i) =>
       custRepo.create({
-        companyId: cid, name: c.name, company: c.name,
-        email: `cust${i + 1}@metromatrix.com`, phone: `+92-300-44411${i}${i}`,
+        companyId: cid,
+        name: c.name,
+        company: c.name,
+        email: `cust${i + 1}@metromatrix.com`,
+        phone: `+92-300-44411${i}${i}`,
         billingAddress: { city: c.city, country: 'Pakistan' },
         shippingAddress: { city: c.city, country: 'Pakistan' },
-        creditLimit: '500000', paymentTerms: 'net30', balance: '0', isActive: true, notes: null,
+        creditLimit: '500000',
+        paymentTerms: 'net30',
+        balance: '0',
+        isActive: true,
+        notes: null,
       }),
     ),
   );
 
   const vendRepo = ds.getRepository(Vendor);
   const vendors = await vendRepo.save(
-    [
-      'Habib Oil Mills', 'Pak Detergent Industries', 'Sufi Cooking Oil',
-    ].map((n, i) =>
-      vendRepo.create({
-        companyId: cid, companyName: n, contactPerson: `Mr. ${n.split(' ')[0]}`,
-        email: `vendor${i + 1}@metromatrix.com`, phone: `+92-42-357610${i}0`,
-        address: { city: 'Lahore', country: 'Pakistan' }, paymentTerms: 'net30',
-        taxId: null, defaultExpenseAccountId: null, balance: '0', isActive: true, notes: null,
-      }),
+    ['Habib Oil Mills', 'Pak Detergent Industries', 'Sufi Cooking Oil'].map(
+      (n, i) =>
+        vendRepo.create({
+          companyId: cid,
+          companyName: n,
+          contactPerson: `Mr. ${n.split(' ')[0]}`,
+          email: `vendor${i + 1}@metromatrix.com`,
+          phone: `+92-42-357610${i}0`,
+          address: { city: 'Lahore', country: 'Pakistan' },
+          paymentTerms: 'net30',
+          taxId: null,
+          defaultExpenseAccountId: null,
+          balance: '0',
+          isActive: true,
+          notes: null,
+        }),
     ),
   );
 
   const itemRepo = ds.getRepository(InventoryItem);
   const items = await itemRepo.save(
     [
-      { sku: 'CO-HABIB-5L', name: 'Habib Cooking Oil 5L', cat: 'Cooking Oil', cost: '1850', sell: '2400' },
-      { sku: 'DET-SURF-1KG', name: 'Surf Excel 1KG', cat: 'Detergent', cost: '420', sell: '560' },
-      { sku: 'CO-SUFI-5L', name: 'Sufi Cooking Oil 5L', cat: 'Cooking Oil', cost: '1780', sell: '2300' },
-      { sku: 'DW-LIQ-500', name: 'Dishwash Liquid 500ml', cat: 'Cleaners', cost: '180', sell: '250' },
-      { sku: 'GHEE-DALDA-1', name: 'Dalda Ghee 1KG', cat: 'Ghee', cost: '950', sell: '1250' },
-      { sku: 'RICE-BAS-5', name: 'Basmati Rice 5KG', cat: 'Grocery', cost: '1400', sell: '1850' },
+      {
+        sku: 'CO-HABIB-5L',
+        name: 'Habib Cooking Oil 5L',
+        cat: 'Cooking Oil',
+        cost: '1850',
+        sell: '2400',
+      },
+      {
+        sku: 'DET-SURF-1KG',
+        name: 'Surf Excel 1KG',
+        cat: 'Detergent',
+        cost: '420',
+        sell: '560',
+      },
+      {
+        sku: 'CO-SUFI-5L',
+        name: 'Sufi Cooking Oil 5L',
+        cat: 'Cooking Oil',
+        cost: '1780',
+        sell: '2300',
+      },
+      {
+        sku: 'DW-LIQ-500',
+        name: 'Dishwash Liquid 500ml',
+        cat: 'Cleaners',
+        cost: '180',
+        sell: '250',
+      },
+      {
+        sku: 'GHEE-DALDA-1',
+        name: 'Dalda Ghee 1KG',
+        cat: 'Ghee',
+        cost: '950',
+        sell: '1250',
+      },
+      {
+        sku: 'RICE-BAS-5',
+        name: 'Basmati Rice 5KG',
+        cat: 'Grocery',
+        cost: '1400',
+        sell: '1850',
+      },
     ].map((p) =>
       itemRepo.create({
-        companyId: cid, sku: p.sku, name: p.name, description: null, category: p.cat,
-        unitOfMeasure: 'unit', costMethod: 'average', unitCost: p.cost, sellingPrice: p.sell,
-        quantityOnHand: '0', quantityOnOrder: '0', quantityCommitted: '0', reorderPoint: '50',
-        reorderQuantity: '200', minStock: '20', maxStock: '5000', sourceAgencyId: null,
-        locationId: null, serialTracking: false, lotTracking: false, barcodeData: null, isActive: true,
+        companyId: cid,
+        sku: p.sku,
+        name: p.name,
+        description: null,
+        category: p.cat,
+        unitOfMeasure: 'unit',
+        costMethod: 'average',
+        unitCost: p.cost,
+        sellingPrice: p.sell,
+        quantityOnHand: '0',
+        quantityOnOrder: '0',
+        quantityCommitted: '0',
+        reorderPoint: '50',
+        reorderQuantity: '200',
+        minStock: '20',
+        maxStock: '5000',
+        sourceAgencyId: null,
+        locationId: null,
+        serialTracking: false,
+        lotTracking: false,
+        barcodeData: null,
+        isActive: true,
       }),
     ),
   );
@@ -173,31 +267,55 @@ async function run() {
   const taxRepo = ds.getRepository(TaxRate);
   await taxRepo.save(
     taxRepo.create({
-      companyId: cid, name: 'GST (17%)', rate: '17', type: 'sales' as any,
-      authority: 'FBR', isActive: true, isDefault: true,
+      companyId: cid,
+      name: 'GST (17%)',
+      rate: '17',
+      type: 'sales' as any,
+      authority: 'FBR',
+      isActive: true,
+      isDefault: true,
     }),
   );
-  console.log(`  ✓ ${customers.length} customers, ${vendors.length} vendors, ${items.length} items, 1 tax rate`);
+  console.log(
+    `  ✓ ${customers.length} customers, ${vendors.length} vendors, ${items.length} items, 1 tax rate`,
+  );
 
   // Resolve cash + an expense account for payments / direct bills.
   const acctRepo = ds.getRepository(Account);
-  const cashAcct = await acctRepo.findOneByOrFail({ companyId: cid, accountNumber: ACCT_CASH });
-  const bankAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: ACCT_BANK });
+  const cashAcct = await acctRepo.findOneByOrFail({
+    companyId: cid,
+    accountNumber: ACCT_CASH,
+  });
+  const bankAcct = await acctRepo.findOneBy({
+    companyId: cid,
+    accountNumber: ACCT_BANK,
+  });
   const cashId = cashAcct.id;
   // Route both collections and payments through one cash account so the demo
   // balance sheet shows a single, positive cash figure (no overdrawn account).
   void bankAcct;
   const bankId = cashId;
-  const rentAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6000' });
-  const utilAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: '6100' });
+  const rentAcct = await acctRepo.findOneBy({
+    companyId: cid,
+    accountNumber: '6000',
+  });
+  const utilAcct = await acctRepo.findOneBy({
+    companyId: cid,
+    accountNumber: '6100',
+  });
 
   // Opening cash — posted through the engine (Dr Cash / Cr Opening Balance
   // Equity), dated before the first month of activity, exactly as an
   // accountant would enter it. Keeps the demo balance sheet cash healthy
   // while every report still derives from the ledger.
-  const obeAcct = await acctRepo.findOneBy({ companyId: cid, accountNumber: ACCT_OPENING_BALANCE_EQUITY });
+  const obeAcct = await acctRepo.findOneBy({
+    companyId: cid,
+    accountNumber: ACCT_OPENING_BALANCE_EQUITY,
+  });
   if (obeAcct) {
-    const openDate = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 12, 1));
+    const openDate = ymd(
+      new Date(new Date().getFullYear(), new Date().getMonth() - 12, 1),
+    );
     await ds.transaction(async (manager) => {
       await posting.createEntry(manager, {
         companyId: cid,
@@ -208,8 +326,20 @@ async function run() {
         sourceType: 'opening_balance',
         sourceId: cashAcct.id,
         lines: [
-          { accountId: cashAcct.id, description: 'Opening cash', debit: '250000.0000', credit: '0', lineOrder: 0 },
-          { accountId: obeAcct.id, description: 'Opening balance offset', debit: '0', credit: '250000.0000', lineOrder: 1 },
+          {
+            accountId: cashAcct.id,
+            description: 'Opening cash',
+            debit: '250000.0000',
+            credit: '0',
+            lineOrder: 0,
+          },
+          {
+            accountId: obeAcct.id,
+            description: 'Opening balance offset',
+            debit: '0',
+            credit: '250000.0000',
+            lineOrder: 1,
+          },
         ],
       });
     });
@@ -218,7 +348,11 @@ async function run() {
 
   // ── 3. Twelve months of activity, posted through the services ──
   const now = new Date();
-  let invCount = 0, billCount = 0, payCount = 0, poCount = 0, errors = 0;
+  let invCount = 0,
+    billCount = 0,
+    payCount = 0,
+    poCount = 0,
+    errors = 0;
 
   for (let m = 11; m >= 0; m--) {
     const base = new Date(now.getFullYear(), now.getMonth() - m, 1);
@@ -241,7 +375,11 @@ async function run() {
         vendorId: vendors[m % vendors.length].id,
         orderDate: day(2),
         lines: [A, B].map((it) => ({
-          itemId: it.id, description: it.name, orderedQty: '30', unitCost: it.unitCost, taxRate: '0',
+          itemId: it.id,
+          description: it.name,
+          orderedQty: '30',
+          unitCost: it.unitCost,
+          taxRate: '0',
         })),
       } as any);
       // A new PO is a requisition (draft); goods can only be received once it
@@ -253,19 +391,28 @@ async function run() {
         lines: lines.map((l: any) => ({ lineId: l.id, receivedQty: '30' })),
       } as any);
       const { billId } = await pos.createBill(cid, uid, po.id, {
-        billNumber: `PB-${mlabel}`, billDate: day(5), dueDate: day(25),
+        billNumber: `PB-${mlabel}`,
+        billDate: day(5),
+        dueDate: day(25),
       } as any);
-      poCount++; billCount++;
+      poCount++;
+      billCount++;
       const bill = await ds.getRepository(Bill).findOneBy({ id: billId });
       if (bill) {
         await bills.pay(cid, uid, {
-          vendorId: bill.vendorId, paymentDate: day(20), paymentMethod: 'bank_transfer',
-          bankAccountId: bankId, applications: [{ billId, amount: bill.balance }],
+          vendorId: bill.vendorId,
+          paymentDate: day(20),
+          paymentMethod: 'bank_transfer',
+          bankAccountId: bankId,
+          applications: [{ billId, amount: bill.balance }],
           proofId: await seedPaymentVoucher(bills, cid, uid, `MM-PO-${m}`),
         } as any);
         payCount++;
       }
-    } catch (e: any) { errors++; console.warn(`   PO ${m} failed:`, e.message); }
+    } catch (e: any) {
+      errors++;
+      console.warn(`   PO ${m} failed:`, e.message);
+    }
 
     // 3b. Three sales invoices selling those two products (27 of each ≤ 30 in
     // stock), payment collected on ~90%.
@@ -273,26 +420,50 @@ async function run() {
       try {
         const cust = customers[(m + k) % customers.length];
         const inv = await invoices.create(cid, uid, {
-          customerId: cust.id, invoiceDate: day(8 + k * 5), dueDate: day(28),
-          status: 'sent', discountType: 'none', discountValue: '0',
+          customerId: cust.id,
+          invoiceDate: day(8 + k * 5),
+          dueDate: day(28),
+          status: 'sent',
+          discountType: 'none',
+          discountValue: '0',
           lines: [
-            { description: A.name, quantity: '9', unitPrice: A.sellingPrice, taxRate: '17', itemId: A.id },
-            { description: B.name, quantity: '9', unitPrice: B.sellingPrice, taxRate: '17', itemId: B.id },
+            {
+              description: A.name,
+              quantity: '9',
+              unitPrice: A.sellingPrice,
+              taxRate: '17',
+              itemId: A.id,
+            },
+            {
+              description: B.name,
+              quantity: '9',
+              unitPrice: B.sellingPrice,
+              taxRate: '17',
+              itemId: B.id,
+            },
           ],
         } as any);
         invCount++;
         if ((m * 3 + k) % 10 !== 0) {
-          const full = await ds.getRepository(Invoice).findOneBy({ id: inv.id });
+          const full = await ds
+            .getRepository(Invoice)
+            .findOneBy({ id: inv.id });
           if (full) {
             await payments.receive(cid, uid, {
-              customerId: cust.id, paymentDate: day(24), paymentMethod: 'cash',
-              amount: full.total, bankAccountId: cashId,
+              customerId: cust.id,
+              paymentDate: day(24),
+              paymentMethod: 'cash',
+              amount: full.total,
+              bankAccountId: cashId,
               applications: [{ invoiceId: inv.id, amount: full.total }],
             } as any);
             payCount++;
           }
         }
-      } catch (e: any) { errors++; console.warn(`   INV ${m}-${k} failed:`, e.message); }
+      } catch (e: any) {
+        errors++;
+        console.warn(`   INV ${m}-${k} failed:`, e.message);
+      }
     }
 
     // 3c. One modest direct expense bill (rent or utilities), paid.
@@ -301,21 +472,37 @@ async function run() {
       if (exp) {
         const eb = await bills.create(cid, uid, {
           vendorId: vendors[(m + 1) % vendors.length].id,
-          billNumber: `EXP-${mlabel}`, billDate: day(3), dueDate: day(18), status: 'open',
-          lines: [{ accountId: exp.id, description: m % 2 === 0 ? 'Monthly rent' : 'Utilities', amount: '12000', taxRate: '0' }],
+          billNumber: `EXP-${mlabel}`,
+          billDate: day(3),
+          dueDate: day(18),
+          status: 'open',
+          lines: [
+            {
+              accountId: exp.id,
+              description: m % 2 === 0 ? 'Monthly rent' : 'Utilities',
+              amount: '12000',
+              taxRate: '0',
+            },
+          ],
         } as any);
         billCount++;
         const ebFull = await ds.getRepository(Bill).findOneBy({ id: eb.id });
         if (ebFull) {
           await bills.pay(cid, uid, {
-            vendorId: ebFull.vendorId, paymentDate: day(15), paymentMethod: 'bank_transfer',
-            bankAccountId: bankId, applications: [{ billId: eb.id, amount: ebFull.balance }],
+            vendorId: ebFull.vendorId,
+            paymentDate: day(15),
+            paymentMethod: 'bank_transfer',
+            bankAccountId: bankId,
+            applications: [{ billId: eb.id, amount: ebFull.balance }],
             proofId: await seedPaymentVoucher(bills, cid, uid, `EXP-${mlabel}`),
           } as any);
           payCount++;
         }
       }
-    } catch (e: any) { errors++; console.warn(`   EXP ${m} failed:`, e.message); }
+    } catch (e: any) {
+      errors++;
+      console.warn(`   EXP ${m} failed:`, e.message);
+    }
   }
 
   // ── 4. Delivery-module demo data (fresh customers/items, riders kept) ──
@@ -346,7 +533,8 @@ async function run() {
       for (let i = 0; i < plan.length; i++) {
         const p = plan[i];
         const cust = customers[i % customers.length];
-        const rider = p.status === 'unassigned' ? null : riders[i % riders.length].id;
+        const rider =
+          p.status === 'unassigned' ? null : riders[i % riders.length].id;
         const when = new Date(Date.now() - p.daysAgo * 86400000);
         const itA = items[i % items.length];
         const itB = items[(i + 2) % items.length];
@@ -370,14 +558,24 @@ async function run() {
         );
         await diRepo.save([
           diRepo.create({
-            deliveryId: d.id, itemId: itA.id, itemName: itA.name,
-            quantity: '4', orderedQty: '4', unitPrice: itA.sellingPrice,
-            deliveredQty: p.status === 'delivered' ? '4' : '0', returnedQty: '0',
+            deliveryId: d.id,
+            itemId: itA.id,
+            itemName: itA.name,
+            quantity: '4',
+            orderedQty: '4',
+            unitPrice: itA.sellingPrice,
+            deliveredQty: p.status === 'delivered' ? '4' : '0',
+            returnedQty: '0',
           } as unknown as DeliveryItem),
           diRepo.create({
-            deliveryId: d.id, itemId: itB.id, itemName: itB.name,
-            quantity: '2', orderedQty: '2', unitPrice: itB.sellingPrice,
-            deliveredQty: p.status === 'delivered' ? '2' : '0', returnedQty: '0',
+            deliveryId: d.id,
+            itemId: itB.id,
+            itemName: itB.name,
+            quantity: '2',
+            orderedQty: '2',
+            unitPrice: itB.sellingPrice,
+            deliveredQty: p.status === 'delivered' ? '2' : '0',
+            returnedQty: '0',
           } as unknown as DeliveryItem),
         ]);
         dCount++;
@@ -391,7 +589,9 @@ async function run() {
          WHERE p.company_id=$1`,
         [cid],
       );
-      console.log(`  ✓ ${dCount} deliveries across ${riders.length} riders (approval loop left LIVE for the demo)`);
+      console.log(
+        `  ✓ ${dCount} deliveries across ${riders.length} riders (approval loop left LIVE for the demo)`,
+      );
     } else {
       console.warn('  (no active riders found — delivery demo data skipped)');
     }
@@ -400,10 +600,16 @@ async function run() {
   }
 
   // Mark setup complete so the checklist hides for the demo company.
-  await ds.query(`UPDATE companies SET setup_completed = true WHERE id=$1`, [cid]);
+  await ds.query(`UPDATE companies SET setup_completed = true WHERE id=$1`, [
+    cid,
+  ]);
 
-  console.log(`\n  ✓ Seeded: ${invCount} invoices, ${poCount} POs, ${billCount} bills, ${payCount} payments (${errors} errors)`);
-  console.log('> Done. Reports now derive from a full year of posted ledger activity.');
+  console.log(
+    `\n  ✓ Seeded: ${invCount} invoices, ${poCount} POs, ${billCount} bills, ${payCount} payments (${errors} errors)`,
+  );
+  console.log(
+    '> Done. Reports now derive from a full year of posted ledger activity.',
+  );
   await app.close();
   process.exit(0);
 }

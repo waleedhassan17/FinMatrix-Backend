@@ -34,7 +34,9 @@ let COMPANY = '';
 let steps = 0;
 
 async function req(method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   if (COMPANY) headers['x-company-id'] = COMPANY;
   // Back off on 429, the way the acceptance suites already do.
@@ -52,7 +54,9 @@ async function req(method: string, path: string, body?: unknown) {
     });
     if (res.status === 429 && attempt < 3) {
       const wait = path.startsWith('/auth') ? 65_000 : 15_000 * (attempt + 1);
-      console.log(`  … throttled on ${path}, waiting ${Math.round(wait / 1000)}s`);
+      console.log(
+        `  … throttled on ${path}, waiting ${Math.round(wait / 1000)}s`,
+      );
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -98,7 +102,9 @@ async function uploadProof(filename: string) {
 function step(label: string, res: { status: number; body: any }) {
   const okish = res.status >= 200 && res.status < 300;
   steps++;
-  console.log(`  ${okish ? '·' : '!'} ${label}${okish ? '' : ` (${res.status} ${JSON.stringify(res.body)?.slice(0, 160)})`}`);
+  console.log(
+    `  ${okish ? '·' : '!'} ${label}${okish ? '' : ` (${res.status} ${JSON.stringify(res.body)?.slice(0, 160)})`}`,
+  );
   if (!okish) throw new Error(`scenario step failed: ${label}`);
   return data(res);
 }
@@ -106,7 +112,10 @@ function step(label: string, res: { status: number; body: any }) {
 async function main() {
   console.log(`\nFinMatrix QA scenario → ${API}\n`);
 
-  const login = await req('POST', '/auth/signin', { email: EMAIL, password: PASSWORD });
+  const login = await req('POST', '/auth/signin', {
+    email: EMAIL,
+    password: PASSWORD,
+  });
   TOKEN = data(login)?.tokens?.accessToken ?? '';
   COMPANY = data(login)?.companyId ?? '';
   if (!TOKEN) throw new Error(`cannot sign in as ${EMAIL}`);
@@ -144,7 +153,14 @@ async function main() {
     await req('POST', '/purchase-orders', {
       vendorId: vendor.id,
       orderDate: TODAY,
-      lines: [{ description: 'QA stock', orderedQty: '40', unitCost: '100', itemId: item.id }],
+      lines: [
+        {
+          description: 'QA stock',
+          orderedQty: '40',
+          unitCost: '100',
+          itemId: item.id,
+        },
+      ],
     }),
   );
   // A PO is a requisition until it is sent to the vendor; only then can goods
@@ -164,10 +180,13 @@ async function main() {
       dueDate: '2099-12-31',
     }),
   );
-  const accountsForPay = ((data(await req('GET', '/accounts?limit=200')) as any)?.accounts
-    ?? (data(await req('GET', '/accounts?limit=200')) as any)?.data ?? []) as any[];
-  const bankAccount = accountsForPay.find((a: any) => a.accountNumber === '1010')
-    ?? accountsForPay.find((a: any) => a.accountNumber === '1000');
+  const accountsForPay = ((data(await req('GET', '/accounts?limit=200')) as any)
+    ?.accounts ??
+    (data(await req('GET', '/accounts?limit=200')) as any)?.data ??
+    []) as any[];
+  const bankAccount =
+    accountsForPay.find((a: any) => a.accountNumber === '1010') ??
+    accountsForPay.find((a: any) => a.accountNumber === '1000');
   // A payment now needs evidence behind it, so the scenario uploads one first
   // — the same two steps the app takes.
   const proof = data(await uploadProof('seed-bank-confirmation.png')) as any;
@@ -191,7 +210,15 @@ async function main() {
       invoiceDate: TODAY,
       dueDate: '2099-12-31',
       status: 'sent',
-      lines: [{ description: 'QA sale', quantity: '10', unitPrice: '250', taxRate: '17', itemId: item.id }],
+      lines: [
+        {
+          description: 'QA sale',
+          quantity: '10',
+          unitPrice: '250',
+          taxRate: '17',
+          itemId: item.id,
+        },
+      ],
     }),
   );
   step(
@@ -201,7 +228,9 @@ async function main() {
       paymentDate: TODAY,
       amount: String(invoice.total ?? '2925'),
       paymentMethod: 'cash',
-      applications: [{ invoiceId: invoice.id, amount: String(invoice.total ?? '2925') }],
+      applications: [
+        { invoiceId: invoice.id, amount: String(invoice.total ?? '2925') },
+      ],
     }),
   );
 
@@ -212,7 +241,15 @@ async function main() {
       customerId: customer.id,
       date: TODAY,
       reason: 'QA scenario return',
-      lines: [{ description: 'QA return', quantity: '2', unitPrice: '250', taxRate: '17', itemId: item.id }],
+      lines: [
+        {
+          description: 'QA return',
+          quantity: '2',
+          unitPrice: '250',
+          taxRate: '17',
+          itemId: item.id,
+        },
+      ],
     }),
   );
   step(
@@ -221,7 +258,9 @@ async function main() {
       vendorId: vendor.id,
       date: TODAY,
       reason: 'QA scenario vendor return',
-      lines: [{ description: 'QA vendor return', amount: '500', taxRate: '17' }],
+      lines: [
+        { description: 'QA vendor return', amount: '500', taxRate: '17' },
+      ],
     }),
   );
   step(
@@ -254,7 +293,8 @@ async function main() {
 
   // ── Manual journal entry ───────────────────────────────────────
   const accountsRes = data(await req('GET', '/accounts?limit=200')) as any;
-  const accounts = accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
+  const accounts =
+    accountsRes?.accounts ?? accountsRes?.data ?? accountsRes ?? [];
   const cash = accounts.find((a: any) => a.accountNumber === '1000');
   const rent = accounts.find((a: any) => a.accountNumber === '6000');
   if (cash && rent) {
@@ -272,7 +312,9 @@ async function main() {
     );
   }
 
-  console.log(`\n${steps} steps completed. Run qa/run-qa.sh to check the invariants.\n`);
+  console.log(
+    `\n${steps} steps completed. Run qa/run-qa.sh to check the invariants.\n`,
+  );
 }
 
 main().catch((e) => {

@@ -81,7 +81,9 @@ export class InventoryCostColumns1789910000000 implements MigrationInterface {
     // Reversible: these columns are additive and nothing reads them until the
     // later migrations land. Dropping them takes the recorded costs with them,
     // which is the point of reversing.
-    await queryRunner.query(`DROP INDEX IF EXISTS "idx_invoice_line_items_item"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "idx_invoice_line_items_item"`,
+    );
     await queryRunner.query(`
       ALTER TABLE "companies" DROP COLUMN IF EXISTS "inventory_cost_history_from"
     `);

@@ -1,7 +1,11 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { ForbiddenException, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { createHash } from 'crypto';
@@ -121,12 +125,21 @@ describe('AuthService', () => {
         },
         {
           provide: DataSource,
-          useValue: { transaction: jest.fn(), query: (...args: unknown[]) => dataSourceQuery(...args) },
+          useValue: {
+            transaction: jest.fn(),
+            query: (...args: unknown[]) => dataSourceQuery(...args),
+          },
         },
         { provide: MailService, useValue: mail },
         { provide: getRepositoryToken(RefreshToken), useValue: refreshRepo },
-        { provide: getRepositoryToken(RevokedAccessToken), useValue: revokedRepo },
-        { provide: getRepositoryToken(EmailVerification), useValue: verificationRepo },
+        {
+          provide: getRepositoryToken(RevokedAccessToken),
+          useValue: revokedRepo,
+        },
+        {
+          provide: getRepositoryToken(EmailVerification),
+          useValue: verificationRepo,
+        },
         { provide: getRepositoryToken(PasswordResetOtp), useValue: otpRepo },
         { provide: getRepositoryToken(Company), useValue: repoMock() },
         { provide: getRepositoryToken(UserCompany), useValue: userCompanyRepo },
@@ -150,7 +163,8 @@ describe('AuthService', () => {
     // therefore costs one comparison and reads the same.
     describe('takes the same path whether or not the account exists', () => {
       // The service's own module object, so the spy sees its calls.
-      const bcryptjs = jest.requireActual<typeof import('bcryptjs')>('bcryptjs');
+      const bcryptjs =
+        jest.requireActual<typeof import('bcryptjs')>('bcryptjs');
       let compare: jest.SpyInstance;
       beforeEach(() => {
         compare = jest.spyOn(bcryptjs, 'compare');
@@ -158,7 +172,10 @@ describe('AuthService', () => {
       afterEach(() => compare.mockRestore());
 
       const refusal = {
-        response: { code: 'INVALID_CREDENTIALS', message: 'Invalid username or password' },
+        response: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Invalid username or password',
+        },
       };
 
       it('compares a password for a username that matches no account', async () => {
@@ -214,8 +231,13 @@ describe('AuthService', () => {
         isEmailVerified: false,
       });
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
-      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
-      const res = await service.signin({ email: 'admin@x.z', password: 'Admin123!' });
+      jwtMock.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const res = await service.signin({
+        email: 'admin@x.z',
+        password: 'Admin123!',
+      });
       expect(res.tokens.accessToken).toBeTruthy();
       expect(res.user.isEmailVerified).toBe(false);
     });
@@ -235,11 +257,21 @@ describe('AuthService', () => {
         userId: 'u1',
         companyId: 'c1',
         role: 'admin',
-        company: { id: 'c1', name: 'Acme', status: 'pending_approval', rejectionReason: null },
+        company: {
+          id: 'c1',
+          name: 'Acme',
+          status: 'pending_approval',
+          rejectionReason: null,
+        },
       });
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
-      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
-      const res = await service.signin({ email: 'admin@x.z', password: 'Admin123!' });
+      jwtMock.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const res = await service.signin({
+        email: 'admin@x.z',
+        password: 'Admin123!',
+      });
       expect(res.user.isEmailVerified).toBe(false);
       expect(res.tokens.accessToken).toBeTruthy();
     });
@@ -268,7 +300,9 @@ describe('AuthService', () => {
       });
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
       // issueTokens decodes the refresh token to persist its expiry.
-      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      jwtMock.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
       return service.signin({ email: 'admin@x.z', password: 'Admin123!' });
     };
 
@@ -280,7 +314,9 @@ describe('AuthService', () => {
     });
 
     it('still blocks a SUBMITTED company awaiting approval', async () => {
-      await expect(signInWithCompanyStatus('pending_approval')).rejects.toMatchObject({
+      await expect(
+        signInWithCompanyStatus('pending_approval'),
+      ).rejects.toMatchObject({
         response: { code: 'COMPANY_PENDING' },
       });
     });
@@ -325,11 +361,18 @@ describe('AuthService', () => {
               userId: 'u1',
               companyId: 'c1',
               role,
-              company: { id: 'c1', name: 'Acme', status: 'approved', rejectionReason: null },
+              company: {
+                id: 'c1',
+                name: 'Acme',
+                status: 'approved',
+                rejectionReason: null,
+              },
             },
       );
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
-      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      jwtMock.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
       return service.signin({
         identifier,
         password: opts.password ?? 'Secret123!',
@@ -338,7 +381,9 @@ describe('AuthService', () => {
     };
 
     it('refuses the owner on the team member portal, before any token is issued', async () => {
-      await expect(signInAs('admin', { portal: 'staff' })).rejects.toMatchObject({
+      await expect(
+        signInAs('admin', { portal: 'staff' }),
+      ).rejects.toMatchObject({
         response: {
           code: 'WRONG_PORTAL',
           details: { accountType: 'admin', portal: 'staff' },
@@ -348,7 +393,9 @@ describe('AuthService', () => {
     });
 
     it('refuses a team member on the owner portal', async () => {
-      await expect(signInAs('staff', { portal: 'admin' })).rejects.toMatchObject({
+      await expect(
+        signInAs('staff', { portal: 'admin' }),
+      ).rejects.toMatchObject({
         response: { code: 'WRONG_PORTAL', details: { accountType: 'staff' } },
       });
       expect(jwtMock.signAsync).not.toHaveBeenCalled();
@@ -357,23 +404,35 @@ describe('AuthService', () => {
     // The app's Staff and Delivery Portals are separate doors: the portal a
     // person picked is checked, not just whether they are "team".
     it('refuses a staff account on the delivery portal', async () => {
-      await expect(signInAs('staff', { portal: 'delivery' })).rejects.toMatchObject({
-        response: { code: 'WRONG_PORTAL', details: { accountType: 'staff', portal: 'delivery' } },
+      await expect(
+        signInAs('staff', { portal: 'delivery' }),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'WRONG_PORTAL',
+          details: { accountType: 'staff', portal: 'delivery' },
+        },
       });
       expect(jwtMock.signAsync).not.toHaveBeenCalled();
     });
 
     it('refuses a rider on the staff portal', async () => {
-      await expect(signInAs('delivery', { portal: 'staff' })).rejects.toMatchObject({
-        response: { code: 'WRONG_PORTAL', details: { accountType: 'delivery', portal: 'staff' } },
+      await expect(
+        signInAs('delivery', { portal: 'staff' }),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'WRONG_PORTAL',
+          details: { accountType: 'delivery', portal: 'staff' },
+        },
       });
       expect(jwtMock.signAsync).not.toHaveBeenCalled();
     });
 
     it('refuses an owner on the app user portal', async () => {
-      await expect(signInAs('admin', { portal: 'team' })).rejects.toMatchObject({
-        response: { code: 'WRONG_PORTAL' },
-      });
+      await expect(signInAs('admin', { portal: 'team' })).rejects.toMatchObject(
+        {
+          response: { code: 'WRONG_PORTAL' },
+        },
+      );
     });
 
     it('keeps a wrong password generic, whatever the portal', async () => {
@@ -400,11 +459,14 @@ describe('AuthService', () => {
       ['staff', 'team'],
       ['delivery', 'team'],
       ['delivery', 'delivery'],
-    ] as const)('admits a %s account on the %s portal', async (role, portal) => {
-      const res = await signInAs(role, { portal });
-      expect(res.tokens.accessToken).toBeTruthy();
-      expect(res.user.role).toBe(role);
-    });
+    ] as const)(
+      'admits a %s account on the %s portal',
+      async (role, portal) => {
+        const res = await signInAs(role, { portal });
+        expect(res.tokens.accessToken).toBeTruthy();
+        expect(res.user.role).toBe(role);
+      },
+    );
 
     it('does not gate a client that names no portal (installed app builds)', async () => {
       const res = await signInAs('staff');
@@ -413,7 +475,9 @@ describe('AuthService', () => {
 
     it('refuses a rider whose seat the plan has locked, before any token is issued', async () => {
       dataSourceQuery.mockResolvedValue([{ status: 'plan_locked' }]);
-      await expect(signInAs('delivery', { portal: 'delivery' })).rejects.toMatchObject({
+      await expect(
+        signInAs('delivery', { portal: 'delivery' }),
+      ).rejects.toMatchObject({
         response: { code: 'RIDER_SEAT_LOCKED' },
       });
       expect(jwtMock.signAsync).not.toHaveBeenCalled();
@@ -427,7 +491,9 @@ describe('AuthService', () => {
   });
 
   describe('signin while a request is in review', () => {
-    const signInPendingOwner = async (lastSubmission: { kind: string; status: string } | null) => {
+    const signInPendingOwner = async (
+      lastSubmission: { kind: string; status: string } | null,
+    ) => {
       const passwordHash = await bcrypt.hash('Secret123!', 4);
       const account = {
         id: 'u1',
@@ -455,14 +521,20 @@ describe('AuthService', () => {
         },
       });
       dataSourceQuery.mockResolvedValue(lastSubmission ? [lastSubmission] : []);
-      return service.signin({ identifier: 'owner@x.z', password: 'Secret123!' });
+      return service.signin({
+        identifier: 'owner@x.z',
+        password: 'Secret123!',
+      });
     };
 
     it('tells a trial requester that it is their TRIAL being reviewed', async () => {
       await expect(
         signInPendingOwner({ kind: 'TRIAL', status: 'submitted' }),
       ).rejects.toMatchObject({
-        response: { code: 'COMPANY_PENDING', details: { pendingKind: 'trial' } },
+        response: {
+          code: 'COMPANY_PENDING',
+          details: { pendingKind: 'trial' },
+        },
       });
     });
 
@@ -470,7 +542,10 @@ describe('AuthService', () => {
       await expect(
         signInPendingOwner({ kind: 'NEW', status: 'submitted' }),
       ).rejects.toMatchObject({
-        response: { code: 'COMPANY_PENDING', details: { pendingKind: 'payment' } },
+        response: {
+          code: 'COMPANY_PENDING',
+          details: { pendingKind: 'payment' },
+        },
       });
     });
   });
@@ -478,7 +553,9 @@ describe('AuthService', () => {
   describe('verifyEmail', () => {
     it('throws on an unknown token', async () => {
       verificationRepo.findOne.mockResolvedValue(null);
-      await expect(service.verifyEmail('bad')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.verifyEmail('bad')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
 
     // Mail scanners open links first, owners click twice, a resend retires the
@@ -489,7 +566,11 @@ describe('AuthService', () => {
         usedAt: new Date(),
         expiresAt: new Date(Date.now() + 100000),
       });
-      users.findById.mockResolvedValue({ id: 'u1', email: 'a@b.c', isEmailVerified: true });
+      users.findById.mockResolvedValue({
+        id: 'u1',
+        email: 'a@b.c',
+        isEmailVerified: true,
+      });
       await expect(service.verifyEmail('used')).resolves.toMatchObject({
         verified: true,
         alreadyVerified: true,
@@ -503,7 +584,11 @@ describe('AuthService', () => {
         usedAt: null,
         expiresAt: new Date(Date.now() - 1000),
       });
-      users.findById.mockResolvedValue({ id: 'u1', email: 'a@b.c', isEmailVerified: false });
+      users.findById.mockResolvedValue({
+        id: 'u1',
+        email: 'a@b.c',
+        isEmailVerified: false,
+      });
       await expect(service.verifyEmail('expired')).rejects.toMatchObject({
         response: { code: 'INVALID_TOKEN' },
       });
@@ -539,24 +624,40 @@ describe('AuthService', () => {
       defaultCompanyId: 'c1',
     };
     /** Memberships the user holds right now, keyed by company. */
-    let memberships: Record<string, { userId: string; companyId: string; role: string }>;
+    let memberships: Record<
+      string,
+      { userId: string; companyId: string; role: string }
+    >;
 
     beforeEach(() => {
       memberships = { c1: { userId: 'u1', companyId: 'c1', role: 'admin' } };
       userCompanyRepo.findOne.mockImplementation(
         async ({ where }: { where: { companyId?: string } }) =>
-          where.companyId ? (memberships[where.companyId] ?? null) : (Object.values(memberships)[0] ?? null),
+          where.companyId
+            ? (memberships[where.companyId] ?? null)
+            : (Object.values(memberships)[0] ?? null),
       );
       refreshRepo.update.mockResolvedValue({ affected: 1 });
       users.getByIdOrFail.mockResolvedValue(owner);
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
-      jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600, iat: 0 });
+      jwtMock.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: 0,
+      });
     });
 
     const refreshWith = async (payload: Record<string, unknown>) => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', role: 'admin', typ: 'refresh', ...payload });
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        role: 'admin',
+        typ: 'refresh',
+        ...payload,
+      });
       await service.refresh('refresh.jwt');
-      return jwtMock.signAsync.mock.calls[0][0] as { companyId: string | null; role: string };
+      return jwtMock.signAsync.mock.calls[0][0] as {
+        companyId: string | null;
+        role: string;
+      };
     };
 
     it('fills in the company for a session that began before it existed', async () => {
@@ -575,38 +676,68 @@ describe('AuthService', () => {
 
     it('takes the role from the membership, not from the old token', async () => {
       memberships.c1.role = 'staff';
-      expect((await refreshWith({ companyId: 'c1', role: 'admin' })).role).toBe('staff');
+      expect((await refreshWith({ companyId: 'c1', role: 'admin' })).role).toBe(
+        'staff',
+      );
     });
 
     it('accepts a legacy refresh token that carries no typ', async () => {
-      expect((await refreshWith({ companyId: 'c1', typ: undefined })).companyId).toBe('c1');
+      expect(
+        (await refreshWith({ companyId: 'c1', typ: undefined })).companyId,
+      ).toBe('c1');
     });
 
     it('refuses an access token presented as a refresh token', async () => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'access' });
-      await expect(service.refresh('access.jwt')).rejects.toBeInstanceOf(UnauthorizedException);
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        typ: 'access',
+      });
+      await expect(service.refresh('access.jwt')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
       expect(refreshRepo.update).not.toHaveBeenCalled();
     });
 
     it('lets only one of two concurrent refreshes with the same token win', async () => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'refresh' });
-      refreshRepo.update.mockResolvedValueOnce({ affected: 1 }).mockResolvedValueOnce({ affected: 0 });
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        typ: 'refresh',
+      });
+      refreshRepo.update
+        .mockResolvedValueOnce({ affected: 1 })
+        .mockResolvedValueOnce({ affected: 0 });
       const results = await Promise.allSettled([
         service.refresh('refresh.jwt'),
         service.refresh('refresh.jwt'),
       ]);
-      expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(results.map((r) => r.status).sort()).toEqual([
+        'fulfilled',
+        'rejected',
+      ]);
     });
 
     it('refuses a deactivated user', async () => {
       users.getByIdOrFail.mockResolvedValue({ ...owner, isActive: false });
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'refresh' });
-      await expect(service.refresh('refresh.jwt')).rejects.toBeInstanceOf(UnauthorizedException);
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        typ: 'refresh',
+      });
+      await expect(service.refresh('refresh.jwt')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
     });
 
     it('signs access and refresh tokens with their own typ', async () => {
       await refreshWith({ companyId: 'c1' });
-      const [access, refresh] = jwtMock.signAsync.mock.calls.map((c) => c[0] as { typ: string });
+      const [access, refresh] = jwtMock.signAsync.mock.calls.map(
+        (c) => c[0] as { typ: string },
+      );
       expect(access.typ).toBe('access');
       expect(refresh.typ).toBe('refresh');
     });
@@ -621,7 +752,11 @@ describe('AuthService', () => {
     });
 
     it('issues and emails an OTP for a known user', async () => {
-      users.findByEmail.mockResolvedValue({ id: 'u1', email: 'a@b.c', displayName: 'A' });
+      users.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'a@b.c',
+        displayName: 'A',
+      });
       const res = await service.forgotPassword({ email: 'a@b.c' });
       expect(res).toEqual({ delivered: true });
       expect(otpRepo.save).toHaveBeenCalled();
@@ -652,11 +787,19 @@ describe('AuthService', () => {
     });
 
     it('still refuses staff, and anyone with no inbox', async () => {
-      users.findByEmail.mockResolvedValue({ id: 'u8', email: 's@c.pk', role: 'staff' });
+      users.findByEmail.mockResolvedValue({
+        id: 'u8',
+        email: 's@c.pk',
+        role: 'staff',
+      });
       await service.forgotPassword({ email: 's@c.pk' });
       expect(mail.sendOtpEmail).not.toHaveBeenCalled();
 
-      users.findByEmail.mockResolvedValue({ id: 'u7', email: null, role: 'admin' });
+      users.findByEmail.mockResolvedValue({
+        id: 'u7',
+        email: null,
+        role: 'admin',
+      });
       await service.forgotPassword({ email: 'x@y.z' });
       expect(mail.sendOtpEmail).not.toHaveBeenCalled();
     });
@@ -783,7 +926,12 @@ describe('AuthService', () => {
     });
 
     it('still revokes refresh tokens for a valid pre-jti token (no jti claim)', async () => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', exp });
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        exp,
+      });
       const res = await service.signoutByToken('Bearer legacy.token');
       expect(res.success).toBe(true);
       expect(refreshRepo.update).toHaveBeenCalled();
@@ -791,7 +939,13 @@ describe('AuthService', () => {
     });
 
     it('prunes expired denylist rows opportunistically', async () => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', jti: 'j1', exp });
+      jwtMock.verify.mockReturnValue({
+        sub: 'u1',
+        companyId: 'c1',
+        role: 'admin',
+        jti: 'j1',
+        exp,
+      });
       await service.signoutByToken('Bearer some.valid.token');
       expect(revokedRepo.delete).toHaveBeenCalled();
     });

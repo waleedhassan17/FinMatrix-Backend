@@ -33,16 +33,39 @@ export class Estimate extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   subtotal!: string;
 
-  @Column({ type: 'varchar', length: 8, default: 'none', name: 'discount_type' })
+  @Column({
+    type: 'varchar',
+    length: 8,
+    default: 'none',
+    name: 'discount_type',
+  })
   discountType!: DiscountType;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_value' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_value',
+  })
   discountValue!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_amount',
+  })
   discountAmount!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
@@ -54,7 +77,12 @@ export class Estimate extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 
-  @Column({ type: 'varchar', length: 16, nullable: true, name: 'converted_to_type' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'converted_to_type',
+  })
   convertedToType!: ConvertedToType | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'converted_to_id' })

@@ -1,4 +1,10 @@
-import { CellError, cellToBoolean, cellToDecimal, cellToText, isBlankCell } from './cell-value';
+import {
+  CellError,
+  cellToBoolean,
+  cellToDecimal,
+  cellToText,
+  isBlankCell,
+} from './cell-value';
 
 describe('cell values', () => {
   describe('cellToText', () => {
@@ -16,9 +22,15 @@ describe('cell values', () => {
     });
 
     it('unwraps rich text, hyperlinks and formula results', () => {
-      expect(cellToText({ richText: [{ text: 'Walnut ' }, { text: 'chair' }] })).toBe('Walnut chair');
-      expect(cellToText({ text: 'Catalogue', hyperlink: 'https://x.test' })).toBe('Catalogue');
-      expect(cellToText({ formula: 'A1&B1', result: 'CHR-001' })).toBe('CHR-001');
+      expect(
+        cellToText({ richText: [{ text: 'Walnut ' }, { text: 'chair' }] }),
+      ).toBe('Walnut chair');
+      expect(
+        cellToText({ text: 'Catalogue', hyperlink: 'https://x.test' }),
+      ).toBe('Catalogue');
+      expect(cellToText({ formula: 'A1&B1', result: 'CHR-001' })).toBe(
+        'CHR-001',
+      );
       expect(cellToText({ sharedFormula: 'A2', result: 7 })).toBe('7');
     });
 
@@ -48,7 +60,9 @@ describe('cell values', () => {
     it('refuses what is not a usable amount', () => {
       expect(() => cellToDecimal('abc', 2)).toThrow(/not a number/);
       expect(() => cellToDecimal(-5, 2)).toThrow(/negative/);
-      expect(() => cellToDecimal('12.345', 2)).toThrow(/at most 2 decimal places/);
+      expect(() => cellToDecimal('12.345', 2)).toThrow(
+        /at most 2 decimal places/,
+      );
       expect(() => cellToDecimal(new Date(), 2)).toThrow(/date/);
       expect(() => cellToDecimal(true, 2)).toThrow(/TRUE\/FALSE/);
       expect(() => cellToDecimal(1e13, 2)).toThrow(/too large/);
@@ -61,8 +75,10 @@ describe('cell values', () => {
 
   describe('cellToBoolean', () => {
     it('reads the yes/no words a sheet might hold', () => {
-      for (const v of ['Yes', 'y', 'TRUE', '1', 'Active', true, 1]) expect(cellToBoolean(v)).toBe(true);
-      for (const v of ['No', 'n', 'false', '0', 'inactive', false, 0]) expect(cellToBoolean(v)).toBe(false);
+      for (const v of ['Yes', 'y', 'TRUE', '1', 'Active', true, 1])
+        expect(cellToBoolean(v)).toBe(true);
+      for (const v of ['No', 'n', 'false', '0', 'inactive', false, 0])
+        expect(cellToBoolean(v)).toBe(false);
       expect(cellToBoolean('')).toBeNull();
       expect(() => cellToBoolean('maybe')).toThrow(/Yes or No/);
     });

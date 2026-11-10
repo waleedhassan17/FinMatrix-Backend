@@ -35,7 +35,8 @@ export class CreateVendorDto {
 
   @ApiPropertyOptional({
     example: 'V-0003',
-    description: 'Vendor ID. Left out or empty, the next one in the series is assigned.',
+    description:
+      'Vendor ID. Left out or empty, the next one in the series is assigned.',
   })
   @IsOptional()
   @IsString()
@@ -58,17 +59,27 @@ export class CreateVendorDto {
   paymentTerms?: PaymentTerms;
 
   @ApiPropertyOptional() @IsOptional() @IsString() taxId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsUUID() defaultExpenseAccountId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  defaultExpenseAccountId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 
   // ── FinMatrix Connect ──
-  @ApiPropertyOptional({ example: '0300 1234567', description: 'WhatsApp number. Left out: derived from phone. Empty: cleared.' })
+  @ApiPropertyOptional({
+    example: '0300 1234567',
+    description:
+      'WhatsApp number. Left out: derived from phone. Empty: cleared.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(32)
   whatsappPhone?: string;
 
-  @ApiPropertyOptional({ description: 'true records consent to WhatsApp messages now; false withdraws it.' })
+  @ApiPropertyOptional({
+    description:
+      'true records consent to WhatsApp messages now; false withdraws it.',
+  })
   @IsOptional()
   @IsBoolean()
   whatsappOptIn?: boolean;

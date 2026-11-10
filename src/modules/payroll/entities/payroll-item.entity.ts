@@ -1,4 +1,11 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { PayrollRun } from './payroll-run.entity';
 
 @Entity('payroll_items')
@@ -13,7 +20,13 @@ export class PayrollItem {
   @Column({ type: 'uuid', name: 'employee_id' })
   employeeId!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'hours' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'hours',
+  })
   hours!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })

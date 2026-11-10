@@ -32,15 +32,17 @@ export class FeatureGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const feature = this.reflector.getAllAndOverride<FeatureKey | undefined>(FEATURE_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const feature = this.reflector.getAllAndOverride<FeatureKey | undefined>(
+      FEATURE_KEY,
+      [context.getHandler(), context.getClass()],
+    );
     if (!feature) return true;
 
     const req = context
       .switchToHttp()
-      .getRequest<Request & { user?: AuthenticatedUser; companyId?: string | null }>();
+      .getRequest<
+        Request & { user?: AuthenticatedUser; companyId?: string | null }
+      >();
     const companyId = req.companyId ?? req.user?.companyId ?? null;
     if (!companyId) {
       // No tenant context — let CompanyGuard's own error surface instead.

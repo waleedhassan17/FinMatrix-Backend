@@ -1,4 +1,10 @@
-import { IsUUID, IsEnum, IsOptional, IsString, IsDateString } from 'class-validator';
+import {
+  IsUUID,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsDateString,
+} from 'class-validator';
 import { SubscriptionStatus } from '../entities/company-subscription.entity';
 
 export class AssignSubscriptionDto {

@@ -39,7 +39,6 @@ interface Watched {
   numeric?: string[];
 }
 
-
 /** What TypeORM reports as an entity's target: its class, or a table name. */
 type EntityTarget = EntityMetadata['target'];
 /**
@@ -58,7 +57,10 @@ const WATCHED = new Map<EntityTarget, Watched>([
   [Payment, { module: 'payments', resourceType: 'payment' }],
   [CreditMemo, { module: 'credit_memos', resourceType: 'credit_memo' }],
   [VendorCredit, { module: 'vendor_credits', resourceType: 'vendor_credit' }],
-  [InventoryAdjustment, { module: 'inventory', resourceType: 'inventory_adjustment' }],
+  [
+    InventoryAdjustment,
+    { module: 'inventory', resourceType: 'inventory_adjustment' },
+  ],
   [TaxPayment, { module: 'tax', resourceType: 'tax_payment' }],
   [JournalEntry, { module: 'journal_entries', resourceType: 'journal_entry' }],
   [
@@ -66,7 +68,13 @@ const WATCHED = new Map<EntityTarget, Watched>([
     {
       module: 'customers',
       resourceType: 'customer',
-      ignore: ['balance', 'updatedAt', 'shippingLat', 'shippingLng', 'shippingGeocodedAt'],
+      ignore: [
+        'balance',
+        'updatedAt',
+        'shippingLat',
+        'shippingLng',
+        'shippingGeocodedAt',
+      ],
       json: ['billingAddress', 'shippingAddress'],
       numeric: ['creditLimit'],
     },
@@ -83,7 +91,9 @@ const WATCHED = new Map<EntityTarget, Watched>([
 ]);
 
 /** The same settings, by resource type, for the flush. */
-const BY_RESOURCE = new Map([...WATCHED.values()].map((w) => [w.resourceType, w]));
+const BY_RESOURCE = new Map(
+  [...WATCHED.values()].map((w) => [w.resourceType, w]),
+);
 
 interface PendingAudit {
   action: AuditAction;
@@ -130,7 +140,13 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
   }
 
   afterInsert(event: InsertEvent<unknown>): void {
-    this.capture(event.queryRunner, event.metadata.target, 'create', null, event.entity);
+    this.capture(
+      event.queryRunner,
+      event.metadata.target,
+      'create',
+      null,
+      event.entity,
+    );
   }
 
   afterUpdate(event: UpdateEvent<unknown>): void {
@@ -142,14 +158,26 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
       this.statusOf(after) === 'void' && this.statusOf(before) !== 'void'
         ? 'void'
         : 'update';
-    this.capture(event.queryRunner, event.metadata.target, action, before, after);
+    this.capture(
+      event.queryRunner,
+      event.metadata.target,
+      action,
+      before,
+      after,
+    );
   }
 
   afterRemove(event: RemoveEvent<unknown>): void {
     // Bills and payments unwind the ledger through delete rather than a
     // /void route, so a hard remove is a financial mutation too.
     const before = event.databaseEntity ?? event.entity ?? null;
-    this.capture(event.queryRunner, event.metadata.target, 'delete', before, null);
+    this.capture(
+      event.queryRunner,
+      event.metadata.target,
+      'delete',
+      before,
+      null,
+    );
   }
 
   afterTransactionCommit(event: { queryRunner: QueryRunner }): void {
@@ -211,7 +239,9 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
    */
   private async flush(rows: PendingAudit[]): Promise<void> {
     try {
-      const collapsed = this.collapse(rows).filter((r) => r.companyId && this.meaningful(r));
+      const collapsed = this.collapse(rows).filter(
+        (r) => r.companyId && this.meaningful(r),
+      );
       if (collapsed.length === 0) return;
 
       const repo = this.dataSource.getRepository(AuditTrailEntry);
@@ -270,7 +300,10 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
    * every row. Nothing financial is redacted; this is the record of what
    * changed. `json` names object columns kept as values (a customer's address).
    */
-  private snapshot(entity: unknown, json: string[] = []): Record<string, unknown> | null {
+  private snapshot(
+    entity: unknown,
+    json: string[] = [],
+  ): Record<string, unknown> | null {
     if (!entity || typeof entity !== 'object') return null;
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(entity)) {
@@ -301,7 +334,10 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
     const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
     for (const key of keys) {
       if (watched.ignore.includes(key)) continue;
-      if (!sameAuditValue(before[key], after[key], watched.numeric?.includes(key))) return true;
+      if (
+        !sameAuditValue(before[key], after[key], watched.numeric?.includes(key))
+      )
+        return true;
     }
     return false;
   }

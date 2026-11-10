@@ -111,7 +111,7 @@ describe('@IsPkPhone', () => {
     '923124890176',
     '0312-4890176',
     '+92 312 4890176',
-  ])('accepts %s and stores it canonically', async input => {
+  ])('accepts %s and stores it canonically', async (input) => {
     const { instance, errors } = await runPipe(MobileDto, { phone: input });
     expect(errors).toHaveLength(0);
     expect(instance.phone).toBe('+923124890176');

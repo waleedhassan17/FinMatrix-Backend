@@ -1,5 +1,14 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -7,11 +16,21 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
 import { VendorCreditsService } from './vendor-credits.service';
-import { ApplyVendorCreditDto, CreateVendorCreditDto, ListVendorCreditsQueryDto } from './dto/vendor-credit.dto';
-import { ParsePaginationPipe, PaginationParams } from '../../common/pipes/parse-pagination.pipe';
+import {
+  ApplyVendorCreditDto,
+  CreateVendorCreditDto,
+  ListVendorCreditsQueryDto,
+} from './dto/vendor-credit.dto';
+import {
+  ParsePaginationPipe,
+  PaginationParams,
+} from '../../common/pipes/parse-pagination.pipe';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('vendor-credits')
@@ -38,7 +57,10 @@ export class VendorCreditsController {
   }
 
   @Get(':id')
-  get(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.getById(companyId, id);
   }
 

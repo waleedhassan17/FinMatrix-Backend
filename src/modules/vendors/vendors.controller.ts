@@ -15,7 +15,10 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { VendorsService } from './vendors.service';
 import { PartyLedgerService } from '../ledger/party-ledger.service';
 import { PartyHistoryService } from '../ledger/party-history.service';
@@ -121,17 +124,28 @@ export class VendorsController {
 
   /** The statement read from the books (see CustomersController.ledgerStatement). */
   @Get(':vendorId/ledger-statement')
-  @ApiOperation({ summary: 'Period statement from the ledger: opening + lines + closing.' })
+  @ApiOperation({
+    summary: 'Period statement from the ledger: opening + lines + closing.',
+  })
   ledgerStatement(
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,
     @Query() query: VendorStatementQueryDto,
   ) {
-    return this.partyLedger.statement(companyId, 'vendor', vendorId, query.startDate, query.endDate);
+    return this.partyLedger.statement(
+      companyId,
+      'vendor',
+      vendorId,
+      query.startDate,
+      query.endDate,
+    );
   }
 
   @Get(':vendorId/history')
-  @ApiOperation({ summary: 'History: since, last bill/payment, months of the fiscal year, edit log (owner).' })
+  @ApiOperation({
+    summary:
+      'History: since, last bill/payment, months of the fiscal year, edit log (owner).',
+  })
   history(
     @CurrentCompany() companyId: string,
     @Param('vendorId', ParseUUIDPipe) vendorId: string,

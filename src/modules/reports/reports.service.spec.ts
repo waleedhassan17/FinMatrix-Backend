@@ -263,8 +263,24 @@ describe('ReportsService — cashFlow indirect operating', () => {
             sourceId: `doc-${i}`,
           };
           return [
-            { ...base, id: `c${i}`, accountCode: '1000', accountName: 'Cash', type: 'asset', subType: 'Cash', amount: String(net) },
-            { ...base, id: `x${i}`, accountCode: code, accountName: code, type, subType, amount: String(-net) },
+            {
+              ...base,
+              id: `c${i}`,
+              accountCode: '1000',
+              accountName: 'Cash',
+              type: 'asset',
+              subType: 'Cash',
+              amount: String(net),
+            },
+            {
+              ...base,
+              id: `x${i}`,
+              accountCode: code,
+              accountName: code,
+              type,
+              subType,
+              amount: String(-net),
+            },
           ];
         });
       }
@@ -835,7 +851,8 @@ describe('ReportsService — aging', () => {
  * than against numbers typed into the test.
  */
 describe('ReportsService — aging party documents', () => {
-  const dueDaysAgo = (days: number): string => addDaysIso(businessToday(), -days);
+  const dueDaysAgo = (days: number): string =>
+    addDaysIso(businessToday(), -days);
 
   type Doc = {
     id: string;
@@ -849,13 +866,20 @@ describe('ReportsService — aging party documents', () => {
   /** Captures every statement the service issues, so we can assert on the SQL. */
   const sqlSeen: string[] = [];
 
-  const makeQuery = (docs: Doc[], prefs: unknown = null, party: unknown = { name: 'Acme' }) =>
+  const makeQuery = (
+    docs: Doc[],
+    prefs: unknown = null,
+    party: unknown = { name: 'Acme' },
+  ) =>
     jest.fn(async (sql: string) => {
       sqlSeen.push(sql);
-      if (sql.includes('report_preferences')) return prefs === null ? [] : [{ prefs }];
+      if (sql.includes('report_preferences'))
+        return prefs === null ? [] : [{ prefs }];
       // Party lookups. Distinct from the summary's `JOIN customers c ON …`.
-      if (sql.includes('FROM customers c WHERE c.id')) return party === null ? [] : [party];
-      if (sql.includes('FROM vendors v WHERE v.id')) return party === null ? [] : [party];
+      if (sql.includes('FROM customers c WHERE c.id'))
+        return party === null ? [] : [party];
+      if (sql.includes('FROM vendors v WHERE v.id'))
+        return party === null ? [] : [party];
       // The drill-down. Checked before the summary because both name `invoices i`.
       if (sql.includes('i.customer_id = $2')) {
         return docs.map((d) => ({
@@ -908,12 +932,20 @@ describe('ReportsService — aging party documents', () => {
   it('foots to the aging row bucket when one is named', async () => {
     const svc = await makeService(makeQuery(SPREAD));
     const summary: any = await svc.arAging('c1');
-    const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1', undefined, 'd1to30');
+    const detail: any = await svc.arAgingPartyDocuments(
+      'c1',
+      'cust-1',
+      undefined,
+      'd1to30',
+    );
 
     // 200 + 50, and the row's own figure for that column, computed independently.
     expect(detail.outstandingTotal).toBe(summary.rows[0].amounts.d1to30);
     expect(detail.total).toBe(2);
-    expect(detail.documents.map((d: any) => d.documentNumber)).toEqual(['INV-2', 'INV-3']);
+    expect(detail.documents.map((d: any) => d.documentNumber)).toEqual([
+      'INV-2',
+      'INV-3',
+    ]);
   });
 
   it('every document reports the bucket its own row would have put it in', async () => {
@@ -942,18 +974,26 @@ describe('ReportsService — aging party documents', () => {
     await svc.arAging('c1');
     await svc.arAgingPartyDocuments('c1', 'cust-1');
 
-    const summarySql = sqlSeen.find((s) => s.includes('FROM invoices i JOIN customers c'))!;
+    const summarySql = sqlSeen.find((s) =>
+      s.includes('FROM invoices i JOIN customers c'),
+    )!;
     const detailSql = sqlSeen.find((s) => s.includes('i.customer_id = $2'))!;
-    const predicate = /i\.balance::numeric > 0 AND i\.status NOT IN \('paid','void','draft'\)/;
+    const predicate =
+      /i\.balance::numeric > 0 AND i\.status NOT IN \('paid','void','draft'\)/;
 
     expect(summarySql).toMatch(predicate);
     expect(detailSql).toMatch(predicate);
   });
 
   it('re-buckets with the requested preset, not the company default', async () => {
-    const svc = await makeService(makeQuery(SPREAD, { aging: { preset: 'monthly' } }));
+    const svc = await makeService(
+      makeQuery(SPREAD, { aging: { preset: 'monthly' } }),
+    );
     const detail: any = await svc.arAgingPartyDocuments(
-      'c1', 'cust-1', { preset: 'days3' }, undefined,
+      'c1',
+      'cust-1',
+      { preset: 'days3' },
+      undefined,
     );
 
     expect(detail.preset).toBe('days3');
@@ -961,11 +1001,15 @@ describe('ReportsService — aging party documents', () => {
     // days overdue sits mid-table here and in `1–30` under monthly: same money,
     // finer columns, which is the whole reason the preset is configurable.
     expect(detail.buckets.map((b: any) => b.key)).toContain('d13plus');
-    const inv2 = detail.documents.find((d: any) => d.documentNumber === 'INV-2');
+    const inv2 = detail.documents.find(
+      (d: any) => d.documentNumber === 'INV-2',
+    );
     expect(inv2.bucketKey).toBe('d10to12');
     expect(inv2.bucketLabel).toBe('10–12');
     // …and the oldest document has moved into the open-ended bucket.
-    const inv5 = detail.documents.find((d: any) => d.documentNumber === 'INV-5');
+    const inv5 = detail.documents.find(
+      (d: any) => d.documentNumber === 'INV-5',
+    );
     expect(inv5.bucketKey).toBe('d13plus');
   });
 
@@ -999,7 +1043,9 @@ describe('ReportsService — aging party documents', () => {
     // Signed, so the client can say "due in 5 days" without recomputing.
     const svc = await makeService(makeQuery(SPREAD));
     const detail: any = await svc.arAgingPartyDocuments('c1', 'cust-1');
-    const notDue = detail.documents.find((d: any) => d.documentNumber === 'INV-1');
+    const notDue = detail.documents.find(
+      (d: any) => d.documentNumber === 'INV-1',
+    );
     expect(notDue.daysOverdue).toBe(-5);
     expect(notDue.bucketKey).toBe('current');
   });
@@ -1013,7 +1059,12 @@ describe('ReportsService — aging party documents', () => {
     }));
     const svc = await makeService(makeQuery(many));
     const detail: any = await svc.arAgingPartyDocuments(
-      'c1', 'cust-1', undefined, 'd1to30', 1, 2,
+      'c1',
+      'cust-1',
+      undefined,
+      'd1to30',
+      1,
+      2,
     );
 
     expect(detail.documents).toHaveLength(2);
@@ -1028,7 +1079,12 @@ describe('ReportsService — aging party documents', () => {
   it('clamps an absurd limit rather than trying to serve it', async () => {
     const svc = await makeService(makeQuery(SPREAD));
     const detail: any = await svc.arAgingPartyDocuments(
-      'c1', 'cust-1', undefined, undefined, 1, 99999,
+      'c1',
+      'cust-1',
+      undefined,
+      undefined,
+      1,
+      99999,
     );
     expect(detail.limit).toBe(200);
   });
@@ -1046,14 +1102,18 @@ describe('ReportsService — aging party documents', () => {
 
   it('refuses an unknown customer rather than reporting no debt', async () => {
     const svc = await makeService(makeQuery(SPREAD, null, null));
-    await expect(svc.arAgingPartyDocuments('c1', 'nobody')).rejects.toMatchObject({
+    await expect(
+      svc.arAgingPartyDocuments('c1', 'nobody'),
+    ).rejects.toMatchObject({
       response: { code: 'CUSTOMER_NOT_FOUND' },
     });
   });
 
   it('refuses an unknown vendor on the payables side', async () => {
     const svc = await makeService(makeQuery([], null, null));
-    await expect(svc.apAgingPartyDocuments('c1', 'nobody')).rejects.toMatchObject({
+    await expect(
+      svc.apAgingPartyDocuments('c1', 'nobody'),
+    ).rejects.toMatchObject({
       response: { code: 'VENDOR_NOT_FOUND' },
     });
   });
@@ -1106,9 +1166,12 @@ describe('ReportsService — aging party documents', () => {
 
     const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
     const enveloped: any = await firstValueFrom(
-      interceptor.intercept({} as ExecutionContext, {
-        handle: () => of(payload),
-      } as CallHandler),
+      interceptor.intercept(
+        {} as ExecutionContext,
+        {
+          handle: () => of(payload),
+        } as CallHandler,
+      ),
     );
 
     expect(enveloped.success).toBe(true);
@@ -1129,9 +1192,12 @@ describe('ReportsService — aging party documents', () => {
     // naming constraint above can be revisited.
     const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
     const enveloped: any = await firstValueFrom(
-      interceptor.intercept({} as ExecutionContext, {
-        handle: () => of({ data: [1, 2], outstandingTotal: 99 }),
-      } as CallHandler),
+      interceptor.intercept(
+        {} as ExecutionContext,
+        {
+          handle: () => of({ data: [1, 2], outstandingTotal: 99 }),
+        } as CallHandler,
+      ),
     );
     expect(enveloped.data).toEqual([1, 2]);
     expect(enveloped.outstandingTotal).toBeUndefined();
@@ -1148,9 +1214,16 @@ describe('ReportsService — aging party documents', () => {
  * which receipts are free.
  */
 describe('ReportsService — party summary', () => {
-  const dueDaysAgo = (days: number): string => addDaysIso(businessToday(), -days);
+  const dueDaysAgo = (days: number): string =>
+    addDaysIso(businessToday(), -days);
 
-  type Doc = { id: string; number: string; days: number; balance: string; total?: string };
+  type Doc = {
+    id: string;
+    number: string;
+    days: number;
+    balance: string;
+    total?: string;
+  };
 
   const sqlSeen: Array<{ sql: string; params: unknown[] }> = [];
 
@@ -1160,20 +1233,27 @@ describe('ReportsService — party summary', () => {
     contactPerson: 'Bilal',
     email: 'accounts@acme.pk',
     phone: '0300 1234567',
-    address: { street: '12 Mall Road', city: 'Lahore', zipCode: '54000', country: 'Pakistan' },
+    address: {
+      street: '12 Mall Road',
+      city: 'Lahore',
+      zipCode: '54000',
+      country: 'Pakistan',
+    },
     paymentTerms: 'net30',
     taxId: 'NTN-42',
   };
 
-  const makeQuery = (opts: {
-    docs?: Doc[];
-    party?: unknown;
-    prefs?: unknown;
-    receipts?: unknown[];
-    memos?: unknown[];
-    vendorCredits?: unknown[];
-    lastPayment?: unknown[];
-  } = {}) => {
+  const makeQuery = (
+    opts: {
+      docs?: Doc[];
+      party?: unknown;
+      prefs?: unknown;
+      receipts?: unknown[];
+      memos?: unknown[];
+      vendorCredits?: unknown[];
+      lastPayment?: unknown[];
+    } = {},
+  ) => {
     const docs = opts.docs ?? [];
     const toDocRow = (d: Doc) => ({
       documentId: d.id,
@@ -1193,19 +1273,34 @@ describe('ReportsService — party summary', () => {
     });
     return jest.fn(async (sql: string, params: unknown[] = []) => {
       sqlSeen.push({ sql, params });
-      if (sql.includes('report_preferences')) return opts.prefs ? [{ prefs: opts.prefs }] : [];
-      if (sql.includes('FROM customers c WHERE c.id') || sql.includes('FROM vendors v WHERE v.id')) {
+      if (sql.includes('report_preferences'))
+        return opts.prefs ? [{ prefs: opts.prefs }] : [];
+      if (
+        sql.includes('FROM customers c WHERE c.id') ||
+        sql.includes('FROM vendors v WHERE v.id')
+      ) {
         const party = opts.party === undefined ? CUSTOMER : opts.party;
         return party === null ? [] : [party];
       }
-      if (sql.includes('i.customer_id = $2') || sql.includes('b.vendor_id = $2')) return docs.map(toDocRow);
-      if (sql.includes('FROM invoices i JOIN customers c') || sql.includes('FROM bills b JOIN vendors v')) {
+      if (
+        sql.includes('i.customer_id = $2') ||
+        sql.includes('b.vendor_id = $2')
+      )
+        return docs.map(toDocRow);
+      if (
+        sql.includes('FROM invoices i JOIN customers c') ||
+        sql.includes('FROM bills b JOIN vendors v')
+      ) {
         return docs.map(toAgingRow);
       }
       if (sql.includes('payment_applications')) return opts.receipts ?? [];
       if (sql.includes('FROM credit_memos m')) return opts.memos ?? [];
-      if (sql.includes('FROM vendor_credits vc')) return opts.vendorCredits ?? [];
-      if (sql.includes('FROM payments p') || sql.includes('FROM bill_payments bp')) {
+      if (sql.includes('FROM vendor_credits vc'))
+        return opts.vendorCredits ?? [];
+      if (
+        sql.includes('FROM payments p') ||
+        sql.includes('FROM bill_payments bp')
+      ) {
         return opts.lastPayment ?? [];
       }
       return [];
@@ -1232,9 +1327,13 @@ describe('ReportsService — party summary', () => {
 
     expect(summary.totals.outstanding).toBe(row.total);
     for (const b of summary.buckets) expect(b.amount).toBe(row.amounts[b.key]);
-    expect(summary.buckets.reduce((n: number, b: any) => n + b.count, 0)).toBe(SPREAD.length);
+    expect(summary.buckets.reduce((n: number, b: any) => n + b.count, 0)).toBe(
+      SPREAD.length,
+    );
     // The same buckets the report opens with, labels and all.
-    expect(summary.buckets.map(({ amount, count, ...b }: any) => b)).toEqual(aging.buckets);
+    expect(summary.buckets.map(({ amount, count, ...b }: any) => b)).toEqual(
+      aging.buckets,
+    );
     expect(summary.asOfDate).toBe(aging.asOfDate);
   });
 
@@ -1243,12 +1342,21 @@ describe('ReportsService — party summary', () => {
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     const detail: any = await svc.arAgingPartyDocuments('c1', 'party-1');
     expect(summary.documents).toEqual(detail.documents);
-    expect(summary.documents[1]).toMatchObject({ total: 500, amountPaid: 300, balance: 200 });
+    expect(summary.documents[1]).toMatchObject({
+      total: 500,
+      amountPaid: 300,
+      balance: 200,
+    });
   });
 
   it('splits overdue from not yet due on the signed days overdue', async () => {
     const svc = await makeService(
-      makeQuery({ docs: [...SPREAD, { id: 'i6', number: 'INV-6', days: 0, balance: '10' }] }),
+      makeQuery({
+        docs: [
+          ...SPREAD,
+          { id: 'i6', number: 'INV-6', days: 0, balance: '10' },
+        ],
+      }),
     );
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     // Due today is not overdue yet: INV-1 (due in 5 days) and INV-6.
@@ -1266,9 +1374,24 @@ describe('ReportsService — party summary', () => {
       makeQuery({
         docs: SPREAD,
         receipts: [
-          { id: 'p1', payment_number: 'PAY-2026-0009', payment_date: '2026-09-01', amount: '500.0000', advance_posted: true, unapplied: '150.0000' },
+          {
+            id: 'p1',
+            payment_number: 'PAY-2026-0009',
+            payment_date: '2026-09-01',
+            amount: '500.0000',
+            advance_posted: true,
+            unapplied: '150.0000',
+          },
         ],
-        memos: [{ id: 'm1', reference: 'CM-2026-0003', date: '2026-08-14', amount: '80', available: '80' }],
+        memos: [
+          {
+            id: 'm1',
+            reference: 'CM-2026-0003',
+            date: '2026-08-14',
+            amount: '80',
+            available: '80',
+          },
+        ],
       }),
     );
     const summary: any = await svc.arPartySummary('c1', 'party-1');
@@ -1277,8 +1400,22 @@ describe('ReportsService — party summary', () => {
     expect(summary.netDue).toBe(445.5);
     // Oldest first, whatever kind.
     expect(summary.credits.items).toEqual([
-      { kind: 'credit_memo', id: 'm1', reference: 'CM-2026-0003', date: '2026-08-14', amount: 80, available: 80 },
-      { kind: 'payment', id: 'p1', reference: 'PAY-2026-0009', date: '2026-09-01', amount: 500, available: 150 },
+      {
+        kind: 'credit_memo',
+        id: 'm1',
+        reference: 'CM-2026-0003',
+        date: '2026-08-14',
+        amount: 80,
+        available: 80,
+      },
+      {
+        kind: 'payment',
+        id: 'p1',
+        reference: 'PAY-2026-0009',
+        date: '2026-09-01',
+        amount: 500,
+        available: 150,
+      },
     ]);
   });
 
@@ -1287,18 +1424,30 @@ describe('ReportsService — party summary', () => {
     // is left out here exactly as it is when a payment is recorded.
     const svc = await makeService(makeQuery({ docs: SPREAD }));
     await svc.arPartySummary('c1', 'party-1');
-    const receipts = sqlSeen.find((s) => s.sql.includes('payment_applications'))!;
+    const receipts = sqlSeen.find((s) =>
+      s.sql.includes('payment_applications'),
+    )!;
     expect(receipts.sql).toBe(UNAPPLIED_RECEIPTS_SQL);
     expect(receipts.params).toEqual(['c1', 'party-1', '0.0001']);
     const memos = sqlSeen.find((s) => s.sql.includes('FROM credit_memos m'))!;
-    expect(memos.sql).toMatch(/m\.balance::numeric > 0 AND m\.status NOT IN \('draft', 'void'\)/);
+    expect(memos.sql).toMatch(
+      /m\.balance::numeric > 0 AND m\.status NOT IN \('draft', 'void'\)/,
+    );
   });
 
   it('can owe the customer: net due goes below zero when credits exceed the open invoices', async () => {
     const svc = await makeService(
       makeQuery({
         docs: [{ id: 'i1', number: 'INV-1', days: 3, balance: '100' }],
-        memos: [{ id: 'm1', reference: 'CM-1', date: '2026-08-14', amount: '250', available: '250' }],
+        memos: [
+          {
+            id: 'm1',
+            reference: 'CM-1',
+            date: '2026-08-14',
+            amount: '250',
+            available: '250',
+          },
+        ],
       }),
     );
     const summary: any = await svc.arPartySummary('c1', 'party-1');
@@ -1323,30 +1472,59 @@ describe('ReportsService — party summary', () => {
   });
 
   it('leaves missing contact details null rather than inventing them', async () => {
-    const svc = await makeService(makeQuery({ party: { name: 'Walk-in', address: {} } }));
+    const svc = await makeService(
+      makeQuery({ party: { name: 'Walk-in', address: {} } }),
+    );
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     expect(summary.party).toMatchObject({
-      name: 'Walk-in', code: null, email: null, phone: null, address: null, paymentTerms: null, taxId: null,
+      name: 'Walk-in',
+      code: null,
+      email: null,
+      phone: null,
+      address: null,
+      paymentTerms: null,
+      taxId: null,
     });
   });
 
   it('reports the latest payment, or none', async () => {
     const paid = await makeService(
-      makeQuery({ lastPayment: [{ date: '2026-09-20', amount: '1234.5000', reference: 'PAY-2026-0011' }] }),
+      makeQuery({
+        lastPayment: [
+          {
+            date: '2026-09-20',
+            amount: '1234.5000',
+            reference: 'PAY-2026-0011',
+          },
+        ],
+      }),
     );
-    expect(((await paid.arPartySummary('c1', 'party-1')) as any).lastPayment).toEqual({
-      date: '2026-09-20', amount: 1234.5, reference: 'PAY-2026-0011',
+    expect(
+      ((await paid.arPartySummary('c1', 'party-1')) as any).lastPayment,
+    ).toEqual({
+      date: '2026-09-20',
+      amount: 1234.5,
+      reference: 'PAY-2026-0011',
     });
     const never = await makeService(makeQuery());
-    expect(((await never.arPartySummary('c1', 'party-1')) as any).lastPayment).toBeNull();
+    expect(
+      ((await never.arPartySummary('c1', 'party-1')) as any).lastPayment,
+    ).toBeNull();
   });
 
   it("buckets with the company's saved preference", async () => {
-    const svc = await makeService(makeQuery({ docs: SPREAD, prefs: { aging: { preset: 'weekly' } } }));
+    const svc = await makeService(
+      makeQuery({ docs: SPREAD, prefs: { aging: { preset: 'weekly' } } }),
+    );
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     expect(summary.preset).toBe('weekly');
     expect(summary.buckets.map((b: any) => b.key)).toEqual([
-      'current', 'd1to7', 'd8to14', 'd15to21', 'd22to28', 'd29plus',
+      'current',
+      'd1to7',
+      'd8to14',
+      'd15to21',
+      'd22to28',
+      'd29plus',
     ]);
   });
 
@@ -1354,8 +1532,16 @@ describe('ReportsService — party summary', () => {
     const svc = await makeService(makeQuery());
     const summary: any = await svc.arPartySummary('c1', 'party-1');
     expect(summary.documents).toEqual([]);
-    expect(summary.totals).toEqual({ count: 0, outstanding: 0, overdue: 0, overdueCount: 0, notYetDue: 0 });
-    expect(summary.buckets.every((b: any) => b.amount === 0 && b.count === 0)).toBe(true);
+    expect(summary.totals).toEqual({
+      count: 0,
+      outstanding: 0,
+      overdue: 0,
+      overdueCount: 0,
+      notYetDue: 0,
+    });
+    expect(
+      summary.buckets.every((b: any) => b.amount === 0 && b.count === 0),
+    ).toBe(true);
     expect(summary.credits).toEqual({ total: 0, items: [] });
     expect(summary.netDue).toBe(0);
   });
@@ -1375,8 +1561,18 @@ describe('ReportsService — party summary', () => {
       makeQuery({
         docs: SPREAD,
         party: { name: 'Supplier Co', address: null },
-        vendorCredits: [{ id: 'vc1', reference: 'VC-2026-0002', date: '2026-07-01', amount: '60', available: '40' }],
-        lastPayment: [{ date: '2026-09-02', amount: '700', reference: 'CHQ 1182' }],
+        vendorCredits: [
+          {
+            id: 'vc1',
+            reference: 'VC-2026-0002',
+            date: '2026-07-01',
+            amount: '60',
+            available: '40',
+          },
+        ],
+        lastPayment: [
+          { date: '2026-09-02', amount: '700', reference: 'CHQ 1182' },
+        ],
       }),
     );
     const aging: any = await svc.apAging('c1');
@@ -1385,17 +1581,36 @@ describe('ReportsService — party summary', () => {
     expect(summary.partyType).toBe('vendor');
     expect(summary.party.name).toBe('Supplier Co');
     expect(summary.totals.outstanding).toBe(aging.rows[0].total);
-    expect(summary.documents.every((d: any) => d.documentType === 'bill')).toBe(true);
+    expect(summary.documents.every((d: any) => d.documentType === 'bill')).toBe(
+      true,
+    );
     expect(summary.credits).toEqual({
       total: 40,
-      items: [{ kind: 'vendor_credit', id: 'vc1', reference: 'VC-2026-0002', date: '2026-07-01', amount: 60, available: 40 }],
+      items: [
+        {
+          kind: 'vendor_credit',
+          id: 'vc1',
+          reference: 'VC-2026-0002',
+          date: '2026-07-01',
+          amount: 60,
+          available: 40,
+        },
+      ],
     });
     expect(summary.netDue).toBe(635.5);
-    expect(summary.lastPayment).toEqual({ date: '2026-09-02', amount: 700, reference: 'CHQ 1182' });
-    const credits = sqlSeen.find((s) => s.sql.includes('FROM vendor_credits vc'))!;
+    expect(summary.lastPayment).toEqual({
+      date: '2026-09-02',
+      amount: 700,
+      reference: 'CHQ 1182',
+    });
+    const credits = sqlSeen.find((s) =>
+      s.sql.includes('FROM vendor_credits vc'),
+    )!;
     expect(credits.sql).toMatch(/vc\.status NOT IN \('void', 'closed'\)/);
     // No customer receipts or credit memos on the payables side.
-    expect(sqlSeen.some((s) => s.sql.includes('payment_applications'))).toBe(false);
+    expect(sqlSeen.some((s) => s.sql.includes('payment_applications'))).toBe(
+      false,
+    );
   });
 
   it('survives the response envelope with every figure beside the documents', async () => {
@@ -1405,7 +1620,10 @@ describe('ReportsService — party summary', () => {
 
     const interceptor = new ResponseEnvelopeInterceptor(new Reflector());
     const enveloped: any = await firstValueFrom(
-      interceptor.intercept({} as ExecutionContext, { handle: () => of(payload) } as CallHandler),
+      interceptor.intercept(
+        {} as ExecutionContext,
+        { handle: () => of(payload) } as CallHandler,
+      ),
     );
     expect(enveloped.data.documents).toHaveLength(SPREAD.length);
     expect(enveloped.data.totals.outstanding).toBe(675.5);
@@ -1494,10 +1712,9 @@ describe('ReportsService — statementLineEntries', () => {
 
     expect(r.lineAmount).toBe(1150);
     expect(r.entries.map((d: any) => d.amount)).toEqual([800, 400, -50]);
-    expect(r.entries.reduce((t: number, d: any) => t + d.amount, 0)).toBeCloseTo(
-      r.lineAmount,
-      2,
-    );
+    expect(
+      r.entries.reduce((t: number, d: any) => t + d.amount, 0),
+    ).toBeCloseTo(r.lineAmount, 2);
   });
 
   it('signs an expense account debit-normal', async () => {
@@ -1680,13 +1897,21 @@ describe('ReportsService — inventory history', () => {
   });
 
   describe('inventoryItemHistory', () => {
-    const ITEM = { id: 'i1', name: 'Engine Oil 5L', sku: 'WC-OIL-5L', quantityOnHand: '0', unitCost: '0' };
+    const ITEM = {
+      id: 'i1',
+      name: 'Engine Oil 5L',
+      sku: 'WC-OIL-5L',
+      quantityOnHand: '0',
+      unitCost: '0',
+    };
 
     async function makeItemService(rows: any[], found = true, onHand = '0') {
       const query = jest.fn(async () => rows);
       const repo = {} as never;
       const itemRepo = {
-        find: jest.fn(async () => (found ? [{ ...ITEM, quantityOnHand: onHand }] : [])),
+        find: jest.fn(async () =>
+          found ? [{ ...ITEM, quantityOnHand: onHand }] : [],
+        ),
       };
       const moduleRef = await Test.createTestingModule({
         providers: [
@@ -1809,7 +2034,10 @@ describe('ReportsService — item explorer', () => {
   async function makeItemService(
     query: jest.Mock,
     found = true,
-    opts: { item?: Record<string, unknown>; signer?: Partial<MediaUrlSigner> } = {},
+    opts: {
+      item?: Record<string, unknown>;
+      signer?: Partial<MediaUrlSigner>;
+    } = {},
   ) {
     const repo = {} as never;
     const item = { ...ITEM, ...opts.item };
@@ -1824,7 +2052,9 @@ describe('ReportsService — item explorer', () => {
         { provide: getRepositoryToken(InventoryMovement), useValue: repo },
         { provide: getRepositoryToken(Delivery), useValue: repo },
         { provide: getRepositoryToken(TaxPayment), useValue: repo },
-        ...(opts.signer ? [{ provide: MediaUrlSigner, useValue: opts.signer }] : []),
+        ...(opts.signer
+          ? [{ provide: MediaUrlSigner, useValue: opts.signer }]
+          : []),
       ],
     }).compile();
     return moduleRef.get(ReportsService);
@@ -1838,13 +2068,31 @@ describe('ReportsService — item explorer', () => {
       // months ago 40 came in (+400).
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
-          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '-150', value_missing: false, since },
+          {
+            period: monthsAgo(3),
+            closing: '40',
+            qty_in: '40',
+            qty_out: '0',
+            value_net: '400',
+            value_missing: false,
+            since,
+          },
+          {
+            period: monthsAgo(1),
+            closing: '25',
+            qty_in: '0',
+            qty_out: '15',
+            value_net: '-150',
+            value_missing: false,
+            since,
+          },
         ]),
       );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
 
-      expect(r.points.map((p: any) => p.closingValue)).toEqual([400, 400, 250, 250]);
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([
+        400, 400, 250, 250,
+      ]);
       expect(r.points.every((p: any) => p.valueKnown)).toBe(true);
       expect(r.coverage.value).toBe('exact');
       expect(r.coverage.message).toBe('');
@@ -1855,7 +2103,14 @@ describe('ReportsService — item explorer', () => {
       // last-DATED movement's running balance was; the walk cannot miss.
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(0), qty_in: '0', qty_out: '4', value_net: '-40', value_missing: false, since },
+          {
+            period: monthsAgo(0),
+            qty_in: '0',
+            qty_out: '4',
+            value_net: '-40',
+            value_missing: false,
+            since,
+          },
         ]),
       );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 1);
@@ -1867,8 +2122,24 @@ describe('ReportsService — item explorer', () => {
       const horizon = `${monthsAgo(1)}-01`;
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since: horizon },
-          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '-150', value_missing: false, since: horizon },
+          {
+            period: monthsAgo(3),
+            closing: '40',
+            qty_in: '40',
+            qty_out: '0',
+            value_net: '400',
+            value_missing: false,
+            since: horizon,
+          },
+          {
+            period: monthsAgo(1),
+            closing: '25',
+            qty_in: '0',
+            qty_out: '15',
+            value_net: '-150',
+            value_missing: false,
+            since: horizon,
+          },
         ]),
       );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
@@ -1876,7 +2147,12 @@ describe('ReportsService — item explorer', () => {
       // Months −3 and −2 closed before the horizon: the quantity is still
       // exact, the value is not claimed.
       expect(r.points.map((p: any) => p.closingQty)).toEqual([40, 40, 25, 25]);
-      expect(r.points.map((p: any) => p.closingValue)).toEqual([null, null, 250, 250]);
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([
+        null,
+        null,
+        250,
+        250,
+      ]);
       expect(r.coverage.value).toBe('partial');
       expect(r.coverage.costHistoryFrom).toBe(horizon);
       expect(r.coverage.message).toContain(horizon);
@@ -1885,15 +2161,36 @@ describe('ReportsService — item explorer', () => {
     it('stops the walk at a movement that carries no value', async () => {
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(3), closing: '40', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
-          { period: monthsAgo(1), closing: '25', qty_in: '0', qty_out: '15', value_net: '0', value_missing: true, since },
+          {
+            period: monthsAgo(3),
+            closing: '40',
+            qty_in: '40',
+            qty_out: '0',
+            value_net: '400',
+            value_missing: false,
+            since,
+          },
+          {
+            period: monthsAgo(1),
+            closing: '25',
+            qty_in: '0',
+            qty_out: '15',
+            value_net: '0',
+            value_missing: true,
+            since,
+          },
         ]),
       );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
 
       // Everything before the unvalued movement would be off by whatever it
       // moved, so none of it is claimed.
-      expect(r.points.map((p: any) => p.valueKnown)).toEqual([false, false, true, true]);
+      expect(r.points.map((p: any) => p.valueKnown)).toEqual([
+        false,
+        false,
+        true,
+        true,
+      ]);
       expect(r.points[0].closingValue).toBeNull();
     });
 
@@ -1904,16 +2201,36 @@ describe('ReportsService — item explorer', () => {
       // rather than borrowing a running balance typed in a different order.
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(3), closing: '32', qty_in: '0', qty_out: '8', value_net: '-80', value_missing: false, since },
-          { period: monthsAgo(1), closing: '32', qty_in: '40', qty_out: '0', value_net: '400', value_missing: false, since },
+          {
+            period: monthsAgo(3),
+            closing: '32',
+            qty_in: '0',
+            qty_out: '8',
+            value_net: '-80',
+            value_missing: false,
+            since,
+          },
+          {
+            period: monthsAgo(1),
+            closing: '32',
+            qty_in: '40',
+            qty_out: '0',
+            value_net: '400',
+            value_missing: false,
+            since,
+          },
         ]),
       );
       // 32 on hand at 10 = 320 today.
-      (svc as any).itemRepo.find = jest.fn(async () => [{ ...ITEM, quantityOnHand: '32' }]);
+      (svc as any).itemRepo.find = jest.fn(async () => [
+        { ...ITEM, quantityOnHand: '32' },
+      ]);
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 4);
 
       expect(r.points.map((p: any) => p.closingQty)).toEqual([-8, -8, 32, 32]);
-      expect(r.points.map((p: any) => p.closingValue)).toEqual([-80, -80, 320, 320]);
+      expect(r.points.map((p: any) => p.closingValue)).toEqual([
+        -80, -80, 320, 320,
+      ]);
       expect(r.coverage.value).toBe('exact');
       expect(r.coverage.message).toMatch(/below zero at the end of/);
     });
@@ -1921,7 +2238,15 @@ describe('ReportsService — item explorer', () => {
     it('declines every value when the company has no horizon at all', async () => {
       const svc = await makeItemService(
         jest.fn(async () => [
-          { period: monthsAgo(0), closing: '10', qty_in: '10', qty_out: '0', value_net: '100', value_missing: false, since: null },
+          {
+            period: monthsAgo(0),
+            closing: '10',
+            qty_in: '10',
+            qty_out: '0',
+            value_net: '100',
+            value_missing: false,
+            since: null,
+          },
         ]),
       );
       const r: any = await svc.inventoryItemHistory('c1', 'i1', 2);
@@ -1946,26 +2271,90 @@ describe('ReportsService — item explorer', () => {
   });
 
   describe('itemPerformance — facts and customers', () => {
-    const MONTH = { period: monthsAgo(0), units: '6', revenue: '600', cogs: '360', est_cogs: '0', cost_missing: false };
+    const MONTH = {
+      period: monthsAgo(0),
+      units: '6',
+      revenue: '600',
+      cogs: '360',
+      est_cogs: '0',
+      cost_missing: false,
+    };
     const CUSTOMERS = [
-      { customerId: 'k1', customerName: 'Acme Ltd', units: '3', revenue: '300', cogs: '180' },
-      { customerId: 'k2', customerName: 'Beta', units: '1', revenue: '100', cogs: '60' },
-      { customerId: 'k3', customerName: 'Gamma', units: '1', revenue: '80', cogs: '60' },
-      { customerId: 'k4', customerName: 'Delta', units: '0.5', revenue: '60', cogs: '30' },
-      { customerId: 'k5', customerName: 'Epsilon', units: '0.3', revenue: '40', cogs: '20' },
-      { customerId: 'k6', customerName: '', units: '0.2', revenue: '20', cogs: '10' },
+      {
+        customerId: 'k1',
+        customerName: 'Acme Ltd',
+        units: '3',
+        revenue: '300',
+        cogs: '180',
+      },
+      {
+        customerId: 'k2',
+        customerName: 'Beta',
+        units: '1',
+        revenue: '100',
+        cogs: '60',
+      },
+      {
+        customerId: 'k3',
+        customerName: 'Gamma',
+        units: '1',
+        revenue: '80',
+        cogs: '60',
+      },
+      {
+        customerId: 'k4',
+        customerName: 'Delta',
+        units: '0.5',
+        revenue: '60',
+        cogs: '30',
+      },
+      {
+        customerId: 'k5',
+        customerName: 'Epsilon',
+        units: '0.3',
+        revenue: '40',
+        cogs: '20',
+      },
+      {
+        customerId: 'k6',
+        customerName: '',
+        units: '0.2',
+        revenue: '20',
+        cogs: '10',
+      },
     ];
 
     // The same lines as MONTH, by document type: 500 + 160 − 60 = 600.
     const CHANNELS = [
-      { docType: 'invoice', documents: 4, units: '5', revenue: '500', cogs: '300' },
-      { docType: 'delivery', documents: 1, units: '2', revenue: '160', cogs: '90' },
-      { docType: 'credit_memo', documents: 1, units: '-1', revenue: '-60', cogs: '-30' },
+      {
+        docType: 'invoice',
+        documents: 4,
+        units: '5',
+        revenue: '500',
+        cogs: '300',
+      },
+      {
+        docType: 'delivery',
+        documents: 1,
+        units: '2',
+        revenue: '160',
+        cogs: '90',
+      },
+      {
+        docType: 'credit_memo',
+        documents: 1,
+        units: '-1',
+        revenue: '-60',
+        cogs: '-30',
+      },
     ];
     // Stock last went out a month ago: not dead stock.
     const LAST_OUT = `${monthsAgo(1)}-15`;
 
-    const makeQuery = (lastOut: string | null = LAST_OUT, channels: unknown[] = CHANNELS) =>
+    const makeQuery = (
+      lastOut: string | null = LAST_OUT,
+      channels: unknown[] = CHANNELS,
+    ) =>
       routed([
         [/GROUP BY period\s/, [MONTH]],
         [/"customerName"/, CUSTOMERS],
@@ -1977,7 +2366,12 @@ describe('ReportsService — item explorer', () => {
     it('states the item as it stands today', async () => {
       const svc = await makeItemService(makeQuery());
       const start = `${monthsAgo(0)}-01`;
-      const r: any = await svc.itemPerformance('c1', 'i1', start, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        start,
+        businessToday(),
+      );
 
       const cover = daysOfCover(25, 6, start, businessToday(), businessToday());
       expect(r.item).toEqual({
@@ -2008,38 +2402,85 @@ describe('ReportsService — item explorer', () => {
 
     it('signs the item photo like the inventory list does', async () => {
       const urlsFor = jest.fn((id: string | null) => ({
-        imageUrl: id ? `https://api.test/media/item-images/${id}/display.jpg?sig=x` : null,
-        thumbnailUrl: id ? `https://api.test/media/item-images/${id}/thumb.jpg?sig=x` : null,
+        imageUrl: id
+          ? `https://api.test/media/item-images/${id}/display.jpg?sig=x`
+          : null,
+        thumbnailUrl: id
+          ? `https://api.test/media/item-images/${id}/thumb.jpg?sig=x`
+          : null,
       }));
-      const svc = await makeItemService(makeQuery(), true, { item: { imageId: 'img9' }, signer: { urlsFor } as never });
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const svc = await makeItemService(makeQuery(), true, {
+        item: { imageId: 'img9' },
+        signer: { urlsFor } as never,
+      });
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
 
       expect(urlsFor).toHaveBeenCalledWith('img9');
-      expect(r.item.imageUrl).toBe('https://api.test/media/item-images/img9/display.jpg?sig=x');
-      expect(r.item.thumbnailUrl).toBe('https://api.test/media/item-images/img9/thumb.jpg?sig=x');
+      expect(r.item.imageUrl).toBe(
+        'https://api.test/media/item-images/img9/display.jpg?sig=x',
+      );
+      expect(r.item.thumbnailUrl).toBe(
+        'https://api.test/media/item-images/img9/thumb.jpg?sig=x',
+      );
     });
 
     it('calls stock with nothing ever sent out dead stock, as the Health tab does', async () => {
       const query = makeQuery(null);
       const svc = await makeItemService(query);
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
 
       expect(r.item.deadStock).toBe(true);
       expect(r.item.lastOutboundDate).toBeNull();
       // By the Health tab's outbound rule: sales and deliveries going out.
-      const stockSql = query.mock.calls.find(([sql]) => /AS last_out/.test(sql))![0];
+      const stockSql = query.mock.calls.find(([sql]) =>
+        /AS last_out/.test(sql),
+      )![0];
       expect(stockSql).toMatch(/m\.type IN \('sale', 'delivery'\)/);
     });
 
     it('splits the sales by channel, and the channels add up to the totals', async () => {
       const svc = await makeItemService(makeQuery());
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
 
       expect(r.channels).toEqual([
-        { key: 'invoice', unitsSold: 5, revenue: 500, grossProfit: 200, documents: 4, sharePct: 75.76 },
-        { key: 'delivery', unitsSold: 2, revenue: 160, grossProfit: 70, documents: 1, sharePct: 24.24 },
+        {
+          key: 'invoice',
+          unitsSold: 5,
+          revenue: 500,
+          grossProfit: 200,
+          documents: 4,
+          sharePct: 75.76,
+        },
+        {
+          key: 'delivery',
+          unitsSold: 2,
+          revenue: 160,
+          grossProfit: 70,
+          documents: 1,
+          sharePct: 24.24,
+        },
       ]);
-      expect(r.returns).toEqual({ unitsSold: -1, revenue: -60, grossProfit: -30, documents: 1 });
+      expect(r.returns).toEqual({
+        unitsSold: -1,
+        revenue: -60,
+        grossProfit: -30,
+        documents: 1,
+      });
       const sum = (k: 'unitsSold' | 'revenue') =>
         r.channels.reduce((t: number, c: any) => t + c[k], 0) + r.returns[k];
       expect(sum('revenue')).toBe(r.totals.revenue);
@@ -2053,7 +2494,8 @@ describe('ReportsService — item explorer', () => {
       await svc.itemPerformance('c1', 'i1', '2001-01-01', businessToday());
 
       const firstPoint = `${monthsAgo(59)}-01`;
-      const paramsOf = (re: RegExp) => query.mock.calls.find(([sql]) => re.test(sql))![1] as unknown[];
+      const paramsOf = (re: RegExp) =>
+        query.mock.calls.find(([sql]) => re.test(sql))![1] as unknown[];
       expect(paramsOf(/GROUP BY period\s/)[1]).toBe('2001-01-01');
       expect(paramsOf(/"customerName"/)[1]).toBe(firstPoint);
       expect(paramsOf(/GROUP BY l\.doc_type/)[1]).toBe(firstPoint);
@@ -2061,14 +2503,24 @@ describe('ReportsService — item explorer', () => {
 
     it('has no channels and no returns for an item that did not sell', async () => {
       const svc = await makeItemService(makeQuery(LAST_OUT, []));
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
       expect(r.channels).toEqual([]);
       expect(r.returns).toBeNull();
     });
 
     it('names the top five customers and folds the rest', async () => {
       const svc = await makeItemService(makeQuery());
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
 
       expect(r.customers.map((c: any) => c.customerName)).toEqual([
         'Acme Ltd',
@@ -2077,20 +2529,51 @@ describe('ReportsService — item explorer', () => {
         'Delta',
         'Epsilon',
       ]);
-      expect(r.customers[0]).toMatchObject({ unitsSold: 3, revenue: 300, grossProfit: 120, sharePct: 50 });
-      expect(r.otherCustomers).toEqual({ count: 1, unitsSold: 0.2, revenue: 20, grossProfit: 10, sharePct: 3.33 });
+      expect(r.customers[0]).toMatchObject({
+        unitsSold: 3,
+        revenue: 300,
+        grossProfit: 120,
+        sharePct: 50,
+      });
+      expect(r.otherCustomers).toEqual({
+        count: 1,
+        unitsSold: 0.2,
+        revenue: 20,
+        grossProfit: 10,
+        sharePct: 3.33,
+      });
     });
 
     it('gives a customer who returned more than they bought no share', async () => {
       const query = routed([
         [/GROUP BY period\s/, [MONTH]],
-        [/"customerName"/, [
-          { customerId: 'k1', customerName: 'Acme Ltd', units: '7', revenue: '700', cogs: '420' },
-          { customerId: 'k2', customerName: 'Beta', units: '-1', revenue: '-100', cogs: '-60' },
-        ]],
+        [
+          /"customerName"/,
+          [
+            {
+              customerId: 'k1',
+              customerName: 'Acme Ltd',
+              units: '7',
+              revenue: '700',
+              cogs: '420',
+            },
+            {
+              customerId: 'k2',
+              customerName: 'Beta',
+              units: '-1',
+              revenue: '-100',
+              cogs: '-60',
+            },
+          ],
+        ],
       ]);
       const svc = await makeItemService(query);
-      const r: any = await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      const r: any = await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
       expect(r.customers.map((c: any) => c.sharePct)).toEqual([116.67, null]);
       expect(r.otherCustomers.sharePct).toBeNull();
     });
@@ -2098,18 +2581,27 @@ describe('ReportsService — item explorer', () => {
     it('asks for revenue net of the invoice discount', async () => {
       const query = makeQuery();
       const svc = await makeItemService(query);
-      await svc.itemPerformance('c1', 'i1', `${monthsAgo(0)}-01`, businessToday());
+      await svc.itemPerformance(
+        'c1',
+        'i1',
+        `${monthsAgo(0)}-01`,
+        businessToday(),
+      );
 
       // The ledger credits 4000 with subtotal − discount; a line that ignored
       // the discount would overstate every item on a discounted invoice.
-      const monthSql = query.mock.calls.find(([sql]) => /GROUP BY period\s/.test(sql))![0];
+      const monthSql = query.mock.calls.find(([sql]) =>
+        /GROUP BY period\s/.test(sql),
+      )![0];
       expect(monthSql).toMatch(/discount_amount/);
       expect(monthSql).toMatch(/i\.subtotal::numeric > 0/);
     });
 
     it("404s on an item that is not this company's", async () => {
       const svc = await makeItemService(makeQuery(), false);
-      await expect(svc.itemPerformance('c1', 'nope', '2026-01-01', '2026-01-31')).rejects.toMatchObject({
+      await expect(
+        svc.itemPerformance('c1', 'nope', '2026-01-01', '2026-01-31'),
+      ).rejects.toMatchObject({
         response: { code: 'ITEM_NOT_FOUND' },
       });
     });
@@ -2117,20 +2609,67 @@ describe('ReportsService — item explorer', () => {
 
   describe('itemSalesEntries', () => {
     const ROWS = [
-      { date: '2026-09-20', docType: 'credit_memo', docId: 'cm1', docNumber: 'CM-0003', customerId: 'k1', customerName: 'Acme Ltd', lineId: 'l3', units: '-1', revenue: '-100', cogs: '-60', costBasis: 'exact', costMissing: false },
-      { date: '2026-09-18', docType: 'invoice', docId: 'in2', docNumber: 'INV-0009', customerId: 'k1', customerName: 'Acme Ltd', lineId: 'l2', units: '2', revenue: '180', cogs: '120', costBasis: 'posted', costMissing: false },
-      { date: '2026-09-02', docType: 'delivery', docId: 'in1', docNumber: 'INV-0007', customerId: null, customerName: '', lineId: 'l1', units: '3', revenue: '300', cogs: '180', costBasis: 'delivery', costMissing: false },
+      {
+        date: '2026-09-20',
+        docType: 'credit_memo',
+        docId: 'cm1',
+        docNumber: 'CM-0003',
+        customerId: 'k1',
+        customerName: 'Acme Ltd',
+        lineId: 'l3',
+        units: '-1',
+        revenue: '-100',
+        cogs: '-60',
+        costBasis: 'exact',
+        costMissing: false,
+      },
+      {
+        date: '2026-09-18',
+        docType: 'invoice',
+        docId: 'in2',
+        docNumber: 'INV-0009',
+        customerId: 'k1',
+        customerName: 'Acme Ltd',
+        lineId: 'l2',
+        units: '2',
+        revenue: '180',
+        cogs: '120',
+        costBasis: 'posted',
+        costMissing: false,
+      },
+      {
+        date: '2026-09-02',
+        docType: 'delivery',
+        docId: 'in1',
+        docNumber: 'INV-0007',
+        customerId: null,
+        customerName: '',
+        lineId: 'l1',
+        units: '3',
+        revenue: '300',
+        cogs: '180',
+        costBasis: 'delivery',
+        costMissing: false,
+      },
     ];
 
     const makeQuery = () =>
       routed([
-        [/COUNT\(\*\)::int AS total/, [{ total: 42, units: '4', revenue: '380', cogs: '240' }]],
+        [
+          /COUNT\(\*\)::int AS total/,
+          [{ total: 42, units: '4', revenue: '380', cogs: '240' }],
+        ],
         [/LIMIT \$5 OFFSET \$6/, ROWS],
       ]);
 
     it('lists each line with its document, price and margin', async () => {
       const svc = await makeItemService(makeQuery());
-      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30');
+      const r: any = await svc.itemSalesEntries(
+        'c1',
+        'i1',
+        '2026-09-01',
+        '2026-09-30',
+      );
 
       expect(r.entries[1]).toMatchObject({
         docType: 'invoice',
@@ -2144,16 +2683,32 @@ describe('ReportsService — item explorer', () => {
       });
       // A return reads at the price it was credited at, and has no margin of
       // its own to speak of.
-      expect(r.entries[0]).toMatchObject({ units: -1, unitPrice: 100, marginPct: null });
+      expect(r.entries[0]).toMatchObject({
+        units: -1,
+        unitPrice: 100,
+        marginPct: null,
+      });
       expect(r.entries[2].customerName).toBe('(no customer)');
-      expect(r.totals).toEqual({ unitsSold: 4, revenue: 380, cogs: 240, grossProfit: 140 });
+      expect(r.totals).toEqual({
+        unitsSold: 4,
+        revenue: 380,
+        cogs: 240,
+        grossProfit: 140,
+      });
       expect(r.total).toBe(42);
     });
 
     it('pages by LIMIT/OFFSET and clamps an absurd page size', async () => {
       const query = makeQuery();
       const svc = await makeItemService(query);
-      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30', 3, 5000);
+      const r: any = await svc.itemSalesEntries(
+        'c1',
+        'i1',
+        '2026-09-01',
+        '2026-09-30',
+        3,
+        5000,
+      );
 
       expect(r.limit).toBe(100);
       expect(r.page).toBe(3);
@@ -2165,7 +2720,12 @@ describe('ReportsService — item explorer', () => {
       // The response envelope lifts a `data` key and drops every sibling —
       // which is how the P&L drill-down once shipped empty.
       const svc = await makeItemService(makeQuery());
-      const r: any = await svc.itemSalesEntries('c1', 'i1', '2026-09-01', '2026-09-30');
+      const r: any = await svc.itemSalesEntries(
+        'c1',
+        'i1',
+        '2026-09-01',
+        '2026-09-30',
+      );
       expect(r).not.toHaveProperty('data');
       expect(Array.isArray(r.entries)).toBe(true);
     });
@@ -2174,14 +2734,33 @@ describe('ReportsService — item explorer', () => {
   describe('inventoryPerformance — ledger and last sale', () => {
     it('reports the control account beside the stock, and when each item last sold', async () => {
       const query = routed([
-        [/WITH sales AS/, [
-          { itemId: 'i1', itemName: 'Oil', sku: 'O', category: 'Lubricants', units: '0', revenue: '0', cogs: '0', est_cogs: '0', cost_missing: false, qtyOnHand: '25', unitCost: '10' },
-        ]],
+        [
+          /WITH sales AS/,
+          [
+            {
+              itemId: 'i1',
+              itemName: 'Oil',
+              sku: 'O',
+              category: 'Lubricants',
+              units: '0',
+              revenue: '0',
+              cogs: '0',
+              est_cogs: '0',
+              cost_missing: false,
+              qtyOnHand: '25',
+              unitCost: '10',
+            },
+          ],
+        ],
         [/AS "lastSold"/, [{ itemId: 'i1', lastSold: '2026-03-14' }]],
         [/account_number = '1200'/, [{ value: '245.5' }]],
       ]);
       const svc = await makeItemService(query);
-      const r: any = await svc.inventoryPerformance('c1', '2026-09-01', '2026-09-30');
+      const r: any = await svc.inventoryPerformance(
+        'c1',
+        '2026-09-01',
+        '2026-09-30',
+      );
 
       expect(r.totals.stockValue).toBe(250);
       expect(r.totals.ledgerValue).toBe(245.5);

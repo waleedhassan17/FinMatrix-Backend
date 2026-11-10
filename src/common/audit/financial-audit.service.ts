@@ -26,18 +26,15 @@ export class FinancialAuditService {
     private readonly repo: Repository<AuditTrailEntry>,
   ) {}
 
-  async list(
-    companyId: string,
-    query: ListAuditQuery,
-    page = 1,
-    limit = 50,
-  ) {
+  async list(companyId: string, query: ListAuditQuery, page = 1, limit = 50) {
     const qb = this.repo
       .createQueryBuilder('a')
       .where('a.companyId = :companyId', { companyId });
 
-    if (query.module) qb.andWhere('a.module = :module', { module: query.module });
-    if (query.action) qb.andWhere('a.action = :action', { action: query.action });
+    if (query.module)
+      qb.andWhere('a.module = :module', { module: query.module });
+    if (query.action)
+      qb.andWhere('a.action = :action', { action: query.action });
     if (query.resourceType) {
       qb.andWhere('a.resourceType = :rt', { rt: query.resourceType });
     }
@@ -63,7 +60,11 @@ export class FinancialAuditService {
   }
 
   /** Full change history for one document, oldest first. */
-  async forResource(companyId: string, resourceType: string, resourceId: string) {
+  async forResource(
+    companyId: string,
+    resourceType: string,
+    resourceId: string,
+  ) {
     return this.repo.find({
       where: { companyId, resourceType, resourceId },
       order: { createdAt: 'ASC' },

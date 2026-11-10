@@ -32,25 +32,61 @@ export class DeliveryItem {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   quantity!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'ordered_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'ordered_qty',
+  })
   orderedQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'delivered_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'delivered_qty',
+  })
   deliveredQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'returned_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'returned_qty',
+  })
   returnedQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_price' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_price',
+  })
   unitPrice!: string;
 
   // Weighted-average cost frozen when the stock left the shelf (Stage 1), so
   // the Stage-3 relief of Goods in Transit matches the Stage-1 debit exactly
   // even if the item's average cost drifts in between.
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_cost' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_cost',
+  })
   unitCost!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
   @ManyToOne(() => Delivery, (d) => d.items, { onDelete: 'CASCADE' })

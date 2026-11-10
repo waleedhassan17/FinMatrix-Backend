@@ -70,7 +70,9 @@ async function run() {
     where: { userId: admin.id, companyId: company.id },
   });
   if (!membership) {
-    await ucRepo.save(ucRepo.create({ userId: admin.id, companyId: company.id, role: 'admin' }));
+    await ucRepo.save(
+      ucRepo.create({ userId: admin.id, companyId: company.id, role: 'admin' }),
+    );
   }
   if (!admin.defaultCompanyId) {
     admin.defaultCompanyId = company.id;
@@ -91,11 +93,13 @@ async function run() {
     [company.id, PLAN, start, expiry],
   );
 
-  console.log(`OK: ${NAME} (${company.id}) admin ${EMAIL} / ${PASSWORD} — large_org, approved, active ${PLAN}`);
+  console.log(
+    `OK: ${NAME} (${company.id}) admin ${EMAIL} / ${PASSWORD} — large_org, approved, active ${PLAN}`,
+  );
   await app.close();
 }
 
-run().catch(err => {
+run().catch((err) => {
   console.error(err);
   process.exit(1);
 });

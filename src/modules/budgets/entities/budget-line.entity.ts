@@ -1,4 +1,11 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { Budget } from './budget.entity';
 
 @Entity('budget_lines')
@@ -17,7 +24,13 @@ export class BudgetLine {
   @Column({ type: 'jsonb', name: 'monthly_amounts' })
   monthlyAmounts!: number[];
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'annual_total' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'annual_total',
+  })
   annualTotal!: string;
 
   @ManyToOne(() => Budget, (b) => b.lines, { onDelete: 'CASCADE' })

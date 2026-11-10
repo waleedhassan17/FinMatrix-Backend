@@ -2,7 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ShadowInventorySnapshot } from './entities/shadow-inventory-snapshot.entity';
-import { CreateSnapshotDto, UpdateSnapshotDto } from './dto/shadow-inventory.dto';
+import {
+  CreateSnapshotDto,
+  UpdateSnapshotDto,
+} from './dto/shadow-inventory.dto';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
@@ -12,8 +15,15 @@ export class ShadowInventoryService {
     private readonly repo: Repository<ShadowInventorySnapshot>,
   ) {}
 
-  async list(companyId: string, personnelId: string | undefined, page: number, limit: number) {
-    const qb = this.repo.createQueryBuilder('s').where('s.companyId = :cid', { cid: companyId });
+  async list(
+    companyId: string,
+    personnelId: string | undefined,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.repo
+      .createQueryBuilder('s')
+      .where('s.companyId = :cid', { cid: companyId });
     if (personnelId) qb.andWhere('s.personnelId = :pid', { pid: personnelId });
     qb.orderBy('s.createdAt', 'DESC').addOrderBy('s.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -39,14 +49,20 @@ export class ShadowInventoryService {
   }
 
   async create(companyId: string, dto: CreateSnapshotDto) {
-    const snap = this.repo.create({ ...dto, companyId, syncStatus: 'synced', lastSyncAt: new Date() });
+    const snap = this.repo.create({
+      ...dto,
+      companyId,
+      syncStatus: 'synced',
+      lastSyncAt: new Date(),
+    });
     return this.repo.save(snap);
   }
 
   async update(companyId: string, id: string, dto: UpdateSnapshotDto) {
     const s = await this.getById(companyId, id);
     Object.assign(s, dto);
-    if (dto.currentQty !== undefined || dto.syncStatus !== undefined) s.lastSyncAt = new Date();
+    if (dto.currentQty !== undefined || dto.syncStatus !== undefined)
+      s.lastSyncAt = new Date();
     return this.repo.save(s);
   }
 

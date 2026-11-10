@@ -10,8 +10,16 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     expect(f.creditMemos).toBe(true);
     expect(f.bankReconciliation).toBe(true); // core feature, all tiers (phase3.md)
     for (const k of [
-      'inventory', 'purchaseOrders', 'salesOrders', 'agencies', 'delivery',
-      'payroll', 'budgets', 'auditLog', 'periodClose', 'whatsappConnect',
+      'inventory',
+      'purchaseOrders',
+      'salesOrders',
+      'agencies',
+      'delivery',
+      'payroll',
+      'budgets',
+      'auditLog',
+      'periodClose',
+      'whatsappConnect',
     ] as const) {
       expect(f[k]).toBe(false);
     }
@@ -22,14 +30,25 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
     // the approval flow that makes a staff account safe is core accounting
     // behaviour. Asserted across all three types so re-gating one by accident
     // fails here rather than in production.
-    for (const companyType of ['small_business', 'large_org', 'warehouse'] as const) {
+    for (const companyType of [
+      'small_business',
+      'large_org',
+      'warehouse',
+    ] as const) {
       expect(computeFeatures({ ...base, companyType }).multiUser).toBe(true);
     }
   });
 
   it('large_org: payroll/budgets/multiUser/auditLog/periodClose/bankRec on; inventory, delivery & PO/GRNI NEVER', () => {
     const f = computeFeatures({ ...base, companyType: 'large_org' });
-    for (const k of ['payroll', 'budgets', 'multiUser', 'auditLog', 'periodClose', 'bankReconciliation'] as const) {
+    for (const k of [
+      'payroll',
+      'budgets',
+      'multiUser',
+      'auditLog',
+      'periodClose',
+      'bankReconciliation',
+    ] as const) {
       expect(f[k]).toBe(true);
     }
     expect(f.inventory).toBe(false); // warehouse-only
@@ -38,13 +57,24 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
   });
 
   it('whatsappConnect: off for small_business, on for large_org and warehouse', () => {
-    expect(computeFeatures({ ...base, companyType: 'small_business' }).whatsappConnect).toBe(false);
-    expect(computeFeatures({ ...base, companyType: 'large_org' }).whatsappConnect).toBe(true);
-    expect(computeFeatures({ ...base, companyType: 'warehouse' }).whatsappConnect).toBe(true);
+    expect(
+      computeFeatures({ ...base, companyType: 'small_business' })
+        .whatsappConnect,
+    ).toBe(false);
+    expect(
+      computeFeatures({ ...base, companyType: 'large_org' }).whatsappConnect,
+    ).toBe(true);
+    expect(
+      computeFeatures({ ...base, companyType: 'warehouse' }).whatsappConnect,
+    ).toBe(true);
   });
 
   it('large_org: the per-company inventory toggle no longer unlocks anything (warehouse-only)', () => {
-    const f = computeFeatures({ companyType: 'large_org', inventoryEnabled: true, allFeaturesUnlocked: false });
+    const f = computeFeatures({
+      companyType: 'large_org',
+      inventoryEnabled: true,
+      allFeaturesUnlocked: false,
+    });
     expect(f.inventory).toBe(false);
     expect(f.delivery).toBe(false);
     expect(f.purchaseOrders).toBe(false);
@@ -57,19 +87,31 @@ describe('FEATURE_MAP / computeFeatures (FinMatrix.md THE MODEL)', () => {
   });
 
   it('KILL SWITCH beats the type check (checked first, SAFETY §4)', () => {
-    const f = computeFeatures({ companyType: 'small_business', inventoryEnabled: false, allFeaturesUnlocked: true });
+    const f = computeFeatures({
+      companyType: 'small_business',
+      inventoryEnabled: false,
+      allFeaturesUnlocked: true,
+    });
     for (const k of FEATURE_KEYS) expect(f[k]).toBe(true);
   });
 
   it('legacy company with no type is fully unlocked (never lock out existing customers)', () => {
-    const f = computeFeatures({ companyType: null, inventoryEnabled: false, allFeaturesUnlocked: false });
+    const f = computeFeatures({
+      companyType: null,
+      inventoryEnabled: false,
+      allFeaturesUnlocked: false,
+    });
     for (const k of FEATURE_KEYS) expect(f[k]).toBe(true);
   });
 
   it('global FEATURES_DISABLED env is an app-wide kill switch', () => {
     process.env.FEATURES_DISABLED = 'true';
     try {
-      const f = computeFeatures({ companyType: 'small_business', inventoryEnabled: false, allFeaturesUnlocked: false });
+      const f = computeFeatures({
+        companyType: 'small_business',
+        inventoryEnabled: false,
+        allFeaturesUnlocked: false,
+      });
       for (const k of FEATURE_KEYS) expect(f[k]).toBe(true);
     } finally {
       delete process.env.FEATURES_DISABLED;

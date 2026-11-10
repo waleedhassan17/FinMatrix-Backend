@@ -17,7 +17,8 @@ export class InvoicePdfService {
     doc.moveDown();
 
     doc.fontSize(20).text('INVOICE', { align: 'right' });
-    doc.fontSize(10)
+    doc
+      .fontSize(10)
       .text(`# ${invoice.invoiceNumber}`, { align: 'right' })
       .text(`Date: ${invoice.invoiceDate}`, { align: 'right' })
       .text(`Due: ${invoice.dueDate}`, { align: 'right' })
@@ -45,7 +46,10 @@ export class InvoicePdfService {
     doc.text('Unit Price', 355, tableTop, { width: 80, align: 'right' });
     doc.text('Tax %', 440, tableTop, { width: 40, align: 'right' });
     doc.text('Amount', 485, tableTop, { width: 65, align: 'right' });
-    doc.moveTo(50, tableTop + 15).lineTo(550, tableTop + 15).stroke();
+    doc
+      .moveTo(50, tableTop + 15)
+      .lineTo(550, tableTop + 15)
+      .stroke();
 
     let y = tableTop + 25;
     for (const line of invoice.lines ?? []) {
@@ -66,7 +70,10 @@ export class InvoicePdfService {
     y += 16;
     if (parseFloat(invoice.discountAmount) > 0) {
       doc.text('Discount:', 350, y, { width: 130, align: 'right' });
-      doc.text(`-${invoice.discountAmount}`, 485, y, { width: 65, align: 'right' });
+      doc.text(`-${invoice.discountAmount}`, 485, y, {
+        width: 65,
+        align: 'right',
+      });
       y += 16;
     }
     doc.text('Tax:', 350, y, { width: 130, align: 'right' });
@@ -78,7 +85,9 @@ export class InvoicePdfService {
     doc.fontSize(10).text('Paid:', 350, y, { width: 130, align: 'right' });
     doc.text(invoice.amountPaid, 485, y, { width: 65, align: 'right' });
     y += 16;
-    doc.fontSize(12).text('Balance Due:', 350, y, { width: 130, align: 'right' });
+    doc
+      .fontSize(12)
+      .text('Balance Due:', 350, y, { width: 130, align: 'right' });
     doc.text(invoice.balance, 485, y, { width: 65, align: 'right' });
 
     if (invoice.notes) {

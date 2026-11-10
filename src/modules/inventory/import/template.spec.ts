@@ -45,7 +45,10 @@ describe('buildItemsWorkbook', () => {
     await wb.xlsx.load((await buildItemsWorkbook()) as unknown as ArrayBuffer);
     expect(wb.worksheets.map((s) => s.name)).toEqual(['Items', 'Instructions']);
     const sheet = wb.getWorksheet('Items')!;
-    expect(sheet.getRow(1).values).toEqual([undefined, ...IMPORT_COLUMNS.map((c) => c.header)]);
+    expect(sheet.getRow(1).values).toEqual([
+      undefined,
+      ...IMPORT_COLUMNS.map((c) => c.header),
+    ]);
     // No example row: one there would be imported as a real item.
     expect(sheet.actualRowCount).toBe(1);
   });
@@ -60,7 +63,9 @@ describe('buildItemsWorkbook', () => {
       hasMovements: i.quantityOnHand !== '0.0000',
     }));
     const plan = planImport(sheet.rows, existing, { role: 'admin' });
-    expect(plan.rows.map((r) => [r.sku, r.action, r.errors, r.warnings])).toEqual([
+    expect(
+      plan.rows.map((r) => [r.sku, r.action, r.errors, r.warnings]),
+    ).toEqual([
       ['00123', 'unchanged', [], []],
       ['SOF-3', 'unchanged', [], []],
     ]);
@@ -68,6 +73,11 @@ describe('buildItemsWorkbook', () => {
 
   it('never exports the on-hand quantity as an opening quantity', async () => {
     const sheet = await readImportFile(await buildItemsWorkbook(items));
-    expect(sheet.rows.every((r) => r.cells.openingQuantity == null || r.cells.openingQuantity === '')).toBe(true);
+    expect(
+      sheet.rows.every(
+        (r) =>
+          r.cells.openingQuantity == null || r.cells.openingQuantity === '',
+      ),
+    ).toBe(true);
   });
 });

@@ -20,10 +20,22 @@ export class PhysicalCountLine {
   @Column({ type: 'uuid', name: 'item_id' })
   itemId!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'system_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'system_qty',
+  })
   systemQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'counted_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'counted_qty',
+  })
   countedQty!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })

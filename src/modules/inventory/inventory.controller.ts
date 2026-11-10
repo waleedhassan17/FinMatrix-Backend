@@ -16,11 +16,20 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { isUUID } from 'class-validator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { InventoryService } from './inventory.service';
@@ -36,11 +45,15 @@ import {
 } from './dto/inventory.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 import { ApprovalRequestsService } from '../approvals/approval-requests.service';
-import { InventoryImagesService, UploadedImageFile } from './images/inventory-images.service';
+import {
+  InventoryImagesService,
+  UploadedImageFile,
+} from './images/inventory-images.service';
 import { ItemImageUrlsInterceptor } from './images/item-image-urls.interceptor';
 
 const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_IMAGE_BYTES = Number(process.env.ITEM_IMAGE_MAX_SIZE_MB ?? 10) * 1024 * 1024;
+const MAX_IMAGE_BYTES =
+  Number(process.env.ITEM_IMAGE_MAX_SIZE_MB ?? 10) * 1024 * 1024;
 /** One batch of photo URLs — a quotation has far fewer lines than this. */
 const MAX_IMAGE_IDS = 200;
 
@@ -106,7 +119,10 @@ export class InventoryController {
    */
   @Post('items/:id/image')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Upload the item photo; returns the item with imageUrl/thumbnailUrl.' })
+  @ApiOperation({
+    summary:
+      'Upload the item photo; returns the item with imageUrl/thumbnailUrl.',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -140,7 +156,10 @@ export class InventoryController {
     @UploadedFile() file?: UploadedImageFile,
   ) {
     if (!file) {
-      throw new BadRequestException({ code: 'IMAGE_REQUIRED', message: 'Choose a photo to upload.' });
+      throw new BadRequestException({
+        code: 'IMAGE_REQUIRED',
+        message: 'Choose a photo to upload.',
+      });
     }
     return this.images.setImage(companyId, id, user.id, file);
   }
@@ -167,9 +186,21 @@ export class InventoryController {
    */
   @Get('item-images')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: 'Signed photo URLs for up to 200 items (?ids=a,b,c).' })
-  async itemImages(@CurrentCompany() companyId: string, @Query('ids') ids: string | undefined) {
-    const list = [...new Set((ids ?? '').split(',').map((s) => s.trim()).filter(Boolean))];
+  @ApiOperation({
+    summary: 'Signed photo URLs for up to 200 items (?ids=a,b,c).',
+  })
+  async itemImages(
+    @CurrentCompany() companyId: string,
+    @Query('ids') ids: string | undefined,
+  ) {
+    const list = [
+      ...new Set(
+        (ids ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ];
     if (list.length > MAX_IMAGE_IDS || list.some((id) => !isUUID(id))) {
       throw new BadRequestException({
         code: 'INVALID_IDS',

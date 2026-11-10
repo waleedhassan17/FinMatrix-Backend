@@ -106,8 +106,15 @@ async function signin(email: string, password: string): Promise<Res> {
 }
 
 function must<T>(label: string, value: T, res?: Res): T {
-  if (value === undefined || value === null || value === '' || value === false) {
-    const detail = res ? ` (${res.status} ${JSON.stringify(res.body)?.slice(0, 200)})` : '';
+  if (
+    value === undefined ||
+    value === null ||
+    value === '' ||
+    value === false
+  ) {
+    const detail = res
+      ? ` (${res.status} ${JSON.stringify(res.body)?.slice(0, 200)})`
+      : '';
     throw new Error(`provision failed: ${label}${detail}`);
   }
   console.log(`  · ${label}`);
@@ -137,7 +144,11 @@ async function main() {
         role: 'admin',
       },
     });
-    const signupToken = must('admin signed up', data(signup)?.tokens?.accessToken, signup);
+    const signupToken = must(
+      'admin signed up',
+      data(signup)?.tokens?.accessToken,
+      signup,
+    );
     const userId = must('admin user id', data(signup)?.user?.id, signup);
 
     const createCo = await req('POST', '/companies', {
@@ -154,7 +165,9 @@ async function main() {
     // CompanyGuard 403s every business request unless the company is active
     // and the signer's email is verified, and FeatureGuard needs a real plan.
     // None of that is reachable over the API as this user, so set it directly.
-    await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [userId]);
+    await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
+      userId,
+    ]);
     await pg.query(
       `UPDATE companies SET status = 'active', subscription_plan = 'standard',
               subscription_status = 'active' WHERE id = $1`,
@@ -163,7 +176,11 @@ async function main() {
     must('company approved and put on a plan', true);
 
     const relogin = await signin(adminEmail, ADMIN_PASSWORD);
-    const token = must('admin re-signed in with the company live', data(relogin)?.tokens?.accessToken, relogin);
+    const token = must(
+      'admin re-signed in with the company live',
+      data(relogin)?.tokens?.accessToken,
+      relogin,
+    );
     const A = { token, companyId };
 
     // ── Rider ──────────────────────────────────────────────────────────
@@ -180,16 +197,31 @@ async function main() {
         email: `flowrider${RUN}@finmatrix.pk`,
       },
     });
-    must('rider created', data(riderRes)?.userId ?? data(riderRes)?.id, riderRes);
+    must(
+      'rider created',
+      data(riderRes)?.userId ?? data(riderRes)?.id,
+      riderRes,
+    );
     const riderLogin = await signin(riderUsername, RIDER_PASSWORD);
-    must('rider can sign in', data(riderLogin)?.tokens?.accessToken, riderLogin);
+    must(
+      'rider can sign in',
+      data(riderLogin)?.tokens?.accessToken,
+      riderLogin,
+    );
 
     // ── Masters ────────────────────────────────────────────────────────
     const customerRes = await req('POST', '/customers', {
       ...A,
-      json: { name: 'FlowTest Customer', email: `flow.customer.${RUN}@example.test` },
+      json: {
+        name: 'FlowTest Customer',
+        email: `flow.customer.${RUN}@example.test`,
+      },
     });
-    const customerId = must('customer created', data(customerRes)?.id, customerRes);
+    const customerId = must(
+      'customer created',
+      data(customerRes)?.id,
+      customerRes,
+    );
 
     const vendorRes = await req('POST', '/vendors', {
       ...A,
@@ -219,8 +251,18 @@ async function main() {
         },
       });
       const created = data(res);
-      const id = must(`item ${key} (${spec.name}) created`, created?.id ?? created?.item?.id, res);
-      items[key] = { id, name: spec.name, sku: spec.sku, cost: spec.cost, price: spec.price };
+      const id = must(
+        `item ${key} (${spec.name}) created`,
+        created?.id ?? created?.item?.id,
+        res,
+      );
+      items[key] = {
+        id,
+        name: spec.name,
+        sku: spec.sku,
+        cost: spec.cost,
+        price: spec.price,
+      };
     }
 
     // ── Stock both items through a real purchase cycle ─────────────────
@@ -240,9 +282,16 @@ async function main() {
           ],
         },
       });
-      const po = must(`PO for ${key}`, data(poRes)?.id ? data(poRes) : null, poRes);
+      const po = must(
+        `PO for ${key}`,
+        data(poRes)?.id ? data(poRes) : null,
+        poRes,
+      );
 
-      await req('PATCH', `/purchase-orders/${po.id}/status`, { ...A, json: { status: 'sent' } });
+      await req('PATCH', `/purchase-orders/${po.id}/status`, {
+        ...A,
+        json: { status: 'sent' },
+      });
       const recRes = await req('POST', `/purchase-orders/${po.id}/receive`, {
         ...A,
         json: {
@@ -252,20 +301,32 @@ async function main() {
           })),
         },
       });
-      must(`received ${spec.stock} × ${key} @ ${spec.cost}`, recRes.status < 400, recRes);
+      must(
+        `received ${spec.stock} × ${key} @ ${spec.cost}`,
+        recRes.status < 400,
+        recRes,
+      );
 
       // Bill it so GRNI nets to zero before the harness starts. The harness's
       // own supplier-side branch asserts a company-wide GRNI balance of zero,
       // which stock left un-billed here would break.
-      const billRes = await req('POST', `/purchase-orders/${po.id}/create-bill`, {
-        ...A,
-        json: {
-          billNumber: `FT-PROV-${key}-${RUN}`,
-          billDate: TODAY,
-          dueDate: TODAY,
+      const billRes = await req(
+        'POST',
+        `/purchase-orders/${po.id}/create-bill`,
+        {
+          ...A,
+          json: {
+            billNumber: `FT-PROV-${key}-${RUN}`,
+            billDate: TODAY,
+            dueDate: TODAY,
+          },
         },
-      });
-      must(`billed the ${key} receipt (GRNI back to zero)`, billRes.status < 400, billRes);
+      );
+      must(
+        `billed the ${key} receipt (GRNI back to zero)`,
+        billRes.status < 400,
+        billRes,
+      );
     }
 
     // ── Chart of accounts, by number ───────────────────────────────────
@@ -274,7 +335,8 @@ async function main() {
     const list = acctBody?.accounts ?? acctBody?.data ?? acctBody ?? [];
     must('accounts fetched', Array.isArray(list) && list.length > 0, acctRes);
     const accounts: Record<string, { id: string; name: string }> = {};
-    for (const a of list) accounts[a.accountNumber] = { id: a.id, name: a.name };
+    for (const a of list)
+      accounts[a.accountNumber] = { id: a.id, name: a.name };
     must(
       'cash/bank accounts present (the harness pays bills from one)',
       !!(accounts['1010'] || accounts['1000']),

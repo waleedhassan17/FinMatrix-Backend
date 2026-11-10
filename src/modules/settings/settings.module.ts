@@ -9,7 +9,11 @@ import { UsersModule } from '../users/users.module';
 
 @Module({
   // OperationalAuditModule is @Global — no import needed for the audit service.
-  imports: [TypeOrmModule.forFeature([CompanySettings]), CompaniesModule, UsersModule],
+  imports: [
+    TypeOrmModule.forFeature([CompanySettings]),
+    CompaniesModule,
+    UsersModule,
+  ],
   providers: [SettingsService, CompanyUsersService],
   controllers: [SettingsController],
   exports: [SettingsService],

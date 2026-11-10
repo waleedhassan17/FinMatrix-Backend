@@ -87,13 +87,25 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
       `INSERT INTO users (id, email, password_hash, display_name, role, is_active)
        VALUES ($1, $2, $3, $4, $5, true)
        ON CONFLICT DO NOTHING`,
-      [dpUserId, `dp-test-${dpUserId.slice(0, 8)}@test.com`, passwordHash, 'DP Tester', 'delivery'],
+      [
+        dpUserId,
+        `dp-test-${dpUserId.slice(0, 8)}@test.com`,
+        passwordHash,
+        'DP Tester',
+        'delivery',
+      ],
     );
     await ds.query(
       `INSERT INTO users (id, email, password_hash, display_name, role, is_active)
        VALUES ($1, $2, $3, $4, $5, true)
        ON CONFLICT DO NOTHING`,
-      [adminUserId, `admin-test-${adminUserId.slice(0, 8)}@test.com`, passwordHash, 'Admin Tester', 'admin'],
+      [
+        adminUserId,
+        `admin-test-${adminUserId.slice(0, 8)}@test.com`,
+        passwordHash,
+        'Admin Tester',
+        'admin',
+      ],
     );
 
     // UserCompany links
@@ -139,29 +151,59 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
     // Sign in as DP
     const dpRes = await request(app.getHttpServer())
       .post('/api/v1/auth/signin')
-      .send({ email: `dp-test-${dpUserId.slice(0, 8)}@test.com`, password: 'Test1234!' });
+      .send({
+        email: `dp-test-${dpUserId.slice(0, 8)}@test.com`,
+        password: 'Test1234!',
+      });
     dpToken = dpRes.body?.data?.accessToken ?? '';
 
     // Sign in as admin
     const adminRes = await request(app.getHttpServer())
       .post('/api/v1/auth/signin')
-      .send({ email: `admin-test-${adminUserId.slice(0, 8)}@test.com`, password: 'Test1234!' });
+      .send({
+        email: `admin-test-${adminUserId.slice(0, 8)}@test.com`,
+        password: 'Test1234!',
+      });
     adminToken = adminRes.body?.data?.accessToken ?? '';
   }
 
   async function cleanupTestData() {
     // Reverse order to respect FKs
     try {
-      await ds.query(`DELETE FROM notifications WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM inventory_approval_audit_entries WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM inventory_movements WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id = $1)`, [companyId]);
-      await ds.query(`DELETE FROM inventory_update_requests WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM deliveries WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM inventory_items WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM customers WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM user_companies WHERE company_id = $1`, [companyId]);
-      await ds.query(`DELETE FROM users WHERE id IN ($1, $2)`, [dpUserId, adminUserId]);
+      await ds.query(`DELETE FROM notifications WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(
+        `DELETE FROM inventory_approval_audit_entries WHERE company_id = $1`,
+        [companyId],
+      );
+      await ds.query(`DELETE FROM inventory_movements WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(
+        `DELETE FROM inventory_update_request_lines WHERE request_id IN (SELECT id FROM inventory_update_requests WHERE company_id = $1)`,
+        [companyId],
+      );
+      await ds.query(
+        `DELETE FROM inventory_update_requests WHERE company_id = $1`,
+        [companyId],
+      );
+      await ds.query(`DELETE FROM deliveries WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM inventory_items WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM customers WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM user_companies WHERE company_id = $1`, [
+        companyId,
+      ]);
+      await ds.query(`DELETE FROM users WHERE id IN ($1, $2)`, [
+        dpUserId,
+        adminUserId,
+      ]);
       await ds.query(`DELETE FROM companies WHERE id = $1`, [companyId]);
     } catch {
       // Best-effort cleanup; don't fail teardown
@@ -182,9 +224,18 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
         .set('x-company-id', companyId)
         .field('signedBy', 'Muhammad Arif')
         .field('source', 'camera')
-        .field('changes', JSON.stringify([
-          { itemId, itemName: 'AquaPure 500ml', beforeQty: 500, deliveredQty: 48, returnedQty: 2 },
-        ]))
+        .field(
+          'changes',
+          JSON.stringify([
+            {
+              itemId,
+              itemName: 'AquaPure 500ml',
+              beforeQty: 500,
+              deliveredQty: 48,
+              returnedQty: 2,
+            },
+          ]),
+        )
         .expect(400);
 
       expect(res.body.success).toBe(false);
@@ -198,12 +249,24 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
         .post(`/api/v1/deliveries/${deliveryId}/bill-photo`)
         .set('Authorization', `Bearer ${dpToken}`)
         .set('x-company-id', companyId)
-        .attach('photo', fakeJpeg, { filename: 'bill.jpg', contentType: 'image/jpeg' })
+        .attach('photo', fakeJpeg, {
+          filename: 'bill.jpg',
+          contentType: 'image/jpeg',
+        })
         .field('signedBy', 'Muhammad Arif')
         .field('source', 'camera')
-        .field('changes', JSON.stringify([
-          { itemId, itemName: 'AquaPure 500ml', beforeQty: 500, deliveredQty: 48, returnedQty: 2 },
-        ]));
+        .field(
+          'changes',
+          JSON.stringify([
+            {
+              itemId,
+              itemName: 'AquaPure 500ml',
+              beforeQty: 500,
+              deliveredQty: 48,
+              returnedQty: 2,
+            },
+          ]),
+        );
 
       // Accept 200 or 201 — the response envelope interceptor wraps it
       expect([200, 201]).toContain(res.status);
@@ -221,12 +284,24 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
         .post(`/api/v1/deliveries/${deliveryId}/bill-photo`)
         .set('Authorization', `Bearer ${dpToken}`)
         .set('x-company-id', companyId)
-        .attach('photo', fakeJpeg, { filename: 'bill.jpg', contentType: 'image/jpeg' })
+        .attach('photo', fakeJpeg, {
+          filename: 'bill.jpg',
+          contentType: 'image/jpeg',
+        })
         .field('signedBy', 'Muhammad Arif')
         .field('source', 'camera')
-        .field('changes', JSON.stringify([
-          { itemId, itemName: 'AquaPure 500ml', beforeQty: 500, deliveredQty: 48, returnedQty: 2 },
-        ]))
+        .field(
+          'changes',
+          JSON.stringify([
+            {
+              itemId,
+              itemName: 'AquaPure 500ml',
+              beforeQty: 500,
+              deliveredQty: 48,
+              returnedQty: 2,
+            },
+          ]),
+        )
         .expect(409);
 
       expect(res.body.success).toBe(false);
@@ -328,12 +403,24 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
         .post(`/api/v1/deliveries/${secondDeliveryId}/bill-photo`)
         .set('Authorization', `Bearer ${dpToken}`)
         .set('x-company-id', companyId)
-        .attach('photo', fakeJpeg, { filename: 'bill2.jpg', contentType: 'image/jpeg' })
+        .attach('photo', fakeJpeg, {
+          filename: 'bill2.jpg',
+          contentType: 'image/jpeg',
+        })
         .field('signedBy', 'Customer B')
         .field('source', 'gallery')
-        .field('changes', JSON.stringify([
-          { itemId, itemName: 'AquaPure 500ml', beforeQty: 454, deliveredQty: 10, returnedQty: 0 },
-        ]));
+        .field(
+          'changes',
+          JSON.stringify([
+            {
+              itemId,
+              itemName: 'AquaPure 500ml',
+              beforeQty: 454,
+              deliveredQty: 10,
+              returnedQty: 0,
+            },
+          ]),
+        );
 
       secondRequestId = res.body?.data?.requestId;
     });
@@ -366,7 +453,9 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
     });
 
     afterAll(async () => {
-      await ds.query(`DELETE FROM deliveries WHERE id = $1`, [secondDeliveryId]).catch(() => {});
+      await ds
+        .query(`DELETE FROM deliveries WHERE id = $1`, [secondDeliveryId])
+        .catch(() => {});
     });
   });
 
@@ -387,12 +476,24 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
         .post(`/api/v1/deliveries/${bigDeliveryId}/bill-photo`)
         .set('Authorization', `Bearer ${dpToken}`)
         .set('x-company-id', companyId)
-        .attach('photo', fakeJpeg, { filename: 'bill3.jpg', contentType: 'image/jpeg' })
+        .attach('photo', fakeJpeg, {
+          filename: 'bill3.jpg',
+          contentType: 'image/jpeg',
+        })
         .field('signedBy', 'Customer C')
         .field('source', 'camera')
-        .field('changes', JSON.stringify([
-          { itemId, itemName: 'AquaPure 500ml', beforeQty: 454, deliveredQty: 9999, returnedQty: 0 },
-        ]));
+        .field(
+          'changes',
+          JSON.stringify([
+            {
+              itemId,
+              itemName: 'AquaPure 500ml',
+              beforeQty: 454,
+              deliveredQty: 9999,
+              returnedQty: 0,
+            },
+          ]),
+        );
 
       bigRequestId = res.body?.data?.requestId;
     });
@@ -409,7 +510,9 @@ describe('Inventory Approvals — Bill Photo Flow (e2e)', () => {
     });
 
     afterAll(async () => {
-      await ds.query(`DELETE FROM deliveries WHERE id = $1`, [bigDeliveryId]).catch(() => {});
+      await ds
+        .query(`DELETE FROM deliveries WHERE id = $1`, [bigDeliveryId])
+        .catch(() => {});
     });
   });
 });

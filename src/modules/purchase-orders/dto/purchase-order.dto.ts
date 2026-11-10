@@ -25,7 +25,8 @@ export class PurchaseOrderLineDto {
   @ApiProperty() @IsNumberString() unitCost!: string;
   @ApiPropertyOptional({
     example: '17',
-    description: 'Tax percent the vendor charges, typed by hand (0–100, up to 4 decimals).',
+    description:
+      'Tax percent the vendor charges, typed by hand (0–100, up to 4 decimals).',
   })
   @IsOptional()
   @IsTaxRate()
@@ -91,7 +92,9 @@ export class CreateBillFromPoDto {
   @IsDateString()
   billDate?: string;
 
-  @ApiPropertyOptional({ description: "Defaults to the bill date plus the vendor's payment terms." })
+  @ApiPropertyOptional({
+    description: "Defaults to the bill date plus the vendor's payment terms.",
+  })
   @IsOptional()
   @IsDateString()
   dueDate?: string;

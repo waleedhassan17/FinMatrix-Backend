@@ -1,6 +1,15 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseUUIDPipe,
-  ParseIntPipe, Patch, Post, Query, UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -8,9 +17,16 @@ import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentCompany } from '../../common/decorators/current-company.decorator';
-import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { BudgetsService } from './budgets.service';
-import { CreateBudgetDto, ListBudgetsQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import {
+  CreateBudgetDto,
+  ListBudgetsQueryDto,
+  UpdateBudgetDto,
+} from './dto/budget.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
 
 @ApiTags('budgets')
@@ -23,7 +39,10 @@ export class BudgetsController {
 
   @Get()
   @Roles('admin', 'staff')
-  list(@CurrentCompany() companyId: string, @Query() query: ListBudgetsQueryDto) {
+  list(
+    @CurrentCompany() companyId: string,
+    @Query() query: ListBudgetsQueryDto,
+  ) {
     return this.svc.list(companyId, query);
   }
 
@@ -37,21 +56,31 @@ export class BudgetsController {
   @Roles('admin', 'staff')
   prefill(
     @CurrentCompany() companyId: string,
-    @Query('fiscalYear', new ParseIntPipe({ optional: true })) fiscalYear?: number,
+    @Query('fiscalYear', new ParseIntPipe({ optional: true }))
+    fiscalYear?: number,
   ) {
-    return this.svc.prefillFromActuals(companyId, fiscalYear ?? new Date().getFullYear() - 1);
+    return this.svc.prefillFromActuals(
+      companyId,
+      fiscalYear ?? new Date().getFullYear() - 1,
+    );
   }
 
   @Get(':id')
   @Roles('admin', 'staff')
-  get(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  get(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.getById(companyId, id);
   }
 
   @Get(':id/vs-actual')
   @Roles('admin', 'staff')
   @ApiOperation({ summary: 'Budget vs Actual comparison for the fiscal year.' })
-  vsActual(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  vsActual(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.budgetVsActual(companyId, id);
   }
 
@@ -77,7 +106,10 @@ export class BudgetsController {
 
   @Delete(':id')
   @Roles('admin')
-  remove(@CurrentCompany() companyId: string, @Param('id', ParseUUIDPipe) id: string) {
+  remove(
+    @CurrentCompany() companyId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.svc.delete(companyId, id);
   }
 }

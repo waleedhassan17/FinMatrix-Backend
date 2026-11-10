@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
@@ -10,10 +14,18 @@ import { Customer } from '../customers/entities/customer.entity';
 import { InventoryUpdateRequest } from '../inventory-approvals/entities/inventory-update-request.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import {
-  ApplyCreditMemoDto, CreateCreditMemoDto, CreditMemoLineDto, ListCreditMemosQueryDto,
+  ApplyCreditMemoDto,
+  CreateCreditMemoDto,
+  CreditMemoLineDto,
+  ListCreditMemosQueryDto,
 } from './dto/credit-memo.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
-import { addMoney, isPositive, MONEY_TOLERANCE, toDecimal } from '../../common/utils/money.util';
+import {
+  addMoney,
+  isPositive,
+  MONEY_TOLERANCE,
+  toDecimal,
+} from '../../common/utils/money.util';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
@@ -22,9 +34,19 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
-import { ACCT_AR, ACCT_CASH, ACCT_COGS, ACCT_INVENTORY, ACCT_SALES_REVENUE, ACCT_TAX_PAYABLE } from '../accounts/accounts.constants';
+import {
+  ACCT_AR,
+  ACCT_CASH,
+  ACCT_COGS,
+  ACCT_INVENTORY,
+  ACCT_SALES_REVENUE,
+  ACCT_TAX_PAYABLE,
+} from '../accounts/accounts.constants';
 import { businessToday } from '../../common/utils/business-date.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 
 @Injectable()
 export class CreditMemosService {
@@ -34,14 +56,22 @@ export class CreditMemosService {
     private readonly accounts: AccountsService,
     private readonly invoices: InvoicesService,
     @InjectRepository(CreditMemo) private readonly repo: Repository<CreditMemo>,
-    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
   ) {}
 
-  async list(companyId: string, query: ListCreditMemosQueryDto, pagination: PaginationParams) {
+  async list(
+    companyId: string,
+    query: ListCreditMemosQueryDto,
+    pagination: PaginationParams,
+  ) {
     // Everything but the status tab: the summary counts every tab of these.
     const filtered = () => {
-      const qb = this.repo.createQueryBuilder('c').where('c.companyId = :companyId', { companyId });
-      if (query.customerId) qb.andWhere('c.customerId = :cust', { cust: query.customerId });
+      const qb = this.repo
+        .createQueryBuilder('c')
+        .where('c.companyId = :companyId', { companyId });
+      if (query.customerId)
+        qb.andWhere('c.customerId = :cust', { cust: query.customerId });
       applyTextSearch(qb, query.search, companyId, {
         columns: ['c.creditMemoNumber'],
         customerColumn: 'c.customerId',
@@ -50,7 +80,10 @@ export class CreditMemosService {
     };
     const qb = filtered();
     if (query.status) qb.andWhere('c.status = :s', { s: query.status });
-    qb.orderBy('c.date', 'DESC').addOrderBy('c.createdAt', 'DESC').take(pagination.limit).skip(pagination.skip);
+    qb.orderBy('c.date', 'DESC')
+      .addOrderBy('c.createdAt', 'DESC')
+      .take(pagination.limit)
+      .skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
     const ids = [...new Set(data.map((c) => c.customerId))];
@@ -59,7 +92,10 @@ export class CreditMemosService {
 
     // Over everything the search matches: counts per tab, and what the open
     // and part-used memos still hold.
-    const byStatus = await statusSummary(filtered(), 'c', { total: 'c.total', balance: 'c.balance' });
+    const byStatus = await statusSummary(filtered(), 'c', {
+      total: 'c.total',
+      balance: 'c.balance',
+    });
     const openBalance = ['open', 'applied']
       .reduce((sum, s) => sum + Number(byStatus.byStatus[s]?.balance ?? 0), 0)
       .toFixed(4);
@@ -77,7 +113,10 @@ export class CreditMemosService {
    * so a wrong account is refused when the request is raised rather than when
    * the owner approves it, and the owner reads where the money will go.
    */
-  async refundAccountLabel(companyId: string, accountId?: string): Promise<string> {
+  async refundAccountLabel(
+    companyId: string,
+    accountId?: string,
+  ): Promise<string> {
     const account = await this.accounts.resolveMoneyAccount(
       this.dataSource.manager,
       companyId,
@@ -88,13 +127,24 @@ export class CreditMemosService {
   }
 
   async getById(companyId: string, id: string): Promise<CreditMemo> {
-    const cm = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
-    if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
+    const cm = await this.repo.findOne({
+      where: { id, companyId },
+      relations: { lines: true },
+    });
+    if (!cm)
+      throw new NotFoundException({
+        code: 'CREDIT_MEMO_NOT_FOUND',
+        message: 'Credit memo not found',
+      });
     cm.lines.sort((a, b) => a.lineOrder - b.lineOrder);
     return cm;
   }
 
-  async create(companyId: string, userId: string, dto: CreateCreditMemoDto): Promise<CreditMemo> {
+  async create(
+    companyId: string,
+    userId: string,
+    dto: CreateCreditMemoDto,
+  ): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) =>
       this.createInTransaction(manager, companyId, userId, dto),
     );
@@ -248,62 +298,158 @@ export class CreditMemosService {
     dto: CreateCreditMemoDto,
   ): Promise<CreditMemo> {
     {
-      const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
-      if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      const customer = await manager.findOne(Customer, {
+        where: { id: dto.customerId, companyId },
+      });
+      if (!customer)
+        throw new NotFoundException({
+          code: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer not found',
+        });
 
       const totals = this.computeTotals(dto.lines);
-      const number = await nextDocumentNumber(manager, companyId, 'CM', yearOf(dto.date));
+      const number = await nextDocumentNumber(
+        manager,
+        companyId,
+        'CM',
+        yearOf(dto.date),
+      );
 
       const cm = manager.create(CreditMemo, {
-        companyId, customerId: dto.customerId, creditMemoNumber: number, date: dto.date,
-        originalInvoiceId: dto.originalInvoiceId ?? null, reason: dto.reason ?? null,
-        subtotal: totals.subtotal, taxAmount: totals.taxAmount, total: totals.total,
-        amountApplied: '0', balance: totals.total, status: 'open' as CreditMemoStatus,
-        journalEntryId: null, createdBy: userId,
+        companyId,
+        customerId: dto.customerId,
+        creditMemoNumber: number,
+        date: dto.date,
+        originalInvoiceId: dto.originalInvoiceId ?? null,
+        reason: dto.reason ?? null,
+        subtotal: totals.subtotal,
+        taxAmount: totals.taxAmount,
+        total: totals.total,
+        amountApplied: '0',
+        balance: totals.total,
+        status: 'open' as CreditMemoStatus,
+        journalEntryId: null,
+        createdBy: userId,
       });
       await manager.save(cm);
-      cm.lines = totals.lines.map((l) => manager.create(CreditMemoLine, { creditMemoId: cm.id, ...l }));
+      cm.lines = totals.lines.map((l) =>
+        manager.create(CreditMemoLine, { creditMemoId: cm.id, ...l }),
+      );
       await manager.save(cm.lines);
 
       // JE: DR Sales Revenue + DR Tax Payable, CR Accounts Receivable.
-      const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
-      const rev = await this.accounts.getByNumberOrFail(companyId, ACCT_SALES_REVENUE, manager);
+      const ar = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_AR,
+        manager,
+      );
+      const rev = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_SALES_REVENUE,
+        manager,
+      );
       const lines = [
-        { accountId: rev.id, description: 'Sales returns / credit', debit: totals.subtotal, credit: '0', lineOrder: 0 },
+        {
+          accountId: rev.id,
+          description: 'Sales returns / credit',
+          debit: totals.subtotal,
+          credit: '0',
+          lineOrder: 0,
+        },
       ];
       if (toDecimal(totals.taxAmount).greaterThan(0)) {
-        const tax = await this.accounts.getByNumberOrFail(companyId, ACCT_TAX_PAYABLE, manager);
-        lines.push({ accountId: tax.id, description: 'Tax adjustment', debit: totals.taxAmount, credit: '0', lineOrder: 1 });
+        const tax = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_TAX_PAYABLE,
+          manager,
+        );
+        lines.push({
+          accountId: tax.id,
+          description: 'Tax adjustment',
+          debit: totals.taxAmount,
+          credit: '0',
+          lineOrder: 1,
+        });
       }
-      lines.push({ accountId: ar.id, description: `Credit memo ${number}`, debit: '0', credit: totals.total, lineOrder: lines.length });
+      lines.push({
+        accountId: ar.id,
+        description: `Credit memo ${number}`,
+        debit: '0',
+        credit: totals.total,
+        lineOrder: lines.length,
+      });
 
       // Inventory return side (FinMatrix.md §11): restock item lines and reverse
       // the cost out of COGS — Dr Inventory / Cr COGS at qty × item cost.
-      const returnCost = await this.postCreditMemoInventory(manager, cm, userId, false);
+      const returnCost = await this.postCreditMemoInventory(
+        manager,
+        cm,
+        userId,
+        false,
+      );
       if (returnCost.greaterThan(0)) {
-        const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
-        const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
-        lines.push({ accountId: inventory.id, description: 'Inventory returned to stock', debit: returnCost.toFixed(4), credit: '0', lineOrder: lines.length });
-        lines.push({ accountId: cogs.id, description: 'COGS reversed on return', debit: '0', credit: returnCost.toFixed(4), lineOrder: lines.length });
+        const inventory = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_INVENTORY,
+          manager,
+        );
+        const cogs = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_COGS,
+          manager,
+        );
+        lines.push({
+          accountId: inventory.id,
+          description: 'Inventory returned to stock',
+          debit: returnCost.toFixed(4),
+          credit: '0',
+          lineOrder: lines.length,
+        });
+        lines.push({
+          accountId: cogs.id,
+          description: 'COGS reversed on return',
+          debit: '0',
+          credit: returnCost.toFixed(4),
+          lineOrder: lines.length,
+        });
       }
 
       const entry = await this.posting.createEntry(manager, {
-        companyId, createdBy: userId, date: dto.date, memo: `Credit memo ${number}`,
-        status: 'posted', lines, sourceType: 'credit_memo', sourceId: cm.id,
+        companyId,
+        createdBy: userId,
+        date: dto.date,
+        memo: `Credit memo ${number}`,
+        status: 'posted',
+        lines,
+        sourceType: 'credit_memo',
+        sourceId: cm.id,
       });
       cm.journalEntryId = entry.id;
       await manager.save(cm);
 
       // A credit memo reduces what the customer owes.
-      customer.balance = addMoney(customer.balance, toDecimal(totals.total).negated().toFixed(4)).toFixed(4);
+      customer.balance = addMoney(
+        customer.balance,
+        toDecimal(totals.total).negated().toFixed(4),
+      ).toFixed(4);
       await manager.save(customer);
       return cm;
     }
   }
 
-  async applyToInvoice(companyId: string, id: string, dto: ApplyCreditMemoDto): Promise<CreditMemo> {
+  async applyToInvoice(
+    companyId: string,
+    id: string,
+    dto: ApplyCreditMemoDto,
+  ): Promise<CreditMemo> {
     return this.dataSource.transaction((manager) =>
-      this.applyInTransaction(manager, companyId, id, dto.invoiceId, dto.amount),
+      this.applyInTransaction(
+        manager,
+        companyId,
+        id,
+        dto.invoiceId,
+        dto.amount,
+      ),
     );
   }
 
@@ -330,23 +476,45 @@ export class CreditMemosService {
       where: { id, companyId },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
-    if (cm.status === 'void' || cm.status === 'refunded' || cm.status === 'closed') {
-      throw new BadRequestException({ code: 'CREDIT_UNAVAILABLE', message: `Credit memo is ${cm.status}` });
+    if (!cm)
+      throw new NotFoundException({
+        code: 'CREDIT_MEMO_NOT_FOUND',
+        message: 'Credit memo not found',
+      });
+    if (
+      cm.status === 'void' ||
+      cm.status === 'refunded' ||
+      cm.status === 'closed'
+    ) {
+      throw new BadRequestException({
+        code: 'CREDIT_UNAVAILABLE',
+        message: `Credit memo is ${cm.status}`,
+      });
     }
     const amt = toDecimal(amount);
     // A negative amount would re-open the invoice and grow the memo past its
     // own total — credit out of nothing.
     if (!isPositive(amt)) {
-      throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'The amount applied must be positive' });
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The amount applied must be positive',
+      });
     }
     if (amt.greaterThan(toDecimal(cm.balance).plus(MONEY_TOLERANCE))) {
-      throw new BadRequestException({ code: 'EXCEEDS_CREDIT', message: 'Amount exceeds available credit balance' });
+      throw new BadRequestException({
+        code: 'EXCEEDS_CREDIT',
+        message: 'Amount exceeds available credit balance',
+      });
     }
     // A customer's credit can only settle that customer's invoice.
-    const target = await manager.findOne(Invoice, { where: { id: invoiceId, companyId } });
+    const target = await manager.findOne(Invoice, {
+      where: { id: invoiceId, companyId },
+    });
     if (!target) {
-      throw new NotFoundException({ code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' });
+      throw new NotFoundException({
+        code: 'INVOICE_NOT_FOUND',
+        message: 'Invoice not found',
+      });
     }
     if (target.customerId !== cm.customerId) {
       throw new BadRequestException({
@@ -354,10 +522,19 @@ export class CreditMemosService {
         message: 'That invoice belongs to a different customer.',
       });
     }
-    await this.invoices.applyPayment(manager, companyId, invoiceId, amt.toFixed(4));
+    await this.invoices.applyPayment(
+      manager,
+      companyId,
+      invoiceId,
+      amt.toFixed(4),
+    );
     cm.amountApplied = addMoney(cm.amountApplied, amt).toFixed(4);
-    cm.balance = toDecimal(cm.total).minus(toDecimal(cm.amountApplied)).toFixed(4);
-    cm.status = toDecimal(cm.balance).lessThanOrEqualTo(0) ? 'closed' : 'applied';
+    cm.balance = toDecimal(cm.total)
+      .minus(toDecimal(cm.amountApplied))
+      .toFixed(4);
+    cm.status = toDecimal(cm.balance).lessThanOrEqualTo(0)
+      ? 'closed'
+      : 'applied';
     await manager.save(cm);
     return cm;
   }
@@ -374,25 +551,65 @@ export class CreditMemosService {
     bankAccountId?: string,
   ): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) => {
-      const cm = await manager.findOne(CreditMemo, { where: { id, companyId } });
-      if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
+      const cm = await manager.findOne(CreditMemo, {
+        where: { id, companyId },
+      });
+      if (!cm)
+        throw new NotFoundException({
+          code: 'CREDIT_MEMO_NOT_FOUND',
+          message: 'Credit memo not found',
+        });
       const remaining = toDecimal(cm.balance);
       if (remaining.lessThanOrEqualTo(0)) {
-        throw new BadRequestException({ code: 'NO_BALANCE', message: 'No remaining balance to refund' });
+        throw new BadRequestException({
+          code: 'NO_BALANCE',
+          message: 'No remaining balance to refund',
+        });
       }
-      const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
-      const cash = await this.accounts.resolveMoneyAccount(manager, companyId, bankAccountId, ACCT_CASH);
+      const ar = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_AR,
+        manager,
+      );
+      const cash = await this.accounts.resolveMoneyAccount(
+        manager,
+        companyId,
+        bankAccountId,
+        ACCT_CASH,
+      );
       await this.posting.createEntry(manager, {
-        companyId, createdBy: userId, date: businessToday(),
-        memo: `Refund credit memo ${cm.creditMemoNumber}`, status: 'posted',
+        companyId,
+        createdBy: userId,
+        date: businessToday(),
+        memo: `Refund credit memo ${cm.creditMemoNumber}`,
+        status: 'posted',
         lines: [
-          { accountId: ar.id, debit: remaining.toFixed(4), credit: '0', lineOrder: 0 },
-          { accountId: cash.id, debit: '0', credit: remaining.toFixed(4), lineOrder: 1 },
+          {
+            accountId: ar.id,
+            debit: remaining.toFixed(4),
+            credit: '0',
+            lineOrder: 0,
+          },
+          {
+            accountId: cash.id,
+            debit: '0',
+            credit: remaining.toFixed(4),
+            lineOrder: 1,
+          },
         ],
-        sourceType: 'credit_memo_refund', sourceId: cm.id,
+        sourceType: 'credit_memo_refund',
+        sourceId: cm.id,
       });
-      const customer = await manager.findOne(Customer, { where: { id: cm.customerId, companyId } });
-      if (customer) { customer.balance = addMoney(customer.balance, remaining.toFixed(4)).toFixed(4); await manager.save(customer); }
+      const customer = await manager.findOne(Customer, {
+        where: { id: cm.customerId, companyId },
+      });
+      if (customer) {
+        customer.balance = addMoney(
+          customer.balance,
+          remaining.toFixed(4),
+        ).toFixed(4);
+        await manager.save(customer);
+      }
       cm.balance = '0';
       cm.status = 'refunded';
       cm.refundAccountId = cash.id;
@@ -401,12 +618,26 @@ export class CreditMemosService {
     });
   }
 
-  async void(companyId: string, id: string, userId: string): Promise<CreditMemo> {
+  async void(
+    companyId: string,
+    id: string,
+    userId: string,
+  ): Promise<CreditMemo> {
     return this.dataSource.transaction(async (manager) => {
-      const cm = await manager.findOne(CreditMemo, { where: { id, companyId }, relations: { lines: true } });
-      if (!cm) throw new NotFoundException({ code: 'CREDIT_MEMO_NOT_FOUND', message: 'Credit memo not found' });
+      const cm = await manager.findOne(CreditMemo, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!cm)
+        throw new NotFoundException({
+          code: 'CREDIT_MEMO_NOT_FOUND',
+          message: 'Credit memo not found',
+        });
       if (cm.status === 'void') {
-        throw new BadRequestException({ code: 'ALREADY_VOID', message: 'Credit memo is already void' });
+        throw new BadRequestException({
+          code: 'ALREADY_VOID',
+          message: 'Credit memo is already void',
+        });
       }
       // refund() zeroes the balance but leaves amountApplied at 0, so without
       // this the ALREADY_APPLIED guard lets a refunded memo be voided too —
@@ -418,36 +649,90 @@ export class CreditMemosService {
         });
       }
       if (toDecimal(cm.amountApplied).greaterThan(0)) {
-        throw new BadRequestException({ code: 'ALREADY_APPLIED', message: 'Cannot void a credit memo that has been applied' });
+        throw new BadRequestException({
+          code: 'ALREADY_APPLIED',
+          message: 'Cannot void a credit memo that has been applied',
+        });
       }
       if (cm.journalEntryId) {
-        const ar = await this.accounts.getByNumberOrFail(companyId, ACCT_AR, manager);
-        const rev = await this.accounts.getByNumberOrFail(companyId, ACCT_SALES_REVENUE, manager);
+        const ar = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_AR,
+          manager,
+        );
+        const rev = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_SALES_REVENUE,
+          manager,
+        );
         const lines = [
           { accountId: ar.id, debit: cm.total, credit: '0', lineOrder: 0 },
           { accountId: rev.id, debit: '0', credit: cm.subtotal, lineOrder: 1 },
         ];
         if (toDecimal(cm.taxAmount).greaterThan(0)) {
-          const tax = await this.accounts.getByNumberOrFail(companyId, ACCT_TAX_PAYABLE, manager);
-          lines.push({ accountId: tax.id, debit: '0', credit: cm.taxAmount, lineOrder: 2 });
+          const tax = await this.accounts.getByNumberOrFail(
+            companyId,
+            ACCT_TAX_PAYABLE,
+            manager,
+          );
+          lines.push({
+            accountId: tax.id,
+            debit: '0',
+            credit: cm.taxAmount,
+            lineOrder: 2,
+          });
         }
         // Reverse the inventory return: pull the restocked goods back out —
         // qty↓, Dr COGS / Cr Inventory (undo the Dr Inventory / Cr COGS on issue).
-        const returnCost = await this.postCreditMemoInventory(manager, cm, userId, true);
+        const returnCost = await this.postCreditMemoInventory(
+          manager,
+          cm,
+          userId,
+          true,
+        );
         if (returnCost.greaterThan(0)) {
-          const cogs = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, manager);
-          const inventory = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, manager);
-          lines.push({ accountId: cogs.id, debit: returnCost.toFixed(4), credit: '0', lineOrder: lines.length });
-          lines.push({ accountId: inventory.id, debit: '0', credit: returnCost.toFixed(4), lineOrder: lines.length });
+          const cogs = await this.accounts.getByNumberOrFail(
+            companyId,
+            ACCT_COGS,
+            manager,
+          );
+          const inventory = await this.accounts.getByNumberOrFail(
+            companyId,
+            ACCT_INVENTORY,
+            manager,
+          );
+          lines.push({
+            accountId: cogs.id,
+            debit: returnCost.toFixed(4),
+            credit: '0',
+            lineOrder: lines.length,
+          });
+          lines.push({
+            accountId: inventory.id,
+            debit: '0',
+            credit: returnCost.toFixed(4),
+            lineOrder: lines.length,
+          });
         }
         await this.posting.createEntry(manager, {
-          companyId, createdBy: userId, date: businessToday(),
-          memo: `Void credit memo ${cm.creditMemoNumber}`, status: 'posted', lines,
-          reversalOfId: cm.journalEntryId, sourceType: 'credit_memo_void', sourceId: cm.id,
+          companyId,
+          createdBy: userId,
+          date: businessToday(),
+          memo: `Void credit memo ${cm.creditMemoNumber}`,
+          status: 'posted',
+          lines,
+          reversalOfId: cm.journalEntryId,
+          sourceType: 'credit_memo_void',
+          sourceId: cm.id,
         });
       }
-      const customer = await manager.findOne(Customer, { where: { id: cm.customerId, companyId } });
-      if (customer) { customer.balance = addMoney(customer.balance, cm.total).toFixed(4); await manager.save(customer); }
+      const customer = await manager.findOne(Customer, {
+        where: { id: cm.customerId, companyId },
+      });
+      if (customer) {
+        customer.balance = addMoney(customer.balance, cm.total).toFixed(4);
+        await manager.save(customer);
+      }
       cm.status = 'void';
       cm.balance = '0';
       await manager.save(cm);
@@ -458,11 +743,16 @@ export class CreditMemosService {
   async delete(companyId: string, id: string, userId: string) {
     const cm = await this.getById(companyId, id);
     if (cm.status !== 'open') {
-      throw new BadRequestException({ code: 'CANNOT_DELETE', message: 'Only open, unapplied credit memos can be deleted' });
+      throw new BadRequestException({
+        code: 'CANNOT_DELETE',
+        message: 'Only open, unapplied credit memos can be deleted',
+      });
     }
     // Reverse the ledger (via void) attributed to the acting user — never an
     // empty createdBy, which would fail the reversal JE's uuid column.
-    if (cm.journalEntryId) { await this.void(companyId, id, userId); }
+    if (cm.journalEntryId) {
+      await this.void(companyId, id, userId);
+    }
     await this.repo.remove(cm);
     return { id, deleted: true };
   }
@@ -486,7 +776,9 @@ export class CreditMemosService {
     let total = new Decimal(0);
     for (const line of cm.lines ?? []) {
       if (!line.itemId) continue;
-      const item = await itemRepo.findOne({ where: { id: line.itemId, companyId: cm.companyId } });
+      const item = await itemRepo.findOne({
+        where: { id: line.itemId, companyId: cm.companyId },
+      });
       if (!item) continue;
       const qty = toDecimal(line.quantity);
 
@@ -582,13 +874,22 @@ export class CreditMemosService {
       tax = tax.plus(lineTax);
       calc.push({
         itemId: l.itemId ?? null,
-        description: l.description, quantity: toDecimal(l.quantity).toFixed(4), unitPrice: toDecimal(l.unitPrice).toFixed(4),
-        taxRate: toDecimal(l.taxRate ?? '0').toFixed(4), lineTotal: base.plus(lineTax).toFixed(4), lineOrder: i,
+        description: l.description,
+        quantity: toDecimal(l.quantity).toFixed(4),
+        unitPrice: toDecimal(l.unitPrice).toFixed(4),
+        taxRate: toDecimal(l.taxRate ?? '0').toFixed(4),
+        lineTotal: base.plus(lineTax).toFixed(4),
+        lineOrder: i,
         // Seeded when the caller knows the original cost; postCreditMemoInventory
         // prefers it over today's average so a reversal cancels the sale exactly.
         restockUnitCost: l.unitCost ? toDecimal(l.unitCost).toFixed(4) : null,
       });
     });
-    return { subtotal: subtotal.toFixed(4), taxAmount: tax.toFixed(4), total: subtotal.plus(tax).toFixed(4), lines: calc };
+    return {
+      subtotal: subtotal.toFixed(4),
+      taxAmount: tax.toFixed(4),
+      total: subtotal.plus(tax).toFixed(4),
+      lines: calc,
+    };
   }
 }

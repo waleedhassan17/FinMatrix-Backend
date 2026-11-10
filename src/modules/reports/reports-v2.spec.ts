@@ -123,14 +123,22 @@ describe('Reports v2 — cash flow by counterpart', () => {
     const r = await run();
     const monthly = r.monthly!;
     expect(monthly).toHaveLength(12);
-    for (const m of monthly) expect(m.net).toBeCloseTo(m.inflow - m.outflow, 10);
+    for (const m of monthly)
+      expect(m.net).toBeCloseTo(m.inflow - m.outflow, 10);
     expect(monthly.reduce((t, m) => t + m.net, 0)).toBeCloseTo(r.netChange, 10);
     expect(monthly.map((m) => m.endingCash)).toEqual(
       r.monthlyTrend.map((p) => p.endingCash),
     );
-    expect(monthly.map((m) => m.net)).toEqual(r.monthlyTrend.map((p) => p.value));
+    expect(monthly.map((m) => m.net)).toEqual(
+      r.monthlyTrend.map((p) => p.value),
+    );
     // March: the bill payment.
-    expect(monthly[2]).toMatchObject({ period: '2026-03', inflow: 0, outflow: 5000, net: -5000 });
+    expect(monthly[2]).toMatchObject({
+      period: '2026-03',
+      inflow: 0,
+      outflow: 5000,
+      net: -5000,
+    });
     // April: the loan and the owner's capital in, the drawings out; the
     // 2,000 moved from cash to the bank is in neither column.
     expect(monthly[3]).toEqual({
@@ -141,7 +149,12 @@ describe('Reports v2 — cash flow by counterpart', () => {
       net: 25500,
       endingCash: 30500,
     });
-    expect(monthly[0]).toMatchObject({ inflow: 0, outflow: 0, net: 0, endingCash: 10000 });
+    expect(monthly[0]).toMatchObject({
+      inflow: 0,
+      outflow: 0,
+      net: 0,
+      endingCash: 10000,
+    });
   });
 });
 
@@ -326,7 +339,9 @@ describe('Reports v2 — balance sheet equity', () => {
   it('lists the active accounts with no balance only when asked, moving no total', async () => {
     const svc = await makeService(ledgerQuery(accounts, books));
     const plain = await svc.balanceSheet('c1', AS_OF);
-    const all = await svc.balanceSheet('c1', AS_OF, undefined, { includeZero: true });
+    const all = await svc.balanceSheet('c1', AS_OF, undefined, {
+      includeZero: true,
+    });
     const codes = (bs: typeof plain) =>
       bs.sections.flatMap((s) => s.lines.map((l) => l.accountCode));
     // The loan account has never been posted to.
@@ -334,7 +349,15 @@ describe('Reports v2 — balance sheet equity', () => {
     expect(
       all.sections.find((s) => s.key === 'longTermLiabilities')!.lines,
     ).toEqual([expect.objectContaining({ accountCode: '2700', amount: 0 })]);
-    for (const code of ['1010', '1100', '1200', '1500', '2000', '3200', '3900']) {
+    for (const code of [
+      '1010',
+      '1100',
+      '1200',
+      '1500',
+      '2000',
+      '3200',
+      '3900',
+    ]) {
       expect(codes(all)).toContain(code);
     }
     expect(all.sections.map((s) => s.subtotal)).toEqual(
@@ -820,18 +843,31 @@ describe('Reports v2 — 2.5 trial balance modes', () => {
   it('lists untouched accounts of the chart only when asked, in every mode', async () => {
     const svc = await svcFor(CASH_BOOKS);
     for (const mode of ['movement', 'closing', 'working'] as const) {
-      const plain: any = await svc.trialBalance('c1', '2026-01-01', '2026-12-31', mode);
-      const all: any = await svc.trialBalance('c1', '2026-01-01', '2026-12-31', mode, {
-        includeZero: true,
-      });
+      const plain: any = await svc.trialBalance(
+        'c1',
+        '2026-01-01',
+        '2026-12-31',
+        mode,
+      );
+      const all: any = await svc.trialBalance(
+        'c1',
+        '2026-01-01',
+        '2026-12-31',
+        mode,
+        {
+          includeZero: true,
+        },
+      );
       const codes = (r: any) => r.rows.map((x: any) => x.accountCode);
       // Rent (6000) and bank interest (4100) are never posted to.
       expect(codes(plain)).not.toContain('6000');
       expect(codes(all)).toEqual(expect.arrayContaining(['4100', '6000']));
-      expect(all.rows.find((x: any) => x.accountCode === '6000')).toMatchObject({
-        debit: 0,
-        credit: 0,
-      });
+      expect(all.rows.find((x: any) => x.accountCode === '6000')).toMatchObject(
+        {
+          debit: 0,
+          credit: 0,
+        },
+      );
       expect([all.totalDebits, all.totalCredits, all.isBalanced]).toEqual([
         plain.totalDebits,
         plain.totalCredits,
@@ -850,15 +886,42 @@ describe('Reports v2 — 2.5 trial balance modes', () => {
     // with includeZero. Neither choice may move a column total.
     const books: PostingFixture[] = [
       ...CASH_BOOKS,
-      { ref: 'JE-D1', date: '2026-05-05', sourceType: 'journal_entry', lines: [['6300', 0.004, 0], ['1010', 0, 0.004]] },
-      { ref: 'JE-D2', date: '2026-05-06', sourceType: 'journal_entry', lines: [['6000', 0.0045, 0], ['1000', 0, 0.0045]] },
+      {
+        ref: 'JE-D1',
+        date: '2026-05-05',
+        sourceType: 'journal_entry',
+        lines: [
+          ['6300', 0.004, 0],
+          ['1010', 0, 0.004],
+        ],
+      },
+      {
+        ref: 'JE-D2',
+        date: '2026-05-06',
+        sourceType: 'journal_entry',
+        lines: [
+          ['6000', 0.0045, 0],
+          ['1000', 0, 0.0045],
+        ],
+      },
     ];
     const svc = await svcFor(books);
     for (const mode of ['movement', 'closing', 'working'] as const) {
-      const plain: any = await svc.trialBalance('c1', '2026-01-01', '2026-12-31', mode);
-      const all: any = await svc.trialBalance('c1', '2026-01-01', '2026-12-31', mode, {
-        includeZero: true,
-      });
+      const plain: any = await svc.trialBalance(
+        'c1',
+        '2026-01-01',
+        '2026-12-31',
+        mode,
+      );
+      const all: any = await svc.trialBalance(
+        'c1',
+        '2026-01-01',
+        '2026-12-31',
+        mode,
+        {
+          includeZero: true,
+        },
+      );
       expect([all.totalDebits, all.totalCredits, all.isBalanced]).toEqual([
         plain.totalDebits,
         plain.totalCredits,

@@ -14,7 +14,10 @@ import {
 } from 'class-validator';
 import { DeliverDto } from '../../messaging/dto/deliver.dto';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
-import { SALES_LINE_KINDS, SalesLineKind } from '../../../common/utils/sales-lines.util';
+import {
+  SALES_LINE_KINDS,
+  SalesLineKind,
+} from '../../../common/utils/sales-lines.util';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
 import { PAYMENT_TERMS } from '../../customers/dto/customer.dto';
 import { IsTaxRate } from '../../../common/validation/tax-rate.validator';
@@ -23,12 +26,17 @@ export class InvoiceLineDto {
   @ApiProperty() @IsString() description!: string;
   @ApiProperty({ example: '1' }) @IsNumberString() quantity!: string;
   @ApiProperty({ example: '100' }) @IsNumberString() unitPrice!: string;
-  @ApiPropertyOptional({ example: '12.5' }) @IsOptional() @IsTaxRate() taxRate?: string;
+  @ApiPropertyOptional({ example: '12.5' })
+  @IsOptional()
+  @IsTaxRate()
+  taxRate?: string;
   @ApiPropertyOptional({ description: 'Revenue account id' })
   @IsOptional()
   @IsUUID()
   accountId?: string;
-  @ApiPropertyOptional({ description: 'Inventory item id — drives COGS posting' })
+  @ApiPropertyOptional({
+    description: 'Inventory item id — drives COGS posting',
+  })
   @IsOptional()
   @IsUUID()
   itemId?: string;
@@ -74,7 +82,8 @@ export class CreateInvoiceDto {
 
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()
@@ -92,7 +101,9 @@ export class CreateInvoiceDto {
 export class UpdateInvoiceDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() invoiceDate?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() dueDate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsIn(['percent', 'amount', 'none'])
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsIn(['percent', 'amount', 'none'])
   discountType?: 'percent' | 'amount' | 'none';
   @ApiPropertyOptional() @IsOptional() @IsNumberString() discountValue?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
@@ -124,7 +135,8 @@ export class VoidInvoiceDto {
 export class SendInvoiceDto {
   @ApiPropertyOptional({
     type: CreditOverrideDto,
-    description: "Owner only: let this go past the customer's credit limit, with a reason (audited).",
+    description:
+      "Owner only: let this go past the customer's credit limit, with a reason (audited).",
   })
   @IsOptional()
   @ValidateNested()

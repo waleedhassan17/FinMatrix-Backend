@@ -46,27 +46,47 @@ import { pagedResponse } from '../../common/utils/paged-response.util';
 @Injectable()
 export class InventoryService {
   constructor(
-    @InjectRepository(InventoryItem) private readonly itemRepo: Repository<InventoryItem>,
-    @InjectRepository(InventoryMovement) private readonly moveRepo: Repository<InventoryMovement>,
-    @InjectRepository(InventoryAdjustment) private readonly adjRepo: Repository<InventoryAdjustment>,
-    @InjectRepository(StockTransfer) private readonly xferRepo: Repository<StockTransfer>,
-    @InjectRepository(StockTransferLine) private readonly xferLineRepo: Repository<StockTransferLine>,
-    @InjectRepository(PhysicalCount) private readonly countRepo: Repository<PhysicalCount>,
-    @InjectRepository(PhysicalCountLine) private readonly countLineRepo: Repository<PhysicalCountLine>,
+    @InjectRepository(InventoryItem)
+    private readonly itemRepo: Repository<InventoryItem>,
+    @InjectRepository(InventoryMovement)
+    private readonly moveRepo: Repository<InventoryMovement>,
+    @InjectRepository(InventoryAdjustment)
+    private readonly adjRepo: Repository<InventoryAdjustment>,
+    @InjectRepository(StockTransfer)
+    private readonly xferRepo: Repository<StockTransfer>,
+    @InjectRepository(StockTransferLine)
+    private readonly xferLineRepo: Repository<StockTransferLine>,
+    @InjectRepository(PhysicalCount)
+    private readonly countRepo: Repository<PhysicalCount>,
+    @InjectRepository(PhysicalCountLine)
+    private readonly countLineRepo: Repository<PhysicalCountLine>,
     private readonly dataSource: DataSource,
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
   ) {}
 
   // Items
-  async listItems(companyId: string, query: InventoryItemQueryDto, page: number, limit: number) {
-    const qb = this.itemRepo.createQueryBuilder('i').where('i.companyId = :cid', { cid: companyId });
-    if (query.q) qb.andWhere('(i.name ILIKE :q OR i.sku ILIKE :q)', { q: `%${query.q}%` });
-    if (query.category) qb.andWhere('i.category = :cat', { cat: query.category });
-    if (query.sourceAgencyId) qb.andWhere('i.sourceAgencyId = :sid', { sid: query.sourceAgencyId });
-    if (query.locationId) qb.andWhere('i.locationId = :lid', { lid: query.locationId });
-    if (query.isActive !== undefined) qb.andWhere('i.isActive = :a', { a: query.isActive });
-    if (query.lowStock) qb.andWhere('i.quantityOnHand::numeric <= i.reorderPoint::numeric');
+  async listItems(
+    companyId: string,
+    query: InventoryItemQueryDto,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.itemRepo
+      .createQueryBuilder('i')
+      .where('i.companyId = :cid', { cid: companyId });
+    if (query.q)
+      qb.andWhere('(i.name ILIKE :q OR i.sku ILIKE :q)', { q: `%${query.q}%` });
+    if (query.category)
+      qb.andWhere('i.category = :cat', { cat: query.category });
+    if (query.sourceAgencyId)
+      qb.andWhere('i.sourceAgencyId = :sid', { sid: query.sourceAgencyId });
+    if (query.locationId)
+      qb.andWhere('i.locationId = :lid', { lid: query.locationId });
+    if (query.isActive !== undefined)
+      qb.andWhere('i.isActive = :a', { a: query.isActive });
+    if (query.lowStock)
+      qb.andWhere('i.quantityOnHand::numeric <= i.reorderPoint::numeric');
     // With a tie-break, so a page boundary cannot skip or repeat an item.
     qb.orderBy('i.createdAt', 'DESC').addOrderBy('i.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -81,16 +101,26 @@ export class InventoryService {
   }
 
   async createItem(companyId: string, dto: CreateInventoryItemDto) {
-    const exists = await this.itemRepo.findOne({ where: { companyId, sku: dto.sku } });
+    const exists = await this.itemRepo.findOne({
+      where: { companyId, sku: dto.sku },
+    });
     if (exists) throw new BadRequestException('SKU already exists');
-    const item = this.itemRepo.create({ ...dto, companyId, quantityOnHand: '0', quantityOnOrder: '0', quantityCommitted: '0' });
+    const item = this.itemRepo.create({
+      ...dto,
+      companyId,
+      quantityOnHand: '0',
+      quantityOnOrder: '0',
+      quantityCommitted: '0',
+    });
     return this.itemRepo.save(item);
   }
 
   async updateItem(companyId: string, id: string, dto: UpdateInventoryItemDto) {
     const item = await this.getItem(companyId, id);
     if (dto.sku && dto.sku !== item.sku) {
-      const exists = await this.itemRepo.findOne({ where: { companyId, sku: dto.sku } });
+      const exists = await this.itemRepo.findOne({
+        where: { companyId, sku: dto.sku },
+      });
       if (exists) throw new BadRequestException('SKU already exists');
     }
 
@@ -161,7 +191,9 @@ export class InventoryService {
       // records a reason and is reversible. Without this guard it becomes a
       // second adjustment route with no reason code and no reversal path.
       const onHand = toDecimal(item.quantityOnHand);
-      const movements = await moveRepo.count({ where: { companyId, itemId: item.id } });
+      const movements = await moveRepo.count({
+        where: { companyId, itemId: item.id },
+      });
       if (!onHand.isZero() || movements > 0) {
         throw new BadRequestException({
           code: 'OPENING_STOCK_ALREADY_SET',
@@ -177,7 +209,8 @@ export class InventoryService {
       if (toDecimal(item.unitCost).lessThanOrEqualTo(0)) {
         throw new BadRequestException({
           code: 'UNIT_COST_REQUIRED',
-          message: 'Set the item unit cost before recording opening stock — stock with no cost has no value to post.',
+          message:
+            'Set the item unit cost before recording opening stock — stock with no cost has no value to post.',
         });
       }
 
@@ -198,7 +231,14 @@ export class InventoryService {
         createdBy: userId,
       });
 
-      const journalEntryId = await this.postOpeningStockJe(em, companyId, userId, item, qty, date);
+      const journalEntryId = await this.postOpeningStockJe(
+        em,
+        companyId,
+        userId,
+        item,
+        qty,
+        date,
+      );
       return { item, movement: move, journalEntryId };
     });
   }
@@ -324,7 +364,10 @@ export class InventoryService {
       const item = await itemRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
-        .where('i.id = :id AND i.companyId = :cid', { id: dto.itemId, cid: companyId })
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: dto.itemId,
+          cid: companyId,
+        })
         .getOne();
       if (!item) throw new NotFoundException('Item not found');
 
@@ -420,7 +463,10 @@ export class InventoryService {
       const item = await itemRepo
         .createQueryBuilder('i')
         .setLock('pessimistic_write')
-        .where('i.id = :id AND i.companyId = :cid', { id: adj.itemId, cid: companyId })
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: adj.itemId,
+          cid: companyId,
+        })
         .getOne();
       if (!item) throw new NotFoundException('Item not found');
 
@@ -453,7 +499,8 @@ export class InventoryService {
       const today = todayIso();
       // Mirror the account the ORIGINAL used, not whatever today's reason map
       // would pick. Rows written before that column existed all went to 6400.
-      const offsetAccountNumber = adj.offsetAccountNumber ?? ACCT_INVENTORY_ADJUSTMENT;
+      const offsetAccountNumber =
+        adj.offsetAccountNumber ?? ACCT_INVENTORY_ADJUSTMENT;
 
       const reversal = await adjRepo.save(
         adjRepo.create({
@@ -483,7 +530,9 @@ export class InventoryService {
         type: 'adjustment',
         quantityChange: variance.negated(),
         balanceAfter: restored,
-        valueChange: variance.isNegative() ? originalValue : originalValue.negated(),
+        valueChange: variance.isNegative()
+          ? originalValue
+          : originalValue.negated(),
         description: `Reversal of adjustment ${adj.id}`,
         sourceType: 'inventory_adjustment_void',
         sourceId: reversal.id,
@@ -491,7 +540,11 @@ export class InventoryService {
       });
 
       if (originalValue.greaterThan(0)) {
-        const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+        const inventoryAcct = await this.accounts.getByNumberOrFail(
+          companyId,
+          ACCT_INVENTORY,
+          em,
+        );
         const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
           em,
           companyId,
@@ -549,7 +602,11 @@ export class InventoryService {
   }
 
   // Transfer
-  async createTransfer(companyId: string, dto: CreateStockTransferDto, userId: string) {
+  async createTransfer(
+    companyId: string,
+    dto: CreateStockTransferDto,
+    userId: string,
+  ) {
     return this.dataSource.transaction(async (em) => {
       const xferRepo = em.getRepository(StockTransfer);
       const lineRepo = em.getRepository(StockTransferLine);
@@ -566,7 +623,13 @@ export class InventoryService {
       });
       await xferRepo.save(xfer);
 
-      const lines = dto.lines.map((l) => lineRepo.create({ transferId: xfer.id, itemId: l.itemId, quantity: l.quantity }));
+      const lines = dto.lines.map((l) =>
+        lineRepo.create({
+          transferId: xfer.id,
+          itemId: l.itemId,
+          quantity: l.quantity,
+        }),
+      );
       await lineRepo.save(lines);
 
       // A stock transfer relocates an item between locations. quantityOnHand is
@@ -575,7 +638,9 @@ export class InventoryService {
       // impact and NO change to total quantity on hand (FinMatrixGuide §3.8).
       // We update the item's location and record audit movements only.
       for (const l of dto.lines) {
-        const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
+        const item = await itemRepo.findOne({
+          where: { id: l.itemId, companyId },
+        });
         if (!item) continue;
         if (dto.toLocationId) {
           item.locationId = dto.toLocationId;
@@ -604,9 +669,13 @@ export class InventoryService {
   }
 
   async completeTransfer(companyId: string, id: string) {
-    const xfer = await this.xferRepo.findOne({ where: { id, companyId }, relations: ['lines'] });
+    const xfer = await this.xferRepo.findOne({
+      where: { id, companyId },
+      relations: ['lines'],
+    });
     if (!xfer) throw new NotFoundException('Transfer not found');
-    if (xfer.status !== 'draft') throw new BadRequestException('Transfer already processed');
+    if (xfer.status !== 'draft')
+      throw new BadRequestException('Transfer already processed');
     xfer.status = 'completed';
     return this.xferRepo.save(xfer);
   }
@@ -614,19 +683,30 @@ export class InventoryService {
   // Physical Count — records the count AND reconciles stock to the counted
   // quantity, posting the variance as an inventory adjustment (FinMatrixGuide
   // §3.8: stock and the Inventory GL move together; shrinkage is expensed).
-  async createCount(companyId: string, dto: CreatePhysicalCountDto, userId: string) {
+  async createCount(
+    companyId: string,
+    dto: CreatePhysicalCountDto,
+    userId: string,
+  ) {
     return this.dataSource.transaction(async (em) => {
       const countRepo = em.getRepository(PhysicalCount);
       const lineRepo = em.getRepository(PhysicalCountLine);
       const itemRepo = em.getRepository(InventoryItem);
       const adjRepo = em.getRepository(InventoryAdjustment);
 
-      const count = countRepo.create({ companyId, countDate: dto.countDate, notes: dto.notes ?? null, createdBy: userId });
+      const count = countRepo.create({
+        companyId,
+        countDate: dto.countDate,
+        notes: dto.notes ?? null,
+        createdBy: userId,
+      });
       await countRepo.save(count);
 
       const lines = [];
       for (const l of dto.lines) {
-        const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
+        const item = await itemRepo.findOne({
+          where: { id: l.itemId, companyId },
+        });
         const sysQty = item ? item.quantityOnHand : '0';
         const counted = toDecimal(l.countedQty);
         const variance = counted.minus(toDecimal(sysQty));
@@ -723,7 +803,11 @@ export class InventoryService {
     const value = quantity.times(toDecimal(item.unitCost));
     if (value.lessThanOrEqualTo(0)) return null;
 
-    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    const inventoryAcct = await this.accounts.getByNumberOrFail(
+      companyId,
+      ACCT_INVENTORY,
+      em,
+    );
     // 3900 is lazily created — a company that never opened a balance has no row yet.
     const obe = await this.accounts.getOrCreateSystemAccount(
       em,
@@ -739,8 +823,20 @@ export class InventoryService {
       memo: `Opening stock for ${item.sku} ${item.name}`,
       status: 'posted',
       lines: [
-        { accountId: inventoryAcct.id, description: 'Opening stock on hand', debit: amount, credit: '0', lineOrder: 0 },
-        { accountId: obe.id, description: 'Opening balance equity', debit: '0', credit: amount, lineOrder: 1 },
+        {
+          accountId: inventoryAcct.id,
+          description: 'Opening stock on hand',
+          debit: amount,
+          credit: '0',
+          lineOrder: 0,
+        },
+        {
+          accountId: obe.id,
+          description: 'Opening balance equity',
+          debit: '0',
+          credit: amount,
+          lineOrder: 1,
+        },
       ],
       sourceType: 'opening_stock',
       sourceId: item.id,
@@ -775,13 +871,27 @@ export class InventoryService {
     memo: string,
   ): Promise<{ id: string; reference: string } | null> {
     const lines = entries
-      .map(({ item, quantity }) => ({ item, quantity, amount: quantity.times(toDecimal(item.unitCost)).toFixed(4) }))
+      .map(({ item, quantity }) => ({
+        item,
+        quantity,
+        amount: quantity.times(toDecimal(item.unitCost)).toFixed(4),
+      }))
       .filter((l) => toDecimal(l.amount).greaterThan(0));
     if (lines.length === 0) return null;
 
-    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
-    const obe = await this.accounts.getOrCreateSystemAccount(em, companyId, ACCT_OPENING_BALANCE_EQUITY);
-    const total = lines.reduce((sum, l) => sum.plus(l.amount), new Decimal(0)).toFixed(4);
+    const inventoryAcct = await this.accounts.getByNumberOrFail(
+      companyId,
+      ACCT_INVENTORY,
+      em,
+    );
+    const obe = await this.accounts.getOrCreateSystemAccount(
+      em,
+      companyId,
+      ACCT_OPENING_BALANCE_EQUITY,
+    );
+    const total = lines
+      .reduce((sum, l) => sum.plus(l.amount), new Decimal(0))
+      .toFixed(4);
 
     const entry = await this.posting.createEntry(em, {
       companyId,
@@ -835,7 +945,11 @@ export class InventoryService {
   ): Promise<string | null> {
     const value = variance.abs().times(toDecimal(item.unitCost));
     if (value.lessThanOrEqualTo(0)) return null;
-    const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
+    const inventoryAcct = await this.accounts.getByNumberOrFail(
+      companyId,
+      ACCT_INVENTORY,
+      em,
+    );
     // getOrCreate, not getByNumberOrFail: the 54xx accounts are new, and a
     // company whose chart predates them gets the account created on first use
     // — the same way 6400, GRNI and Goods in Transit already reach older
@@ -870,23 +984,41 @@ export class InventoryService {
   }
 
   // Movements
-  async listMovements(companyId: string, query: MovementQueryDto, page: number, limit: number) {
-    const qb = this.moveRepo.createQueryBuilder('m').where('m.companyId = :cid', { cid: companyId });
+  async listMovements(
+    companyId: string,
+    query: MovementQueryDto,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.moveRepo
+      .createQueryBuilder('m')
+      .where('m.companyId = :cid', { cid: companyId });
     if (query.itemId) qb.andWhere('m.itemId = :iid', { iid: query.itemId });
     if (query.type) qb.andWhere('m.type = :t', { t: query.type });
     if (query.startDate) qb.andWhere('m.date >= :s', { s: query.startDate });
     if (query.endDate) qb.andWhere('m.date <= :e', { e: query.endDate });
     // With tie-breaks: movements on one date must keep one order across pages.
-    qb.orderBy('m.date', 'DESC').addOrderBy('m.createdAt', 'DESC').addOrderBy('m.id', 'DESC');
+    qb.orderBy('m.date', 'DESC')
+      .addOrderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
     return pagedResponse(data, { page, limit, total });
   }
 
   // Item movements
-  async itemMovements(companyId: string, itemId: string, page: number, limit: number) {
-    const qb = this.moveRepo.createQueryBuilder('m')
-      .where('m.companyId = :cid AND m.itemId = :iid', { cid: companyId, iid: itemId })
+  async itemMovements(
+    companyId: string,
+    itemId: string,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.moveRepo
+      .createQueryBuilder('m')
+      .where('m.companyId = :cid AND m.itemId = :iid', {
+        cid: companyId,
+        iid: itemId,
+      })
       .orderBy('m.date', 'DESC')
       .addOrderBy('m.createdAt', 'DESC')
       .addOrderBy('m.id', 'DESC');

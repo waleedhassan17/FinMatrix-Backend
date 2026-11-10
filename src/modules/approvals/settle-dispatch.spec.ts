@@ -8,22 +8,18 @@ import { ApprovalDispatcher } from './approval-dispatcher.service';
 describe('ApprovalDispatcher — settlements', () => {
   const make = () => {
     const payments = {
-      settle: jest
-        .fn()
-        .mockResolvedValue({
-          payment: { id: 'rct-1', journalEntryId: 'je-1' },
-          credits: [],
-        }),
+      settle: jest.fn().mockResolvedValue({
+        payment: { id: 'rct-1', journalEntryId: 'je-1' },
+        credits: [],
+      }),
       receive: jest.fn(),
       apply: jest.fn(),
     };
     const bills = {
-      settle: jest
-        .fn()
-        .mockResolvedValue({
-          payment: null,
-          credits: [{ vendorCreditId: 'vc-1' }],
-        }),
+      settle: jest.fn().mockResolvedValue({
+        payment: null,
+        credits: [{ vendorCreditId: 'vc-1' }],
+      }),
       pay: jest.fn(),
     };
     const svc = new ApprovalDispatcher(

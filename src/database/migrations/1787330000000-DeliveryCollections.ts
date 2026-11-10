@@ -84,7 +84,9 @@ export class DeliveryCollections1787330000000 implements MigrationInterface {
         DROP COLUMN IF EXISTS "amount_collected",
         DROP COLUMN IF EXISTS "paid_status"
     `);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_deliveries_advance_payment"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_deliveries_advance_payment"`,
+    );
     await queryRunner.query(`
       ALTER TABLE "deliveries"
         DROP COLUMN IF EXISTS "amount_collected",

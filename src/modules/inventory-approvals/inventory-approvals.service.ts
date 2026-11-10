@@ -85,10 +85,20 @@ export class InventoryApprovalsService {
   //  Legacy: kept to preserve existing /inventory-approvals controller
   // ==========================================================================
 
-  async list(companyId: string, status: string | undefined, page: number, limit: number) {
+  async list(
+    companyId: string,
+    status: string | undefined,
+    page: number,
+    limit: number,
+  ) {
     const qb = this.reqRepo
       .createQueryBuilder('r')
-      .leftJoinAndMapMany('r.lines', InventoryUpdateRequestLine, 'l', 'l.request_id = r.id')
+      .leftJoinAndMapMany(
+        'r.lines',
+        InventoryUpdateRequestLine,
+        'l',
+        'l.request_id = r.id',
+      )
       .where('r.companyId = :cid', { cid: companyId });
     if (status) qb.andWhere('r.status = :s', { s: status });
     qb.orderBy('r.submittedAt', 'DESC').addOrderBy('r.id', 'DESC');
@@ -96,7 +106,10 @@ export class InventoryApprovalsService {
     const [rows, total] = await qb.getManyAndCount();
     // With its total: the rows alone could not say a second page exists.
     return pagedResponse(
-      await this.enrichWithDelivery(companyId, rows.map((r) => this.formatRequest(r))),
+      await this.enrichWithDelivery(
+        companyId,
+        rows.map((r) => this.formatRequest(r)),
+      ),
       { page, limit, total },
     );
   }
@@ -141,7 +154,9 @@ export class InventoryApprovalsService {
 
       const lines: InventoryUpdateRequestLine[] = [];
       for (const l of dto.lines) {
-        const item = await itemRepo.findOne({ where: { id: l.itemId, companyId } });
+        const item = await itemRepo.findOne({
+          where: { id: l.itemId, companyId },
+        });
         const beforeQty = item ? item.quantityOnHand : '0';
         const delivered = toDecimal(l.deliveredQty);
         const returned = toDecimal(l.returnedQty ?? '0');
@@ -221,7 +236,9 @@ export class InventoryApprovalsService {
     const changes = await this.parseAndValidateChanges(body.changes);
 
     // Resolve the user's display name (JWT only carries email)
-    const callerUser = await this.userRepo.findOne({ where: { id: callerUserId } });
+    const callerUser = await this.userRepo.findOne({
+      where: { id: callerUserId },
+    });
     const resolvedName = callerUser?.displayName ?? callerName;
 
     // Best-effort notifications are sent only after the transaction commits.
@@ -274,7 +291,10 @@ export class InventoryApprovalsService {
           where: { deliveryId: delivery.id },
         });
         const dispatchedByItem = new Map(
-          deliveryLines.map((l) => [l.itemId, Number(l.orderedQty) || Number(l.quantity) || 0]),
+          deliveryLines.map((l) => [
+            l.itemId,
+            Number(l.orderedQty) || Number(l.quantity) || 0,
+          ]),
         );
         for (const c of changes) {
           const dispatched = dispatchedByItem.get(c.itemId) ?? 0;
@@ -323,7 +343,10 @@ export class InventoryApprovalsService {
         deliveryId,
         personnelId: callerUserId,
         personnelName: body.personnelName ?? resolvedName,
-        deliveryReference: body.deliveryReference ?? delivery.referenceNo ?? `DEL-${deliveryId.slice(0, 8).toUpperCase()}`,
+        deliveryReference:
+          body.deliveryReference ??
+          delivery.referenceNo ??
+          `DEL-${deliveryId.slice(0, 8).toUpperCase()}`,
         routeLabel: body.routeLabel ?? this.formatRouteLabel(delivery),
         status: 'pending',
         shadowStatus: 'pending',
@@ -377,7 +400,9 @@ export class InventoryApprovalsService {
 
       for (const c of changes) {
         const item = itemById.get(c.itemId);
-        const serverBeforeQty = item ? Number(item.quantityOnHand) : c.beforeQty;
+        const serverBeforeQty = item
+          ? Number(item.quantityOnHand)
+          : c.beforeQty;
         // Same split the validation above makes: when stock was committed to
         // Goods in Transit at assignment, warehouse on-hand already excludes
         // the dispatched units, so subtracting `delivered` here removes them a
@@ -408,7 +433,9 @@ export class InventoryApprovalsService {
           where: { companyId, personnelId: callerUserId, itemId: c.itemId },
         });
         if (shadow) {
-          shadow.currentQty = String(Number(shadow.currentQty) - c.deliveredQty + c.returnedQty);
+          shadow.currentQty = String(
+            Number(shadow.currentQty) - c.deliveredQty + c.returnedQty,
+          );
           shadow.lastSyncAt = now;
           shadow.syncStatus = 'pending';
         } else {
@@ -488,7 +515,12 @@ export class InventoryApprovalsService {
     };
   }
 
-  async getOneFormatted(companyId: string, id: string, userId: string, role: string) {
+  async getOneFormatted(
+    companyId: string,
+    id: string,
+    userId: string,
+    role: string,
+  ) {
     const req = await this.reqRepo.findOne({
       where: { id, companyId },
       relations: ['lines'],
@@ -497,7 +529,9 @@ export class InventoryApprovalsService {
     if (role === 'delivery' && req.personnelId !== userId) {
       throw new ForbiddenException('Not your request');
     }
-    const [enriched] = await this.enrichWithDelivery(companyId, [this.formatRequest(req)]);
+    const [enriched] = await this.enrichWithDelivery(companyId, [
+      this.formatRequest(req),
+    ]);
     return enriched;
   }
 
@@ -549,8 +583,9 @@ export class InventoryApprovalsService {
       const approvalDelivery = await em.getRepository(Delivery).findOne({
         where: { id: req.deliveryId, companyId },
       });
-      let ledgerResult: import('../deliveries/delivery-ledger.service').ApprovalLedgerResult | null =
-        null;
+      let ledgerResult:
+        | import('../deliveries/delivery-ledger.service').ApprovalLedgerResult
+        | null = null;
       let journalEntryId: string | null = null;
 
       if (approvalDelivery?.stockCommittedAt) {
@@ -571,7 +606,12 @@ export class InventoryApprovalsService {
         // Legacy path (delivery predates the Goods-in-Transit flow): apply
         // each line with row-locking + negative-stock guard and post
         // Dr COGS / Cr Inventory as before.
-        journalEntryId = await this.applyLegacyApproval(em, companyId, req, reviewerId);
+        journalEntryId = await this.applyLegacyApproval(
+          em,
+          companyId,
+          req,
+          reviewerId,
+        );
       }
 
       // Zero-out / delete shadow inventory entries for approved items
@@ -579,18 +619,27 @@ export class InventoryApprovalsService {
         await shadowRepo
           .createQueryBuilder()
           .update()
-          .set({ currentQty: '0', syncStatus: 'synced', lastSyncAt: new Date() })
-          .where('company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)', {
-            cid: companyId,
-            pid: req.personnelId,
-            itemIds: req.lines.map((l) => l.itemId),
+          .set({
+            currentQty: '0',
+            syncStatus: 'synced',
+            lastSyncAt: new Date(),
           })
+          .where(
+            'company_id = :cid AND personnel_id = :pid AND item_id IN (:...itemIds)',
+            {
+              cid: companyId,
+              pid: req.personnelId,
+              itemIds: req.lines.map((l) => l.itemId),
+            },
+          )
           .execute();
       }
 
       // Set delivery status to 'delivered' if not already
       const deliveryRepo = em.getRepository(Delivery);
-      const delivery = await deliveryRepo.findOne({ where: { id: req.deliveryId, companyId } });
+      const delivery = await deliveryRepo.findOne({
+        where: { id: req.deliveryId, companyId },
+      });
       if (delivery && delivery.status !== 'delivered') {
         delivery.status = 'delivered';
         delivery.completedAt = new Date();
@@ -614,7 +663,10 @@ export class InventoryApprovalsService {
       const cashNote =
         ledgerResult &&
         dto.amountCollected !== undefined &&
-        !toDecimal(ledgerResult.amountCollected).minus(riderFigure).abs().lessThanOrEqualTo(MONEY_TOLERANCE)
+        !toDecimal(ledgerResult.amountCollected)
+          .minus(riderFigure)
+          .abs()
+          .lessThanOrEqualTo(MONEY_TOLERANCE)
           ? ` Rider reported ${riderFigure.toFixed(2)} collected; owner counted ${toDecimal(ledgerResult.amountCollected).toFixed(2)}.`
           : '';
       await auditRepo.save(
@@ -647,7 +699,10 @@ export class InventoryApprovalsService {
           }),
       );
 
-      await this.messaging.enqueue(em, deliveryUpdateMessage(delivery, 'approved', reviewerId));
+      await this.messaging.enqueue(
+        em,
+        deliveryUpdateMessage(delivery, 'approved', reviewerId),
+      );
       return { ...this.formatRequest(req), ledger: ledgerResult };
     });
     afterCommit.forEach((send) => send());
@@ -669,94 +724,128 @@ export class InventoryApprovalsService {
 
     let netCost = toDecimal(0);
     for (const line of req.lines) {
-        const item = await itemRepo
-          .createQueryBuilder('i')
-          .setLock('pessimistic_write')
-          .where('i.id = :id AND i.companyId = :cid', {
-            id: line.itemId,
-            cid: companyId,
-          })
-          .getOne();
-        if (!item) {
-          throw new NotFoundException(`Inventory item ${line.itemId} not found`);
-        }
+      const item = await itemRepo
+        .createQueryBuilder('i')
+        .setLock('pessimistic_write')
+        .where('i.id = :id AND i.companyId = :cid', {
+          id: line.itemId,
+          cid: companyId,
+        })
+        .getOne();
+      if (!item) {
+        throw new NotFoundException(`Inventory item ${line.itemId} not found`);
+      }
 
-        const before = Number(item.quantityOnHand);
-        const delivered = Number(line.deliveredQty);
-        const returned = Number(line.returnedQty);
-        const next = before - delivered + returned;
+      const before = Number(item.quantityOnHand);
+      const delivered = Number(line.deliveredQty);
+      const returned = Number(line.returnedQty);
+      const next = before - delivered + returned;
 
-        if (next < 0) {
-          throw new UnprocessableEntityException({
-            code: 'NEGATIVE_STOCK',
-            message: `Approving would drive ${item.name} below zero (current ${before}, delivered ${delivered}, returned ${returned}).`,
-          });
-        }
-
-        item.quantityOnHand = String(next);
-        await itemRepo.save(item);
-        line.afterQty = String(next);
-        netCost = netCost.plus(
-          toDecimal(delivered - returned).times(toDecimal(item.unitCost)),
-        );
-
-        // `netCost` above accumulates (delivered - returned) x unitCost and the
-        // entry below posts Dr COGS / Cr Inventory by it, so 1200 moves by the
-        // negation — which is this line's quantity change at the same rate.
-        //
-        // Computed with Decimal rather than the Number() arithmetic around it:
-        // this figure is compared against the ledger by invariant I23, and a
-        // float rounding difference there is a failing build. The quantity
-        // arithmetic is left alone deliberately — changing it would change the
-        // strings already stored in quantity_on_hand.
-        await recordInventoryMovement(em, {
-          companyId,
-          itemId: line.itemId,
-          date: new Date().toISOString().split('T')[0],
-          type: 'delivery',
-          quantityChange: String(returned - delivered),
-          balanceAfter: String(next),
-          valueChange: toDecimal(returned - delivered).times(toDecimal(item.unitCost)),
-          reference: `Approval ${req.id}`,
-          sourceType: 'inventory_approval',
-          sourceId: req.id,
-          createdBy: reviewerId,
-          description: `delivery_approved: ${req.deliveryReference ?? req.deliveryId}`,
+      if (next < 0) {
+        throw new UnprocessableEntityException({
+          code: 'NEGATIVE_STOCK',
+          message: `Approving would drive ${item.name} below zero (current ${before}, delivered ${delivered}, returned ${returned}).`,
         });
       }
 
-      // Ledger commit (chunk 2): goods dispatched to the customer leave stock,
-      // so the GL must move with the quantity — Dr COGS / Cr Inventory at the
-      // item's (weighted-average) unit cost. A net return (returned >
-      // delivered) posts the mirror entry. Without this, Inventory Valuation
-      // and the Balance Sheet Inventory line diverge. Same transaction as the
-      // quantity change, so both commit or neither does.
-      let journalEntryId: string | null = null;
-      if (netCost.abs().greaterThan(MONEY_TOLERANCE)) {
-        const inventoryAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_INVENTORY, em);
-        const cogsAcct = await this.accounts.getByNumberOrFail(companyId, ACCT_COGS, em);
-        const value = netCost.abs().toFixed(4);
-        const outbound = netCost.greaterThan(0);
-        const entry = await this.posting.createEntry(em, {
-          companyId,
-          date: new Date().toISOString().split('T')[0],
-          memo: `Delivery ${req.deliveryReference ?? req.deliveryId} approved — stock committed`,
-          createdBy: reviewerId,
-          status: 'posted',
-          sourceType: 'delivery_approval',
-          sourceId: req.id,
-          lines: outbound
-            ? [
-                { accountId: cogsAcct.id, description: 'Cost of goods delivered', debit: value, credit: '0', lineOrder: 0 },
-                { accountId: inventoryAcct.id, description: 'Inventory relieved on delivery', debit: '0', credit: value, lineOrder: 1 },
-              ]
-            : [
-                { accountId: inventoryAcct.id, description: 'Inventory returned on delivery', debit: value, credit: '0', lineOrder: 0 },
-                { accountId: cogsAcct.id, description: 'COGS reversed on returned goods', debit: '0', credit: value, lineOrder: 1 },
-              ],
-        });
-        journalEntryId = entry.id;
-      }
+      item.quantityOnHand = String(next);
+      await itemRepo.save(item);
+      line.afterQty = String(next);
+      netCost = netCost.plus(
+        toDecimal(delivered - returned).times(toDecimal(item.unitCost)),
+      );
+
+      // `netCost` above accumulates (delivered - returned) x unitCost and the
+      // entry below posts Dr COGS / Cr Inventory by it, so 1200 moves by the
+      // negation — which is this line's quantity change at the same rate.
+      //
+      // Computed with Decimal rather than the Number() arithmetic around it:
+      // this figure is compared against the ledger by invariant I23, and a
+      // float rounding difference there is a failing build. The quantity
+      // arithmetic is left alone deliberately — changing it would change the
+      // strings already stored in quantity_on_hand.
+      await recordInventoryMovement(em, {
+        companyId,
+        itemId: line.itemId,
+        date: new Date().toISOString().split('T')[0],
+        type: 'delivery',
+        quantityChange: String(returned - delivered),
+        balanceAfter: String(next),
+        valueChange: toDecimal(returned - delivered).times(
+          toDecimal(item.unitCost),
+        ),
+        reference: `Approval ${req.id}`,
+        sourceType: 'inventory_approval',
+        sourceId: req.id,
+        createdBy: reviewerId,
+        description: `delivery_approved: ${req.deliveryReference ?? req.deliveryId}`,
+      });
+    }
+
+    // Ledger commit (chunk 2): goods dispatched to the customer leave stock,
+    // so the GL must move with the quantity — Dr COGS / Cr Inventory at the
+    // item's (weighted-average) unit cost. A net return (returned >
+    // delivered) posts the mirror entry. Without this, Inventory Valuation
+    // and the Balance Sheet Inventory line diverge. Same transaction as the
+    // quantity change, so both commit or neither does.
+    let journalEntryId: string | null = null;
+    if (netCost.abs().greaterThan(MONEY_TOLERANCE)) {
+      const inventoryAcct = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_INVENTORY,
+        em,
+      );
+      const cogsAcct = await this.accounts.getByNumberOrFail(
+        companyId,
+        ACCT_COGS,
+        em,
+      );
+      const value = netCost.abs().toFixed(4);
+      const outbound = netCost.greaterThan(0);
+      const entry = await this.posting.createEntry(em, {
+        companyId,
+        date: new Date().toISOString().split('T')[0],
+        memo: `Delivery ${req.deliveryReference ?? req.deliveryId} approved — stock committed`,
+        createdBy: reviewerId,
+        status: 'posted',
+        sourceType: 'delivery_approval',
+        sourceId: req.id,
+        lines: outbound
+          ? [
+              {
+                accountId: cogsAcct.id,
+                description: 'Cost of goods delivered',
+                debit: value,
+                credit: '0',
+                lineOrder: 0,
+              },
+              {
+                accountId: inventoryAcct.id,
+                description: 'Inventory relieved on delivery',
+                debit: '0',
+                credit: value,
+                lineOrder: 1,
+              },
+            ]
+          : [
+              {
+                accountId: inventoryAcct.id,
+                description: 'Inventory returned on delivery',
+                debit: value,
+                credit: '0',
+                lineOrder: 0,
+              },
+              {
+                accountId: cogsAcct.id,
+                description: 'COGS reversed on returned goods',
+                debit: '0',
+                credit: value,
+                lineOrder: 1,
+              },
+            ],
+      });
+      journalEntryId = entry.id;
+    }
 
     return journalEntryId;
   }
@@ -808,8 +897,11 @@ export class InventoryApprovalsService {
       const rejectDelivery = await em.getRepository(Delivery).findOne({
         where: { id: req.deliveryId, companyId },
       });
-      let ledgerReversal: { reversed: boolean; journalEntryId: string | null; restockedCost: string } | null =
-        null;
+      let ledgerReversal: {
+        reversed: boolean;
+        journalEntryId: string | null;
+        restockedCost: string;
+      } | null = null;
       if (rejectDelivery?.stockCommittedAt) {
         ledgerReversal = await this.deliveryLedger.releaseOnReject(
           em,
@@ -848,11 +940,17 @@ export class InventoryApprovalsService {
       if (req.lines.length > 0) {
         for (const line of req.lines) {
           const shadow = await shadowRepo.findOne({
-            where: { companyId, personnelId: req.personnelId, itemId: line.itemId },
+            where: {
+              companyId,
+              personnelId: req.personnelId,
+              itemId: line.itemId,
+            },
           });
           if (shadow) {
             shadow.currentQty = String(
-              Number(shadow.currentQty) + Number(line.deliveredQty) - Number(line.returnedQty),
+              Number(shadow.currentQty) +
+                Number(line.deliveredQty) -
+                Number(line.returnedQty),
             );
             shadow.syncStatus = 'rejected' as never;
             shadow.lastSyncAt = now;
@@ -1041,7 +1139,10 @@ export class InventoryApprovalsService {
       //   part paid      → apply_then_refund
       invoiceBalance: balance.toFixed(4),
       settlement,
-      settlementAmount: (settlement === 'apply_to_invoice' ? Decimal.min(balance, creditTotal) : creditTotal).toFixed(4),
+      settlementAmount: (settlement === 'apply_to_invoice'
+        ? Decimal.min(balance, creditTotal)
+        : creditTotal
+      ).toFixed(4),
       /** Cash going back to the customer: all of it, part of it, or none. */
       refundAmount: Decimal.max(creditTotal.minus(balance), 0).toFixed(4),
       // The reversal posts TODAY, which is also what puts it under the period
@@ -1200,11 +1301,17 @@ export class InventoryApprovalsService {
       // Reset shadow inventory for the personnel: restore qty to reflect undo
       for (const line of req.lines) {
         const shadow = await shadowRepo.findOne({
-          where: { companyId, personnelId: req.personnelId, itemId: line.itemId },
+          where: {
+            companyId,
+            personnelId: req.personnelId,
+            itemId: line.itemId,
+          },
         });
         if (shadow) {
           shadow.currentQty = String(
-            Number(shadow.currentQty) + Number(line.deliveredQty) - Number(line.returnedQty),
+            Number(shadow.currentQty) +
+              Number(line.deliveredQty) -
+              Number(line.returnedQty),
           );
           // Back to pending review (not rejected) — admin will re-decide.
           shadow.syncStatus = 'pending' as never;
@@ -1352,8 +1459,14 @@ export class InventoryApprovalsService {
    * invoice.
    */
   private async enrichWithDelivery<
-    T extends { deliveryId: string; changes: { itemId: string; deliveredQty: number }[] },
-  >(companyId: string, formatted: T[]): Promise<
+    T extends {
+      deliveryId: string;
+      changes: { itemId: string; deliveredQty: number }[];
+    },
+  >(
+    companyId: string,
+    formatted: T[],
+  ): Promise<
     (T & {
       paidStatus: DeliveryPaidStatus;
       prepaid: boolean;
@@ -1368,7 +1481,9 @@ export class InventoryApprovalsService {
       balanceDue: string;
     })[]
   > {
-    const deliveryIds = [...new Set(formatted.map((f) => f.deliveryId).filter(Boolean))];
+    const deliveryIds = [
+      ...new Set(formatted.map((f) => f.deliveryId).filter(Boolean)),
+    ];
     const deliveries = deliveryIds.length
       ? await this.deliveryRepo.find({
           where: deliveryIds.map((did) => ({ id: did, companyId })),
@@ -1402,7 +1517,10 @@ export class InventoryApprovalsService {
         saleAmount: gross.toFixed(2),
         // What was paid up front. A legacy prepaid row may predate the
         // backfill; its advance was the whole sale.
-        advanceAmount: Decimal.max(toDecimal(d?.advanceAmount ?? '0'), d?.prepaid && !d.advancePaymentId ? gross : 0).toFixed(2),
+        advanceAmount: Decimal.max(
+          toDecimal(d?.advanceAmount ?? '0'),
+          d?.prepaid && !d.advancePaymentId ? gross : 0,
+        ).toFixed(2),
         advanceApplied: advanceApplied.toFixed(2),
         amountCollected: collected.toFixed(2),
         amountDue: amountDue.toFixed(2),
@@ -1431,7 +1549,8 @@ export class InventoryApprovalsService {
       reviewedBy: r.reviewedBy ?? null,
       reviewerRole: r.reviewerRole ?? null,
       reversalCreditMemoId: r.reversalCreditMemoId ?? null,
-      reviewerComment: r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
+      reviewerComment:
+        r.reviewerComment ?? r.approvalNotes ?? r.rejectReason ?? null,
       changes: (r.lines ?? []).map((l) => ({
         itemId: l.itemId,
         itemName: l.itemName,

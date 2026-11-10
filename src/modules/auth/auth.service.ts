@@ -88,7 +88,9 @@ export interface SubscriptionSummary {
   trialConvertedAt: Date | null;
 }
 
-function subscriptionSummary(company: Company | null | undefined): SubscriptionSummary | null {
+function subscriptionSummary(
+  company: Company | null | undefined,
+): SubscriptionSummary | null {
   if (!company) return null;
   return {
     plan: normalizePlan(company.subscriptionPlan),
@@ -236,13 +238,21 @@ export class AuthService implements OnModuleInit {
       await this.mail.sendVerificationEmail(email, dto.displayName, token);
     }
 
-    const tokens = await this.issueTokens(result.user, result.companyId, dto.role);
+    const tokens = await this.issueTokens(
+      result.user,
+      result.companyId,
+      dto.role,
+    );
     return {
       user: this.toPublicUser(result.user, result.companyId),
       tokens,
       companyId: result.companyId,
       company: result.company
-        ? { id: result.company.id, name: result.company.name, status: result.company.status }
+        ? {
+            id: result.company.id,
+            name: result.company.name,
+            status: result.company.status,
+          }
         : null,
       companyStatus: result.company?.status ?? null,
       companyType: result.company?.companyType ?? null,
@@ -290,7 +300,7 @@ export class AuthService implements OnModuleInit {
 
     // super_admin is a platform-level role — never let a company membership override it
     const isSuperAdmin = user.role === 'super_admin';
-    const companyId = isSuperAdmin ? null : membership?.companyId ?? null;
+    const companyId = isSuperAdmin ? null : (membership?.companyId ?? null);
     const role: UserRole = isSuperAdmin
       ? 'super_admin'
       : ((membership?.role ?? user.role) as UserRole);
@@ -325,9 +335,12 @@ export class AuthService implements OnModuleInit {
     // An owner-created account has no email to verify, so this cannot apply to
     // it. After the portal gate: an unverified owner on the wrong door is still
     // told which door is theirs.
-    const emailUnverified = user.role === 'admin' && !!user.email && !user.isEmailVerified;
+    const emailUnverified =
+      user.role === 'admin' && !!user.email && !user.isEmailVerified;
     if (emailUnverified) {
-      this.logger.warn(`Login → verify-email only (email not verified): ${identifier}`);
+      this.logger.warn(
+        `Login → verify-email only (email not verified): ${identifier}`,
+      );
     }
 
     const company = membership?.company ?? null;
@@ -356,7 +369,8 @@ export class AuthService implements OnModuleInit {
       // every business endpoint for anything that is not `active`, so signing
       // in buys them exactly the onboarding screens they need and no more.
       if (acctStatus === 'pending' || acctStatus === 'rejected') {
-        const code = acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
+        const code =
+          acctStatus === 'rejected' ? 'COMPANY_REJECTED' : 'COMPANY_PENDING';
         // What is being waited on — a free-trial request or a payment — so a
         // returning owner sees the right screen. Only `details` survives the
         // exception filter, hence it lives there. One primary-key lookup, on
@@ -408,7 +422,9 @@ export class AuthService implements OnModuleInit {
       user: this.toPublicUser(user, companyId),
       tokens,
       companyId,
-      company: company ? { id: company.id, name: company.name, status: company.status } : null,
+      company: company
+        ? { id: company.id, name: company.name, status: company.status }
+        : null,
       companyStatus: company ? effectiveCompanyStatus(company) : null,
       companyType: company?.companyType ?? null,
       features: company
@@ -425,11 +441,14 @@ export class AuthService implements OnModuleInit {
   /** 'trial' when the item under review is a free-trial request, else 'payment'. */
   private async pendingKindOf(company: Company): Promise<'trial' | 'payment'> {
     if (!company.lastSubmissionId) return 'payment';
-    const rows: Array<{ kind: string; status: string }> = await this.dataSource.query(
-      `SELECT kind, status FROM platform_payment_submissions WHERE id = $1 LIMIT 1`,
-      [company.lastSubmissionId],
-    );
-    return rows[0]?.kind === 'TRIAL' && rows[0]?.status === 'submitted' ? 'trial' : 'payment';
+    const rows: Array<{ kind: string; status: string }> =
+      await this.dataSource.query(
+        `SELECT kind, status FROM platform_payment_submissions WHERE id = $1 LIMIT 1`,
+        [company.lastSubmissionId],
+      );
+    return rows[0]?.kind === 'TRIAL' && rows[0]?.status === 'submitted'
+      ? 'trial'
+      : 'payment';
   }
 
   async refresh(refreshToken: string): Promise<TokenPair> {
@@ -446,7 +465,11 @@ export class AuthService implements OnModuleInit {
     // both mint a new session; only one of them can win this update.
     const now = new Date();
     const claimed = await this.refreshRepo.update(
-      { tokenHash: this.hashToken(refreshToken), revokedAt: IsNull(), expiresAt: MoreThan(now) },
+      {
+        tokenHash: this.hashToken(refreshToken),
+        revokedAt: IsNull(),
+        expiresAt: MoreThan(now),
+      },
       { revokedAt: now },
     );
     if (!claimed.affected) {
@@ -492,13 +515,16 @@ export class AuthService implements OnModuleInit {
    */
   private verifyRefreshToken(token: string): JwtPayload | null {
     const secrets = [
-      this.config.get<string>('jwt.refreshSecret') || this.config.getOrThrow<string>('jwt.secret'),
+      this.config.get<string>('jwt.refreshSecret') ||
+        this.config.getOrThrow<string>('jwt.secret'),
       this.config.getOrThrow<string>('jwt.secret'),
     ];
     for (const secret of secrets) {
       try {
         const payload = this.jwt.verify<JwtPayload>(token, { secret });
-        return payload.typ === undefined || payload.typ === 'refresh' ? payload : null;
+        return payload.typ === undefined || payload.typ === 'refresh'
+          ? payload
+          : null;
       } catch {
         // Wrong secret or expired: try the next one.
       }
@@ -620,9 +646,11 @@ export class AuthService implements OnModuleInit {
     return token;
   }
 
-  async verifyEmail(
-    token: string,
-  ): Promise<{ verified: true; email: string | null; alreadyVerified: boolean }> {
+  async verifyEmail(token: string): Promise<{
+    verified: true;
+    email: string | null;
+    alreadyVerified: boolean;
+  }> {
     if (!token) {
       throw new BadRequestException({
         code: 'INVALID_TOKEN',
@@ -650,7 +678,8 @@ export class AuthService implements OnModuleInit {
       }
       throw new BadRequestException({
         code: 'INVALID_TOKEN',
-        message: 'This verification link has expired or been replaced. Request a new one.',
+        message:
+          'This verification link has expired or been replaced. Request a new one.',
       });
     }
     const user = await this.users.getByIdOrFail(record.userId);
@@ -765,7 +794,11 @@ export class AuthService implements OnModuleInit {
     if (!user) throw genericError;
 
     const record = await this.otpRepo.findOne({
-      where: { userId: user.id, usedAt: IsNull(), expiresAt: MoreThan(new Date()) },
+      where: {
+        userId: user.id,
+        usedAt: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      },
       order: { createdAt: 'DESC' },
     });
     if (!record) throw genericError;
@@ -843,9 +876,10 @@ export class AuthService implements OnModuleInit {
     // belt-and-braces — but it costs one statement and makes a stale credential
     // structurally impossible rather than merely unreachable. `revealCredential`
     // then reports "nothing stored", and the screen offers a reset.
-    await this.dataSource.query('DELETE FROM managed_credentials WHERE user_id = $1', [
-      user.id,
-    ]);
+    await this.dataSource.query(
+      'DELETE FROM managed_credentials WHERE user_id = $1',
+      [user.id],
+    );
 
     record.usedAt = new Date();
     await this.otpRepo.save(record);
@@ -903,7 +937,11 @@ export class AuthService implements OnModuleInit {
       })),
       companyId,
       company: primary?.company
-        ? { id: primary.company.id, name: primary.company.name, status: primary.company.status }
+        ? {
+            id: primary.company.id,
+            name: primary.company.name,
+            status: primary.company.status,
+          }
         : null,
       // Normalized so the client routes on a stable model; mid-session
       // deactivation (status → inactive) AND a lapsed paid subscription (live
@@ -965,9 +1003,13 @@ export class AuthService implements OnModuleInit {
     // A separate secret (and `typ`) so a refresh token can never be presented
     // as an access token: they used to share both, which made every 30-day
     // refresh token a 30-day bearer credential that sign-out did not revoke.
-    const refreshSecret = this.config.get<string>('jwt.refreshSecret') || secret;
+    const refreshSecret =
+      this.config.get<string>('jwt.refreshSecret') || secret;
     const accessExpires = this.config.get<string>('jwt.accessExpiresIn', '15m');
-    const refreshExpires = this.config.get<string>('jwt.refreshExpiresIn', '30d');
+    const refreshExpires = this.config.get<string>(
+      'jwt.refreshExpiresIn',
+      '30d',
+    );
 
     // jti on the ACCESS token lets sign-out denylist it individually
     // (revoked_access_tokens); without it a stateless access token stays
@@ -1002,7 +1044,10 @@ export class AuthService implements OnModuleInit {
       }),
     );
 
-    const decodedAccess = this.jwt.decode(accessToken) as { exp: number; iat: number };
+    const decodedAccess = this.jwt.decode(accessToken) as {
+      exp: number;
+      iat: number;
+    };
     const expiresIn = decodedAccess.exp - decodedAccess.iat;
 
     return { accessToken, refreshToken: refreshTokenStr, expiresIn };

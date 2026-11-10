@@ -9,7 +9,9 @@ import { Bill } from '../bills/entities/bill.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Customer, Vendor, Invoice, Bill, InventoryItem])],
+  imports: [
+    TypeOrmModule.forFeature([Customer, Vendor, Invoice, Bill, InventoryItem]),
+  ],
   controllers: [SearchController],
   providers: [SearchService],
 })

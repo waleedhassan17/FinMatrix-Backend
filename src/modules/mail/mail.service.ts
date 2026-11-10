@@ -21,7 +21,8 @@ import {
 @Injectable()
 export class MailService implements OnModuleInit {
   private readonly logger = new Logger(MailService.name);
-  private transport: { sendMail: (opts: unknown) => Promise<unknown> } | null = null;
+  private transport: { sendMail: (opts: unknown) => Promise<unknown> } | null =
+    null;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -40,7 +41,9 @@ export class MailService implements OnModuleInit {
       const mod: any = await import(moduleName as string);
       const nodemailer = mod?.default ?? mod;
       if (!nodemailer?.createTransport) {
-        throw new Error('nodemailer is not installed (run: npm install nodemailer)');
+        throw new Error(
+          'nodemailer is not installed (run: npm install nodemailer)',
+        );
       }
       this.transport = nodemailer.createTransport({
         host: this.config.get<string>('mail.host'),
@@ -95,7 +98,11 @@ export class MailService implements OnModuleInit {
    * owner reading on the phone the app is on. `webLink` is the API's own
    * fallback page, which links sent before `appLink` existed still point at.
    */
-  buildVerificationLinks(token: string): { appLink: string; deepLink: string; webLink: string } {
+  buildVerificationLinks(token: string): {
+    appLink: string;
+    deepLink: string;
+    webLink: string;
+  } {
     const scheme = this.config.get<string>('mail.appScheme', 'finmatrix');
     const webBase = this.config.get<string>('mail.webFallbackBaseUrl', '');
     const webAppUrl = this.config.get<string>('mail.webAppUrl', '');
@@ -117,35 +124,69 @@ export class MailService implements OnModuleInit {
     return this.config.get<string>('mail.appScheme', 'finmatrix');
   }
 
-  async sendVerificationEmail(to: string, displayName: string, token: string): Promise<void> {
+  async sendVerificationEmail(
+    to: string,
+    displayName: string,
+    token: string,
+  ): Promise<void> {
     const { appLink } = this.buildVerificationLinks(token);
     await this.send(to, emailTemplates.verification(displayName, appLink));
   }
 
-  async sendOtpEmail(to: string, displayName: string, otp: string): Promise<void> {
+  async sendOtpEmail(
+    to: string,
+    displayName: string,
+    otp: string,
+  ): Promise<void> {
     const ttl = this.config.get<number>('mail.otpTtlMinutes', 10);
     await this.send(to, emailTemplates.otp(displayName, otp, ttl));
   }
 
-  async sendCompanySubmittedNotice(companyName: string, ownerEmail: string): Promise<void> {
+  async sendCompanySubmittedNotice(
+    companyName: string,
+    ownerEmail: string,
+  ): Promise<void> {
     const adminEmail = this.config.get<string>('mail.platformAdminEmail');
     if (!adminEmail) {
-      this.logger.warn('No ADMIN_EMAIL configured — skipping submission notice.');
+      this.logger.warn(
+        'No ADMIN_EMAIL configured — skipping submission notice.',
+      );
       return;
     }
-    await this.send(adminEmail, emailTemplates.companySubmitted(companyName, ownerEmail));
+    await this.send(
+      adminEmail,
+      emailTemplates.companySubmitted(companyName, ownerEmail),
+    );
   }
 
-  async sendApprovalEmail(to: string, displayName: string, companyName: string): Promise<void> {
-    await this.send(to, emailTemplates.approved(displayName, companyName, this.webAppUrl()));
+  async sendApprovalEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.approved(displayName, companyName, this.webAppUrl()),
+    );
   }
 
-  async sendDeactivatedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+  async sendDeactivatedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
     await this.send(to, emailTemplates.deactivated(displayName, companyName));
   }
 
-  async sendReactivatedEmail(to: string, displayName: string, companyName: string): Promise<void> {
-    await this.send(to, emailTemplates.reactivated(displayName, companyName, this.webAppUrl()));
+  async sendReactivatedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.reactivated(displayName, companyName, this.webAppUrl()),
+    );
   }
 
   async sendRejectionEmail(
@@ -154,13 +195,23 @@ export class MailService implements OnModuleInit {
     companyName: string,
     reason: string,
   ): Promise<void> {
-    await this.send(to, emailTemplates.rejected(displayName, companyName, reason));
+    await this.send(
+      to,
+      emailTemplates.rejected(displayName, companyName, reason),
+    );
   }
 
   // ── Free trial ──────────────────────────────────────────────────────────
 
-  async sendTrialRequestedEmail(to: string, displayName: string, companyName: string): Promise<void> {
-    await this.send(to, emailTemplates.trialRequested(displayName, companyName));
+  async sendTrialRequestedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.trialRequested(displayName, companyName),
+    );
   }
 
   /** Tells the platform admin a trial is waiting (the user was promised 24 hours). */
@@ -171,10 +222,15 @@ export class MailService implements OnModuleInit {
   ): Promise<void> {
     const adminEmail = this.config.get<string>('mail.platformAdminEmail');
     if (!adminEmail) {
-      this.logger.warn('No ADMIN_EMAIL configured — skipping trial request notice.');
+      this.logger.warn(
+        'No ADMIN_EMAIL configured — skipping trial request notice.',
+      );
       return;
     }
-    await this.send(adminEmail, emailTemplates.trialRequestedAdmin(companyName, ownerEmail, ownerPhone));
+    await this.send(
+      adminEmail,
+      emailTemplates.trialRequestedAdmin(companyName, ownerEmail, ownerPhone),
+    );
   }
 
   async sendTrialApprovedEmail(
@@ -183,7 +239,10 @@ export class MailService implements OnModuleInit {
     companyName: string,
     trialEndsAt: Date,
   ): Promise<void> {
-    await this.send(to, emailTemplates.trialApproved(displayName, companyName, trialEndsAt));
+    await this.send(
+      to,
+      emailTemplates.trialApproved(displayName, companyName, trialEndsAt),
+    );
   }
 
   async sendTrialRejectedEmail(
@@ -192,7 +251,10 @@ export class MailService implements OnModuleInit {
     companyName: string,
     reason: string,
   ): Promise<void> {
-    await this.send(to, emailTemplates.trialRejected(displayName, companyName, reason));
+    await this.send(
+      to,
+      emailTemplates.trialRejected(displayName, companyName, reason),
+    );
   }
 
   async sendTrialEndingEmail(
@@ -201,10 +263,17 @@ export class MailService implements OnModuleInit {
     companyName: string,
     daysRemaining: number,
   ): Promise<void> {
-    await this.send(to, emailTemplates.trialEnding(displayName, companyName, daysRemaining));
+    await this.send(
+      to,
+      emailTemplates.trialEnding(displayName, companyName, daysRemaining),
+    );
   }
 
-  async sendTrialEndedEmail(to: string, displayName: string, companyName: string): Promise<void> {
+  async sendTrialEndedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
     await this.send(to, emailTemplates.trialEnded(displayName, companyName));
   }
 
@@ -243,7 +312,9 @@ export class MailService implements OnModuleInit {
       this.logger.log(`Email sent to ${to}: "${email.subject}"`);
     } catch (err) {
       // Never let a mail failure break the calling flow.
-      this.logger.error(`Failed to send email to ${to}: ${(err as Error).message}`);
+      this.logger.error(
+        `Failed to send email to ${to}: ${(err as Error).message}`,
+      );
     }
   }
 }

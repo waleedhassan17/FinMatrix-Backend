@@ -8,21 +8,32 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import Decimal from 'decimal.js';
-import { SalesOrder, DiscountType, SalesOrderStatus } from './entities/sales-order.entity';
+import {
+  SalesOrder,
+  DiscountType,
+  SalesOrderStatus,
+} from './entities/sales-order.entity';
 import { SalesOrderLineItem } from './entities/sales-order-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import {
-  ConvertSalesOrderDto, CreateSalesOrderDto, FulfillSalesOrderDto, ListSalesOrdersQueryDto,
-  SalesOrderLineDto, UpdateSalesOrderDto,
+  ConvertSalesOrderDto,
+  CreateSalesOrderDto,
+  FulfillSalesOrderDto,
+  ListSalesOrdersQueryDto,
+  SalesOrderLineDto,
+  UpdateSalesOrderDto,
 } from './dto/sales-order.dto';
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { nextDocumentNumber, yearOf } from '../../common/utils/sequence.util';
 import { applyTextSearch } from '../../common/utils/search-query.util';
 import { InvoicesService } from '../invoices/invoices.service';
-import { addDaysIso, businessToday } from '../../common/utils/business-date.util';
+import {
+  addDaysIso,
+  businessToday,
+} from '../../common/utils/business-date.util';
 import {
   assertSalesLinesClassified,
   backorderLines,
@@ -35,7 +46,10 @@ import {
   enforceCreditLimit,
   grossValue,
 } from '../../common/utils/credit-control.util';
-import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
+import {
+  pagedResponse,
+  statusSummary,
+} from '../../common/utils/paged-response.util';
 
 /** Options for sales orders created by the system rather than typed by a user. */
 export interface CreateSalesOrderOptions {
@@ -46,9 +60,15 @@ export interface CreateSalesOrderOptions {
 }
 
 interface LineCalc {
-  description: string; quantity: string; unitPrice: string; taxRate: string;
-  taxAmount: string; lineTotal: string; accountId: string | null;
-  itemId: string | null; lineOrder: number;
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  taxRate: string;
+  taxAmount: string;
+  lineTotal: string;
+  accountId: string | null;
+  itemId: string | null;
+  lineOrder: number;
 }
 
 @Injectable()
@@ -57,18 +77,30 @@ export class SalesOrdersService {
     private readonly dataSource: DataSource,
     private readonly invoices: InvoicesService,
     @InjectRepository(SalesOrder) private readonly repo: Repository<SalesOrder>,
-    @InjectRepository(SalesOrderLineItem) private readonly lineRepo: Repository<SalesOrderLineItem>,
-    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(SalesOrderLineItem)
+    private readonly lineRepo: Repository<SalesOrderLineItem>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
   ) {}
 
-  async list(companyId: string, query: ListSalesOrdersQueryDto, pagination: PaginationParams) {
+  async list(
+    companyId: string,
+    query: ListSalesOrdersQueryDto,
+    pagination: PaginationParams,
+  ) {
     // Everything but the status tab: the summary counts every tab of these.
     const filtered = () => {
-      const qb = this.repo.createQueryBuilder('o').where('o.companyId = :companyId', { companyId });
-      if (query.customerId) qb.andWhere('o.customerId = :c', { c: query.customerId });
+      const qb = this.repo
+        .createQueryBuilder('o')
+        .where('o.companyId = :companyId', { companyId });
+      if (query.customerId)
+        qb.andWhere('o.customerId = :c', { c: query.customerId });
       if (query.startDate && query.endDate) {
         // Named apart from the status's `:s`: one name holds one value per query.
-        qb.andWhere('o.orderDate BETWEEN :startDate AND :endDate', { startDate: query.startDate, endDate: query.endDate });
+        qb.andWhere('o.orderDate BETWEEN :startDate AND :endDate', {
+          startDate: query.startDate,
+          endDate: query.endDate,
+        });
       }
       applyTextSearch(qb, query.search, companyId, {
         columns: ['o.orderNumber', 'o.notes'],
@@ -82,8 +114,12 @@ export class SalesOrdersService {
     qb.take(pagination.limit).skip(pagination.skip);
 
     const [data, total] = await qb.getManyAndCount();
-    const customerIds = [...new Set(data.map((o) => o.customerId).filter(Boolean))];
-    const customers = customerIds.length ? await this.customerRepo.findByIds(customerIds) : [];
+    const customerIds = [
+      ...new Set(data.map((o) => o.customerId).filter(Boolean)),
+    ];
+    const customers = customerIds.length
+      ? await this.customerRepo.findByIds(customerIds)
+      : [];
     const nameMap = Object.fromEntries(customers.map((c) => [c.id, c.name]));
 
     // Over everything the search matches — the tabs' counts — not the page.
@@ -98,8 +134,15 @@ export class SalesOrdersService {
   }
 
   async getById(companyId: string, id: string): Promise<SalesOrder> {
-    const so = await this.repo.findOne({ where: { id, companyId }, relations: { lines: true } });
-    if (!so) throw new NotFoundException({ code: 'SALES_ORDER_NOT_FOUND', message: 'Sales order not found' });
+    const so = await this.repo.findOne({
+      where: { id, companyId },
+      relations: { lines: true },
+    });
+    if (!so)
+      throw new NotFoundException({
+        code: 'SALES_ORDER_NOT_FOUND',
+        message: 'Sales order not found',
+      });
     so.lines.sort((a, b) => a.lineOrder - b.lineOrder);
     return so;
   }
@@ -121,15 +164,27 @@ export class SalesOrdersService {
     let hasBackorder = false;
     const lines = so.lines.map((l) => {
       const pos = l.itemId ? positions.get(l.itemId) : undefined;
-      const stillToShip = Decimal.max(toDecimal(l.quantity).minus(toDecimal(l.quantityFulfilled)), 0);
-      const backorderQty = pos && open
-        ? Decimal.max(stillToShip.minus(Decimal.max(toDecimal(pos.available), 0)), 0)
-        : new Decimal(0);
+      const stillToShip = Decimal.max(
+        toDecimal(l.quantity).minus(toDecimal(l.quantityFulfilled)),
+        0,
+      );
+      const backorderQty =
+        pos && open
+          ? Decimal.max(
+              stillToShip.minus(Decimal.max(toDecimal(pos.available), 0)),
+              0,
+            )
+          : new Decimal(0);
       if (backorderQty.greaterThan(0)) hasBackorder = true;
       return Object.assign(l, {
         lineKind: lineKindOf(l.itemId),
         stock: pos
-          ? { onHand: pos.onHand, committed: pos.committed, available: pos.available, sku: pos.sku }
+          ? {
+              onHand: pos.onHand,
+              committed: pos.committed,
+              available: pos.available,
+              sku: pos.sku,
+            }
           : null,
         backorderQty: backorderQty.toFixed(4),
       });
@@ -145,7 +200,14 @@ export class SalesOrdersService {
     opts: CreateSalesOrderOptions = {},
   ): Promise<SalesOrder> {
     return this.dataSource.transaction(async (manager) =>
-      this.createInTransaction(manager, companyId, userId, dto, sourceEstimateId, opts),
+      this.createInTransaction(
+        manager,
+        companyId,
+        userId,
+        dto,
+        sourceEstimateId,
+        opts,
+      ),
     );
   }
 
@@ -163,18 +225,39 @@ export class SalesOrdersService {
     opts: CreateSalesOrderOptions = {},
   ): Promise<SalesOrder> {
     {
-      const customer = await manager.findOne(Customer, { where: { id: dto.customerId, companyId } });
-      if (!customer) throw new NotFoundException({ code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+      const customer = await manager.findOne(Customer, {
+        where: { id: dto.customerId, companyId },
+      });
+      if (!customer)
+        throw new NotFoundException({
+          code: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer not found',
+        });
       await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
       await assertSalesLinesClassified(manager, companyId, dto.lines, {
         treatFreeTextAsService: opts.treatFreeTextAsService,
       });
       if (!opts.skipStockChecks) {
-        await this.assertBackorderAccepted(manager, companyId, dto.lines, dto.acceptBackorder, null);
+        await this.assertBackorderAccepted(
+          manager,
+          companyId,
+          dto.lines,
+          dto.acceptBackorder,
+          null,
+        );
       }
 
-      const totals = this.computeTotals(dto.lines, dto.discountType, dto.discountValue);
-      const orderNumber = await nextDocumentNumber(manager, companyId, 'SO', yearOf(dto.orderDate));
+      const totals = this.computeTotals(
+        dto.lines,
+        dto.discountType,
+        dto.discountValue,
+      );
+      const orderNumber = await nextDocumentNumber(
+        manager,
+        companyId,
+        'SO',
+        yearOf(dto.orderDate),
+      );
 
       const order = manager.create(SalesOrder, {
         companyId,
@@ -196,54 +279,97 @@ export class SalesOrdersService {
       });
       await manager.save(order);
 
-      const lines = totals.lines.map((l) => manager.create(SalesOrderLineItem, {
-        salesOrderId: order.id, quantityFulfilled: '0', ...l,
-      }));
+      const lines = totals.lines.map((l) =>
+        manager.create(SalesOrderLineItem, {
+          salesOrderId: order.id,
+          quantityFulfilled: '0',
+          ...l,
+        }),
+      );
       await manager.save(lines);
       order.lines = lines;
       if (!opts.skipStockChecks) {
         // Not a block: an order only promises goods. It warns early that
         // shipping all of it would take the customer past their credit limit.
-        const creditCheck = await assessCredit(manager, companyId, order.customerId, order.total, {
-          excludeSalesOrderId: order.id,
-        });
+        const creditCheck = await assessCredit(
+          manager,
+          companyId,
+          order.customerId,
+          order.total,
+          {
+            excludeSalesOrderId: order.id,
+          },
+        );
         return Object.assign(order, { creditCheck });
       }
       return order;
     }
   }
 
-  async update(companyId: string, id: string, dto: UpdateSalesOrderDto): Promise<SalesOrder> {
+  async update(
+    companyId: string,
+    id: string,
+    dto: UpdateSalesOrderDto,
+  ): Promise<SalesOrder> {
     return this.dataSource.transaction(async (manager) => {
-      const order = await manager.findOne(SalesOrder, { where: { id, companyId }, relations: { lines: true } });
-      if (!order) throw new NotFoundException({ code: 'SALES_ORDER_NOT_FOUND', message: 'Sales order not found' });
+      const order = await manager.findOne(SalesOrder, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!order)
+        throw new NotFoundException({
+          code: 'SALES_ORDER_NOT_FOUND',
+          message: 'Sales order not found',
+        });
       if (order.status === 'invoiced' || order.status === 'cancelled') {
-        throw new BadRequestException({ code: 'CANNOT_EDIT', message: `Cannot edit a ${order.status} sales order` });
+        throw new BadRequestException({
+          code: 'CANNOT_EDIT',
+          message: `Cannot edit a ${order.status} sales order`,
+        });
       }
 
       if (dto.orderDate !== undefined) order.orderDate = dto.orderDate;
       if (dto.expectedDate !== undefined) order.expectedDate = dto.expectedDate;
       if (dto.notes !== undefined) order.notes = dto.notes;
 
-      if (dto.lines && order.lines.some((l) => toDecimal(l.quantityFulfilled).greaterThan(0))) {
+      if (
+        dto.lines &&
+        order.lines.some((l) => toDecimal(l.quantityFulfilled).greaterThan(0))
+      ) {
         // Rebuilding the lines resets what has already been shipped to zero.
         throw new BadRequestException({
           code: 'SO_HAS_SHIPMENTS',
-          message: 'Goods have already been shipped on this order, so its lines can no longer be changed.',
+          message:
+            'Goods have already been shipped on this order, so its lines can no longer be changed.',
         });
       }
 
-      if (dto.lines || dto.discountType !== undefined || dto.discountValue !== undefined) {
+      if (
+        dto.lines ||
+        dto.discountType !== undefined ||
+        dto.discountValue !== undefined
+      ) {
         if (dto.lines) {
           await this.assertItemsBelongToCompany(manager, companyId, dto.lines);
           await assertSalesLinesClassified(manager, companyId, dto.lines);
-          await this.assertBackorderAccepted(manager, companyId, dto.lines, dto.acceptBackorder, order.id);
+          await this.assertBackorderAccepted(
+            manager,
+            companyId,
+            dto.lines,
+            dto.acceptBackorder,
+            order.id,
+          );
         }
-        const nextLines = dto.lines ?? order.lines.map<SalesOrderLineDto>((l) => ({
-          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-          taxRate: l.taxRate, accountId: l.accountId ?? undefined,
-          itemId: l.itemId ?? undefined,
-        }));
+        const nextLines =
+          dto.lines ??
+          order.lines.map<SalesOrderLineDto>((l) => ({
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            accountId: l.accountId ?? undefined,
+            itemId: l.itemId ?? undefined,
+          }));
         const dType = dto.discountType ?? order.discountType;
         const dValue = dto.discountValue ?? order.discountValue;
         const totals = this.computeTotals(nextLines, dType, dValue);
@@ -255,9 +381,13 @@ export class SalesOrdersService {
         order.total = totals.total;
         if (dto.lines) {
           await manager.delete(SalesOrderLineItem, { salesOrderId: order.id });
-          const newLines = totals.lines.map((l) => manager.create(SalesOrderLineItem, {
-            salesOrderId: order.id, quantityFulfilled: '0', ...l,
-          }));
+          const newLines = totals.lines.map((l) =>
+            manager.create(SalesOrderLineItem, {
+              salesOrderId: order.id,
+              quantityFulfilled: '0',
+              ...l,
+            }),
+          );
           await manager.save(newLines);
           // See the same line in EstimatesService.update: the cascade on
           // `manager.save(order)` below would otherwise walk the rows just
@@ -266,12 +396,31 @@ export class SalesOrdersService {
         }
       }
       await manager.save(order);
-      const saved = (await manager.findOne(SalesOrder, { where: { id, companyId }, relations: { lines: true } }))!;
+      const saved = (await manager.findOne(SalesOrder, {
+        where: { id, companyId },
+        relations: { lines: true },
+      }))!;
       const unshipped = saved.lines.reduce(
-        (sum, l) => sum.plus(grossValue(Decimal.max(toDecimal(l.quantity).minus(toDecimal(l.quantityFulfilled)), 0), l.unitPrice, l.taxRate)),
+        (sum, l) =>
+          sum.plus(
+            grossValue(
+              Decimal.max(
+                toDecimal(l.quantity).minus(toDecimal(l.quantityFulfilled)),
+                0,
+              ),
+              l.unitPrice,
+              l.taxRate,
+            ),
+          ),
         new Decimal(0),
       );
-      const creditCheck = await assessCredit(manager, companyId, saved.customerId, unshipped, {});
+      const creditCheck = await assessCredit(
+        manager,
+        companyId,
+        saved.customerId,
+        unshipped,
+        {},
+      );
       return Object.assign(saved, { creditCheck });
     });
   }
@@ -283,10 +432,20 @@ export class SalesOrdersService {
     creditOverride: CreditOverride | null = null,
   ): Promise<SalesOrder> {
     return this.dataSource.transaction(async (manager) => {
-      const order = await manager.findOne(SalesOrder, { where: { id, companyId }, relations: { lines: true } });
-      if (!order) throw new NotFoundException({ code: 'SALES_ORDER_NOT_FOUND', message: 'Sales order not found' });
+      const order = await manager.findOne(SalesOrder, {
+        where: { id, companyId },
+        relations: { lines: true },
+      });
+      if (!order)
+        throw new NotFoundException({
+          code: 'SALES_ORDER_NOT_FOUND',
+          message: 'Sales order not found',
+        });
       if (order.status === 'invoiced' || order.status === 'cancelled') {
-        throw new BadRequestException({ code: 'CANNOT_FULFILL', message: `Cannot fulfill a ${order.status} sales order` });
+        throw new BadRequestException({
+          code: 'CANNOT_FULFILL',
+          message: `Cannot fulfill a ${order.status} sales order`,
+        });
       }
       await this.assertNotDeliveryOrder(manager, companyId, order.id);
 
@@ -294,37 +453,62 @@ export class SalesOrdersService {
       // Shipping is where "we don't have it" becomes a hard stop: an order may
       // be taken on backorder, but goods cannot leave that are not on the shelf.
       const shippingByItem = new Map<string, Decimal>();
-      const updates: Array<{ line: SalesOrderLineItem; fulfilled: Decimal }> = [];
+      const updates: Array<{ line: SalesOrderLineItem; fulfilled: Decimal }> =
+        [];
       let shippedValue = new Decimal(0);
       for (const f of dto.lines) {
         const line = byId.get(f.lineId);
-        if (!line) throw new BadRequestException({ code: 'LINE_NOT_FOUND', message: `Line ${f.lineId} not found` });
+        if (!line)
+          throw new BadRequestException({
+            code: 'LINE_NOT_FOUND',
+            message: `Line ${f.lineId} not found`,
+          });
         const fulfilled = toDecimal(f.quantityFulfilled);
         if (fulfilled.lessThan(0)) {
-          throw new BadRequestException({ code: 'VALIDATION_FAILED', message: 'Shipped quantity cannot be negative' });
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'Shipped quantity cannot be negative',
+          });
         }
         if (fulfilled.greaterThan(toDecimal(line.quantity))) {
-          throw new BadRequestException({ code: 'OVER_FULFILLED', message: 'Fulfilled quantity exceeds ordered quantity' });
+          throw new BadRequestException({
+            code: 'OVER_FULFILLED',
+            message: 'Fulfilled quantity exceeds ordered quantity',
+          });
         }
         const delta = fulfilled.minus(toDecimal(line.quantityFulfilled));
         if (line.itemId && delta.greaterThan(0)) {
-          shippingByItem.set(line.itemId, (shippingByItem.get(line.itemId) ?? new Decimal(0)).plus(delta));
+          shippingByItem.set(
+            line.itemId,
+            (shippingByItem.get(line.itemId) ?? new Decimal(0)).plus(delta),
+          );
         }
-        if (delta.greaterThan(0)) shippedValue = shippedValue.plus(grossValue(delta, line.unitPrice, line.taxRate));
+        if (delta.greaterThan(0))
+          shippedValue = shippedValue.plus(
+            grossValue(delta, line.unitPrice, line.taxRate),
+          );
         updates.push({ line, fulfilled });
       }
       // Goods leaving on credit: the customer's credit limit is checked here,
       // before anything is recorded as shipped.
       if (shippedValue.greaterThan(0)) {
-        await enforceCreditLimit(manager, companyId, order.customerId, shippedValue, {
-          action: 'sales_order_shipment',
-          targetType: 'sales_order',
-          targetId: order.id,
-          override: creditOverride,
-        });
+        await enforceCreditLimit(
+          manager,
+          companyId,
+          order.customerId,
+          shippedValue,
+          {
+            action: 'sales_order_shipment',
+            targetType: 'sales_order',
+            targetId: order.id,
+            override: creditOverride,
+          },
+        );
       }
       if (shippingByItem.size > 0) {
-        const positions = await stockPositions(manager, companyId, [...shippingByItem.keys()]);
+        const positions = await stockPositions(manager, companyId, [
+          ...shippingByItem.keys(),
+        ]);
         for (const [itemId, qty] of shippingByItem) {
           const pos = positions.get(itemId);
           if (pos && qty.greaterThan(toDecimal(pos.onHand))) {
@@ -341,12 +525,23 @@ export class SalesOrdersService {
       }
 
       // Recompute status from fulfillment progress.
-      const fresh = await manager.find(SalesOrderLineItem, { where: { salesOrderId: order.id } });
-      const allFull = fresh.every((l) => toDecimal(l.quantityFulfilled).greaterThanOrEqualTo(toDecimal(l.quantity)));
-      const anyFull = fresh.some((l) => toDecimal(l.quantityFulfilled).greaterThan(0));
+      const fresh = await manager.find(SalesOrderLineItem, {
+        where: { salesOrderId: order.id },
+      });
+      const allFull = fresh.every((l) =>
+        toDecimal(l.quantityFulfilled).greaterThanOrEqualTo(
+          toDecimal(l.quantity),
+        ),
+      );
+      const anyFull = fresh.some((l) =>
+        toDecimal(l.quantityFulfilled).greaterThan(0),
+      );
       order.status = allFull ? 'fulfilled' : anyFull ? 'partial' : 'open';
       await manager.save(order);
-      return (await manager.findOne(SalesOrder, { where: { id, companyId }, relations: { lines: true } }))!;
+      return (await manager.findOne(SalesOrder, {
+        where: { id, companyId },
+        relations: { lines: true },
+      }))!;
     });
   }
 
@@ -355,15 +550,29 @@ export class SalesOrdersService {
    * staff member's conversion is filed as an invoice approval carrying this,
    * so the owner reviews the actual lines and amounts before it posts.
    */
-  async conversionPayload(companyId: string, id: string, dto: ConvertSalesOrderDto) {
+  async conversionPayload(
+    companyId: string,
+    id: string,
+    dto: ConvertSalesOrderDto,
+  ) {
     const order = await this.getById(companyId, id);
     if (order.status === 'invoiced') {
-      throw new BadRequestException({ code: 'ALREADY_INVOICED', message: 'Sales order already invoiced' });
+      throw new BadRequestException({
+        code: 'ALREADY_INVOICED',
+        message: 'Sales order already invoiced',
+      });
     }
     if (order.status === 'cancelled') {
-      throw new BadRequestException({ code: 'ORDER_CANCELLED', message: 'Cancelled sales orders cannot be invoiced' });
+      throw new BadRequestException({
+        code: 'ORDER_CANCELLED',
+        message: 'Cancelled sales orders cannot be invoiced',
+      });
     }
-    await this.assertNotDeliveryOrder(this.dataSource.manager, companyId, order.id);
+    await this.assertNotDeliveryOrder(
+      this.dataSource.manager,
+      companyId,
+      order.id,
+    );
     return {
       orderNumber: order.orderNumber,
       payload: {
@@ -375,8 +584,12 @@ export class SalesOrdersService {
         discountValue: order.discountValue,
         notes: `Converted from sales order ${order.orderNumber}`,
         lines: order.lines.map((l) => ({
-          description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-          taxRate: l.taxRate, itemId: l.itemId ?? undefined, lineKind: lineKindOf(l.itemId),
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxRate: l.taxRate,
+          itemId: l.itemId ?? undefined,
+          lineKind: lineKindOf(l.itemId),
         })),
       },
     };
@@ -397,12 +610,22 @@ export class SalesOrdersService {
         .setLock('pessimistic_write')
         .where('o.id = :id AND o.companyId = :companyId', { id, companyId })
         .getOne();
-      if (!order) throw new NotFoundException({ code: 'SALES_ORDER_NOT_FOUND', message: 'Sales order not found' });
+      if (!order)
+        throw new NotFoundException({
+          code: 'SALES_ORDER_NOT_FOUND',
+          message: 'Sales order not found',
+        });
       if (order.status === 'invoiced') {
-        throw new BadRequestException({ code: 'ALREADY_INVOICED', message: 'Sales order already invoiced' });
+        throw new BadRequestException({
+          code: 'ALREADY_INVOICED',
+          message: 'Sales order already invoiced',
+        });
       }
       if (order.status === 'cancelled') {
-        throw new BadRequestException({ code: 'ORDER_CANCELLED', message: 'Cancelled sales orders cannot be invoiced' });
+        throw new BadRequestException({
+          code: 'ORDER_CANCELLED',
+          message: 'Cancelled sales orders cannot be invoiced',
+        });
       }
       await this.assertNotDeliveryOrder(manager, companyId, order.id);
       const lines = await manager.find(SalesOrderLineItem, {
@@ -427,8 +650,11 @@ export class SalesOrdersService {
           // Dr COGS / Cr Inventory and a stock movement per line. Conversion is
           // refused (INSUFFICIENT_STOCK) when the stock is not there.
           lines: lines.map((l) => ({
-            description: l.description, quantity: l.quantity, unitPrice: l.unitPrice,
-            taxRate: l.taxRate, accountId: l.accountId ?? undefined,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            accountId: l.accountId ?? undefined,
             itemId: l.itemId ?? undefined,
             lineKind: lineKindOf(l.itemId),
           })),
@@ -448,7 +674,10 @@ export class SalesOrdersService {
   async cancel(companyId: string, id: string): Promise<SalesOrder> {
     const order = await this.getById(companyId, id);
     if (order.status === 'invoiced') {
-      throw new BadRequestException({ code: 'ALREADY_INVOICED', message: 'Invoiced sales orders cannot be cancelled' });
+      throw new BadRequestException({
+        code: 'ALREADY_INVOICED',
+        message: 'Invoiced sales orders cannot be cancelled',
+      });
     }
     order.status = 'cancelled';
     await this.repo.save(order);
@@ -458,7 +687,10 @@ export class SalesOrdersService {
   async delete(companyId: string, id: string) {
     const order = await this.getById(companyId, id);
     if (order.status === 'invoiced') {
-      throw new BadRequestException({ code: 'CANNOT_DELETE', message: 'Invoiced sales orders cannot be deleted' });
+      throw new BadRequestException({
+        code: 'CANNOT_DELETE',
+        message: 'Invoiced sales orders cannot be deleted',
+      });
     }
     await this.repo.remove(order);
     return { id, deleted: true };
@@ -470,8 +702,14 @@ export class SalesOrdersService {
    * or invoicing that order by hand as well would move the stock twice and
    * book the revenue twice.
    */
-  private async assertNotDeliveryOrder(manager: EntityManager, companyId: string, orderId: string): Promise<void> {
-    const delivery = await manager.findOne(Delivery, { where: { companyId, salesOrderId: orderId } });
+  private async assertNotDeliveryOrder(
+    manager: EntityManager,
+    companyId: string,
+    orderId: string,
+  ): Promise<void> {
+    const delivery = await manager.findOne(Delivery, {
+      where: { companyId, salesOrderId: orderId },
+    });
     if (delivery) {
       throw new BadRequestException({
         code: 'SO_MANAGED_BY_DELIVERY',
@@ -494,7 +732,9 @@ export class SalesOrdersService {
     excludeSalesOrderId: string | null,
   ): Promise<void> {
     if (accepted) return;
-    const short = await backorderLines(manager, companyId, lines, { excludeSalesOrderId });
+    const short = await backorderLines(manager, companyId, lines, {
+      excludeSalesOrderId,
+    });
     if (short.length === 0) return;
     throw new ConflictException({
       code: 'BACKORDER_CONFIRMATION_REQUIRED',
@@ -518,7 +758,9 @@ export class SalesOrdersService {
     companyId: string,
     lines: { itemId?: string }[],
   ): Promise<void> {
-    const ids = [...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id))];
+    const ids = [
+      ...new Set(lines.map((l) => l.itemId).filter((id): id is string => !!id)),
+    ];
     if (ids.length === 0) return;
     const found = await manager.getRepository(InventoryItem).find({
       where: { id: In(ids), companyId },
@@ -527,7 +769,8 @@ export class SalesOrdersService {
     if (found.length !== ids.length) {
       throw new BadRequestException({
         code: 'ITEM_NOT_FOUND',
-        message: 'One or more line items reference an inventory item that does not exist',
+        message:
+          'One or more line items reference an inventory item that does not exist',
       });
     }
   }
@@ -536,7 +779,13 @@ export class SalesOrdersService {
     lines: SalesOrderLineDto[],
     discountType: 'percent' | 'amount' | 'none' | undefined,
     discountValue: string | undefined,
-  ): { subtotal: string; discountAmount: string; taxAmount: string; total: string; lines: LineCalc[] } {
+  ): {
+    subtotal: string;
+    discountAmount: string;
+    taxAmount: string;
+    total: string;
+    lines: LineCalc[];
+  } {
     const calc: LineCalc[] = [];
     let subtotal = new Decimal(0);
     let taxTotal = new Decimal(0);
@@ -549,19 +798,32 @@ export class SalesOrdersService {
       subtotal = subtotal.plus(base);
       taxTotal = taxTotal.plus(tax);
       calc.push({
-        description: l.description, quantity: qty.toFixed(4), unitPrice: price.toFixed(4),
-        taxRate: taxRate.toFixed(4), taxAmount: tax.toFixed(4), lineTotal: base.plus(tax).toFixed(4),
-        accountId: l.accountId ?? null, itemId: l.itemId ?? null, lineOrder: i,
+        description: l.description,
+        quantity: qty.toFixed(4),
+        unitPrice: price.toFixed(4),
+        taxRate: taxRate.toFixed(4),
+        taxAmount: tax.toFixed(4),
+        lineTotal: base.plus(tax).toFixed(4),
+        accountId: l.accountId ?? null,
+        itemId: l.itemId ?? null,
+        lineOrder: i,
       });
     });
     let discountAmount = new Decimal(0);
-    if (discountType === 'percent') discountAmount = subtotal.times(toDecimal(discountValue ?? 0)).dividedBy(100);
-    else if (discountType === 'amount') discountAmount = toDecimal(discountValue ?? 0);
+    if (discountType === 'percent')
+      discountAmount = subtotal
+        .times(toDecimal(discountValue ?? 0))
+        .dividedBy(100);
+    else if (discountType === 'amount')
+      discountAmount = toDecimal(discountValue ?? 0);
     if (discountAmount.greaterThan(subtotal)) discountAmount = subtotal;
     const total = subtotal.minus(discountAmount).plus(taxTotal);
     return {
-      subtotal: subtotal.toFixed(4), discountAmount: discountAmount.toFixed(4),
-      taxAmount: taxTotal.toFixed(4), total: total.toFixed(4), lines: calc,
+      subtotal: subtotal.toFixed(4),
+      discountAmount: discountAmount.toFixed(4),
+      taxAmount: taxTotal.toFixed(4),
+      total: total.toFixed(4),
+      lines: calc,
     };
   }
 }

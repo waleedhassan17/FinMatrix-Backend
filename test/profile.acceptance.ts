@@ -29,8 +29,13 @@ const STAFF_PASSWORD = process.env.STAFF_PASSWORD;
 let pass = 0;
 let fail = 0;
 const ok = (name: string, cond: boolean, detail = '') => {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name} ${detail}`); }
+  if (cond) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name} ${detail}`);
+  }
 };
 
 async function req(
@@ -45,14 +50,21 @@ async function req(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   let parsed: any = null;
-  try { parsed = await res.json(); } catch { /* empty body */ }
+  try {
+    parsed = await res.json();
+  } catch {
+    /* empty body */
+  }
   return { status: res.status, body: parsed };
 }
 
 const bearer = (t: string) => ({ Authorization: `Bearer ${t}` });
 const unwrap = (b: any) => b?.data ?? b;
 
-async function signin(identifier: string, password: string): Promise<string | undefined> {
+async function signin(
+  identifier: string,
+  password: string,
+): Promise<string | undefined> {
   const r = await req('POST', '/auth/signin', { identifier, password });
   const data = unwrap(r.body);
   return (data?.tokens ?? data)?.accessToken;
@@ -65,47 +77,120 @@ async function checkOwner() {
   if (!token) return;
   const auth = bearer(token);
 
-  const before = unwrap((await req('GET', '/auth/me', undefined, auth)).body)?.user;
+  const before = unwrap(
+    (await req('GET', '/auth/me', undefined, auth)).body,
+  )?.user;
   ok('GET /auth/me returns the user', !!before?.id);
   if (!before) return;
-  const original = { displayName: before.displayName as string, phone: before.phone as string | null };
+  const original = {
+    displayName: before.displayName as string,
+    phone: before.phone as string | null,
+  };
 
   const anon = await req('PATCH', '/auth/me', { displayName: 'Nobody' });
-  ok('PATCH /auth/me without a token is 401', anon.status === 401, `status=${anon.status}`);
+  ok(
+    'PATCH /auth/me without a token is 401',
+    anon.status === 401,
+    `status=${anon.status}`,
+  );
 
-  const upd = await req('PATCH', '/auth/me', { displayName: '  Profile   Test ', phone: '0312-4890176' }, auth);
+  const upd = await req(
+    'PATCH',
+    '/auth/me',
+    { displayName: '  Profile   Test ', phone: '0312-4890176' },
+    auth,
+  );
   const updUser = unwrap(upd.body)?.user;
-  ok('PATCH saves name + phone', upd.status === 200, `status=${upd.status} ${JSON.stringify(upd.body)}`);
-  ok('name is tidied', updUser?.displayName === 'Profile Test', `got ${updUser?.displayName}`);
-  ok('phone is stored as +92…', updUser?.phone === '+923124890176', `got ${updUser?.phone}`);
-  ok('answers with the /auth/me shape (company + features)', 'company' in (unwrap(upd.body) ?? {}) && 'features' in (unwrap(upd.body) ?? {}));
+  ok(
+    'PATCH saves name + phone',
+    upd.status === 200,
+    `status=${upd.status} ${JSON.stringify(upd.body)}`,
+  );
+  ok(
+    'name is tidied',
+    updUser?.displayName === 'Profile Test',
+    `got ${updUser?.displayName}`,
+  );
+  ok(
+    'phone is stored as +92…',
+    updUser?.phone === '+923124890176',
+    `got ${updUser?.phone}`,
+  );
+  ok(
+    'answers with the /auth/me shape (company + features)',
+    'company' in (unwrap(upd.body) ?? {}) &&
+      'features' in (unwrap(upd.body) ?? {}),
+  );
 
   const me = unwrap((await req('GET', '/auth/me', undefined, auth)).body)?.user;
-  ok('GET /auth/me reflects the change', me?.displayName === 'Profile Test' && me?.phone === '+923124890176');
+  ok(
+    'GET /auth/me reflects the change',
+    me?.displayName === 'Profile Test' && me?.phone === '+923124890176',
+  );
 
-  const badPhone = await req('PATCH', '/auth/me', { displayName: 'Profile Test', phone: '12345' }, auth);
-  ok('a bad phone is 400', badPhone.status === 400, `status=${badPhone.status}`);
+  const badPhone = await req(
+    'PATCH',
+    '/auth/me',
+    { displayName: 'Profile Test', phone: '12345' },
+    auth,
+  );
+  ok(
+    'a bad phone is 400',
+    badPhone.status === 400,
+    `status=${badPhone.status}`,
+  );
   const badName = await req('PATCH', '/auth/me', { displayName: 'A' }, auth);
-  ok('a one-letter name is 400', badName.status === 400, `status=${badName.status}`);
-  const still = unwrap((await req('GET', '/auth/me', undefined, auth)).body)?.user;
-  ok('a refused edit changes nothing', still?.displayName === 'Profile Test' && still?.phone === '+923124890176');
+  ok(
+    'a one-letter name is 400',
+    badName.status === 400,
+    `status=${badName.status}`,
+  );
+  const still = unwrap(
+    (await req('GET', '/auth/me', undefined, auth)).body,
+  )?.user;
+  ok(
+    'a refused edit changes nothing',
+    still?.displayName === 'Profile Test' && still?.phone === '+923124890176',
+  );
 
-  const cleared = unwrap((await req('PATCH', '/auth/me', { displayName: 'Profile Test', phone: '' }, auth)).body)?.user;
-  ok('a blank phone clears it', cleared?.phone === null, `got ${cleared?.phone}`);
+  const cleared = unwrap(
+    (
+      await req(
+        'PATCH',
+        '/auth/me',
+        { displayName: 'Profile Test', phone: '' },
+        auth,
+      )
+    ).body,
+  )?.user;
+  ok(
+    'a blank phone clears it',
+    cleared?.phone === null,
+    `got ${cleared?.phone}`,
+  );
 
   const restored = await req(
     'PATCH',
     '/auth/me',
-    { displayName: original.displayName, ...(original.phone ? { phone: original.phone } : {}) },
+    {
+      displayName: original.displayName,
+      ...(original.phone ? { phone: original.phone } : {}),
+    },
     auth,
   );
   const r = unwrap(restored.body)?.user;
-  ok('original name and phone are restored', r?.displayName === original.displayName && (r?.phone ?? null) === (original.phone ?? null));
+  ok(
+    'original name and phone are restored',
+    r?.displayName === original.displayName &&
+      (r?.phone ?? null) === (original.phone ?? null),
+  );
 }
 
 async function checkStaff() {
   if (!STAFF_USERNAME || !STAFF_PASSWORD) {
-    console.log('\n── team member ── ~ skipped (STAFF_USERNAME/STAFF_PASSWORD not set)');
+    console.log(
+      '\n── team member ── ~ skipped (STAFF_USERNAME/STAFF_PASSWORD not set)',
+    );
     return;
   }
   console.log(`\n── team member (${STAFF_USERNAME}) ──`);
@@ -113,10 +198,30 @@ async function checkStaff() {
   ok('team member signs in', !!token);
   if (!token) return;
   const auth = bearer(token);
-  const before = unwrap((await req('GET', '/auth/me', undefined, auth)).body)?.user;
-  const upd = await req('PATCH', '/auth/me', { displayName: 'Staff Profile Test' }, auth);
-  ok('a team member can edit their own name', upd.status === 200 && unwrap(upd.body)?.user?.displayName === 'Staff Profile Test', `status=${upd.status}`);
-  await req('PATCH', '/auth/me', { displayName: before.displayName, ...(before.phone ? { phone: before.phone } : {}) }, auth);
+  const before = unwrap(
+    (await req('GET', '/auth/me', undefined, auth)).body,
+  )?.user;
+  const upd = await req(
+    'PATCH',
+    '/auth/me',
+    { displayName: 'Staff Profile Test' },
+    auth,
+  );
+  ok(
+    'a team member can edit their own name',
+    upd.status === 200 &&
+      unwrap(upd.body)?.user?.displayName === 'Staff Profile Test',
+    `status=${upd.status}`,
+  );
+  await req(
+    'PATCH',
+    '/auth/me',
+    {
+      displayName: before.displayName,
+      ...(before.phone ? { phone: before.phone } : {}),
+    },
+    auth,
+  );
 }
 
 (async () => {

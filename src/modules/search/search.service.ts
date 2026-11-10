@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityTarget, In, ObjectLiteral, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityTarget,
+  In,
+  ObjectLiteral,
+  Repository,
+} from 'typeorm';
 import { Customer } from '../customers/entities/customer.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
@@ -74,15 +80,23 @@ const PER_BUCKET = 20;
 @Injectable()
 export class SearchService {
   constructor(
-    @InjectRepository(Customer) private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
     @InjectRepository(Vendor) private readonly vendorRepo: Repository<Vendor>,
-    @InjectRepository(Invoice) private readonly invoiceRepo: Repository<Invoice>,
+    @InjectRepository(Invoice)
+    private readonly invoiceRepo: Repository<Invoice>,
     @InjectRepository(Bill) private readonly billRepo: Repository<Bill>,
-    @InjectRepository(InventoryItem) private readonly itemRepo: Repository<InventoryItem>,
+    @InjectRepository(InventoryItem)
+    private readonly itemRepo: Repository<InventoryItem>,
     private readonly dataSource: DataSource,
   ) {}
 
-  async search(companyId: string, q: string | undefined, entities?: string, role?: string) {
+  async search(
+    companyId: string,
+    q: string | undefined,
+    entities?: string,
+    role?: string,
+  ) {
     const query = (q ?? '').trim();
     const results: Record<string, any[]> = {};
 
@@ -94,17 +108,24 @@ export class SearchService {
       ? (entities
           .split(',')
           .map((e) => e.trim())
-          .filter((e) => (ALL_ENTITIES as readonly string[]).includes(e)) as SearchEntity[])
+          .filter((e) =>
+            (ALL_ENTITIES as readonly string[]).includes(e),
+          ) as SearchEntity[])
       : [...ALL_ENTITIES];
     if (role === 'delivery') {
-      targetEntities = targetEntities.filter((e) => DELIVERY_ENTITIES.includes(e));
+      targetEntities = targetEntities.filter((e) =>
+        DELIVERY_ENTITIES.includes(e),
+      );
     }
 
     // Tier enforcement (feature-map): a company never gets hits from a module
     // its tier does not have, even when the caller asks for them — same lookup
     // as FeatureGuard.
     if (targetEntities.some((e) => ENTITY_FEATURE[e])) {
-      const features = await companyFeatures(this.dataSource.manager, companyId);
+      const features = await companyFeatures(
+        this.dataSource.manager,
+        companyId,
+      );
       targetEntities = targetEntities.filter((e) => {
         const feature = ENTITY_FEATURE[e];
         return !feature || features[feature];
@@ -112,19 +133,41 @@ export class SearchService {
     }
 
     if (targetEntities.includes('customers')) {
-      const qb = this.customerRepo.createQueryBuilder('c').where('c.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['c.code', 'c.name', 'c.company', 'c.email', 'c.phone'] });
-      results.customers = await qb.orderBy('c.name', 'ASC').take(PER_BUCKET).getMany();
+      const qb = this.customerRepo
+        .createQueryBuilder('c')
+        .where('c.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, {
+        columns: ['c.code', 'c.name', 'c.company', 'c.email', 'c.phone'],
+      });
+      results.customers = await qb
+        .orderBy('c.name', 'ASC')
+        .take(PER_BUCKET)
+        .getMany();
     }
 
     if (targetEntities.includes('vendors')) {
-      const qb = this.vendorRepo.createQueryBuilder('v').where('v.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['v.code', 'v.companyName', 'v.contactPerson', 'v.email', 'v.phone'] });
-      results.vendors = await qb.orderBy('v.companyName', 'ASC').take(PER_BUCKET).getMany();
+      const qb = this.vendorRepo
+        .createQueryBuilder('v')
+        .where('v.companyId = :cid', { cid: companyId });
+      applyTextSearch(qb, query, companyId, {
+        columns: [
+          'v.code',
+          'v.companyName',
+          'v.contactPerson',
+          'v.email',
+          'v.phone',
+        ],
+      });
+      results.vendors = await qb
+        .orderBy('v.companyName', 'ASC')
+        .take(PER_BUCKET)
+        .getMany();
     }
 
     if (targetEntities.includes('invoices')) {
-      const qb = this.invoiceRepo.createQueryBuilder('i').where('i.companyId = :cid', { cid: companyId });
+      const qb = this.invoiceRepo
+        .createQueryBuilder('i')
+        .where('i.companyId = :cid', { cid: companyId });
       applyTextSearch(qb, query, companyId, {
         columns: ['i.invoiceNumber', 'i.notes'],
         customerColumn: 'i.customerId',
@@ -139,7 +182,9 @@ export class SearchService {
     }
 
     if (targetEntities.includes('bills')) {
-      const qb = this.billRepo.createQueryBuilder('b').where('b.companyId = :cid', { cid: companyId });
+      const qb = this.billRepo
+        .createQueryBuilder('b')
+        .where('b.companyId = :cid', { cid: companyId });
       applyTextSearch(qb, query, companyId, {
         columns: ['b.billNumber', 'b.memo'],
         vendorColumn: 'b.vendorId',
@@ -153,9 +198,14 @@ export class SearchService {
     }
 
     if (targetEntities.includes('inventory')) {
-      const qb = this.itemRepo.createQueryBuilder('i').where('i.companyId = :cid', { cid: companyId });
+      const qb = this.itemRepo
+        .createQueryBuilder('i')
+        .where('i.companyId = :cid', { cid: companyId });
       applyTextSearch(qb, query, companyId, { columns: ['i.name', 'i.sku'] });
-      results.inventory = await qb.orderBy('i.name', 'ASC').take(PER_BUCKET).getMany();
+      results.inventory = await qb
+        .orderBy('i.name', 'ASC')
+        .take(PER_BUCKET)
+        .getMany();
     }
 
     if (targetEntities.includes('purchaseOrders')) {
@@ -163,8 +213,15 @@ export class SearchService {
         .getRepository(PurchaseOrder)
         .createQueryBuilder('o')
         .where('o.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['o.poNumber', 'o.notes'], vendorColumn: 'o.vendorId' });
-      const rows = await qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      applyTextSearch(qb, query, companyId, {
+        columns: ['o.poNumber', 'o.notes'],
+        vendorColumn: 'o.vendorId',
+      });
+      const rows = await qb
+        .orderBy('o.orderDate', 'DESC')
+        .addOrderBy('o.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.purchaseOrders = await this.withVendorNames(companyId, rows);
     }
 
@@ -173,8 +230,15 @@ export class SearchService {
         .getRepository(SalesOrder)
         .createQueryBuilder('o')
         .where('o.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['o.orderNumber', 'o.notes'], customerColumn: 'o.customerId' });
-      const rows = await qb.orderBy('o.orderDate', 'DESC').addOrderBy('o.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      applyTextSearch(qb, query, companyId, {
+        columns: ['o.orderNumber', 'o.notes'],
+        customerColumn: 'o.customerId',
+      });
+      const rows = await qb
+        .orderBy('o.orderDate', 'DESC')
+        .addOrderBy('o.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.salesOrders = await this.withCustomerNames(companyId, rows);
     }
 
@@ -183,8 +247,15 @@ export class SearchService {
         .getRepository(Estimate)
         .createQueryBuilder('e')
         .where('e.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['e.estimateNumber', 'e.notes'], customerColumn: 'e.customerId' });
-      const rows = await qb.orderBy('e.estimateDate', 'DESC').addOrderBy('e.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      applyTextSearch(qb, query, companyId, {
+        columns: ['e.estimateNumber', 'e.notes'],
+        customerColumn: 'e.customerId',
+      });
+      const rows = await qb
+        .orderBy('e.estimateDate', 'DESC')
+        .addOrderBy('e.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.estimates = await this.withCustomerNames(companyId, rows);
     }
 
@@ -197,7 +268,11 @@ export class SearchService {
         columns: ['p.paymentNumber', 'p.reference', 'p.memo'],
         customerColumn: 'p.customerId',
       });
-      const rows = await qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      const rows = await qb
+        .orderBy('p.paymentDate', 'DESC')
+        .addOrderBy('p.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.payments = await this.withCustomerNames(companyId, rows);
     }
 
@@ -206,8 +281,15 @@ export class SearchService {
         .getRepository(CreditMemo)
         .createQueryBuilder('m')
         .where('m.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['m.creditMemoNumber', 'm.reason'], customerColumn: 'm.customerId' });
-      const rows = await qb.orderBy('m.date', 'DESC').addOrderBy('m.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      applyTextSearch(qb, query, companyId, {
+        columns: ['m.creditMemoNumber', 'm.reason'],
+        customerColumn: 'm.customerId',
+      });
+      const rows = await qb
+        .orderBy('m.date', 'DESC')
+        .addOrderBy('m.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.creditMemos = await this.withCustomerNames(companyId, rows);
     }
 
@@ -216,8 +298,15 @@ export class SearchService {
         .getRepository(VendorCredit)
         .createQueryBuilder('v')
         .where('v.companyId = :cid', { cid: companyId });
-      applyTextSearch(qb, query, companyId, { columns: ['v.vendorCreditNumber', 'v.reason'], vendorColumn: 'v.vendorId' });
-      const rows = await qb.orderBy('v.date', 'DESC').addOrderBy('v.createdAt', 'DESC').take(PER_BUCKET).getMany();
+      applyTextSearch(qb, query, companyId, {
+        columns: ['v.vendorCreditNumber', 'v.reason'],
+        vendorColumn: 'v.vendorId',
+      });
+      const rows = await qb
+        .orderBy('v.date', 'DESC')
+        .addOrderBy('v.createdAt', 'DESC')
+        .take(PER_BUCKET)
+        .getMany();
       results.vendorCredits = await this.withVendorNames(companyId, rows);
     }
 
@@ -280,18 +369,32 @@ export class SearchService {
     return { query, results };
   }
 
-  private async withCustomerNames<T extends ObjectLiteral & { customerId: string }>(companyId: string, rows: T[]) {
+  private async withCustomerNames<
+    T extends ObjectLiteral & { customerId: string },
+  >(companyId: string, rows: T[]) {
     const ids = [...new Set(rows.map((r) => r.customerId).filter(Boolean))];
     if (ids.length === 0) return rows.map((r) => ({ ...r, customerName: '' }));
-    const customers = await this.customerRepo.find({ where: { companyId, id: In(ids) }, select: ['id', 'name'] });
+    const customers = await this.customerRepo.find({
+      where: { companyId, id: In(ids) },
+      select: ['id', 'name'],
+    });
     const names = new Map(customers.map((c) => [c.id, c.name]));
-    return rows.map((r) => ({ ...r, customerName: names.get(r.customerId) ?? '' }));
+    return rows.map((r) => ({
+      ...r,
+      customerName: names.get(r.customerId) ?? '',
+    }));
   }
 
-  private async withVendorNames<T extends ObjectLiteral & { vendorId: string }>(companyId: string, rows: T[]) {
+  private async withVendorNames<T extends ObjectLiteral & { vendorId: string }>(
+    companyId: string,
+    rows: T[],
+  ) {
     const ids = [...new Set(rows.map((r) => r.vendorId).filter(Boolean))];
     if (ids.length === 0) return rows.map((r) => ({ ...r, vendorName: '' }));
-    const vendors = await this.vendorRepo.find({ where: { companyId, id: In(ids) }, select: ['id', 'companyName'] });
+    const vendors = await this.vendorRepo.find({
+      where: { companyId, id: In(ids) },
+      select: ['id', 'companyName'],
+    });
     const names = new Map(vendors.map((v) => [v.id, v.companyName]));
     return rows.map((r) => ({ ...r, vendorName: names.get(r.vendorId) ?? '' }));
   }

@@ -33,7 +33,11 @@ export class BillPurchaseOrderLink1783850000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_bills_purchase_order_id"`);
-    await queryRunner.query(`ALTER TABLE "bills" DROP COLUMN IF EXISTS "purchase_order_id"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "UQ_bills_purchase_order_id"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "bills" DROP COLUMN IF EXISTS "purchase_order_id"`,
+    );
   }
 }

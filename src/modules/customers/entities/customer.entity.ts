@@ -42,10 +42,21 @@ export class Customer extends BaseCompanyEntity {
   @Column({ type: 'jsonb', nullable: true, name: 'shipping_address' })
   shippingAddress!: Address | null;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'credit_limit' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'credit_limit',
+  })
   creditLimit!: string;
 
-  @Column({ type: 'varchar', length: 32, default: 'net30', name: 'payment_terms' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'net30',
+    name: 'payment_terms',
+  })
   paymentTerms!: PaymentTerms;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
@@ -57,7 +68,12 @@ export class Customer extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 
-  @Column({ type: 'varchar', length: 200, nullable: true, name: 'contact_person' })
+  @Column({
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+    name: 'contact_person',
+  })
   contactPerson!: string | null;
 
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'tax_id' })
@@ -75,7 +91,12 @@ export class Customer extends BaseCompanyEntity {
 
   // ── FinMatrix Connect (1790500000000-MessagingFoundation) ──
   /** The number WhatsApp messages go to, E.164 ('+923001234567'). */
-  @Column({ type: 'varchar', length: 16, nullable: true, name: 'whatsapp_e164' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'whatsapp_e164',
+  })
   whatsappE164!: string | null;
 
   /** When someone recorded this contact's consent to WhatsApp messages. */
@@ -106,7 +127,12 @@ export class Customer extends BaseCompanyEntity {
   })
   whatsappUserId?: string | null;
 
-  @Column({ type: 'varchar', length: 2, nullable: true, name: 'preferred_language' })
+  @Column({
+    type: 'varchar',
+    length: 2,
+    nullable: true,
+    name: 'preferred_language',
+  })
   preferredLanguage!: 'en' | 'ur' | null;
 
   /** Stops payment reminders and statements for this customer only. */

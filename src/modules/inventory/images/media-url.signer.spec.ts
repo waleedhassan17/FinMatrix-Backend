@@ -2,7 +2,9 @@ import { ConfigService } from '@nestjs/config';
 import { MediaUrlSigner } from './media-url.signer';
 
 const config = (values: Record<string, string>) =>
-  ({ get: (key: string, fallback?: string) => values[key] ?? fallback }) as unknown as ConfigService;
+  ({
+    get: (key: string, fallback?: string) => values[key] ?? fallback,
+  }) as unknown as ConfigService;
 
 const signer = (extra: Record<string, string> = {}) =>
   new MediaUrlSigner(
@@ -20,20 +22,31 @@ const NOW = Date.UTC(2026, 9, 21, 10, 30);
 /** Pull exp and sig back out of a URL the signer issued. */
 const parts = (url: string) => {
   const u = new URL(url);
-  return { path: u.pathname, exp: u.searchParams.get('exp')!, sig: u.searchParams.get('sig')! };
+  return {
+    path: u.pathname,
+    exp: u.searchParams.get('exp')!,
+    sig: u.searchParams.get('sig')!,
+  };
 };
 
 describe('MediaUrlSigner', () => {
   it('builds both URLs on the API host, ending in .jpg', () => {
     const { imageUrl, thumbnailUrl } = signer().urlsFor(IMAGE, NOW);
-    expect(parts(imageUrl!).path).toBe(`/api/v1/media/item-images/${IMAGE}/display.jpg`);
-    expect(parts(thumbnailUrl!).path).toBe(`/api/v1/media/item-images/${IMAGE}/thumb.jpg`);
+    expect(parts(imageUrl!).path).toBe(
+      `/api/v1/media/item-images/${IMAGE}/display.jpg`,
+    );
+    expect(parts(thumbnailUrl!).path).toBe(
+      `/api/v1/media/item-images/${IMAGE}/thumb.jpg`,
+    );
     // The web PDF renderer only embeds an https URL that says .jpg/.png.
     expect(imageUrl).toMatch(/^https:\/\/.+\.jpg\?/);
   });
 
   it('answers null for an item with no photo', () => {
-    expect(signer().urlsFor(null)).toEqual({ imageUrl: null, thumbnailUrl: null });
+    expect(signer().urlsFor(null)).toEqual({
+      imageUrl: null,
+      thumbnailUrl: null,
+    });
   });
 
   it('verifies its own signature', () => {
@@ -46,14 +59,26 @@ describe('MediaUrlSigner', () => {
     const s = signer();
     const { exp, sig } = parts(s.urlsFor(IMAGE, NOW).thumbnailUrl!);
     expect(s.verify(IMAGE, 'display', exp, sig, NOW)).toBe(false);
-    expect(s.verify('11111111-2222-4333-8444-555555555555', 'thumb', exp, sig, NOW)).toBe(false);
+    expect(
+      s.verify('11111111-2222-4333-8444-555555555555', 'thumb', exp, sig, NOW),
+    ).toBe(false);
   });
 
   it('refuses a stretched expiry or a tampered signature', () => {
     const s = signer();
     const { exp, sig } = parts(s.urlsFor(IMAGE, NOW).thumbnailUrl!);
-    expect(s.verify(IMAGE, 'thumb', String(Number(exp) + 86_400), sig, NOW)).toBe(false);
-    expect(s.verify(IMAGE, 'thumb', exp, sig.slice(0, -1) + (sig.endsWith('A') ? 'B' : 'A'), NOW)).toBe(false);
+    expect(
+      s.verify(IMAGE, 'thumb', String(Number(exp) + 86_400), sig, NOW),
+    ).toBe(false);
+    expect(
+      s.verify(
+        IMAGE,
+        'thumb',
+        exp,
+        sig.slice(0, -1) + (sig.endsWith('A') ? 'B' : 'A'),
+        NOW,
+      ),
+    ).toBe(false);
     expect(s.verify(IMAGE, 'thumb', exp, undefined, NOW)).toBe(false);
     expect(s.verify(IMAGE, 'thumb', 'soon', sig, NOW)).toBe(false);
   });
@@ -81,6 +106,8 @@ describe('MediaUrlSigner', () => {
   it('a different key cannot verify, and MEDIA_URL_SECRET takes precedence over JWT_SECRET', () => {
     const issued = parts(signer().urlsFor(IMAGE, NOW).thumbnailUrl!);
     const other = signer({ MEDIA_URL_SECRET: 'm'.repeat(40) });
-    expect(other.verify(IMAGE, 'thumb', issued.exp, issued.sig, NOW)).toBe(false);
+    expect(other.verify(IMAGE, 'thumb', issued.exp, issued.sig, NOW)).toBe(
+      false,
+    );
   });
 });

@@ -12,10 +12,22 @@ export class InventoryAdjustment extends BaseCompanyEntity {
   @Column({ type: 'date' })
   date!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'previous_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'previous_qty',
+  })
   previousQty!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'new_qty' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'new_qty',
+  })
   newQty!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
@@ -24,7 +36,12 @@ export class InventoryAdjustment extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 32 })
   reason!: InventoryAdjustmentReason;
 
-  @Column({ type: 'varchar', length: 64, nullable: true, name: 'reference_num' })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    name: 'reference_num',
+  })
   referenceNum!: string | null;
 
   @Column({ type: 'text', nullable: true })
@@ -43,7 +60,12 @@ export class InventoryAdjustment extends BaseCompanyEntity {
    * reason says. Null only on rows the backfill missed; readers fall back to
    * ACCT_INVENTORY_ADJUSTMENT.
    */
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'offset_account_number' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'offset_account_number',
+  })
   offsetAccountNumber!: string | null;
 
   @Column({ type: 'uuid', name: 'created_by' })

@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * registered so input tax on bills is posted to Sales Tax Recoverable (1300)
  * instead of being rolled into the expense/inventory line. Idempotent.
  */
-export class CompanySalesTaxRegistered1783100000000
-  implements MigrationInterface
-{
+export class CompanySalesTaxRegistered1783100000000 implements MigrationInterface {
   name = 'CompanySalesTaxRegistered1783100000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

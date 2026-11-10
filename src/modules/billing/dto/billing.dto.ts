@@ -1,5 +1,11 @@
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { PLAN_KEYS, PlanKey } from '../plan-config';
 
 /** Body for POST /billing/submit (multipart, alongside the screenshot file). */
@@ -38,7 +44,9 @@ export class ListSubmissionsQueryDto {
 
   /** A specific kind, or PAYMENT for every non-trial submission. */
   @IsOptional()
-  @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toUpperCase() : value,
+  )
   @IsIn(['NEW', 'RENEWAL', 'UPGRADE', 'TRIAL', 'PAYMENT'])
   kind?: 'NEW' | 'RENEWAL' | 'UPGRADE' | 'TRIAL' | 'PAYMENT';
 

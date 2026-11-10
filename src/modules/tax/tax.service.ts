@@ -1,13 +1,25 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { TaxRate } from './entities/tax-rate.entity';
 import { TaxPayment } from './entities/tax-payment.entity';
-import { CreateTaxRateDto, UpdateTaxRateDto, CreateTaxPaymentDto } from './dto/tax.dto';
+import {
+  CreateTaxRateDto,
+  UpdateTaxRateDto,
+  CreateTaxPaymentDto,
+} from './dto/tax.dto';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { Account } from '../accounts/entities/account.entity';
-import { ACCT_CASH, ACCT_TAX_PAYABLE, ACCT_INPUT_TAX } from '../accounts/accounts.constants';
+import {
+  ACCT_CASH,
+  ACCT_TAX_PAYABLE,
+  ACCT_INPUT_TAX,
+} from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 import { pagedResponse } from '../../common/utils/paged-response.util';
@@ -16,14 +28,22 @@ import { pagedResponse } from '../../common/utils/paged-response.util';
 export class TaxService {
   constructor(
     @InjectRepository(TaxRate) private readonly rateRepo: Repository<TaxRate>,
-    @InjectRepository(TaxPayment) private readonly paymentRepo: Repository<TaxPayment>,
+    @InjectRepository(TaxPayment)
+    private readonly paymentRepo: Repository<TaxPayment>,
     private readonly dataSource: DataSource,
     private readonly posting: PostingService,
     private readonly accounts: AccountsService,
   ) {}
 
-  async listRates(companyId: string, page: number, limit: number, isActive?: boolean) {
-    const qb = this.rateRepo.createQueryBuilder('r').where('r.companyId = :cid', { cid: companyId });
+  async listRates(
+    companyId: string,
+    page: number,
+    limit: number,
+    isActive?: boolean,
+  ) {
+    const qb = this.rateRepo
+      .createQueryBuilder('r')
+      .where('r.companyId = :cid', { cid: companyId });
     if (isActive !== undefined) qb.andWhere('r.isActive = :a', { a: isActive });
     qb.orderBy('r.createdAt', 'DESC').addOrderBy('r.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
@@ -39,7 +59,10 @@ export class TaxService {
 
   async createRate(companyId: string, dto: CreateTaxRateDto) {
     if (dto.isDefault) {
-      await this.rateRepo.update({ companyId, isDefault: true }, { isDefault: false });
+      await this.rateRepo.update(
+        { companyId, isDefault: true },
+        { isDefault: false },
+      );
     }
     // Map app aliases (taxType -> type, description -> authority) and default the
     // NOT-NULL `type` column so a create never violates the constraint.
@@ -58,7 +81,10 @@ export class TaxService {
   async updateRate(companyId: string, id: string, dto: UpdateTaxRateDto) {
     const r = await this.getRate(companyId, id);
     if (dto.isDefault && !r.isDefault) {
-      await this.rateRepo.update({ companyId, isDefault: true }, { isDefault: false });
+      await this.rateRepo.update(
+        { companyId, isDefault: true },
+        { isDefault: false },
+      );
     }
     if (dto.name !== undefined) r.name = dto.name;
     if (dto.rate !== undefined) r.rate = dto.rate;
@@ -88,10 +114,19 @@ export class TaxService {
     return { id, deleted: true };
   }
 
-  async listPayments(companyId: string, taxRateId: string | undefined, page: number, limit: number) {
-    const qb = this.paymentRepo.createQueryBuilder('p').where('p.companyId = :cid', { cid: companyId });
+  async listPayments(
+    companyId: string,
+    taxRateId: string | undefined,
+    page: number,
+    limit: number,
+  ) {
+    const qb = this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.companyId = :cid', { cid: companyId });
     if (taxRateId) qb.andWhere('p.taxRateId = :tid', { tid: taxRateId });
-    qb.orderBy('p.paymentDate', 'DESC').addOrderBy('p.createdAt', 'DESC').addOrderBy('p.id', 'DESC');
+    qb.orderBy('p.paymentDate', 'DESC')
+      .addOrderBy('p.createdAt', 'DESC')
+      .addOrderBy('p.id', 'DESC');
     qb.skip((page - 1) * limit).take(limit);
     const [data, total] = await qb.getManyAndCount();
     return pagedResponse(data, { page, limit, total });
@@ -162,7 +197,9 @@ export class TaxService {
    */
   async deletePayment(companyId: string, id: string, userId: string) {
     return this.dataSource.transaction(async (em) => {
-      const payment = await em.findOne(TaxPayment, { where: { id, companyId } });
+      const payment = await em.findOne(TaxPayment, {
+        where: { id, companyId },
+      });
       if (!payment) {
         throw new NotFoundException({
           code: 'TAX_PAYMENT_NOT_FOUND',

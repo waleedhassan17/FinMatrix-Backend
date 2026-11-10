@@ -11,7 +11,8 @@ export const MONEY_TOLERANCE = new Decimal('0.0001');
 export type MoneyInput = string | number | Decimal;
 
 export function toDecimal(value: MoneyInput | null | undefined): Decimal {
-  if (value === null || value === undefined || value === '') return new Decimal(0);
+  if (value === null || value === undefined || value === '')
+    return new Decimal(0);
   return new Decimal(value);
 }
 
@@ -20,7 +21,10 @@ export function toMoneyString(value: MoneyInput): string {
 }
 
 export function addMoney(...values: MoneyInput[]): Decimal {
-  return values.reduce<Decimal>((acc, v) => acc.plus(toDecimal(v)), new Decimal(0));
+  return values.reduce<Decimal>(
+    (acc, v) => acc.plus(toDecimal(v)),
+    new Decimal(0),
+  );
 }
 
 export function subtractMoney(a: MoneyInput, b: MoneyInput): Decimal {

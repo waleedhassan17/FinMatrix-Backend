@@ -73,7 +73,9 @@ export class SubscriptionLifecycle1783500000000 implements MigrationInterface {
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP TABLE IF EXISTS "platform_revenue"`);
-    await queryRunner.query(`DROP TABLE IF EXISTS "platform_payment_submissions"`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "platform_payment_submissions"`,
+    );
     await queryRunner.query(`
       ALTER TABLE "companies"
         DROP COLUMN IF EXISTS "subscription_status",

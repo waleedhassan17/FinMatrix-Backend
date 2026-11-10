@@ -95,7 +95,12 @@ export class ApprovalRequest extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'reviewed_by' })
   reviewedBy!: string | null;
 
-  @Column({ type: 'varchar', length: 16, nullable: true, name: 'reviewer_role' })
+  @Column({
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+    name: 'reviewer_role',
+  })
   reviewerRole!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true, name: 'reviewed_at' })

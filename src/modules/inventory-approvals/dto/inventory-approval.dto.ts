@@ -13,7 +13,10 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DELIVERY_PAID_STATUSES, DeliveryPaidStatus } from '../../deliveries/delivery-collection.util';
+import {
+  DELIVERY_PAID_STATUSES,
+  DeliveryPaidStatus,
+} from '../../deliveries/delivery-collection.util';
 
 // ============================================================================
 //  Legacy DTOs (kept so existing /inventory-approvals routes keep working)
@@ -44,7 +47,8 @@ export class ReviewRequestDto {
 
   @ApiPropertyOptional({
     example: '500',
-    description: "Approve only: the cash the rider handed in, overriding the rider's figure.",
+    description:
+      "Approve only: the cash the rider handed in, overriding the rider's figure.",
   })
   @IsOptional()
   @IsNumberString()
@@ -86,7 +90,8 @@ export class SubmitBillPhotoDto {
 
   @ApiPropertyOptional({
     example: '500',
-    description: "Cash the customer handed over. Required when paidStatus is 'partial'.",
+    description:
+      "Cash the customer handed over. Required when paidStatus is 'partial'.",
   })
   @IsOptional()
   @IsNumberString()

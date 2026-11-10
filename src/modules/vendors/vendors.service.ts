@@ -1,5 +1,9 @@
 import { applyWhatsappContactFields } from '../../common/utils/whatsapp-contact.util';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { toDecimal } from '../../common/utils/money.util';
@@ -24,7 +28,10 @@ import {
   partyCodeTaken,
   peekNextPartyCode,
 } from '../../common/utils/party-code.util';
-import { activeFilterOf, orderPartyList } from '../../common/utils/party-list.util';
+import {
+  activeFilterOf,
+  orderPartyList,
+} from '../../common/utils/party-list.util';
 
 @Injectable()
 export class VendorsService {
@@ -46,9 +53,19 @@ export class VendorsService {
     const active = activeFilterOf(query);
     if (active !== undefined) qb.andWhere('v.isActive = :a', { a: active });
     applyTextSearch(qb, query.search, companyId, {
-      columns: ['v.code', 'v.companyName', 'v.email', 'v.contactPerson', 'v.phone'],
+      columns: [
+        'v.code',
+        'v.companyName',
+        'v.email',
+        'v.contactPerson',
+        'v.phone',
+      ],
     });
-    orderPartyList(qb, 'v', { sort: query.sort, nameProperty: 'companyName', search: query.search });
+    orderPartyList(qb, 'v', {
+      sort: query.sort,
+      nameProperty: 'companyName',
+      search: query.search,
+    });
     qb.take(pagination.limit).skip(pagination.skip);
     const [data, total] = await qb.getManyAndCount();
     return {
@@ -75,40 +92,51 @@ export class VendorsService {
     return v;
   }
 
-  create(companyId: string, dto: CreateVendorDto, userId?: string | null): Promise<Vendor> {
+  create(
+    companyId: string,
+    dto: CreateVendorDto,
+    userId?: string | null,
+  ): Promise<Vendor> {
     const typed = normalizePartyCode(dto.code);
     if (typed) assertValidPartyCode('vendor', typed);
     const entity = this.repo.create({
-        companyId,
-        companyName: dto.companyName,
-        contactPerson: dto.contactPerson ?? null,
-        email: dto.email ?? null,
-        phone: dto.phone ?? null,
-        address: dto.address ?? null,
-        paymentTerms: dto.paymentTerms ?? 'net30',
-        taxId: dto.taxId ?? null,
-        defaultExpenseAccountId: dto.defaultExpenseAccountId ?? null,
-        balance: '0',
-        isActive: true,
-        notes: dto.notes ?? null,
-      });
+      companyId,
+      companyName: dto.companyName,
+      contactPerson: dto.contactPerson ?? null,
+      email: dto.email ?? null,
+      phone: dto.phone ?? null,
+      address: dto.address ?? null,
+      paymentTerms: dto.paymentTerms ?? 'net30',
+      taxId: dto.taxId ?? null,
+      defaultExpenseAccountId: dto.defaultExpenseAccountId ?? null,
+      balance: '0',
+      isActive: true,
+      notes: dto.notes ?? null,
+    });
     applyWhatsappContactFields(entity, dto, { userId, isCreate: true });
     return this.saveWithCode(companyId, entity, typed);
   }
 
   /** The ID a new vendor would get now, for the form's placeholder. */
   async nextCode(companyId: string) {
-    return { code: await peekNextPartyCode(this.repo.manager, companyId, 'vendor') };
+    return {
+      code: await peekNextPartyCode(this.repo.manager, companyId, 'vendor'),
+    };
   }
 
   /**
    * Save with the typed ID, or the next one in the series, in one transaction
    * (see CustomersService.saveWithCode).
    */
-  private async saveWithCode(companyId: string, entity: Vendor, typed: string | null): Promise<Vendor> {
+  private async saveWithCode(
+    companyId: string,
+    entity: Vendor,
+    typed: string | null,
+  ): Promise<Vendor> {
     try {
       return await this.repo.manager.transaction(async (m) => {
-        if (typed) await assertPartyCodeFree(m, companyId, 'vendor', typed, entity.id);
+        if (typed)
+          await assertPartyCodeFree(m, companyId, 'vendor', typed, entity.id);
         entity.code = typed ?? (await nextPartyCode(m, companyId, 'vendor'));
         return m.getRepository(Vendor).save(entity);
       });
@@ -117,7 +145,13 @@ export class VendorsService {
         throw partyCodeTaken(
           'vendor',
           entity.code,
-          await partyCodeHolder(this.repo.manager, companyId, 'vendor', entity.code, entity.id),
+          await partyCodeHolder(
+            this.repo.manager,
+            companyId,
+            'vendor',
+            entity.code,
+            entity.id,
+          ),
         );
       }
       throw err;
@@ -249,31 +283,51 @@ export class VendorsService {
       .where('p.companyId = :companyId AND p.vendorId = :id', { companyId, id })
       .orderBy('p.paymentDate', 'ASC')
       .getMany();
-    const vendorCredits: Array<{ id: string; vendorCreditNumber: string | null; date: string; total: string; status: string }> =
-      await this.billRepo.manager.query(
-        `SELECT vc.id, vc.vendor_credit_number AS "vendorCreditNumber", vc.date::text AS date,
+    const vendorCredits: Array<{
+      id: string;
+      vendorCreditNumber: string | null;
+      date: string;
+      total: string;
+      status: string;
+    }> = await this.billRepo.manager.query(
+      `SELECT vc.id, vc.vendor_credit_number AS "vendorCreditNumber", vc.date::text AS date,
                 vc.total::numeric AS total, vc.status
            FROM vendor_credits vc
           WHERE vc.company_id = $1 AND vc.vendor_id = $2 AND vc.status <> 'void'
           ORDER BY vc.date ASC, vc.vendor_credit_number ASC`,
-        [companyId, id],
-      );
+      [companyId, id],
+    );
 
     const { opening, closing } = statementBalances(
       [
         ...bills.map((b) => ({ date: b.billDate, amount: toDecimal(b.total) })),
-        ...payments.map((p) => ({ date: p.paymentDate, amount: toDecimal(p.totalAmount).negated() })),
-        ...vendorCredits.map((c) => ({ date: c.date, amount: toDecimal(c.total).negated() })),
+        ...payments.map((p) => ({
+          date: p.paymentDate,
+          amount: toDecimal(p.totalAmount).negated(),
+        })),
+        ...vendorCredits.map((c) => ({
+          date: c.date,
+          amount: toDecimal(c.total).negated(),
+        })),
       ],
       startDate,
       endDate,
     );
 
-    const inRangeBills = bills.filter((b) => inPeriod(b.billDate, startDate, endDate));
-    const inRangePayments = payments.filter((p) => inPeriod(p.paymentDate, startDate, endDate));
-    const inRangeCredits = vendorCredits.filter((c) => inPeriod(c.date, startDate, endDate));
+    const inRangeBills = bills.filter((b) =>
+      inPeriod(b.billDate, startDate, endDate),
+    );
+    const inRangePayments = payments.filter((p) =>
+      inPeriod(p.paymentDate, startDate, endDate),
+    );
+    const inRangeCredits = vendorCredits.filter((c) =>
+      inPeriod(c.date, startDate, endDate),
+    );
     const sum = (values: Array<string | number>) =>
-      values.reduce((acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)), toDecimal(0));
+      values.reduce(
+        (acc: ReturnType<typeof toDecimal>, v) => acc.plus(toDecimal(v)),
+        toDecimal(0),
+      );
 
     return {
       vendor: { id: vendor.id, name: vendor.companyName, email: vendor.email },
@@ -281,7 +335,10 @@ export class VendorsService {
       openingBalance: opening.toFixed(4),
       bills: inRangeBills,
       payments: inRangePayments,
-      vendorCredits: inRangeCredits.map((c) => ({ ...c, total: toDecimal(c.total).toFixed(4) })),
+      vendorCredits: inRangeCredits.map((c) => ({
+        ...c,
+        total: toDecimal(c.total).toFixed(4),
+      })),
       totals: {
         billed: sum(inRangeBills.map((b) => b.total)).toFixed(4),
         paid: sum(inRangePayments.map((p) => p.totalAmount)).toFixed(4),

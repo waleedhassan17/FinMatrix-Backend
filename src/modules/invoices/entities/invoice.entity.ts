@@ -1,4 +1,11 @@
-import { Check, Column, Entity, Index, OneToMany, VersionColumn } from 'typeorm';
+import {
+  Check,
+  Column,
+  Entity,
+  Index,
+  OneToMany,
+  VersionColumn,
+} from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { InvoiceStatus, PaymentTerms } from '../../../types';
 import { InvoiceLineItem } from './invoice-line-item.entity';
@@ -30,22 +37,51 @@ export class Invoice extends BaseCompanyEntity {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   subtotal!: string;
 
-  @Column({ type: 'varchar', length: 8, default: 'none', name: 'discount_type' })
+  @Column({
+    type: 'varchar',
+    length: 8,
+    default: 'none',
+    name: 'discount_type',
+  })
   discountType!: DiscountType;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_value' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_value',
+  })
   discountValue!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'discount_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'discount_amount',
+  })
   discountAmount!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'tax_amount' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'tax_amount',
+  })
   taxAmount!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
   total!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'amount_paid' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'amount_paid',
+  })
   amountPaid!: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 0 })
@@ -57,7 +93,12 @@ export class Invoice extends BaseCompanyEntity {
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 
-  @Column({ type: 'varchar', length: 32, default: 'net30', name: 'payment_terms' })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: 'net30',
+    name: 'payment_terms',
+  })
   paymentTerms!: PaymentTerms;
 
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })

@@ -43,8 +43,13 @@ export class CompaniesController {
   constructor(private readonly companies: CompaniesService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a company and seed default chart of accounts.' })
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateCompanyDto) {
+  @ApiOperation({
+    summary: 'Create a company and seed default chart of accounts.',
+  })
+  create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateCompanyDto,
+  ) {
     return this.companies.create(user.id, dto);
   }
 
@@ -74,18 +79,22 @@ export class CompaniesController {
       limit: 5,
       ttl: 900_000,
       getTracker: (req: Record<string, any>) =>
-        (typeof req.headers?.authorization === 'string' && req.headers.authorization) ||
+        (typeof req.headers?.authorization === 'string' &&
+          req.headers.authorization) ||
         req.ip ||
         'anonymous',
     },
   })
-  @ApiOperation({ summary: 'Request the admin-approved 30-day free trial (owner only).' })
+  @ApiOperation({
+    summary: 'Request the admin-approved 30-day free trial (owner only).',
+  })
   startTrial(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: StartTrialDto,
     @Headers('x-company-id') headerCompanyId?: string,
   ) {
-    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
+    const companyId =
+      dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
     if (!companyId || !isUUID(companyId)) {
       throw new BadRequestException({
         code: 'COMPANY_REQUIRED',
@@ -170,7 +179,9 @@ export class CompaniesController {
   }
 
   @Post('subscribe')
-  @ApiOperation({ summary: 'Select a subscription plan for your company (onboarding).' })
+  @ApiOperation({
+    summary: 'Select a subscription plan for your company (onboarding).',
+  })
   subscribe(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: SelfSubscribeDto,
@@ -179,7 +190,8 @@ export class CompaniesController {
     // A freshly-signed-up admin's JWT has no companyId yet, so accept it from
     // the body / x-company-id header, falling back to the token. selfSubscribe
     // verifies the caller is that company's admin.
-    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
+    const companyId =
+      dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
     if (!companyId || !isUUID(companyId)) {
       throw new BadRequestException({
         code: 'COMPANY_REQUIRED',

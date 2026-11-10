@@ -102,9 +102,16 @@ export async function assessCredit(
   const advances = toDecimal(row?.advances ?? 0);
   const credits = toDecimal(row?.credits ?? 0);
   const adds = toDecimal(thisAmount as never);
-  const exposure = openInvoices.plus(inTransit).plus(shipped).minus(advances).minus(credits).plus(adds);
+  const exposure = openInvoices
+    .plus(inTransit)
+    .plus(shipped)
+    .minus(advances)
+    .minus(credits)
+    .plus(adds);
   const limited = limit.greaterThan(0);
-  const excess = limited ? Decimal.max(exposure.minus(limit), 0) : new Decimal(0);
+  const excess = limited
+    ? Decimal.max(exposure.minus(limit), 0)
+    : new Decimal(0);
   return {
     customerId,
     customerName: row?.name ?? '',
@@ -140,23 +147,31 @@ export async function enforceCreditLimit(
     override?: CreditOverride | null;
   },
 ): Promise<CreditAssessment> {
-  const assessment = await assessCredit(manager, companyId, customerId, thisAmount, {
-    excludeSalesOrderId: ctx.excludeSalesOrderId,
-  });
+  const assessment = await assessCredit(
+    manager,
+    companyId,
+    customerId,
+    thisAmount,
+    {
+      excludeSalesOrderId: ctx.excludeSalesOrderId,
+    },
+  );
   if (assessment.withinLimit) return assessment;
 
   if (ctx.override) {
     if (ctx.override.role !== 'admin') {
       throw new ForbiddenException({
         code: 'CREDIT_OVERRIDE_OWNER_ONLY',
-        message: 'Only the owner can let a sale go past a customer’s credit limit.',
+        message:
+          'Only the owner can let a sale go past a customer’s credit limit.',
       });
     }
     const reason = (ctx.override.reason ?? '').trim();
     if (reason.length < 5) {
       throw new BadRequestException({
         code: 'CREDIT_OVERRIDE_REASON_REQUIRED',
-        message: 'Say why this sale may go past the credit limit (at least 5 characters).',
+        message:
+          'Say why this sale may go past the credit limit (at least 5 characters).',
       });
     }
     await manager.query(
@@ -186,7 +201,13 @@ export async function enforceCreditLimit(
 }
 
 /** Tax-inclusive value of a quantity at a price. */
-export function grossValue(quantity: Decimal.Value, unitPrice: Decimal.Value, taxRate: Decimal.Value): Decimal {
-  const base = toDecimal(quantity as never).times(toDecimal(unitPrice as never));
+export function grossValue(
+  quantity: Decimal.Value,
+  unitPrice: Decimal.Value,
+  taxRate: Decimal.Value,
+): Decimal {
+  const base = toDecimal(quantity as never).times(
+    toDecimal(unitPrice as never),
+  );
   return base.plus(base.times(toDecimal(taxRate as never)).dividedBy(100));
 }

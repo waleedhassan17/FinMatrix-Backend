@@ -1,4 +1,11 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { CreditMemo } from './credit-memo.entity';
 
 @Entity('credit_memo_lines')
@@ -21,13 +28,31 @@ export class CreditMemoLine {
   @Column({ type: 'decimal', precision: 18, scale: 4, default: 1 })
   quantity!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'unit_price' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'unit_price',
+  })
   unitPrice!: string;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0, name: 'tax_rate' })
+  @Column({
+    type: 'decimal',
+    precision: 8,
+    scale: 4,
+    default: 0,
+    name: 'tax_rate',
+  })
   taxRate!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'line_total' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'line_total',
+  })
   lineTotal!: string;
 
   /**

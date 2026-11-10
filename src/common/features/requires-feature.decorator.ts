@@ -10,4 +10,5 @@ export const FEATURE_KEY = 'requiresFeature';
  * (deliveries, payroll, …) or at method level for mixed controllers
  * (e.g. the team-management routes inside settings).
  */
-export const RequiresFeature = (feature: FeatureKey) => SetMetadata(FEATURE_KEY, feature);
+export const RequiresFeature = (feature: FeatureKey) =>
+  SetMetadata(FEATURE_KEY, feature);

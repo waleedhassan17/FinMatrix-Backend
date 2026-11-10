@@ -1,4 +1,18 @@
-import { IsString, IsOptional, IsBoolean, IsEnum, IsNumberString, IsArray, IsUUID, Length, IsNumber, IsEmail, Matches, MinLength, ValidateIf } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsBoolean,
+  IsEnum,
+  IsNumberString,
+  IsArray,
+  IsUUID,
+  Length,
+  IsNumber,
+  IsEmail,
+  Matches,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeliveryPersonnelStatus } from '../../../types';
 import { IsPkPhone } from '../../../common/validation/phone';
@@ -23,13 +37,13 @@ export class CreatePersonnelDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID() userId?: string;
 
   @ApiProperty({ example: 'rider.imran' })
-  @ValidateIf(o => !o.userId)
+  @ValidateIf((o) => !o.userId)
   @IsString()
   @Matches(RIDER_USERNAME_REGEX, { message: RIDER_USERNAME_RULE })
   username!: string;
 
   @ApiProperty({ example: 'Rider123!', minLength: 8 })
-  @ValidateIf(o => !o.userId)
+  @ValidateIf((o) => !o.userId)
   @IsString()
   @MinLength(8, { message: 'Password must be at least 8 characters' })
   password!: string;
@@ -42,19 +56,38 @@ export class CreatePersonnelDto {
   @IsString()
   @IsPkPhone({ allowLandline: true })
   phone?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleType?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleNumber?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  vehicleType?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  vehicleNumber?: string;
   @ApiPropertyOptional() @IsOptional() @IsArray() zones?: string[];
   @ApiPropertyOptional() @IsOptional() @IsNumberString() maxLoad?: string;
 }
 
 export class UpdatePersonnelDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleType?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() @Length(1, 64) vehicleNumber?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  vehicleType?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  vehicleNumber?: string;
   @ApiPropertyOptional() @IsOptional() @IsArray() zones?: string[];
   @ApiPropertyOptional() @IsOptional() @IsNumberString() maxLoad?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isAvailable?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsEnum(['active', 'on_leave', 'inactive'] as DeliveryPersonnelStatus[]) status?: DeliveryPersonnelStatus;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEnum(['active', 'on_leave', 'inactive'] as DeliveryPersonnelStatus[])
+  status?: DeliveryPersonnelStatus;
 }
 
 /**
@@ -74,8 +107,20 @@ export class SetAvailabilityDto {
 export class UpdateLocationDto {
   @ApiProperty({ description: 'GPS latitude' }) @IsNumber() lat!: number;
   @ApiProperty({ description: 'GPS longitude' }) @IsNumber() lng!: number;
-  @ApiPropertyOptional({ description: 'Compass heading (degrees)' }) @IsOptional() @IsNumber() heading?: number;
-  @ApiPropertyOptional({ description: 'Speed (m/s)' }) @IsOptional() @IsNumber() speed?: number;
-  @ApiPropertyOptional({ description: 'GPS accuracy (meters)' }) @IsOptional() @IsNumber() accuracy?: number;
-  @ApiPropertyOptional({ description: 'Client-side timestamp (epoch ms)' }) @IsOptional() @IsNumber() timestamp?: number;
+  @ApiPropertyOptional({ description: 'Compass heading (degrees)' })
+  @IsOptional()
+  @IsNumber()
+  heading?: number;
+  @ApiPropertyOptional({ description: 'Speed (m/s)' })
+  @IsOptional()
+  @IsNumber()
+  speed?: number;
+  @ApiPropertyOptional({ description: 'GPS accuracy (meters)' })
+  @IsOptional()
+  @IsNumber()
+  accuracy?: number;
+  @ApiPropertyOptional({ description: 'Client-side timestamp (epoch ms)' })
+  @IsOptional()
+  @IsNumber()
+  timestamp?: number;
 }

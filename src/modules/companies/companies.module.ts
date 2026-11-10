@@ -15,7 +15,13 @@ import { CompaniesController } from './companies.controller';
 @Module({
   imports: [
     UsersModule,
-    TypeOrmModule.forFeature([Company, UserCompany, Account, SubscriptionPlan, CompanySubscription]),
+    TypeOrmModule.forFeature([
+      Company,
+      UserCompany,
+      Account,
+      SubscriptionPlan,
+      CompanySubscription,
+    ]),
     // The free-trial request files into billing's review queue and answers
     // with billing's status shape. BillingModule imports nothing from
     // companies, so the dependency is one-way — no forwardRef.

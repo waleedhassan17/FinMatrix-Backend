@@ -14,7 +14,10 @@ import { RolesGuard } from '../guards/roles.guard';
 import { Roles } from '../decorators/roles.decorator';
 import { CurrentCompany } from '../decorators/current-company.decorator';
 import { RequiresFeature } from '../features/requires-feature.decorator';
-import { FinancialAuditService, ListAuditQuery } from './financial-audit.service';
+import {
+  FinancialAuditService,
+  ListAuditQuery,
+} from './financial-audit.service';
 
 @ApiTags('audit-trail')
 @ApiBearerAuth()

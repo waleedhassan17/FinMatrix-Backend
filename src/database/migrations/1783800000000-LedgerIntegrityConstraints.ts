@@ -29,9 +29,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Idempotent: ADD CONSTRAINT has no IF NOT EXISTS, so each is wrapped in a DO
  * block that swallows duplicate_object; triggers are dropped before create.
  */
-export class LedgerIntegrityConstraints1783800000000
-  implements MigrationInterface
-{
+export class LedgerIntegrityConstraints1783800000000 implements MigrationInterface {
   name = 'LedgerIntegrityConstraints1783800000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

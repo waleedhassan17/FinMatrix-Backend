@@ -79,7 +79,11 @@ import {
   suggestedOrderQty,
 } from './item-stock';
 import { MediaUrlSigner } from '../inventory/images/media-url.signer';
-import { businessTimezone, businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
+import {
+  businessTimezone,
+  businessToday,
+  daysBetweenIso,
+} from '../../common/utils/business-date.util';
 import { buildDashboardAlerts } from './dashboard-alerts';
 import { MONEY_TOLERANCE } from '../../common/utils/money.util';
 import {
@@ -103,7 +107,8 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export function apportionRounding(raws: number[], target: number): number[] {
   const rounded = raws.map(r2);
   let paisa = Math.round((target - rounded.reduce((t, x) => t + x, 0)) * 100);
-  if (paisa === 0 || !raws.length || Math.abs(paisa) > raws.length) return rounded;
+  if (paisa === 0 || !raws.length || Math.abs(paisa) > raws.length)
+    return rounded;
   const step = paisa > 0 ? 1 : -1;
   const order = raws
     .map((raw, i) => ({ i, err: raw - rounded[i] }))
@@ -211,8 +216,18 @@ const addressLine = (a: any): string | null => {
 };
 
 const MONTH_LABELS = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 /** 'Jan 26' — the label shape every trend series in this file already uses. */
@@ -443,12 +458,17 @@ export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
 
   constructor(
-    @InjectRepository(Invoice) private readonly invoiceRepo: Repository<Invoice>,
+    @InjectRepository(Invoice)
+    private readonly invoiceRepo: Repository<Invoice>,
     @InjectRepository(Bill) private readonly billRepo: Repository<Bill>,
-    @InjectRepository(InventoryItem) private readonly itemRepo: Repository<InventoryItem>,
-    @InjectRepository(InventoryMovement) private readonly moveRepo: Repository<InventoryMovement>,
-    @InjectRepository(Delivery) private readonly deliveryRepo: Repository<Delivery>,
-    @InjectRepository(TaxPayment) private readonly taxRepo: Repository<TaxPayment>,
+    @InjectRepository(InventoryItem)
+    private readonly itemRepo: Repository<InventoryItem>,
+    @InjectRepository(InventoryMovement)
+    private readonly moveRepo: Repository<InventoryMovement>,
+    @InjectRepository(Delivery)
+    private readonly deliveryRepo: Repository<Delivery>,
+    @InjectRepository(TaxPayment)
+    private readonly taxRepo: Repository<TaxPayment>,
     private readonly dataSource: DataSource,
     // Signs the item photo links the item explorer shows. Optional, so the
     // test modules that build this service without inventory still compile;
@@ -456,10 +476,20 @@ export class ReportsService {
     @Optional() private readonly mediaSigner?: MediaUrlSigner,
   ) {}
 
-  private async sum(table: 'invoices' | 'bills', col: string, companyId: string, dateCol?: string, s?: string, e?: string) {
+  private async sum(
+    table: 'invoices' | 'bills',
+    col: string,
+    companyId: string,
+    dateCol?: string,
+    s?: string,
+    e?: string,
+  ) {
     let sql = `SELECT COALESCE(SUM(${col}::numeric),0) AS total FROM ${table} WHERE company_id=$1 AND status NOT IN ('void','draft')`;
     const params: any[] = [companyId];
-    if (dateCol && s && e) { sql += ` AND ${dateCol} BETWEEN $2 AND $3`; params.push(s, e); }
+    if (dateCol && s && e) {
+      sql += ` AND ${dateCol} BETWEEN $2 AND $3`;
+      params.push(s, e);
+    }
     const rows = await this.dataSource.query(sql, params);
     return num(rows[0]?.total);
   }
@@ -515,7 +545,11 @@ export class ReportsService {
    * statement-groups.ts so the trial balance and the KPIs split exactly as
    * the P&L does.
    */
-  private isOther(row: { accountNumber: string; subType: string; type?: string }): boolean {
+  private isOther(row: {
+    accountNumber: string;
+    subType: string;
+    type?: string;
+  }): boolean {
     return isNonOperatingAccount(row);
   }
 
@@ -546,7 +580,13 @@ export class ReportsService {
    * a statement runs, and the balance sheet already has both halves.
    */
   private priorWindowRows<
-    T extends { accountNumber: string; type: string; subType: string; dr: string; cr: string },
+    T extends {
+      accountNumber: string;
+      type: string;
+      subType: string;
+      dr: string;
+      cr: string;
+    },
   >(allRows: T[], currentRows: T[]): T[] {
     const current = new Map(currentRows.map((r) => [r.accountNumber, r]));
     return allRows.map((r) => {
@@ -560,7 +600,13 @@ export class ReportsService {
   }
 
   private earningsOf(
-    rows: Array<{ type: string; dr: string; cr: string; accountNumber: string; subType: string }>,
+    rows: Array<{
+      type: string;
+      dr: string;
+      cr: string;
+      accountNumber: string;
+      subType: string;
+    }>,
   ): { raw: number; display: number } {
     let revenue = 0;
     let cogs = 0;
@@ -574,7 +620,10 @@ export class ReportsService {
         else expense += dr - cr;
       }
     }
-    return { raw: revenue - cogs - expense, display: r2(r2(revenue - cogs) - expense) };
+    return {
+      raw: revenue - cogs - expense,
+      display: r2(r2(revenue - cogs) - expense),
+    };
   }
 
   /**
@@ -721,19 +770,41 @@ export class ReportsService {
    * with a posted 3100 showed two lines with the same code. Synthetic lines
    * now carry accountCode '' and a `synthetic` marker; no real code is reused.
    */
-  private async balanceSheetCore(companyId: string, asOf: string, includeZero = false) {
+  private async balanceSheetCore(
+    companyId: string,
+    asOf: string,
+    includeZero = false,
+  ) {
     // FIRST query, unchanged: the all-time GL as of the date.
-    const rows = await this.glByAccount(companyId, REPORT_RANGE_DEFAULTS.startDate, asOf);
+    const rows = await this.glByAccount(
+      companyId,
+      REPORT_RANGE_DEFAULTS.startDate,
+      asOf,
+    );
     const startMonth = await this.fiscalYearStartMonth(companyId);
     const fyStart = fiscalYearStart(startMonth, asOf);
     const currentRows = await this.glByAccount(companyId, fyStart, asOf);
     const priorRows = this.priorWindowRows(rows, currentRows);
 
-    const assets: { accountCode: string; accountName: string; amount: number }[] = [];
-    const liabilities: { accountCode: string; accountName: string; amount: number }[] = [];
+    const assets: {
+      accountCode: string;
+      accountName: string;
+      amount: number;
+    }[] = [];
+    const liabilities: {
+      accountCode: string;
+      accountName: string;
+      amount: number;
+    }[] = [];
     const equity: BalanceSheetLine[] = [];
     /** Every line at full precision, for the sections and the comparison. */
-    const lines: Array<BalanceSheetLine & { raw: number; group: StatementGroupKey; subType: string | null }> = [];
+    const lines: Array<
+      BalanceSheetLine & {
+        raw: number;
+        group: StatementGroupKey;
+        subType: string | null;
+      }
+    > = [];
     let revenue = 0;
     let cogs = 0;
     let expense = 0;
@@ -749,12 +820,18 @@ export class ReportsService {
     const currentYear = this.earningsOf(currentRows);
     // The chart's Retained Earnings account, if it has one: the lowest-numbered
     // account of that subtype (rows arrive ordered by account number).
-    const reAccount = rows.find((r) => r.type === 'equity' && r.subType === 'Retained Earnings');
+    const reAccount = rows.find(
+      (r) => r.type === 'equity' && r.subType === 'Retained Earnings',
+    );
 
     for (const row of rows) {
       const dr = num(row.dr);
       const cr = num(row.cr);
-      const group = classifyForStatement(row.type, row.subType, row.accountNumber);
+      const group = classifyForStatement(
+        row.type,
+        row.subType,
+        row.accountNumber,
+      );
       const line = (amount: number) => ({
         accountCode: row.accountNumber,
         accountName: row.accountName,
@@ -765,20 +842,35 @@ export class ReportsService {
       // can see the whole chart; it adds nothing to any total.
       const zeroLine = () =>
         includeZero && row.isActive !== false
-          ? lines.push({ ...line(0), raw: 0, group: group ?? 'equity', subType: row.subType })
+          ? lines.push({
+              ...line(0),
+              raw: 0,
+              group: group ?? 'equity',
+              subType: row.subType,
+            })
           : 0;
       if (row.type === 'asset') {
         const amt = dr - cr;
         if (Math.abs(amt) > 0.0001) {
           assets.push(line(amt));
-          lines.push({ ...line(amt), raw: amt, group: group!, subType: row.subType });
+          lines.push({
+            ...line(amt),
+            raw: amt,
+            group: group!,
+            subType: row.subType,
+          });
           rawAssets += amt;
         } else zeroLine();
       } else if (row.type === 'liability') {
         const amt = cr - dr;
         if (Math.abs(amt) > 0.0001) {
           liabilities.push(line(amt));
-          lines.push({ ...line(amt), raw: amt, group: group!, subType: row.subType });
+          lines.push({
+            ...line(amt),
+            raw: amt,
+            group: group!,
+            subType: row.subType,
+          });
           rawLiabilities += amt;
         } else zeroLine();
       } else if (row.type === 'equity') {
@@ -792,14 +884,27 @@ export class ReportsService {
               accountCode: row.accountNumber,
               accountName: row.accountName,
               amount: shown,
-              composite: { postedBalance: r2(amt), priorYearsEarnings: priorYears.display },
+              composite: {
+                postedBalance: r2(amt),
+                priorYearsEarnings: priorYears.display,
+              },
             };
             equity.push(reLine);
-            lines.push({ ...reLine, raw: amt + priorYears.raw, group: 'equity', subType: row.subType });
+            lines.push({
+              ...reLine,
+              raw: amt + priorYears.raw,
+              group: 'equity',
+              subType: row.subType,
+            });
           } else zeroLine();
         } else if (Math.abs(amt) > 0.0001) {
           equity.push(line(amt));
-          lines.push({ ...line(amt), raw: amt, group: 'equity', subType: row.subType });
+          lines.push({
+            ...line(amt),
+            raw: amt,
+            group: 'equity',
+            subType: row.subType,
+          });
         } else zeroLine();
         if (Math.abs(amt) > 0.0001) rawEquity += amt;
       } else if (row.type === 'revenue') revenue += cr - dr;
@@ -839,7 +944,12 @@ export class ReportsService {
         synthetic: 'retainedEarnings',
       };
       equity.push(reLine);
-      lines.push({ ...reLine, raw: priorYears.raw, group: 'equity', subType: null });
+      lines.push({
+        ...reLine,
+        raw: priorYears.raw,
+        group: 'equity',
+        subType: null,
+      });
     }
     if (Math.abs(currentYear.display) > 0.0001) {
       const cyLine: BalanceSheetLine = {
@@ -849,7 +959,12 @@ export class ReportsService {
         synthetic: 'currentYearEarnings',
       };
       equity.push(cyLine);
-      lines.push({ ...cyLine, raw: currentYear.raw, group: 'equity', subType: null });
+      lines.push({
+        ...cyLine,
+        raw: currentYear.raw,
+        group: 'equity',
+        subType: null,
+      });
     }
 
     return {
@@ -865,7 +980,10 @@ export class ReportsService {
       priorYears,
       currentYear,
       reAccount: reAccount
-        ? { accountCode: reAccount.accountNumber, posted: num(reAccount.cr) - num(reAccount.dr) }
+        ? {
+            accountCode: reAccount.accountNumber,
+            posted: num(reAccount.cr) - num(reAccount.dr),
+          }
         : null,
     };
   }
@@ -901,7 +1019,8 @@ export class ReportsService {
     // ties exactly in the ledger can report a gap of a full paisa or more and
     // announce that the books do not balance. They do; the arithmetic that
     // said otherwise was the presentation rounding, not the accounts.
-    const isBalanced = Math.abs(rawAssets - (rawLiabilities + rawEquity)) < 0.01;
+    const isBalanced =
+      Math.abs(rawAssets - (rawLiabilities + rawEquity)) < 0.01;
 
     const { sections, subtotals } = this.balanceSheetSections(core, prior);
     return {
@@ -951,7 +1070,10 @@ export class ReportsService {
     const nowKeys = new Set(core.lines.map(keyOf));
     // Prior-only lines, carried at zero now.
     const merged = [
-      ...core.lines.map((l) => ({ now: l, then: priorByKey.get(keyOf(l)) ?? null })),
+      ...core.lines.map((l) => ({
+        now: l,
+        then: priorByKey.get(keyOf(l)) ?? null,
+      })),
       ...(prior?.lines ?? [])
         .filter((l) => !nowKeys.has(keyOf(l)))
         .map((l) => ({ now: { ...l, amount: 0, raw: 0 }, then: l })),
@@ -1000,7 +1122,9 @@ export class ReportsService {
             priorAmount,
             change,
             // Null, never Infinity, when there was nothing to compare against.
-            changePct: prior ? pct(now.raw - (then?.raw ?? 0), then?.raw ?? 0) : null,
+            changePct: prior
+              ? pct(now.raw - (then?.raw ?? 0), then?.raw ?? 0)
+              : null,
             pctOfTotalAssets: pct(now.raw, core.rawAssets),
             ...(now.synthetic ? { synthetic: now.synthetic } : {}),
             ...(now.composite ? { composite: now.composite } : {}),
@@ -1025,9 +1149,23 @@ export class ReportsService {
     });
 
     const rawOf = (c: typeof core | null, keys: StatementGroupKey[]) =>
-      c ? c.lines.filter((l) => keys.includes(l.group)).reduce((t, l) => t + l.raw, 0) : 0;
-    const CURRENT_ASSETS: StatementGroupKey[] = ['cashAndBank', 'receivables', 'inventory', 'otherCurrentAssets'];
-    const subtotal = (key: string, label: string, now: number, then: number | null): BalanceSheetSubtotal => {
+      c
+        ? c.lines
+            .filter((l) => keys.includes(l.group))
+            .reduce((t, l) => t + l.raw, 0)
+        : 0;
+    const CURRENT_ASSETS: StatementGroupKey[] = [
+      'cashAndBank',
+      'receivables',
+      'inventory',
+      'otherCurrentAssets',
+    ];
+    const subtotal = (
+      key: string,
+      label: string,
+      now: number,
+      then: number | null,
+    ): BalanceSheetSubtotal => {
       const c = comparable(now, then);
       return {
         key,
@@ -1040,11 +1178,36 @@ export class ReportsService {
       };
     };
     const subtotals: BalanceSheetSubtotal[] = [
-      subtotal('totalCurrentAssets', 'Total Current Assets', rawOf(core, CURRENT_ASSETS), prior ? rawOf(prior, CURRENT_ASSETS) : null),
-      subtotal('totalAssets', 'Total Assets', core.rawAssets, prior ? prior.rawAssets : null),
-      subtotal('totalCurrentLiabilities', 'Total Current Liabilities', rawOf(core, ['currentLiabilities']), prior ? rawOf(prior, ['currentLiabilities']) : null),
-      subtotal('totalLiabilities', 'Total Liabilities', core.rawLiabilities, prior ? prior.rawLiabilities : null),
-      subtotal('totalEquity', 'Total Equity', core.rawEquity, prior ? prior.rawEquity : null),
+      subtotal(
+        'totalCurrentAssets',
+        'Total Current Assets',
+        rawOf(core, CURRENT_ASSETS),
+        prior ? rawOf(prior, CURRENT_ASSETS) : null,
+      ),
+      subtotal(
+        'totalAssets',
+        'Total Assets',
+        core.rawAssets,
+        prior ? prior.rawAssets : null,
+      ),
+      subtotal(
+        'totalCurrentLiabilities',
+        'Total Current Liabilities',
+        rawOf(core, ['currentLiabilities']),
+        prior ? rawOf(prior, ['currentLiabilities']) : null,
+      ),
+      subtotal(
+        'totalLiabilities',
+        'Total Liabilities',
+        core.rawLiabilities,
+        prior ? prior.rawLiabilities : null,
+      ),
+      subtotal(
+        'totalEquity',
+        'Total Equity',
+        core.rawEquity,
+        prior ? prior.rawEquity : null,
+      ),
       subtotal(
         'totalLiabilitiesAndEquity',
         'Total Liabilities and Equity',
@@ -1068,7 +1231,9 @@ export class ReportsService {
    * governs the CSV export and every other consumer, not just the screen that
    * set it.
    */
-  private async savedAgingPreference(companyId: string): Promise<AgingSpecRequest | null> {
+  private async savedAgingPreference(
+    companyId: string,
+  ): Promise<AgingSpecRequest | null> {
     try {
       const rows = await this.dataSource.query(
         `SELECT report_preferences AS prefs FROM company_settings WHERE company_id = $1`,
@@ -1105,12 +1270,21 @@ export class ReportsService {
     request?: AgingSpecRequest,
   ): Promise<ResolvedAgingSpec> {
     const selfContained =
-      !!request && (request.preset === 'custom' ? !!request.buckets : !!request.preset || !!request.buckets);
+      !!request &&
+      (request.preset === 'custom'
+        ? !!request.buckets
+        : !!request.preset || !!request.buckets);
     try {
-      return resolveAgingSpec(request ?? null, selfContained ? null : await this.savedAgingPreference(companyId));
+      return resolveAgingSpec(
+        request ?? null,
+        selfContained ? null : await this.savedAgingPreference(companyId),
+      );
     } catch (err) {
       if (err instanceof AgingBucketSpecError) {
-        throw new BadRequestException({ code: 'INVALID_AGING_BUCKETS', message: err.message });
+        throw new BadRequestException({
+          code: 'INVALID_AGING_BUCKETS',
+          message: err.message,
+        });
       }
       throw err;
     }
@@ -1121,24 +1295,50 @@ export class ReportsService {
    *   withAgingInsights). The JSON route asks for them; the CSV export,
    *   /aging and the analytics dashboard do not, so their output is unchanged.
    */
-  async arAging(companyId: string, request?: AgingSpecRequest, opts?: { withInsights?: boolean }) {
+  async arAging(
+    companyId: string,
+    request?: AgingSpecRequest,
+    opts?: { withInsights?: boolean },
+  ) {
     const spec = await this.resolveSpecFor(companyId, request);
     const rowsRaw = await this.dataSource.query(
       `SELECT i.customer_id AS "customerId", c.name AS "customerName", i.balance::numeric AS balance, i.due_date::text AS "dueDate"
        FROM invoices i JOIN customers c ON c.id = i.customer_id
-       WHERE i.company_id=$1 AND ${openDocPredicate('i')}`, [companyId]);
-    const report = this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
-    return opts?.withInsights ? this.bestEffortAgingInsights(companyId, 'customer', rowsRaw, report) : report;
+       WHERE i.company_id=$1 AND ${openDocPredicate('i')}`,
+      [companyId],
+    );
+    const report = this.bucketAging(
+      rowsRaw,
+      spec,
+      'customerId',
+      'customerName',
+    );
+    return opts?.withInsights
+      ? this.bestEffortAgingInsights(companyId, 'customer', rowsRaw, report)
+      : report;
   }
 
-  async apAging(companyId: string, request?: AgingSpecRequest, opts?: { withInsights?: boolean }) {
+  async apAging(
+    companyId: string,
+    request?: AgingSpecRequest,
+    opts?: { withInsights?: boolean },
+  ) {
     const spec = await this.resolveSpecFor(companyId, request);
     const rowsRaw = await this.dataSource.query(
       `SELECT b.vendor_id AS "customerId", v.company_name AS "customerName", b.balance::numeric AS balance, b.due_date::text AS "dueDate"
        FROM bills b JOIN vendors v ON v.id = b.vendor_id
-       WHERE b.company_id=$1 AND ${openDocPredicate('b')}`, [companyId]);
-    const report = this.bucketAging(rowsRaw, spec, 'customerId', 'customerName');
-    return opts?.withInsights ? this.bestEffortAgingInsights(companyId, 'vendor', rowsRaw, report) : report;
+       WHERE b.company_id=$1 AND ${openDocPredicate('b')}`,
+      [companyId],
+    );
+    const report = this.bucketAging(
+      rowsRaw,
+      spec,
+      'customerId',
+      'customerName',
+    );
+    return opts?.withInsights
+      ? this.bestEffortAgingInsights(companyId, 'vendor', rowsRaw, report)
+      : report;
   }
 
   /**
@@ -1154,9 +1354,16 @@ export class ReportsService {
     report: ReturnType<ReportsService['bucketAging']>,
   ) {
     try {
-      return await this.withAgingInsights(companyId, partyType, rowsRaw, report);
+      return await this.withAgingInsights(
+        companyId,
+        partyType,
+        rowsRaw,
+        report,
+      );
     } catch (err) {
-      this.logger.warn(`aging insights unavailable for ${companyId}: ${(err as Error)?.message}`);
+      this.logger.warn(
+        `aging insights unavailable for ${companyId}: ${(err as Error)?.message}`,
+      );
       return report;
     }
   }
@@ -1205,7 +1412,9 @@ export class ReportsService {
       return 'd60_plus';
     };
 
-    const raw = new Map<string, { amount: number; count: number }>(SLOTS.map((x) => [x.key, { amount: 0, count: 0 }]));
+    const raw = new Map<string, { amount: number; count: number }>(
+      SLOTS.map((x) => [x.key, { amount: 0, count: 0 }]),
+    );
     let overdueRaw = 0;
     let lateWeighted = 0;
     const oldestDue = new Map<string, string>();
@@ -1220,13 +1429,21 @@ export class ReportsService {
         overdueRaw += bal;
         lateWeighted += bal * days;
       }
-      if (due && (!oldestDue.has(r.customerId) || due < oldestDue.get(r.customerId)!)) {
+      if (
+        due &&
+        (!oldestDue.has(r.customerId) || due < oldestDue.get(r.customerId)!)
+      ) {
         oldestDue.set(r.customerId, due);
       }
     }
     const totalOpen = report.totals.total;
-    const amounts = apportionRounding(SLOTS.map((x) => raw.get(x.key)!.amount), totalOpen);
-    const partyTotals = report.rows.map((r: any) => r.total).sort((a: number, b: number) => b - a);
+    const amounts = apportionRounding(
+      SLOTS.map((x) => raw.get(x.key)!.amount),
+      totalOpen,
+    );
+    const partyTotals = report.rows
+      .map((r: any) => r.total)
+      .sort((a: number, b: number) => b - a);
     const pctOf = (part: number, whole: number) =>
       Math.abs(whole) > EPS ? r2((part / whole) * 100) : null;
 
@@ -1264,13 +1481,19 @@ export class ReportsService {
               ),
         ])
       : [[], []];
-    const partyById = new Map<string, any>((parties ?? []).map((p: any) => [p.id, p]));
-    const lastById = new Map<string, any>((lastPayments ?? []).map((p: any) => [p.partyId, p]));
+    const partyById = new Map<string, any>(
+      (parties ?? []).map((p: any) => [p.id, p]),
+    );
+    const lastById = new Map<string, any>(
+      (lastPayments ?? []).map((p: any) => [p.partyId, p]),
+    );
 
     const rows = report.rows.map((r: any) => {
       const party = partyById.get(r.customerId);
       const last = lastById.get(r.customerId);
-      const extra: Record<string, unknown> = { paymentTerms: party?.paymentTerms ?? null };
+      const extra: Record<string, unknown> = {
+        paymentTerms: party?.paymentTerms ?? null,
+      };
       if (partyType === 'customer') {
         // A limit of 0 means "no limit" (credit-control.util), never "zero".
         const limit = num(party?.creditLimit);
@@ -1291,8 +1514,12 @@ export class ReportsService {
         totalOpen,
         overdue: r2(overdueRaw),
         overduePct: pctOf(overdueRaw, totalOpen),
-        weightedAvgDaysOverdue: overdueRaw > EPS ? r2(lateWeighted / overdueRaw) : null,
-        top5SharePct: pctOf(partyTotals.slice(0, 5).reduce((t: number, x: number) => t + x, 0), totalOpen),
+        weightedAvgDaysOverdue:
+          overdueRaw > EPS ? r2(lateWeighted / overdueRaw) : null,
+        top5SharePct: pctOf(
+          partyTotals.slice(0, 5).reduce((t: number, x: number) => t + x, 0),
+          totalOpen,
+        ),
         // Each ratio against its benchmark (kpi-benchmarks.ts). Owing most
         // of your payables to a few suppliers is not a risk in itself, so on
         // the A/P side concentration is stated, not judged.
@@ -1306,7 +1533,12 @@ export class ReportsService {
             partyType === 'customer'
               ? assessKpi(
                   'top5SharePct',
-                  pctOf(partyTotals.slice(0, 5).reduce((t: number, x: number) => t + x, 0), totalOpen),
+                  pctOf(
+                    partyTotals
+                      .slice(0, 5)
+                      .reduce((t: number, x: number) => t + x, 0),
+                    totalOpen,
+                  ),
                 )
               : {
                   level: 'neutral' as const,
@@ -1414,8 +1646,16 @@ export class ReportsService {
     limit: number;
   }) {
     const {
-      companyId, partyId, partyType, partyQuery, docQuery, documentType,
-      request, bucket, page, limit,
+      companyId,
+      partyId,
+      partyType,
+      partyQuery,
+      docQuery,
+      documentType,
+      request,
+      bucket,
+      page,
+      limit,
     } = args;
 
     // The same resolution arAging performs, so the detail's buckets ARE the
@@ -1432,9 +1672,18 @@ export class ReportsService {
       });
     }
 
-    const party = await this.findAgingParty(partyQuery, partyId, companyId, partyType);
+    const party = await this.findAgingParty(
+      partyQuery,
+      partyId,
+      companyId,
+      partyType,
+    );
     const { asOfDate, documents: all } = await this.loadOpenDocuments(
-      companyId, partyId, docQuery, documentType, spec,
+      companyId,
+      partyId,
+      docQuery,
+      documentType,
+      spec,
     );
 
     const matching = bucket ? all.filter((d) => d.bucketKey === bucket) : all;
@@ -1483,7 +1732,8 @@ export class ReportsService {
     const party = rows?.[0];
     if (party?.name === undefined) {
       throw new NotFoundException({
-        code: partyType === 'customer' ? 'CUSTOMER_NOT_FOUND' : 'VENDOR_NOT_FOUND',
+        code:
+          partyType === 'customer' ? 'CUSTOMER_NOT_FOUND' : 'VENDOR_NOT_FOUND',
         message: `No ${partyType} with id ${partyId} in this company.`,
       });
     }
@@ -1502,7 +1752,10 @@ export class ReportsService {
     documentType: 'invoice' | 'bill',
     spec: AgingBucketDef[],
   ): Promise<{ asOfDate: string; documents: OpenAgingDocument[] }> {
-    const raw: any[] = await this.dataSource.query(docQuery, [companyId, partyId]);
+    const raw: any[] = await this.dataSource.query(docQuery, [
+      companyId,
+      partyId,
+    ]);
     const asOfDate = businessToday();
     const labelFor = new Map(spec.map((b) => [b.key, b.label]));
 
@@ -1547,8 +1800,7 @@ export class ReportsService {
       partyId: customerId,
       partyType: 'customer',
       documentType: 'invoice',
-      partyQuery:
-        `SELECT c.name, c.code, c.contact_person AS "contactPerson", c.email, c.phone,
+      partyQuery: `SELECT c.name, c.code, c.contact_person AS "contactPerson", c.email, c.phone,
                 c.billing_address AS address, c.payment_terms AS "paymentTerms",
                 c.tax_id AS "taxId"
            FROM customers c WHERE c.id = $1 AND c.company_id = $2 LIMIT 1`,
@@ -1571,26 +1823,29 @@ export class ReportsService {
           [companyId, customerId],
         );
         return [
-          ...receipts.map((p): PartyCredit => ({
-            kind: 'payment',
-            id: p.id,
-            reference: p.payment_number ?? null,
-            date: p.payment_date ?? null,
-            amount: r2(num(p.amount)),
-            available: r2(num(p.unapplied)),
-          })),
-          ...memos.map((m): PartyCredit => ({
-            kind: 'credit_memo',
-            id: m.id,
-            reference: m.reference ?? null,
-            date: m.date ?? null,
-            amount: r2(num(m.amount)),
-            available: r2(num(m.available)),
-          })),
+          ...receipts.map(
+            (p): PartyCredit => ({
+              kind: 'payment',
+              id: p.id,
+              reference: p.payment_number ?? null,
+              date: p.payment_date ?? null,
+              amount: r2(num(p.amount)),
+              available: r2(num(p.unapplied)),
+            }),
+          ),
+          ...memos.map(
+            (m): PartyCredit => ({
+              kind: 'credit_memo',
+              id: m.id,
+              reference: m.reference ?? null,
+              date: m.date ?? null,
+              amount: r2(num(m.amount)),
+              available: r2(num(m.available)),
+            }),
+          ),
         ];
       },
-      lastPaymentQuery:
-        `SELECT p.payment_date::text AS date, p.amount::numeric AS amount,
+      lastPaymentQuery: `SELECT p.payment_date::text AS date, p.amount::numeric AS amount,
                 COALESCE(p.payment_number, p.reference) AS reference
            FROM payments p
           WHERE p.company_id = $1 AND p.customer_id = $2
@@ -1610,8 +1865,7 @@ export class ReportsService {
       partyId: vendorId,
       partyType: 'vendor',
       documentType: 'bill',
-      partyQuery:
-        `SELECT v.company_name AS name, v.code, v.contact_person AS "contactPerson", v.email, v.phone,
+      partyQuery: `SELECT v.company_name AS name, v.code, v.contact_person AS "contactPerson", v.email, v.phone,
                 v.address, v.payment_terms AS "paymentTerms", v.tax_id AS "taxId"
            FROM vendors v WHERE v.id = $1 AND v.company_id = $2 LIMIT 1`,
       docQuery: OPEN_BILLS_SQL,
@@ -1626,17 +1880,18 @@ export class ReportsService {
             ORDER BY vc.date ASC, vc.vendor_credit_number ASC`,
           [companyId, vendorId],
         );
-        return credits.map((c): PartyCredit => ({
-          kind: 'vendor_credit',
-          id: c.id,
-          reference: c.reference ?? null,
-          date: c.date ?? null,
-          amount: r2(num(c.amount)),
-          available: r2(num(c.available)),
-        }));
+        return credits.map(
+          (c): PartyCredit => ({
+            kind: 'vendor_credit',
+            id: c.id,
+            reference: c.reference ?? null,
+            date: c.date ?? null,
+            amount: r2(num(c.amount)),
+            available: r2(num(c.available)),
+          }),
+        );
       },
-      lastPaymentQuery:
-        `SELECT bp.payment_date::text AS date, bp.total_amount::numeric AS amount,
+      lastPaymentQuery: `SELECT bp.payment_date::text AS date, bp.total_amount::numeric AS amount,
                 bp.reference
            FROM bill_payments bp
           WHERE bp.company_id = $1 AND bp.vendor_id = $2
@@ -1663,12 +1918,28 @@ export class ReportsService {
     loadCredits: () => Promise<PartyCredit[]>;
     lastPaymentQuery: string;
   }) {
-    const { companyId, partyId, partyType, documentType, partyQuery, docQuery } = args;
+    const {
+      companyId,
+      partyId,
+      partyType,
+      documentType,
+      partyQuery,
+      docQuery,
+    } = args;
 
     const resolved = await this.resolveSpecFor(companyId);
-    const party = await this.findAgingParty(partyQuery, partyId, companyId, partyType);
+    const party = await this.findAgingParty(
+      partyQuery,
+      partyId,
+      companyId,
+      partyType,
+    );
     const { asOfDate, documents } = await this.loadOpenDocuments(
-      companyId, partyId, docQuery, documentType, resolved.spec,
+      companyId,
+      partyId,
+      docQuery,
+      documentType,
+      resolved.spec,
     );
 
     const buckets = resolved.spec.map((b) => {
@@ -1684,7 +1955,10 @@ export class ReportsService {
     );
     const creditTotal = r2(creditItems.reduce((t, c) => t + c.available, 0));
 
-    const [last] = await this.dataSource.query(args.lastPaymentQuery, [companyId, partyId]);
+    const [last] = await this.dataSource.query(args.lastPaymentQuery, [
+      companyId,
+      partyId,
+    ]);
 
     return {
       partyType,
@@ -1716,7 +1990,11 @@ export class ReportsService {
       // business owes the customer (or the vendor owes the business).
       netDue: r2(outstanding - creditTotal),
       lastPayment: last
-        ? { date: last.date ?? null, amount: r2(num(last.amount)), reference: last.reference ?? null }
+        ? {
+            date: last.date ?? null,
+            amount: r2(num(last.amount)),
+            reference: last.reference ?? null,
+          }
         : null,
     };
   }
@@ -1747,9 +2025,14 @@ export class ReportsService {
     const legacySpec = buildBucketSpec([...LEGACY_BOUNDARIES]);
     const asOfDate = businessToday();
 
-    const zeroAmounts = () => Object.fromEntries(spec.map((b) => [b.key, 0])) as Record<string, number>;
+    const zeroAmounts = () =>
+      Object.fromEntries(spec.map((b) => [b.key, 0])) as Record<string, number>;
     const blankLegacy = () => ({
-      current: 0, bucket1to30: 0, bucket31to60: 0, bucket61to90: 0, bucket90Plus: 0,
+      current: 0,
+      bucket1to30: 0,
+      bucket31to60: 0,
+      bucket61to90: 0,
+      bucket90Plus: 0,
     });
 
     const map = new Map<string, any>();
@@ -1765,7 +2048,13 @@ export class ReportsService {
       const age = due === null ? 0 : daysBetweenIso(due, asOfDate);
 
       if (!map.has(id)) {
-        map.set(id, { customerId: id, customerName: name, amounts: zeroAmounts(), total: 0, ...blankLegacy() });
+        map.set(id, {
+          customerId: id,
+          customerName: name,
+          amounts: zeroAmounts(),
+          total: 0,
+          ...blankLegacy(),
+        });
       }
       const e = map.get(id);
       e.amounts[bucketKeyFor(age, spec)] += bal;
@@ -1779,23 +2068,37 @@ export class ReportsService {
         amounts: Object.fromEntries(
           Object.entries(e.amounts).map(([k, v]) => [k, r2(v as number)]),
         ) as Record<string, number>,
-        current: r2(e.current), bucket1to30: r2(e.bucket1to30), bucket31to60: r2(e.bucket31to60),
-        bucket61to90: r2(e.bucket61to90), bucket90Plus: r2(e.bucket90Plus), total: r2(e.total),
+        current: r2(e.current),
+        bucket1to30: r2(e.bucket1to30),
+        bucket31to60: r2(e.bucket31to60),
+        bucket61to90: r2(e.bucket61to90),
+        bucket90Plus: r2(e.bucket90Plus),
+        total: r2(e.total),
       }))
       .sort((a, b) => b.total - a.total);
 
     const totals = rows.reduce(
       (t, e) => {
         for (const b of spec) t.amounts[b.key] += e.amounts[b.key];
-        t.current += e.current; t.bucket1to30 += e.bucket1to30;
-        t.bucket31to60 += e.bucket31to60; t.bucket61to90 += e.bucket61to90;
-        t.bucket90Plus += e.bucket90Plus; t.total += e.total;
+        t.current += e.current;
+        t.bucket1to30 += e.bucket1to30;
+        t.bucket31to60 += e.bucket31to60;
+        t.bucket61to90 += e.bucket61to90;
+        t.bucket90Plus += e.bucket90Plus;
+        t.total += e.total;
         return t;
       },
       { amounts: zeroAmounts(), ...blankLegacy(), total: 0 },
     );
     for (const b of spec) totals.amounts[b.key] = r2(totals.amounts[b.key]);
-    for (const k of ['current', 'bucket1to30', 'bucket31to60', 'bucket61to90', 'bucket90Plus', 'total'] as const) {
+    for (const k of [
+      'current',
+      'bucket1to30',
+      'bucket31to60',
+      'bucket61to90',
+      'bucket90Plus',
+      'total',
+    ] as const) {
       totals[k] = r2(totals[k]);
     }
 
@@ -1892,7 +2195,8 @@ export class ReportsService {
       account.accountType === 'revenue' ||
       account.accountType === 'liability' ||
       account.accountType === 'equity';
-    const signed = (dr: number, cr: number) => (creditNormal ? cr - dr : dr - cr);
+    const signed = (dr: number, cr: number) =>
+      creditNormal ? cr - dr : dr - cr;
 
     return {
       accountCode: account.accountCode,
@@ -1949,7 +2253,11 @@ export class ReportsService {
 
   /** Revenue, liability and equity accounts read credit-positive. */
   private static creditNormal(accountType: string): boolean {
-    return accountType === 'revenue' || accountType === 'liability' || accountType === 'equity';
+    return (
+      accountType === 'revenue' ||
+      accountType === 'liability' ||
+      accountType === 'equity'
+    );
   }
 
   /**
@@ -1989,9 +2297,11 @@ export class ReportsService {
     const signedSql = creditNormal
       ? `(g.credit::numeric - g.debit::numeric)`
       : `(g.debit::numeric - g.credit::numeric)`;
-    const signed = (dr: number, cr: number) => (creditNormal ? cr - dr : dr - cr);
+    const signed = (dr: number, cr: number) =>
+      creditNormal ? cr - dr : dr - cr;
 
-    const isPnl = account.accountType === 'revenue' || account.accountType === 'expense';
+    const isPnl =
+      account.accountType === 'revenue' || account.accountType === 'expense';
     const openFrom = isPnl
       ? fiscalYearStart(await this.fiscalYearStartMonth(companyId), s)
       : REPORT_RANGE_DEFAULTS.startDate;
@@ -2041,7 +2351,9 @@ export class ReportsService {
       },
       range: { startDate: s, endDate: e },
       /** 'cumulative' for balance-sheet accounts; 'fiscalYearToDate' for P&L. */
-      openingBasis: isPnl ? ('fiscalYearToDate' as const) : ('cumulative' as const),
+      openingBasis: isPnl
+        ? ('fiscalYearToDate' as const)
+        : ('cumulative' as const),
       openingBalance: r2(rawOpening),
       periodDebit: r2(num(totals?.dr)),
       periodCredit: r2(num(totals?.cr)),
@@ -2092,10 +2404,14 @@ export class ReportsService {
       ),
     ]);
 
-    const reAccount = allRows.find((r) => r.type === 'equity' && r.subType === 'Retained Earnings');
+    const reAccount = allRows.find(
+      (r) => r.type === 'equity' && r.subType === 'Retained Earnings',
+    );
     const posted = reAccount ? num(reAccount.cr) - num(reAccount.dr) : 0;
     // Derived exactly as balanceSheetCore derives it, so `total` is that line.
-    const priorYears = this.earningsOf(this.priorWindowRows(allRows, currentRows));
+    const priorYears = this.earningsOf(
+      this.priorWindowRows(allRows, currentRows),
+    );
 
     const years = new Map<number, any[]>();
     for (const r of byYear ?? []) {
@@ -2115,13 +2431,18 @@ export class ReportsService {
       asOfDate: asOf,
       fiscalYearStart: fyStart,
       retainedEarningsAccount: reAccount
-        ? { accountCode: reAccount.accountNumber, accountName: reAccount.accountName }
+        ? {
+            accountCode: reAccount.accountNumber,
+            accountName: reAccount.accountName,
+          }
         : null,
       postedTo3100: r2(posted),
       priorYearsEarnings: priorYears.display,
       byFiscalYear,
       // The balance sheet's Retained Earnings line, exactly.
-      total: reAccount ? r2(r2(posted) + priorYears.display) : priorYears.display,
+      total: reAccount
+        ? r2(r2(posted) + priorYears.display)
+        : priorYears.display,
     };
   }
 
@@ -2174,7 +2495,10 @@ export class ReportsService {
       }
     }
     const rawLine = items.reduce((t, i) => t + i.allocated, 0);
-    const pageItems = items.slice((safePage - 1) * safeLimit, safePage * safeLimit);
+    const pageItems = items.slice(
+      (safePage - 1) * safeLimit,
+      safePage * safeLimit,
+    );
 
     const docs = pageItems.length
       ? await this.dataSource.query(
@@ -2188,7 +2512,9 @@ export class ReportsService {
           [companyId, pageItems.map((i) => i.row.id)],
         )
       : [];
-    const docById = new Map<string, any>((docs ?? []).map((d: any) => [d.id, d]));
+    const docById = new Map<string, any>(
+      (docs ?? []).map((d: any) => [d.id, d]),
+    );
     const cashSigned = (dr: number, cr: number) => dr - cr;
 
     const def = CASH_FLOW_LINES[lineKey];
@@ -2269,8 +2595,14 @@ export class ReportsService {
       [companyId, account.id, s, e, cs, ce],
     );
 
-    const rawCurrent = (rows ?? []).reduce((t: number, r: any) => t + num(r.cur), 0);
-    const rawPrior = (rows ?? []).reduce((t: number, r: any) => t + num(r.pri), 0);
+    const rawCurrent = (rows ?? []).reduce(
+      (t: number, r: any) => t + num(r.cur),
+      0,
+    );
+    const rawPrior = (rows ?? []).reduce(
+      (t: number, r: any) => t + num(r.pri),
+      0,
+    );
     const current = r2(rawCurrent);
     const prior = r2(rawPrior);
     // The difference of the two DISPLAYED figures, so the row visibly
@@ -2301,10 +2633,24 @@ export class ReportsService {
           },
         ];
       }
-      const curR = apportionRounding(list.map((x) => x.cur), current);
-      const priR = apportionRounding(list.map((x) => x.pri), prior);
-      const chgR = apportionRounding(list.map((x) => x.cur - x.pri), change);
-      return list.map((x, i) => ({ name: x.name, current: curR[i], prior: priR[i], change: chgR[i] }));
+      const curR = apportionRounding(
+        list.map((x) => x.cur),
+        current,
+      );
+      const priR = apportionRounding(
+        list.map((x) => x.pri),
+        prior,
+      );
+      const chgR = apportionRounding(
+        list.map((x) => x.cur - x.pri),
+        change,
+      );
+      return list.map((x, i) => ({
+        name: x.name,
+        current: curR[i],
+        prior: priR[i],
+        change: chgR[i],
+      }));
     };
 
     return {
@@ -2319,8 +2665,14 @@ export class ReportsService {
       current,
       prior,
       change,
-      changePct: Math.abs(rawPrior) > EPS ? r2(((rawCurrent - rawPrior) / Math.abs(rawPrior)) * 100) : null,
-      byCounterparty: breakdown((r) => r.counterparty || 'Unattributed', safeLimit),
+      changePct:
+        Math.abs(rawPrior) > EPS
+          ? r2(((rawCurrent - rawPrior) / Math.abs(rawPrior)) * 100)
+          : null,
+      byCounterparty: breakdown(
+        (r) => r.counterparty || 'Unattributed',
+        safeLimit,
+      ),
       bySourceType: breakdown(
         (r) => SOURCE_TYPE_LABELS[r.sourceType] ?? 'Journal entry',
         null,
@@ -2336,14 +2688,27 @@ export class ReportsService {
   async inventoryValuation(companyId: string, asOfDate?: string) {
     if (asOfDate) return this.inventoryValuationAsOf(companyId, asOfDate);
     const items = await this.itemRepo.find({ where: { companyId } });
-    const rows = items.map((it) => {
-      const qty = num(it.quantityOnHand);
-      const cost = num(it.unitCost);
-      return { itemId: it.id, itemName: it.name, sku: it.sku, category: it.category ?? 'Uncategorized', qty, cost, value: r2(qty * cost) };
-    }).sort((a, b) => b.value - a.value);
+    const rows = items
+      .map((it) => {
+        const qty = num(it.quantityOnHand);
+        const cost = num(it.unitCost);
+        return {
+          itemId: it.id,
+          itemName: it.name,
+          sku: it.sku,
+          category: it.category ?? 'Uncategorized',
+          qty,
+          cost,
+          value: r2(qty * cost),
+        };
+      })
+      .sort((a, b) => b.value - a.value);
     const catMap = new Map<string, number>();
-    for (const row of rows) catMap.set(row.category, (catMap.get(row.category) ?? 0) + row.value);
-    const byCategory = Array.from(catMap.entries()).map(([category, totalValue]) => ({ category, totalValue: r2(totalValue) }));
+    for (const row of rows)
+      catMap.set(row.category, (catMap.get(row.category) ?? 0) + row.value);
+    const byCategory = Array.from(catMap.entries()).map(
+      ([category, totalValue]) => ({ category, totalValue: r2(totalValue) }),
+    );
     const totalValue = r2(rows.reduce((a, x) => a + x.value, 0));
     return { rows, byCategory, totalValue };
   }
@@ -2363,7 +2728,10 @@ export class ReportsService {
    */
   async inventoryValuationTrend(companyId: string, months = 12) {
     const count = Math.min(Math.max(Math.trunc(months) || 12, 1), 60);
-    return { months: count, points: await this.inventoryClosings(companyId, businessToday(), count) };
+    return {
+      months: count,
+      points: await this.inventoryClosings(companyId, businessToday(), count),
+    };
   }
 
   /**
@@ -2373,7 +2741,12 @@ export class ReportsService {
    * needs); without it — the public trend's long-standing behaviour — the
    * anchor month closes on everything in it.
    */
-  async inventoryClosings(companyId: string, anchor: string, count: number, cutAtAnchor = false) {
+  async inventoryClosings(
+    companyId: string,
+    anchor: string,
+    count: number,
+    cutAtAnchor = false,
+  ) {
     const window = monthWindow(anchor, count);
 
     const rows = await this.dataSource.query(
@@ -2448,47 +2821,53 @@ export class ReportsService {
     let rawTotal = 0;
     let moves = 0;
     let unvalued = 0;
-    const rows = (items ?? []).map((r: any) => {
-      const qty = num(r.qty);
-      const known = Number(r.unvalued) === 0;
-      const value = num(r.value);
-      if (known) rawTotal += value;
-      moves += Number(r.moves);
-      unvalued += Number(r.unvalued);
-      return {
-        itemId: r.itemId,
-        itemName: r.itemName,
-        sku: r.sku,
-        category: r.category,
-        qty: r2(qty),
-        // The average cost the record implies, where it implies one.
-        cost: known && Math.abs(qty) > EPS ? r2(value / qty) : null,
-        value: known ? r2(value) : null,
-        valueKnown: known,
-      };
-    // Largest value first; items whose value is unknown go last. Compared
-    // explicitly — subtracting two -Infinity placeholders gives NaN, which
-    // leaves the order of the unknown items up to the engine.
-    }).sort((a: any, b: any) =>
-      a.value === null && b.value === null
-        ? 0
-        : a.value === null
-          ? 1
-          : b.value === null
-            ? -1
-            : b.value - a.value,
-    );
+    const rows = (items ?? [])
+      .map((r: any) => {
+        const qty = num(r.qty);
+        const known = Number(r.unvalued) === 0;
+        const value = num(r.value);
+        if (known) rawTotal += value;
+        moves += Number(r.moves);
+        unvalued += Number(r.unvalued);
+        return {
+          itemId: r.itemId,
+          itemName: r.itemName,
+          sku: r.sku,
+          category: r.category,
+          qty: r2(qty),
+          // The average cost the record implies, where it implies one.
+          cost: known && Math.abs(qty) > EPS ? r2(value / qty) : null,
+          value: known ? r2(value) : null,
+          valueKnown: known,
+        };
+        // Largest value first; items whose value is unknown go last. Compared
+        // explicitly — subtracting two -Infinity placeholders gives NaN, which
+        // leaves the order of the unknown items up to the engine.
+      })
+      .sort((a: any, b: any) =>
+        a.value === null && b.value === null
+          ? 0
+          : a.value === null
+            ? 1
+            : b.value === null
+              ? -1
+              : b.value - a.value,
+      );
 
     const catMap = new Map<string, number>();
     for (const row of rows) {
-      if (row.value !== null) catMap.set(row.category, (catMap.get(row.category) ?? 0) + row.value);
+      if (row.value !== null)
+        catMap.set(row.category, (catMap.get(row.category) ?? 0) + row.value);
     }
     const totalValue = r2(rawTotal);
     const gl1200 = r2(num(gl?.v));
     return {
       asOfDate: asOf,
       rows,
-      byCategory: [...catMap.entries()].map(([category, v]) => ({ category, totalValue: r2(v) })),
+      byCategory: [...catMap.entries()].map(([category, v]) => ({
+        category,
+        totalValue: r2(v),
+      })),
       totalValue,
       coverage: {
         movements: moves,
@@ -2580,7 +2959,9 @@ export class ReportsService {
       [companyId, itemId],
     );
 
-    const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
+    const byPeriod = new Map<string, any>(
+      rows.map((r: any) => [r.period as string, r]),
+    );
     const since = toIsoDay(rows[0]?.since);
     const firstMovement = rows.length ? (rows[0].period as string) : null;
 
@@ -2883,15 +3264,17 @@ export class ReportsService {
       [companyId, s, e, itemId],
     );
 
-    const byPeriod = new Map<string, any>(rows.map((r: any) => [r.period as string, r]));
+    const byPeriod = new Map<string, any>(
+      rows.map((r: any) => [r.period as string, r]),
+    );
 
     // The window is the requested range, expressed as whole months, so a chart
     // keeps a fixed width rather than re-scaling as history accumulates.
-    const months = Math.min(
-      Math.max(monthSpan(s, e), 1),
-      60,
+    const months = Math.min(Math.max(monthSpan(s, e), 1), 60);
+    const window = monthWindow(
+      e === REPORT_RANGE_DEFAULTS.endDate ? businessToday() : e,
+      months,
     );
-    const window = monthWindow(e === REPORT_RANGE_DEFAULTS.endDate ? businessToday() : e, months);
     // The customers and channels below read the same months the points do. A
     // custom range longer than sixty months reaches back past the first
     // point, and counting those sales there would leave the parts adding up
@@ -2923,7 +3306,10 @@ export class ReportsService {
     const revenue = r2(points.reduce((t, p) => t + p.revenue, 0));
     const cogs = r2(points.reduce((t, p) => t + p.cogs, 0));
     const estCogs = r2(
-      window.reduce((t, slot) => t + num(byPeriod.get(slot.period)?.est_cogs), 0),
+      window.reduce(
+        (t, slot) => t + num(byPeriod.get(slot.period)?.est_cogs),
+        0,
+      ),
     );
     const grossProfit = r2(revenue - cogs);
 
@@ -3194,7 +3580,6 @@ export class ReportsService {
     };
   }
 
-
   /**
    * Every item's sales, cost and gross margin for a period, beside what it is
    * carrying in stock.
@@ -3221,7 +3606,11 @@ export class ReportsService {
     companyId: string,
     startDate: string,
     endDate: string,
-    sort: 'grossProfit' | 'revenue' | 'marginPct' | 'stockValue' = 'grossProfit',
+    sort:
+      | 'grossProfit'
+      | 'revenue'
+      | 'marginPct'
+      | 'stockValue' = 'grossProfit',
   ) {
     const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
     const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
@@ -3311,10 +3700,13 @@ export class ReportsService {
       return bv - av;
     });
 
-    const sum = (f: (x: any) => number) => r2(mapped.reduce((t: number, x: any) => t + f(x), 0));
+    const sum = (f: (x: any) => number) =>
+      r2(mapped.reduce((t: number, x: any) => t + f(x), 0));
     const revenue = sum((x) => x.revenue);
     const cogs = sum((x) => x.cogs);
-    const estCogs = r2(rows.reduce((t: number, r: any) => t + num(r.est_cogs), 0));
+    const estCogs = r2(
+      rows.reduce((t: number, r: any) => t + num(r.est_cogs), 0),
+    );
 
     // What the ledger says, so the gap can be named rather than discovered.
     const [gl] = await this.dataSource.query(
@@ -3374,7 +3766,10 @@ export class ReportsService {
       );
 
     const manualRevenue = netOf('4000', ['journal_entry', 'opening_balance']);
-    const supplierReturns = netOf('5000', ['vendor_credit', 'vendor_credit_void']);
+    const supplierReturns = netOf('5000', [
+      'vendor_credit',
+      'vendor_credit_void',
+    ]);
 
     const unallocatedRevenue = r2(glRevenue - revenue);
     const unallocatedCogs = r2(glCogs - cogs);
@@ -3456,28 +3851,58 @@ export class ReportsService {
   async deliveryDaily(companyId: string) {
     const deliveries = await this.dataSource.query(
       `SELECT d.status, d.personnel_id AS "personnelId", d.zone, u.display_name AS "personnelName"
-       FROM deliveries d LEFT JOIN users u ON u.id = d.personnel_id WHERE d.company_id=$1`, [companyId]);
+       FROM deliveries d LEFT JOIN users u ON u.id = d.personnel_id WHERE d.company_id=$1`,
+      [companyId],
+    );
     const total = deliveries.length;
-    const completed = deliveries.filter((d: any) => d.status === 'delivered').length;
+    const completed = deliveries.filter(
+      (d: any) => d.status === 'delivered',
+    ).length;
     const failed = deliveries.filter((d: any) => d.status === 'failed').length;
     const onTimePercent = total > 0 ? r2((completed / total) * 100) : 0;
 
     const pMap = new Map<string, any>();
     for (const d of deliveries) {
       if (!d.personnelId) continue;
-      if (!pMap.has(d.personnelId)) pMap.set(d.personnelId, { personId: d.personnelId, name: d.personnelName ?? 'Unassigned', total: 0, delivered: 0, failed: 0, onTimeRate: 0 });
+      if (!pMap.has(d.personnelId))
+        pMap.set(d.personnelId, {
+          personId: d.personnelId,
+          name: d.personnelName ?? 'Unassigned',
+          total: 0,
+          delivered: 0,
+          failed: 0,
+          onTimeRate: 0,
+        });
       const e = pMap.get(d.personnelId);
       e.total++;
       if (d.status === 'delivered') e.delivered++;
       if (d.status === 'failed') e.failed++;
     }
-    const personnelStats = Array.from(pMap.values()).map((e) => ({ ...e, onTimeRate: e.total > 0 ? r2((e.delivered / e.total) * 100) : 0 }));
+    const personnelStats = Array.from(pMap.values()).map((e) => ({
+      ...e,
+      onTimeRate: e.total > 0 ? r2((e.delivered / e.total) * 100) : 0,
+    }));
 
     const zMap = new Map<string, number>();
-    for (const d of deliveries) { const z = d.zone ?? 'Unassigned'; zMap.set(z, (zMap.get(z) ?? 0) + 1); }
-    const agencyDistribution = Array.from(zMap.entries()).map(([z, count]) => ({ agencyId: z, agencyName: z, count }));
+    for (const d of deliveries) {
+      const z = d.zone ?? 'Unassigned';
+      zMap.set(z, (zMap.get(z) ?? 0) + 1);
+    }
+    const agencyDistribution = Array.from(zMap.entries()).map(([z, count]) => ({
+      agencyId: z,
+      agencyName: z,
+      count,
+    }));
 
-    return { date: new Date().toISOString().slice(0, 10), total, completed, failed, onTimePercent, personnelStats, agencyDistribution };
+    return {
+      date: new Date().toISOString().slice(0, 10),
+      total,
+      completed,
+      failed,
+      onTimePercent,
+      personnelStats,
+      agencyDistribution,
+    };
   }
 
   // ── Delivery Performance ─────────────────────────────────────────
@@ -3490,8 +3915,14 @@ export class ReportsService {
               SUM(CASE WHEN d.status='delivered' THEN 1 ELSE 0 END) AS delivered,
               SUM(CASE WHEN d.status='failed' THEN 1 ELSE 0 END) AS failed
        FROM deliveries d WHERE d.company_id=$1
-       GROUP BY label`, [companyId]);
-    const dailyTrend = trendRaw.map((t: any) => ({ label: (t.label ?? '').trim() || '—', delivered: parseInt(t.delivered, 10) || 0, failed: parseInt(t.failed, 10) || 0 }));
+       GROUP BY label`,
+      [companyId],
+    );
+    const dailyTrend = trendRaw.map((t: any) => ({
+      label: (t.label ?? '').trim() || '—',
+      delivered: parseInt(t.delivered, 10) || 0,
+      failed: parseInt(t.failed, 10) || 0,
+    }));
     return { rows, dailyTrend };
   }
 
@@ -3499,36 +3930,64 @@ export class ReportsService {
   async analyticsDashboard(companyId: string) {
     const revRows = await this.dataSource.query(
       `SELECT EXTRACT(YEAR FROM invoice_date::date)::int AS yr, EXTRACT(MONTH FROM invoice_date::date)::int AS mo, SUM(total::numeric) AS v
-       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`, [companyId]);
+       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`,
+      [companyId],
+    );
     const billRows = await this.dataSource.query(
       `SELECT EXTRACT(YEAR FROM bill_date::date)::int AS yr, EXTRACT(MONTH FROM bill_date::date)::int AS mo, SUM(total::numeric) AS v
-       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`, [companyId]);
-    const revenueTrend = revRows.slice(-12).map((r: any) => ({ label: `${MONTH_LABELS[r.mo - 1]} ${String(r.yr).slice(2)}`, value: r2(num(r.v)) }));
+       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`,
+      [companyId],
+    );
+    const revenueTrend = revRows.slice(-12).map((r: any) => ({
+      label: `${MONTH_LABELS[r.mo - 1]} ${String(r.yr).slice(2)}`,
+      value: r2(num(r.v)),
+    }));
     const billByKey = new Map<string, number>();
     for (const b of billRows) billByKey.set(`${b.yr}-${b.mo}`, num(b.v));
-    const cashFlowTrend = revRows.slice(-12).map((r: any) => ({ label: `${MONTH_LABELS[r.mo - 1]} ${String(r.yr).slice(2)}`, value: r2(num(r.v) - (billByKey.get(`${r.yr}-${r.mo}`) ?? 0)) }));
+    const cashFlowTrend = revRows.slice(-12).map((r: any) => ({
+      label: `${MONTH_LABELS[r.mo - 1]} ${String(r.yr).slice(2)}`,
+      value: r2(num(r.v) - (billByKey.get(`${r.yr}-${r.mo}`) ?? 0)),
+    }));
 
     const expRows = await this.dataSource.query(
       `SELECT v.company_name AS label, SUM(b.total::numeric) AS value FROM bills b JOIN vendors v ON v.id=b.vendor_id
-       WHERE b.company_id=$1 AND b.status NOT IN ('void','draft') GROUP BY v.company_name ORDER BY value DESC`, [companyId]);
-    const expenseCategories = expRows.map((e: any) => ({ label: e.label, value: r2(num(e.value)) }));
+       WHERE b.company_id=$1 AND b.status NOT IN ('void','draft') GROUP BY v.company_name ORDER BY value DESC`,
+      [companyId],
+    );
+    const expenseCategories = expRows.map((e: any) => ({
+      label: e.label,
+      value: r2(num(e.value)),
+    }));
 
     const custRows = await this.dataSource.query(
       `SELECT c.name AS label, SUM(i.total::numeric) AS value FROM invoices i JOIN customers c ON c.id=i.customer_id
-       WHERE i.company_id=$1 AND i.status NOT IN ('void','draft') GROUP BY c.name ORDER BY value DESC LIMIT 5`, [companyId]);
-    const topCustomers = custRows.map((c: any) => ({ label: c.label, value: r2(num(c.value)) }));
+       WHERE i.company_id=$1 AND i.status NOT IN ('void','draft') GROUP BY c.name ORDER BY value DESC LIMIT 5`,
+      [companyId],
+    );
+    const topCustomers = custRows.map((c: any) => ({
+      label: c.label,
+      value: r2(num(c.value)),
+    }));
 
     const aging = await this.arAging(companyId);
-    const arAgingTrend = [{
-      label: 'Current',
-      current: aging.totals.current,
-      bucket1to30: aging.totals.bucket1to30,
-      bucket31to60: aging.totals.bucket31to60,
-      bucket61to90: aging.totals.bucket61to90,
-      bucket90Plus: aging.totals.bucket90Plus,
-    }];
+    const arAgingTrend = [
+      {
+        label: 'Current',
+        current: aging.totals.current,
+        bucket1to30: aging.totals.bucket1to30,
+        bucket31to60: aging.totals.bucket31to60,
+        bucket61to90: aging.totals.bucket61to90,
+        bucket90Plus: aging.totals.bucket90Plus,
+      },
+    ];
 
-    return { revenueTrend, expenseCategories, cashFlowTrend, topCustomers, arAgingTrend };
+    return {
+      revenueTrend,
+      expenseCategories,
+      cashFlowTrend,
+      topCustomers,
+      arAgingTrend,
+    };
   }
 
   // ── Simple delivery status breakdown (legacy endpoint) ───────────
@@ -3538,20 +3997,27 @@ export class ReportsService {
   async deliveryReport(companyId: string, startDate: string, endDate: string) {
     const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
     const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
-    const qb = this.deliveryRepo.createQueryBuilder('d')
+    const qb = this.deliveryRepo
+      .createQueryBuilder('d')
       .select('d.status', 'status')
       .addSelect('COUNT(*)', 'count')
       .where('d.companyId = :cid', { cid: companyId })
-      .andWhere('CAST(d.createdAt AT TIME ZONE :tz AS date) BETWEEN :s AND :e', {
-        tz: businessTimezone(),
-        s,
-        e,
-      })
+      .andWhere(
+        'CAST(d.createdAt AT TIME ZONE :tz AS date) BETWEEN :s AND :e',
+        {
+          tz: businessTimezone(),
+          s,
+          e,
+        },
+      )
       .groupBy('d.status');
     return qb.getRawMany();
   }
 
-  async aging(companyId: string, request?: AgingSpecRequest & { type?: 'ar' | 'ap' }) {
+  async aging(
+    companyId: string,
+    request?: AgingSpecRequest & { type?: 'ar' | 'ap' },
+  ) {
     return request?.type === 'ap'
       ? this.apAging(companyId, request)
       : this.arAging(companyId, request);
@@ -3560,13 +4026,33 @@ export class ReportsService {
   // ── Admin home dashboard summary ─────────────────────────────────
   async dashboardSummary(companyId: string) {
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      .toISOString()
+      .slice(0, 10);
     const monthEnd = now.toISOString().slice(0, 10);
 
-    const invoiceTotal = await this.sum('invoices', 'total', companyId, 'invoice_date', monthStart, monthEnd);
-    const billTotal = await this.sum('bills', 'total', companyId, 'bill_date', monthStart, monthEnd);
-    const outstandingAR = (await this.dataSource.query(
-      `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM invoices WHERE company_id=$1 AND status NOT IN ('paid','void')`, [companyId]))[0]?.v;
+    const invoiceTotal = await this.sum(
+      'invoices',
+      'total',
+      companyId,
+      'invoice_date',
+      monthStart,
+      monthEnd,
+    );
+    const billTotal = await this.sum(
+      'bills',
+      'total',
+      companyId,
+      'bill_date',
+      monthStart,
+      monthEnd,
+    );
+    const outstandingAR = (
+      await this.dataSource.query(
+        `SELECT COALESCE(SUM(balance::numeric),0) AS v FROM invoices WHERE company_id=$1 AND status NOT IN ('paid','void')`,
+        [companyId],
+      )
+    )[0]?.v;
     // What we owe suppliers, reconciled to account 2000.
     //
     // Two corrections to what this used to be. DRAFT bills post no journal
@@ -3575,30 +4061,73 @@ export class ReportsService {
     // inconsistency, not a judgement). And an unapplied vendor credit has
     // already been debited to A/P, so the gross bill balances overstate the
     // liability until the credit is applied to a specific bill.
-    const pendingAP = (await this.dataSource.query(
-      `SELECT GREATEST(
+    const pendingAP = (
+      await this.dataSource.query(
+        `SELECT GREATEST(
                 COALESCE((SELECT SUM(balance::numeric) FROM bills
                            WHERE company_id=$1 AND status NOT IN ('paid','void','draft')), 0)
               - COALESCE((SELECT SUM(balance::numeric) FROM vendor_credits
                            WHERE company_id=$1 AND status NOT IN ('void','closed')), 0),
-              0) AS v`, [companyId]))[0]?.v;
+              0) AS v`,
+        [companyId],
+      )
+    )[0]?.v;
     const itemCount = await this.itemRepo.count({ where: { companyId } });
-    const deliveryStats = await this.deliveryRepo.createQueryBuilder('d')
-      .select('d.status', 'status').addSelect('COUNT(*)', 'count')
-      .where('d.companyId = :cid', { cid: companyId }).groupBy('d.status').getRawMany();
-    const recentInvoices = await this.invoiceRepo.createQueryBuilder('i')
-      .where('i.companyId = :cid', { cid: companyId }).orderBy('i.invoiceDate', 'DESC').limit(5).getMany();
-    const recentBills = await this.billRepo.createQueryBuilder('b')
-      .where('b.companyId = :cid', { cid: companyId }).orderBy('b.billDate', 'DESC').limit(5).getMany();
+    const deliveryStats = await this.deliveryRepo
+      .createQueryBuilder('d')
+      .select('d.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('d.companyId = :cid', { cid: companyId })
+      .groupBy('d.status')
+      .getRawMany();
+    const recentInvoices = await this.invoiceRepo
+      .createQueryBuilder('i')
+      .where('i.companyId = :cid', { cid: companyId })
+      .orderBy('i.invoiceDate', 'DESC')
+      .limit(5)
+      .getMany();
+    const recentBills = await this.billRepo
+      .createQueryBuilder('b')
+      .where('b.companyId = :cid', { cid: companyId })
+      .orderBy('b.billDate', 'DESC')
+      .limit(5)
+      .getMany();
 
-    const deliveryBreakdown: Record<string, number> = { pending: 0, assigned: 0, in_transit: 0, delivered: 0, failed: 0, cancelled: 0, unassigned: 0 };
+    const deliveryBreakdown: Record<string, number> = {
+      pending: 0,
+      assigned: 0,
+      in_transit: 0,
+      delivered: 0,
+      failed: 0,
+      cancelled: 0,
+      unassigned: 0,
+    };
     let deliveryTotal = 0;
-    for (const row of deliveryStats) { deliveryBreakdown[row.status] = parseInt(row.count, 10); deliveryTotal += parseInt(row.count, 10); }
+    for (const row of deliveryStats) {
+      deliveryBreakdown[row.status] = parseInt(row.count, 10);
+      deliveryTotal += parseInt(row.count, 10);
+    }
 
     const recentTransactions = [
-      ...recentInvoices.map((inv) => ({ id: inv.id, type: 'invoice' as const, description: inv.invoiceNumber, date: inv.invoiceDate, amount: num(inv.total), status: inv.status })),
-      ...recentBills.map((bill) => ({ id: bill.id, type: 'bill' as const, description: bill.billNumber, date: bill.billDate, amount: num(bill.total), status: bill.status })),
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8);
+      ...recentInvoices.map((inv) => ({
+        id: inv.id,
+        type: 'invoice' as const,
+        description: inv.invoiceNumber,
+        date: inv.invoiceDate,
+        amount: num(inv.total),
+        status: inv.status,
+      })),
+      ...recentBills.map((bill) => ({
+        id: bill.id,
+        type: 'bill' as const,
+        description: bill.billNumber,
+        date: bill.billDate,
+        amount: num(bill.total),
+        status: bill.status,
+      })),
+    ]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8);
 
     // Every open invoice past its due date, counted in the database. This used
     // to filter `recentInvoices` — the five latest by invoice date — so it
@@ -3606,11 +4135,14 @@ export class ReportsService {
     // overdue was invisible as soon as five newer ones were raised. Same
     // open-document predicate as AR aging, so the count matches the report the
     // alert links to.
-    const overdueRow = (await this.dataSource.query(
-      `SELECT COUNT(*)::int AS n, COALESCE(SUM(i.balance::numeric),0) AS amt
+    const overdueRow = (
+      await this.dataSource.query(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(i.balance::numeric),0) AS amt
          FROM invoices i
         WHERE i.company_id=$1 AND ${openDocPredicate('i')} AND i.due_date < $2`,
-      [companyId, businessToday()]))[0];
+        [companyId, businessToday()],
+      )
+    )[0];
     const alerts = buildDashboardAlerts({
       overdueCount: Number(overdueRow?.n ?? 0),
       overdueAmount: num(overdueRow?.amt),
@@ -3643,7 +4175,10 @@ export class ReportsService {
    */
   private async setupStatus(companyId: string, itemCount: number) {
     const count1 = async (sql: string) =>
-      parseInt((await this.dataSource.query(sql, [companyId]))[0]?.v ?? '0', 10);
+      parseInt(
+        (await this.dataSource.query(sql, [companyId]))[0]?.v ?? '0',
+        10,
+      );
 
     const openingBalance = await count1(
       `SELECT CASE WHEN
@@ -3654,9 +4189,15 @@ export class ReportsService {
     const customAccounts = await count1(
       `SELECT COUNT(*) v FROM accounts WHERE company_id=$1`,
     );
-    const customers = await count1(`SELECT COUNT(*) v FROM customers WHERE company_id=$1`);
-    const vendors = await count1(`SELECT COUNT(*) v FROM vendors WHERE company_id=$1`);
-    const taxRates = await count1(`SELECT COUNT(*) v FROM tax_rates WHERE company_id=$1`);
+    const customers = await count1(
+      `SELECT COUNT(*) v FROM customers WHERE company_id=$1`,
+    );
+    const vendors = await count1(
+      `SELECT COUNT(*) v FROM vendors WHERE company_id=$1`,
+    );
+    const taxRates = await count1(
+      `SELECT COUNT(*) v FROM tax_rates WHERE company_id=$1`,
+    );
     const company = await this.dataSource.query(
       `SELECT setup_completed AS "v" FROM companies WHERE id=$1`,
       [companyId],
@@ -3700,7 +4241,8 @@ export class ReportsService {
   ) {
     const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
     const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
-    if (mode) return this.trialBalanceByMode(companyId, s, e, mode, opts.includeZero);
+    if (mode)
+      return this.trialBalanceByMode(companyId, s, e, mode, opts.includeZero);
 
     const glRows = await this.glByAccount(companyId, s, e);
 
@@ -3797,7 +4339,8 @@ export class ReportsService {
     const startMonth = await this.fiscalYearStartMonth(companyId);
     const isPnl = (t: string) => t === 'revenue' || t === 'expense';
     const netOf = (r: GlRow | undefined) => (r ? num(r.dr) - num(r.cr) : 0);
-    const byCode = (rows: GlRow[]) => new Map(rows.map((r) => [r.accountNumber, r]));
+    const byCode = (rows: GlRow[]) =>
+      new Map(rows.map((r) => [r.accountNumber, r]));
 
     /** Debit-positive nets as of a date: BS since inception, P&L for its FY. */
     const closingAsOf = async (asOf: string) => {
@@ -3825,18 +4368,28 @@ export class ReportsService {
       type: 'equity',
       subType: 'Retained Earnings',
     };
-    const flagsFor = (acc: { type: string; subType: string | null; accountName: string }, net: number) => {
-      const flags: Array<'abnormal_balance' | 'contra_assumed' | 'obe_nonzero'> = [];
-      const contra = acc.type === 'asset' && /accumulated/i.test(acc.accountName);
+    const flagsFor = (
+      acc: { type: string; subType: string | null; accountName: string },
+      net: number,
+    ) => {
+      const flags: Array<
+        'abnormal_balance' | 'contra_assumed' | 'obe_nonzero'
+      > = [];
+      const contra =
+        acc.type === 'asset' && /accumulated/i.test(acc.accountName);
       if (contra) flags.push('contra_assumed');
       const debitNormal =
         acc.type === 'asset' ||
         acc.type === 'expense' ||
         (acc.type === 'equity' && acc.subType === 'Owner Draws');
-      if (!contra && ((debitNormal && net < -0.005) || (!debitNormal && net > 0.005))) {
+      if (
+        !contra &&
+        ((debitNormal && net < -0.005) || (!debitNormal && net > 0.005))
+      ) {
         flags.push('abnormal_balance');
       }
-      if (acc.subType === 'Opening Balance Equity' && Math.abs(net) >= 0.005) flags.push('obe_nonzero');
+      if (acc.subType === 'Opening Balance Equity' && Math.abs(net) >= 0.005)
+        flags.push('obe_nonzero');
       return flags;
     };
     const dr = (n: number) => (n > 0 ? r2(n) : 0);
@@ -3849,9 +4402,18 @@ export class ReportsService {
       const debit = r2(rawDr);
       return { debit, credit: balanced ? debit : r2(rawCr), balanced };
     };
-    const groupKeyOf = (acc: { accountNumber: string; subType: string | null; type: string }) =>
-      acc.accountNumber === '' ? 'equity' : accountGroupFor(acc) ?? 'otherCurrentAssets';
-    const GROUP_ORDER = [...STATEMENT_GROUPS.map((g) => g.key), ...PNL_GROUPS.map((g) => g.key)];
+    const groupKeyOf = (acc: {
+      accountNumber: string;
+      subType: string | null;
+      type: string;
+    }) =>
+      acc.accountNumber === ''
+        ? 'equity'
+        : (accountGroupFor(acc) ?? 'otherCurrentAssets');
+    const GROUP_ORDER = [
+      ...STATEMENT_GROUPS.map((g) => g.key),
+      ...PNL_GROUPS.map((g) => g.key),
+    ];
 
     if (mode === 'working') {
       const fyOfS = fiscalYearStart(startMonth, s);
@@ -3874,14 +4436,21 @@ export class ReportsService {
         const moved = netOf(periodBy.get(acc.accountNumber));
         return { acc, opening, moved, closing: opening + moved };
       });
-      lines.push({ acc: RE_ROW as GlRow, opening: priorPnl, moved: 0, closing: priorPnl });
+      lines.push({
+        acc: RE_ROW as GlRow,
+        opening: priorPnl,
+        moved: 0,
+        closing: priorPnl,
+      });
       const shown = lines.filter(
         (l) =>
           Math.abs(l.opening) >= 0.005 ||
           Math.abs(l.moved) >= 0.005 ||
           Math.abs(l.closing) >= 0.005 ||
           // `includeZero`: every active account of the chart, even untouched.
-          (includeZero && l.acc.accountNumber !== '' && l.acc.isActive !== false),
+          (includeZero &&
+            l.acc.accountNumber !== '' &&
+            l.acc.isActive !== false),
       );
       const rows = shown.map((l) => ({
         accountCode: l.acc.accountNumber,
@@ -3909,7 +4478,9 @@ export class ReportsService {
       const o = foot(lines.map((l) => l.opening));
       const p = foot(lines.map((l) => l.moved));
       const c = foot(lines.map((l) => l.closing));
-      const groups = GROUP_ORDER.filter((k) => shown.some((l) => groupKeyOf(l.acc) === k)).map((key) => {
+      const groups = GROUP_ORDER.filter((k) =>
+        shown.some((l) => groupKeyOf(l.acc) === k),
+      ).map((key) => {
         const mine = lines.filter((l) => groupKeyOf(l.acc) === key);
         const pair = (pick: (l: (typeof shown)[number]) => number) => {
           const nets = mine.map(pick);
@@ -3951,7 +4522,11 @@ export class ReportsService {
         totalDebits: c.debit,
         totalCredits: c.credit,
         isBalanced: o.balanced && p.balanced && c.balanced,
-        balanced: { opening: o.balanced, period: p.balanced, closing: c.balanced },
+        balanced: {
+          opening: o.balanced,
+          period: p.balanced,
+          closing: c.balanced,
+        },
         totals: {
           openingDebit: o.debit,
           openingCredit: o.credit,
@@ -3973,7 +4548,11 @@ export class ReportsService {
         const net = closing.nets.get(acc.accountNumber) ?? 0;
         return { acc, net, closingNet: net };
       });
-      lines.push({ acc: RE_ROW as GlRow, net: closing.priorPnl, closingNet: closing.priorPnl });
+      lines.push({
+        acc: RE_ROW as GlRow,
+        net: closing.priorPnl,
+        closingNet: closing.priorPnl,
+      });
     } else {
       const period = await this.glByAccount(companyId, s, e);
       lines = period.map((acc) => ({
@@ -4001,8 +4580,12 @@ export class ReportsService {
     }));
     // Every account, shown or not — see the working mode above.
     const t = foot(lines.map((l) => l.net));
-    const groups = GROUP_ORDER.filter((k) => shown.some((l) => groupKeyOf(l.acc) === k)).map((key) => {
-      const nets = lines.filter((l) => groupKeyOf(l.acc) === key).map((l) => l.net);
+    const groups = GROUP_ORDER.filter((k) =>
+      shown.some((l) => groupKeyOf(l.acc) === k),
+    ).map((key) => {
+      const nets = lines
+        .filter((l) => groupKeyOf(l.acc) === key)
+        .map((l) => l.net);
       return {
         key,
         label: groupLabel(key),
@@ -4013,7 +4596,9 @@ export class ReportsService {
     return {
       range: { startDate: s, endDate: e },
       mode,
-      ...(mode === 'closing' ? { asOfDate: e, fiscalYearStart: closing.fyStart } : {}),
+      ...(mode === 'closing'
+        ? { asOfDate: e, fiscalYearStart: closing.fyStart }
+        : {}),
       rows,
       totalDebits: t.debit,
       totalCredits: t.credit,
@@ -4066,7 +4651,9 @@ export class ReportsService {
       }
     }
     const toSection = (section: CashFlowSectionKey) => {
-      const keys = [...rawByLine.keys()].filter((k) => CASH_FLOW_LINES[k].section === section);
+      const keys = [...rawByLine.keys()].filter(
+        (k) => CASH_FLOW_LINES[k].section === section,
+      );
       const raw = keys.reduce((t, k) => t + rawByLine.get(k)!, 0);
       const lines: CashFlowLine[] = keys
         // A line of ledger dust is not shown, but still counts in the total.
@@ -4141,7 +4728,11 @@ export class ReportsService {
       beginningCash,
       endingCash,
       // `period`/`rawValue` are internal (the analytics series uses them).
-      monthlyTrend: monthlyTrend.map(({ label, value, endingCash }) => ({ label, value, endingCash })),
+      monthlyTrend: monthlyTrend.map(({ label, value, endingCash }) => ({
+        label,
+        value,
+        endingCash,
+      })),
       operatingIndirect,
       // ── additive (v2) ──
       accounts: accounts.map((a) => ({
@@ -4153,7 +4744,8 @@ export class ReportsService {
       cashTie: {
         endingCash,
         balanceSheetCash: r2(rawBalanceSheetCash),
-        ties: Math.abs(rawBeginning + rawNetChange - rawBalanceSheetCash) < 0.005,
+        ties:
+          Math.abs(rawBeginning + rawNetChange - rawBalanceSheetCash) < 0.005,
       },
       monthly,
     };
@@ -4166,7 +4758,13 @@ export class ReportsService {
    * range, so the two agree by construction.
    */
   pnlRaw(
-    rows: Array<{ type: string; dr: string; cr: string; accountNumber: string; subType: string }>,
+    rows: Array<{
+      type: string;
+      dr: string;
+      cr: string;
+      accountNumber: string;
+      subType: string;
+    }>,
   ) {
     let revenue = 0;
     let income = 0;
@@ -4211,8 +4809,11 @@ export class ReportsService {
       [companyId, s, e],
     );
     const byPeriod = new Map<string, any[]>();
-    for (const r of rows ?? []) byPeriod.set(r.period, [...(byPeriod.get(r.period) ?? []), r]);
-    return new Map([...byPeriod.entries()].map(([period, rs]) => [period, this.pnlRaw(rs)]));
+    for (const r of rows ?? [])
+      byPeriod.set(r.period, [...(byPeriod.get(r.period) ?? []), r]);
+    return new Map(
+      [...byPeriod.entries()].map(([period, rs]) => [period, this.pnlRaw(rs)]),
+    );
   }
 
   /** Direct-method operating cash per calendar month, at full precision. */
@@ -4223,7 +4824,8 @@ export class ReportsService {
       const op = f.allocations
         .filter((a) => CASH_FLOW_LINES[a.lineKey].section === 'operating')
         .reduce((t, a) => t + a.amount, 0);
-      if (op) out.set(f.date.slice(0, 7), (out.get(f.date.slice(0, 7)) ?? 0) + op);
+      if (op)
+        out.set(f.date.slice(0, 7), (out.get(f.date.slice(0, 7)) ?? 0) + op);
     }
     return out;
   }
@@ -4270,12 +4872,17 @@ export class ReportsService {
     const paymentIds = [...postings.values()]
       .filter((p) => p.sourceType === 'bill_payment')
       .map((p) => p.sourceId);
-    const lookThrough = await this.billPaymentLookThrough(companyId, paymentIds);
+    const lookThrough = await this.billPaymentLookThrough(
+      companyId,
+      paymentIds,
+    );
 
     const flows = [...postings.values()].map((p) =>
       classifyPosting(
         p,
-        p.sourceType === 'bill_payment' ? lookThrough.get(p.sourceId) ?? [] : undefined,
+        p.sourceType === 'bill_payment'
+          ? (lookThrough.get(p.sourceId) ?? [])
+          : undefined,
       ),
     );
     return { postings, flows };
@@ -4340,7 +4947,10 @@ export class ReportsService {
     // Total debits per application, to turn each line into a share of it.
     const debitsByApp = new Map<string, number>();
     for (const r of rows) {
-      debitsByApp.set(r.applicationId, (debitsByApp.get(r.applicationId) ?? 0) + num(r.debit));
+      debitsByApp.set(
+        r.applicationId,
+        (debitsByApp.get(r.applicationId) ?? 0) + num(r.debit),
+      );
     }
     for (const r of rows) {
       const list = out.get(r.paymentId) ?? [];
@@ -4353,9 +4963,16 @@ export class ReportsService {
           accountCode: r.accountCode,
           weight: applied * (num(r.debit) / totalDebits),
         });
-      } else if (!list.some((w) => w.accountCode === '' && w.weight === applied)) {
+      } else if (
+        !list.some((w) => w.accountCode === '' && w.weight === applied)
+      ) {
         // A bill with no posting to look through to: the supplier line keeps it.
-        list.push({ type: 'liability', subType: 'Accounts Payable', accountCode: '', weight: applied });
+        list.push({
+          type: 'liability',
+          subType: 'Accounts Payable',
+          accountCode: '',
+          weight: applied,
+        });
       }
       out.set(r.paymentId, list);
     }
@@ -4391,18 +5008,32 @@ export class ReportsService {
           ORDER BY period`,
         [companyId, s, e],
       ),
-      beginning !== undefined ? Promise.resolve(beginning) : this.cashBefore(companyId, s),
+      beginning !== undefined
+        ? Promise.resolve(beginning)
+        : this.cashBefore(companyId, s),
     ]);
-    const window = monthWindow(e, Math.min(Math.max(monthSpan(s, e), 1), maxMonths));
-    const byPeriod = new Map<string, any>((rows ?? []).map((r: any) => [r.period as string, r]));
+    const window = monthWindow(
+      e,
+      Math.min(Math.max(monthSpan(s, e), 1), maxMonths),
+    );
+    const byPeriod = new Map<string, any>(
+      (rows ?? []).map((r: any) => [r.period as string, r]),
+    );
     // Cash at the window's start: everything before the range, plus the
     // range's months that fall before the window.
     let running = opening;
-    for (const r of rows ?? []) if ((r.period as string) < window[0].period) running += num(r.v);
+    for (const r of rows ?? [])
+      if ((r.period as string) < window[0].period) running += num(r.v);
     return window.map((slot) => {
       const r = byPeriod.get(slot.period);
       running += num(r?.v);
-      return { label: slot.label, value: r2(num(r?.v)), endingCash: r2(running), period: slot.period, rawValue: num(r?.v) };
+      return {
+        label: slot.label,
+        value: r2(num(r?.v)),
+        endingCash: r2(running),
+        period: slot.period,
+        rawValue: num(r?.v),
+      };
     });
   }
 
@@ -4488,8 +5119,12 @@ export class ReportsService {
       periodRows.map((r) => {
         const dr = num(r.dr);
         const cr = num(r.cr);
-        const moved = r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
-        return [r.accountNumber, { type: r.type, subType: r.subType, moved }] as const;
+        const moved =
+          r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
+        return [
+          r.accountNumber,
+          { type: r.type, subType: r.subType, moved },
+        ] as const;
       }),
     );
 
@@ -4505,7 +5140,8 @@ export class ReportsService {
         if (!pick(code, meta)) continue;
         // `excluded` is debit-positive; movements are normal-balance signed.
         const moved = nonCash.excluded.get(code) ?? 0;
-        const movedNormal = meta.type === 'asset' || meta.type === 'expense' ? moved : -moved;
+        const movedNormal =
+          meta.type === 'asset' || meta.type === 'expense' ? moved : -moved;
         d += meta.moved - movedNormal;
       }
       return d;
@@ -4531,7 +5167,10 @@ export class ReportsService {
     );
     const dGit = delta((c) => c === '1250');
     const dPrepaid = delta(
-      (c, m) => m.type === 'asset' && m.subType === 'Prepaid' && !inRange(c, 1200, 1299),
+      (c, m) =>
+        m.type === 'asset' &&
+        m.subType === 'Prepaid' &&
+        !inRange(c, 1200, 1299),
     );
     // Fixed assets are investing, not working capital.
     const dOtherAssets = delta(
@@ -4577,7 +5216,8 @@ export class ReportsService {
     // displayed adjustments are then rounded so that, with net income, they
     // foot to the displayed total exactly — a residual line appears only for
     // a real residual, never for a paisa of presentation rounding.
-    const rawSubtotal = rawNetIncome + candidates.reduce((t, l) => t + l.amount, 0);
+    const rawSubtotal =
+      rawNetIncome + candidates.reduce((t, l) => t + l.amount, 0);
     const rawResidual = directOperatingRaw - rawSubtotal;
     const total = r2(directOperatingRaw);
     const hasResidual = Math.abs(rawResidual) >= 0.005;
@@ -4617,7 +5257,11 @@ export class ReportsService {
     s: string,
     e: string,
     cash: { postings: Map<string, Posting>; flows: PostingCashFlow[] },
-  ): Promise<{ excluded: Map<string, number>; addBack: number; breakdown: CashFlowLine[] }> {
+  ): Promise<{
+    excluded: Map<string, number>;
+    addBack: number;
+    breakdown: CashFlowLine[];
+  }> {
     const rows = await this.dataSource.query(
       `WITH candidates AS (
          SELECT g.reference
@@ -4653,8 +5297,13 @@ export class ReportsService {
     const flowByRef = new Map(cash.flows.map((f) => [f.reference, f]));
     for (const f of cash.flows) {
       const p = cash.postings.get(f.reference);
-      if (!p || postings.has(f.reference) || f.sourceType !== 'bill_payment') continue;
-      if (f.allocations.some((a) => CASH_FLOW_LINES[a.lineKey].section !== 'operating')) {
+      if (!p || postings.has(f.reference) || f.sourceType !== 'bill_payment')
+        continue;
+      if (
+        f.allocations.some(
+          (a) => CASH_FLOW_LINES[a.lineKey].section !== 'operating',
+        )
+      ) {
         postings.set(f.reference, p);
       }
     }
@@ -4685,8 +5334,14 @@ export class ReportsService {
       }
     }
     const breakdown: CashFlowLine[] = [
-      { label: 'Opening balances and opening stock entered in the period', amount: effect.opening },
-      { label: 'Payables settled for fixed assets (investing)', amount: effect.payables },
+      {
+        label: 'Opening balances and opening stock entered in the period',
+        amount: effect.opening,
+      },
+      {
+        label: 'Payables settled for fixed assets (investing)',
+        amount: effect.payables,
+      },
       { label: 'Non-cash investing and financing', amount: effect.other },
     ]
       .filter((l) => Math.abs(l.amount) >= 0.005)
@@ -4698,7 +5353,9 @@ export class ReportsService {
     if (!rows.length) return '';
     const keys = Object.keys(rows[0]);
     const header = keys.join(',');
-    const lines = rows.map((r) => keys.map((k) => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(','));
+    const lines = rows.map((r) =>
+      keys.map((k) => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(','),
+    );
     return [header, ...lines].join('\n');
   }
 }

@@ -152,11 +152,17 @@ export class ApprovalsService {
     // concurrent approvals cannot both reach the dispatch below.
     const claim = await this.repo.update(
       { id: request.id, companyId, status: 'pending' },
-      { status: 'approving', reviewedBy: reviewer.id, reviewerRole: reviewer.role },
+      {
+        status: 'approving',
+        reviewedBy: reviewer.id,
+        reviewerRole: reviewer.role,
+      },
     );
     if (!claim.affected) {
       // Somebody else won the race; return whatever they made of it.
-      return (await this.repo.findOne({ where: { id: request.id, companyId } }))!;
+      return (await this.repo.findOne({
+        where: { id: request.id, companyId },
+      }))!;
     }
 
     let result: { journalEntryId?: string | null; id?: string | null };
@@ -171,7 +177,11 @@ export class ApprovalsService {
         reviewer.id,
         {
           creditOverride: dto.creditOverrideReason
-            ? { reason: dto.creditOverrideReason, userId: reviewer.id, role: reviewer.role }
+            ? {
+                reason: dto.creditOverrideReason,
+                userId: reviewer.id,
+                role: reviewer.role,
+              }
             : null,
           requestedBy: request.requestedBy,
         },
@@ -190,7 +200,9 @@ export class ApprovalsService {
           lastError: message,
         },
       );
-      this.logger.warn(`Approval ${request.id} (${request.type}) failed: ${message}`);
+      this.logger.warn(
+        `Approval ${request.id} (${request.type}) failed: ${message}`,
+      );
       throw err;
     }
 

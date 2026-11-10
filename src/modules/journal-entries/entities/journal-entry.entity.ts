@@ -20,10 +20,22 @@ export class JournalEntry extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 16, default: 'draft' })
   status!: JournalEntryStatus;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_debits' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_debits',
+  })
   totalDebits!: string;
 
-  @Column({ type: 'decimal', precision: 18, scale: 4, default: 0, name: 'total_credits' })
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'total_credits',
+  })
   totalCredits!: string;
 
   @Column({ type: 'uuid', name: 'created_by' })
