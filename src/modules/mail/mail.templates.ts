@@ -5,20 +5,30 @@
 
 const BRAND = '#1f6feb';
 
+/**
+ * Every email is a complete HTML document: language, charset and a title.
+ * Head-less HTML is one of the things spam filters score, and a missing
+ * charset garbles non-ASCII names in some clients.
+ */
 function layout(title: string, bodyHtml: string): string {
   return `<!doctype html>
-<html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${esc(title)}</title>
+  </head>
   <body style="margin:0;padding:0;background:#f4f6f8;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
     <div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
       <div style="background:${BRAND};padding:20px 28px;">
         <span style="color:#ffffff;font-size:20px;font-weight:700;">FinMatrix</span>
       </div>
       <div style="padding:28px;">
-        <h2 style="margin:0 0 16px;font-size:18px;">${title}</h2>
+        <h2 style="margin:0 0 16px;font-size:18px;">${esc(title)}</h2>
         ${bodyHtml}
       </div>
       <div style="padding:16px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
-        This is an automated message from FinMatrix. Please do not reply.
+        You received this email because of activity on your FinMatrix account.
       </div>
     </div>
   </body>
@@ -60,28 +70,29 @@ export interface RenderedEmail {
 
 export const emailTemplates = {
   /**
-   * The button is an https link to the web app's verify page, which opens in
-   * every mail client and carries the owner on into company setup. It used to
-   * be the `finmatrix://` deep link: dead on a desktop, blocked by most phone
-   * mail apps, and its fallback was a bare API page that could only say "open
-   * the app". The deep link stays, second, for an owner reading on the phone
-   * the app is installed on.
+   * One link, over https, to the web app's verify page: it opens in every mail
+   * client and carries the owner on into company setup.
+   *
+   * There used to be a second, `finmatrix://` link to open the Android app.
+   * Links with a custom scheme are a phishing signal to spam filters, and the
+   * app does not need one: its verify screen notices on its own when the
+   * address has been confirmed, wherever the link was opened.
    */
-  verification(displayName: string, appLink: string, deepLink: string): RenderedEmail {
+  verification(displayName: string, appLink: string): RenderedEmail {
     const name = esc(displayName);
+    const link = esc(appLink);
     return {
       subject: 'Verify your FinMatrix email',
       html: layout(
         'Confirm your email address',
         `<p>Hi ${name},</p>
          <p>Thanks for signing up for FinMatrix. Confirm your email address and we will take you straight on to setting up your company.</p>
-         <p style="margin:24px 0;">${button(appLink, 'Verify email')}</p>
+         <p style="margin:24px 0;">${button(link, 'Verify email')}</p>
          <p style="font-size:13px;color:#6b7280;">Button not working? Copy this link into your browser:<br/>
-         <a href="${appLink}">${appLink}</a></p>
-         <p style="font-size:13px;color:#6b7280;">Using the FinMatrix Android app on this phone? <a href="${deepLink}">Open the app instead</a>.</p>
+         <a href="${link}">${link}</a></p>
          <p style="font-size:13px;color:#6b7280;">The link expires in 24 hours. If you did not sign up for FinMatrix, you can ignore this email.</p>`,
       ),
-      text: `Hi ${displayName},\n\nConfirm your FinMatrix email address:\n${appLink}\n\nUsing the FinMatrix Android app on this phone? Open: ${deepLink}\n\nThe link expires in 24 hours. If you did not sign up for FinMatrix, you can ignore this email.`,
+      text: `Hi ${displayName},\n\nConfirm your FinMatrix email address:\n${appLink}\n\nThe link expires in 24 hours. If you did not sign up for FinMatrix, you can ignore this email.`,
     };
   },
 
@@ -90,7 +101,7 @@ export const emailTemplates = {
       subject: 'Your FinMatrix password reset code',
       html: layout(
         'Password reset code',
-        `<p>Hi ${displayName},</p>
+        `<p>Hi ${esc(displayName)},</p>
          <p>Use the following one-time code to reset your password. It expires in ${ttlMinutes} minutes.</p>
          <p style="font-size:30px;letter-spacing:8px;font-weight:700;margin:24px 0;color:${BRAND};">${otp}</p>
          <p style="font-size:13px;color:#6b7280;">If you didn't request this, you can safely ignore this email.</p>`,
@@ -105,8 +116,8 @@ export const emailTemplates = {
       html: layout(
         'A company registration needs review',
         `<p>A new company has completed onboarding and is awaiting your approval.</p>
-         <p><strong>Company:</strong> ${companyName}<br/>
-         <strong>Owner:</strong> ${ownerEmail}</p>
+         <p><strong>Company:</strong> ${esc(companyName)}<br/>
+         <strong>Owner:</strong> ${esc(ownerEmail)}</p>
          <p>Open the FinMatrix admin console to review and approve or reject this registration.</p>`,
       ),
       text: `A new company is awaiting approval.\n\nCompany: ${companyName}\nOwner: ${ownerEmail}\n\nOpen the FinMatrix admin console to review it.`,
@@ -162,9 +173,9 @@ export const emailTemplates = {
       subject: `Update on your FinMatrix registration`,
       html: layout(
         'Your company registration was not approved',
-        `<p>Hi ${displayName},</p>
-         <p>Unfortunately <strong>${companyName}</strong> was not approved at this time.</p>
-         <p><strong>Reason:</strong><br/>${reason}</p>
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Unfortunately <strong>${esc(companyName)}</strong> was not approved at this time.</p>
+         <p><strong>Reason:</strong><br/>${esc(reason)}</p>
          <p>You can update your details and resubmit for review from the app.</p>`,
       ),
       text: `Hi ${displayName},\n\n${companyName} was not approved.\n\nReason: ${reason}\n\nYou can update your details and resubmit from the app.`,
