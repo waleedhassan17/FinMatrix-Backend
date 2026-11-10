@@ -8,13 +8,10 @@ import {
   IsArray,
   ValidateNested,
   Length,
-  Min,
-  Max,
-  IsInt,
-  IsDecimal,
   IsDateString,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { queryBoolean } from '../../../common/validation/query-boolean';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { InventoryCostMethod, InventoryAdjustmentReason } from '../../../types';
 
@@ -67,8 +64,8 @@ export class InventoryItemQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() category?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() sourceAgencyId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() locationId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() lowStock?: boolean;
+  @ApiPropertyOptional() @IsOptional() @Transform(queryBoolean) @IsBoolean() isActive?: boolean;
+  @ApiPropertyOptional() @IsOptional() @Transform(queryBoolean) @IsBoolean() lowStock?: boolean;
 }
 
 // --- Opening stock ---

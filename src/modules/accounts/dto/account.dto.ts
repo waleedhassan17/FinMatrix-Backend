@@ -8,7 +8,9 @@ import {
   IsUUID,
   MinLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { AccountType } from '../../../types';
+import { queryBoolean } from '../../../common/validation/query-boolean';
 
 export const ACCOUNT_TYPES: AccountType[] = [
   'asset',
@@ -68,6 +70,7 @@ export class ListAccountsQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(queryBoolean)
   @IsBoolean()
   isActive?: boolean;
 }

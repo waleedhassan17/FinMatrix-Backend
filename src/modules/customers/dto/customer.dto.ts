@@ -14,6 +14,11 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { PaymentTerms } from '../../../types';
+import { queryBoolean } from '../../../common/validation/query-boolean';
+
+// Shared with every list that filters on a boolean; re-exported for callers
+// that import it from here.
+export { queryBoolean };
 
 export const PAYMENT_TERMS: PaymentTerms[] = [
   'due_on_receipt',
@@ -44,20 +49,6 @@ export class ShippingAddressDto extends AddressDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() sameAsBilling?: boolean;
 }
 
-/**
- * A boolean query parameter read from what was actually sent.
- *
- * The global ValidationPipe converts implicitly, and class-transformer turns a
- * string into a boolean with `Boolean(value)` — so `?isActive=false` arrived as
- * `true` and the Inactive filter listed the active ones. `obj[key]` is the raw
- * query value, before that conversion.
- */
-export const queryBoolean = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
-  const raw = obj?.[key];
-  if (raw === true || raw === 'true' || raw === '1') return true;
-  if (raw === false || raw === 'false' || raw === '0') return false;
-  return undefined;
-};
 
 /** List orders. `code` is natural order: C-2 before C-10. */
 export const PARTY_SORTS = ['recent', 'code', 'name', 'balance'] as const;
