@@ -1,24 +1,9 @@
 import { ConfigService } from '@nestjs/config';
+import { envFlag, envString } from '../../common/utils/env.util';
 
-/** Joi turns 'true'/'false' into booleans; process.env keeps strings. Accept both. */
-export function envFlag(
-  config: ConfigService | null,
-  key: string,
-  fallback: boolean,
-): boolean {
-  const raw: unknown = config?.get(key) ?? process.env[key];
-  if (raw === undefined || raw === null || raw === '') return fallback;
-  if (typeof raw === 'boolean') return raw;
-  const s = String(raw).trim().toLowerCase();
-  if (['true', '1', 'yes', 'on'].includes(s)) return true;
-  if (['false', '0', 'no', 'off'].includes(s)) return false;
-  return fallback;
-}
-
-export function envString(config: ConfigService | null, key: string): string {
-  const raw: unknown = config?.get(key) ?? process.env[key];
-  return raw === undefined || raw === null ? '' : String(raw).trim();
-}
+// The generic readers live in common/utils/env.util.ts (src/config uses them
+// too); re-exported here so existing imports keep working.
+export { envFlag, envString };
 
 /** True only when real Meta calls are switched on. */
 export const whatsappLive = (config: ConfigService | null) =>
