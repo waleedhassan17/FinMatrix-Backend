@@ -15,6 +15,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { IdempotencyRecord } from './common/interceptors/idempotency-record.entity';
+import { IdempotencyCleanupService } from './common/interceptors/idempotency-cleanup.service';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import {
   ACCOUNT_THROTTLER,
@@ -175,6 +176,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
   controllers: [AppController],
   providers: [
     AppService,
+    IdempotencyCleanupService,
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // Idempotency is registered first → it is the OUTER interceptor, so it
     // captures and replays the fully-enveloped response (FinMatrixGuide §6.3).

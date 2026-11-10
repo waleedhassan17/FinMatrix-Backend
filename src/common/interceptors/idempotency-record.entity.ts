@@ -17,6 +17,10 @@ export class IdempotencyRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
+  /**
+   * The key's scope: the caller's company, or — before they have one, during
+   * onboarding — the caller's own user id. Both are UUIDs and never collide.
+   */
   @Column({ type: 'uuid', name: 'company_id' })
   companyId!: string;
 
