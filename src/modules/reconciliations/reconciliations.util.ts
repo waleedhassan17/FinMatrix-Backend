@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { EntityManager, In } from 'typeorm';
+import { EntityManager } from 'typeorm';
 import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 
 /**

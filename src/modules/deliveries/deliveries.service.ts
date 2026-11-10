@@ -77,14 +77,6 @@ export function requestedAdvance(dto: Pick<CreateDeliveryDto, 'advanceAmount' | 
   return { gross, advance: dto.prePaid ? gross : new Decimal(0) };
 }
 
-const STATUS_ORDER: Record<string, number> = {
-  unassigned: 0,
-  pending: 1,
-  picked_up: 2,
-  in_transit: 3,
-  arrived: 4,
-  delivered: 5,
-};
 
 // Server-enforced status machine (phase3 Chunk 1): only these transitions
 // are legal. Skipping ahead (e.g. pending → delivered) is rejected, and a
@@ -784,7 +776,8 @@ export class DeliveriesService {
   }
 
   async reportIssue(companyId: string, deliveryId: string, dto: DeliveryIssueDto, userId: string) {
-    const d = await this.getById(companyId, deliveryId);
+    // Confirms the delivery exists in this company before recording against it.
+    await this.getById(companyId, deliveryId);
     const issue = this.issueRepo.create({
       deliveryId,
       issueType: dto.issueType,

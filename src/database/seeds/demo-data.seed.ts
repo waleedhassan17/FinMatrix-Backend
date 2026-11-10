@@ -17,7 +17,6 @@ import {
 import { config as loadEnv } from 'dotenv';
 import * as bcrypt from 'bcrypt';
 import { DataSource } from 'typeorm';
-import Decimal from 'decimal.js';
 import { User } from '../../modules/users/entities/user.entity';
 import { Company } from '../../modules/companies/entities/company.entity';
 import { UserCompany } from '../../modules/companies/entities/user-company.entity';
@@ -30,10 +29,6 @@ import { Bill } from '../../modules/bills/entities/bill.entity';
 import { BillLineItem } from '../../modules/bills/entities/bill-line-item.entity';
 import {
   DEFAULT_CHART_OF_ACCOUNTS,
-  ACCT_AR,
-  ACCT_AP,
-  ACCT_SALES_REVENUE,
-  ACCT_BANK,
 } from '../../modules/accounts/accounts.constants';
 import { generateInviteCode } from '../../common/utils/reference-generator.util';
 

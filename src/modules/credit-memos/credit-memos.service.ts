@@ -9,7 +9,6 @@ import { Customer } from '../customers/entities/customer.entity';
 // importing InventoryApprovalsService for it would couple these two modules.
 import { InventoryUpdateRequest } from '../inventory-approvals/entities/inventory-update-request.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
-import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import {
   ApplyCreditMemoDto, CreateCreditMemoDto, CreditMemoLineDto, ListCreditMemosQueryDto,
 } from './dto/credit-memo.dto';
@@ -484,7 +483,6 @@ export class CreditMemosService {
     reverse: boolean,
   ): Promise<Decimal> {
     const itemRepo = manager.getRepository(InventoryItem);
-    const moveRepo = manager.getRepository(InventoryMovement);
     let total = new Decimal(0);
     for (const line of cm.lines ?? []) {
       if (!line.itemId) continue;

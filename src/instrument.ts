@@ -46,7 +46,8 @@ if (process.env.SENTRY_DSN) {
     release:
       process.env.HEROKU_SLUG_COMMIT ||
       process.env.SOURCE_VERSION ||
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // package.json sits outside rootDir, so it is read at runtime, not imported.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       `finmatrix-backend@${require('../package.json').version}`,
 
     // ── Privacy: never send PII or request bodies ──

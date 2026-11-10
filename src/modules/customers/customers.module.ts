@@ -1,6 +1,6 @@
 import { MessagingCoreModule } from '../messaging/messaging-core.module';
 import { CustomerStatementPdfService } from './customer-statement-pdf.service';
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from './entities/customer.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';

@@ -205,7 +205,7 @@ async function main() {
 
   // ═════ Scenario 1+2+3: PAID delivery, full cycle ═════
   console.log('\n— Scenario A: assign → rider PAID → approve');
-  let bs0 = await balanceSheet();
+  const bs0 = await balanceSheet();
   const cashBefore = bsLine(bs0, '1000');
   const invBefore = bsLine(bs0, '1200');
   const d1 = await mkDelivery(4);
@@ -347,7 +347,7 @@ async function main() {
   // ═════ Scenario 7: pre-paid delivery ═════
   // 2 × 150 + 10% = 330, paid before dispatch.
   console.log('\n— Scenario E: pre-paid — receipt held in 2400 at creation, sale at approval');
-  let bsE = await balanceSheet();
+  const bsE = await balanceSheet();
   const cashBeforePrepaid = bsLine(bsE, '1000');
   const advBeforePrepaid = bsLine(bsE, '2400');
   const arBeforePrepaid = bsLine(bsE, '1100');

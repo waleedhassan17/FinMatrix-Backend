@@ -7,7 +7,6 @@ import { GeneralLedgerEntry } from '../ledger/entities/general-ledger.entity';
 import { JournalEntry } from './entities/journal-entry.entity';
 import { JournalEntryLine } from './entities/journal-entry-line.entity';
 import {
-  addMoney,
   moneyEquals,
   toDecimal,
 } from '../../common/utils/money.util';

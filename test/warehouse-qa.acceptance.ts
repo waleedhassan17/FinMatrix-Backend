@@ -144,7 +144,7 @@ async function main() {
   const itemQty = async (id: string) => Number((data(await req('GET', `/inventory/items/${id}`, A)))?.quantityOnHand);
 
   // Baselines (books are non-empty — everything below is deltas)
-  let bs0 = await balanceSheet();
+  const bs0 = await balanceSheet();
   const base = {
     cash: bsLine(bs0, '1000'), ar: bsLine(bs0, '1100'), inv: bsLine(bs0, '1200'),
     git: bsLine(bs0, '1250'), ap: bsLine(bs0, '2000'), grni: bsLine(bs0, '2050'), tax: bsLine(bs0, '2300'),

@@ -30,7 +30,6 @@ import { ACCT_COGS, ACCT_GRNI, ACCT_INVENTORY } from '../accounts/accounts.const
 import { Account } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
-import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { PurchaseOrderStatus } from '../../types';
 import { addDaysIso, businessToday, termsDays } from '../../common/utils/business-date.util';
 import { pagedResponse, statusSummary } from '../../common/utils/paged-response.util';
@@ -371,7 +370,6 @@ export class PurchaseOrdersService {
       const netOfTax = !!company?.salesTaxRegistered;
       const today = businessToday();
       const itemRepo = manager.getRepository(InventoryItem);
-      const moveRepo = manager.getRepository(InventoryMovement);
       const lineMap = new Map(po.lines.map((l) => [l.id, l]));
 
       // Net movement per account; one line per account in the entry.

@@ -11,7 +11,6 @@ import {
   IsUUID,
   MaxLength,
   ValidateNested,
-  Min,
 } from 'class-validator';
 import { DeliverDto } from '../../messaging/dto/deliver.dto';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';

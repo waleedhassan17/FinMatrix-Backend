@@ -27,8 +27,6 @@ function randCode() {
 }
 
 async function run() {
-  const isProduction = process.env.NODE_ENV === 'production';
-
   const ds = new DataSource(
     process.env.DATABASE_URL
       ? {

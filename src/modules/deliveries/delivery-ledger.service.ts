@@ -10,7 +10,6 @@ import Decimal from 'decimal.js';
 import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
-import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { SalesOrder } from '../sales-orders/entities/sales-order.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { PostingService } from '../journal-entries/posting.service';
@@ -240,7 +239,6 @@ export class DeliveryLedgerService {
 
     // ---- Move the stock off the shelf at frozen weighted-average cost ----
     const invRepo = em.getRepository(InventoryItem);
-    const moveRepo = em.getRepository(InventoryMovement);
     let totalCost = new Decimal(0);
 
     for (const line of activeItems) {
@@ -440,7 +438,6 @@ export class DeliveryLedgerService {
 
     // ---- Split each dispatched line into delivered vs returned-to-stock ----
     const invRepo = em.getRepository(InventoryItem);
-    const moveRepo = em.getRepository(InventoryMovement);
     let cogsCost = new Decimal(0);
     let restockCost = new Decimal(0);
     // Invoice lines carry no itemId on purpose: the stock left at dispatch and
@@ -822,7 +819,6 @@ export class DeliveryLedgerService {
 
     const items = await itemRepo.find({ where: { deliveryId: delivery.id } });
     const invRepo = em.getRepository(InventoryItem);
-    const moveRepo = em.getRepository(InventoryMovement);
     let totalCost = new Decimal(0);
 
     for (const line of items) {

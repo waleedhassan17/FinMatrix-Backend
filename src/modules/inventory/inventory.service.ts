@@ -317,7 +317,6 @@ export class InventoryService {
     return this.dataSource.transaction(async (em) => {
       const itemRepo = em.getRepository(InventoryItem);
       const adjRepo = em.getRepository(InventoryAdjustment);
-      const moveRepo = em.getRepository(InventoryMovement);
       // Locked, like setOpeningStock: what follows is a read-modify-write on
       // quantityOnHand, and two concurrent adjustments reading the same `prev`
       // would each post a journal entry while only the last write survives —
@@ -409,7 +408,6 @@ export class InventoryService {
     return this.dataSource.transaction(async (em) => {
       const adjRepo = em.getRepository(InventoryAdjustment);
       const itemRepo = em.getRepository(InventoryItem);
-      const moveRepo = em.getRepository(InventoryMovement);
 
       const adj = await adjRepo.findOne({ where: { id, companyId } });
       if (!adj) throw new NotFoundException('Inventory adjustment not found');
@@ -556,7 +554,6 @@ export class InventoryService {
       const xferRepo = em.getRepository(StockTransfer);
       const lineRepo = em.getRepository(StockTransferLine);
       const itemRepo = em.getRepository(InventoryItem);
-      const moveRepo = em.getRepository(InventoryMovement);
       const xfer = xferRepo.create({
         companyId,
         fromLocationId: dto.fromLocationId ?? null,
@@ -622,7 +619,6 @@ export class InventoryService {
       const countRepo = em.getRepository(PhysicalCount);
       const lineRepo = em.getRepository(PhysicalCountLine);
       const itemRepo = em.getRepository(InventoryItem);
-      const moveRepo = em.getRepository(InventoryMovement);
       const adjRepo = em.getRepository(InventoryAdjustment);
 
       const count = countRepo.create({ companyId, countDate: dto.countDate, notes: dto.notes ?? null, createdBy: userId });

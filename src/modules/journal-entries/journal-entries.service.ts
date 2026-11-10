@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { JournalEntry } from './entities/journal-entry.entity';
-import { JournalEntryLine } from './entities/journal-entry-line.entity';
+
 import { Account } from '../accounts/entities/account.entity';
 import { PostingService } from './posting.service';
 import {

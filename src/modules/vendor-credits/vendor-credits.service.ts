@@ -17,7 +17,6 @@ import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
 import { ACCT_AP, ACCT_COGS, ACCT_INPUT_TAX, ACCT_INVENTORY } from '../accounts/accounts.constants';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
-import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
 import { businessToday } from '../../common/utils/business-date.util';
@@ -264,7 +263,6 @@ export class VendorCreditsService {
     reverse: boolean,
   ): Promise<void> {
     const itemRepo = manager.getRepository(InventoryItem);
-    const moveRepo = manager.getRepository(InventoryMovement);
 
     for (const line of vc.lines) {
       if (!line.itemId) continue;

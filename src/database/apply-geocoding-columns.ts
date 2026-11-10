@@ -10,6 +10,8 @@
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 export {};
+// No @types/pg is installed; require keeps this one-off script untyped.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { Client } = require('pg');
 
 async function main(): Promise<void> {

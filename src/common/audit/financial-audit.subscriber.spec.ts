@@ -1,4 +1,4 @@
-import { DataSource, QueryRunner } from 'typeorm';
+import { DataSource, EntityMetadata, QueryRunner } from 'typeorm';
 import { FinancialAuditSubscriber } from './financial-audit.subscriber';
 import { AuditTrailEntry } from './audit-trail.entity';
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
@@ -27,10 +27,10 @@ describe('FinancialAuditSubscriber', () => {
       getRepository: () => ({ save: (rows: AuditTrailEntry[]) => saveImpl(rows) }),
     }) as unknown as DataSource;
 
-  const insertEvent = (target: Function, entity: unknown) =>
+  const insertEvent = (target: EntityMetadata['target'], entity: unknown) =>
     ({ queryRunner: txRunner, metadata: { target }, entity }) as any;
 
-  const updateEvent = (target: Function, databaseEntity: unknown, entity: unknown) =>
+  const updateEvent = (target: EntityMetadata['target'], databaseEntity: unknown, entity: unknown) =>
     ({ queryRunner: txRunner, metadata: { target }, databaseEntity, entity }) as any;
 
   const commit = async () => {

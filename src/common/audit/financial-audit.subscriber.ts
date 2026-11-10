@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   DataSource,
+  EntityMetadata,
   EntitySubscriberInterface,
   InsertEvent,
   QueryRunner,
@@ -38,6 +39,9 @@ interface Watched {
   numeric?: string[];
 }
 
+
+/** What TypeORM reports as an entity's target: its class, or a table name. */
+type EntityTarget = EntityMetadata['target'];
 /**
  * The records worth an audit row, mapped to the module name recorded
  * alongside. Anything not listed here is ignored, so line-item and join tables
@@ -47,7 +51,7 @@ interface Watched {
  * Customers and vendors are here for their History tab: who changed the credit
  * limit, the terms, the phone number, and when.
  */
-const WATCHED = new Map<Function, Watched>([
+const WATCHED = new Map<EntityTarget, Watched>([
   [Invoice, { module: 'invoices', resourceType: 'invoice' }],
   [Bill, { module: 'bills', resourceType: 'bill' }],
   [BillPayment, { module: 'bills', resourceType: 'bill_payment' }],
@@ -161,7 +165,7 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
 
   private capture(
     queryRunner: QueryRunner,
-    target: Function | string,
+    target: EntityTarget,
     action: AuditAction,
     before: unknown,
     after: unknown,

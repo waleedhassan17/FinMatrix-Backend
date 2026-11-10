@@ -1,8 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import Decimal from 'decimal.js';
-import { InventoryMovement } from '../inventory/entities/inventory-movement.entity';
+
 import { InventoryService } from '../inventory/inventory.service';
 import { toDecimal } from '../../common/utils/money.util';
 import { Agency } from './entities/agency.entity';
