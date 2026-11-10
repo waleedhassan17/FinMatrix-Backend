@@ -502,7 +502,9 @@ describe('ReportsService — a missing date range never blanks a statement', () 
     const [, startDate, asOf] = params as [string, string, string];
 
     expect(startDate).toBe(REPORT_RANGE_DEFAULTS.startDate);
-    expect(asOf).toBe(new Date().toISOString().slice(0, 10));
+    // The business day, like every other "today" in this file; the UTC date
+    // is a day behind between 00:00 and 05:00 PKT.
+    expect(asOf).toBe(businessToday());
   });
 });
 

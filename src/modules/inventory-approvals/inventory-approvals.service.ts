@@ -54,6 +54,7 @@ import { plainToInstance } from 'class-transformer';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 import { MessagingService } from '../messaging/messaging.service';
 import { deliveryUpdateMessage } from '../messaging/document-messages';
+import { businessToday } from '../../common/utils/business-date.util';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'all';
 
@@ -767,7 +768,7 @@ export class InventoryApprovalsService {
       await recordInventoryMovement(em, {
         companyId,
         itemId: line.itemId,
-        date: new Date().toISOString().split('T')[0],
+        date: businessToday(),
         type: 'delivery',
         quantityChange: String(returned - delivered),
         balanceAfter: String(next),
@@ -804,7 +805,7 @@ export class InventoryApprovalsService {
       const outbound = netCost.greaterThan(0);
       const entry = await this.posting.createEntry(em, {
         companyId,
-        date: new Date().toISOString().split('T')[0],
+        date: businessToday(),
         memo: `Delivery ${req.deliveryReference ?? req.deliveryId} approved — stock committed`,
         createdBy: reviewerId,
         status: 'posted',
@@ -1147,7 +1148,7 @@ export class InventoryApprovalsService {
       refundAmount: Decimal.max(creditTotal.minus(balance), 0).toFixed(4),
       // The reversal posts TODAY, which is also what puts it under the period
       // lock rather than back-dating it into the original delivery's period.
-      date: new Date().toISOString().slice(0, 10),
+      date: businessToday(),
       reason: `Reversal of delivery ${delivery.referenceNo ?? req.deliveryReference ?? req.deliveryId}`,
       lines,
     };
@@ -1249,7 +1250,7 @@ export class InventoryApprovalsService {
         await recordInventoryMovement(em, {
           companyId,
           itemId: line.itemId,
-          date: new Date().toISOString().split('T')[0],
+          date: businessToday(),
           type: 'adjustment',
           quantityChange: String(delivered - returned),
           balanceAfter: String(Math.max(0, restored)),
@@ -1279,7 +1280,7 @@ export class InventoryApprovalsService {
         if (originalEntry && originalLines.length >= 2) {
           await this.posting.createEntry(em, {
             companyId,
-            date: new Date().toISOString().split('T')[0],
+            date: businessToday(),
             memo: `Undo approval ${req.deliveryReference ?? req.deliveryId} — reverses ${originalEntry.reference}`,
             createdBy: reviewerId,
             status: 'posted',
@@ -1531,7 +1532,7 @@ export class InventoryApprovalsService {
 
   private formatRouteLabel(d: Delivery): string {
     if (d.preferredDate) return `Route · ${d.preferredDate}`;
-    return `Route · ${new Date().toISOString().split('T')[0]}`;
+    return `Route · ${businessToday()}`;
   }
 
   private formatRequest(r: InventoryUpdateRequest) {

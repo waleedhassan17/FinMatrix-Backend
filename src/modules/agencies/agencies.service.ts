@@ -15,6 +15,7 @@ import {
   AddAgencyItemDto,
 } from './dto/agency.dto';
 import { pagedResponse } from '../../common/utils/paged-response.util';
+import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
 export class AgenciesService {
@@ -202,7 +203,7 @@ export class AgenciesService {
 
       const qty = toDecimal(saved.quantityOnHand);
       if (qty.greaterThan(0)) {
-        const date = new Date().toISOString().split('T')[0];
+        const date = businessToday();
         // Value follows quantity at the item's cost — the same figure
         // postOpeningStockJe debits to 1200 immediately below.
         await recordMovementAtAverage(em, saved, {

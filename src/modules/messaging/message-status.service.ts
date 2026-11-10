@@ -11,6 +11,7 @@ import {
 } from './message-status.util';
 import { MessagingService, rowsOf } from './messaging.service';
 import { inboundReply } from './inbound-reply';
+import { businessToday } from '../../common/utils/business-date.util';
 
 /** Inbound message types that never get an automatic answer. */
 const NO_REPLY_TYPES = new Set(['reaction', 'system', 'unsupported']);
@@ -317,7 +318,7 @@ export class MessageStatusService {
         toPhone: String(last.to_phone_e164),
         language,
         text: reply.text,
-        day: new Date().toISOString().slice(0, 10),
+        day: businessToday(),
       });
       return Boolean(res && !res.duplicate);
     } catch (err) {

@@ -450,8 +450,12 @@ export const REPORT_RANGE_DEFAULTS = {
   endDate: '2999-12-31',
 } as const;
 
-/** Today, for the reports that close AS OF a date rather than over a range. */
-export const reportToday = () => new Date().toISOString().slice(0, 10);
+/**
+ * Today, for the reports that close AS OF a date rather than over a range: the
+ * business day documents are dated by. The UTC date used here before is a day
+ * behind between 00:00 and 05:00 PKT, so "to date" left out the day's postings.
+ */
+export const reportToday = () => businessToday();
 
 @Injectable()
 export class ReportsService {
@@ -3895,7 +3899,7 @@ export class ReportsService {
     }));
 
     return {
-      date: new Date().toISOString().slice(0, 10),
+      date: businessToday(),
       total,
       completed,
       failed,
@@ -4025,11 +4029,11 @@ export class ReportsService {
 
   // ── Admin home dashboard summary ─────────────────────────────────
   async dashboardSummary(companyId: string) {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-      .toISOString()
-      .slice(0, 10);
-    const monthEnd = now.toISOString().slice(0, 10);
+    // This month so far, by business day. The UTC date was a day behind between
+    // 00:00 and 05:00 PKT, and the local-midnight month start turned into the
+    // previous month's last day on a server running in PKT.
+    const monthEnd = businessToday();
+    const monthStart = `${monthEnd.slice(0, 7)}-01`;
 
     const invoiceTotal = await this.sum(
       'invoices',

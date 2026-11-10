@@ -44,6 +44,10 @@ import { CompanySubscription } from '../super-admin/entities/company-subscriptio
 import { MailService } from '../mail/mail.service';
 import { COMPANY_STATUS } from '../../types';
 import { revokeRefreshTokens } from '../../common/utils/session-revocation.util';
+import {
+  addDaysIso,
+  businessToday,
+} from '../../common/utils/business-date.util';
 
 /** Hours the owner is told a trial request takes to review. */
 export const TRIAL_ACTIVATION_HOURS = 24;
@@ -235,7 +239,9 @@ export class CompaniesService {
     await this.assertAdmin(userId, companyId);
     const company = await this.getById(userId, companyId);
 
-    const today = new Date().toISOString().slice(0, 10);
+    // The business day, as postings are dated: by the UTC date, an owner closing
+    // "today" between 00:00 and 05:00 PKT was told the day had not finished.
+    const today = businessToday();
     if (lockDate > today) {
       throw new BadRequestException({
         code: 'LOCK_DATE_IN_FUTURE',
@@ -715,10 +721,8 @@ export class CompaniesService {
           companyId,
           planId: plan.id,
           status: isFree ? 'trial' : 'active',
-          startDate: new Date().toISOString().split('T')[0],
-          endDate: isFree
-            ? null
-            : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+          startDate: businessToday(),
+          endDate: isFree ? null : addDaysIso(businessToday(), 365),
           notes: isFree ? 'Free plan — self-selected during onboarding' : null,
           assignedBy: userId,
         }),

@@ -23,6 +23,7 @@ import {
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
 import { pagedResponse } from '../../common/utils/paged-response.util';
+import { businessToday } from '../../common/utils/business-date.util';
 
 @Injectable()
 export class TaxService {
@@ -234,7 +235,7 @@ export class TaxService {
         await this.posting.createEntry(em, {
           companyId,
           createdBy: userId,
-          date: new Date().toISOString().slice(0, 10),
+          date: businessToday(),
           memo: `Reverse tax payment ${payment.period}`,
           status: 'posted',
           sourceType: 'tax_payment_void',
@@ -273,7 +274,7 @@ export class TaxService {
   async getLiability(companyId: string, startDate?: string, endDate?: string) {
     const r2 = (v: any) => Math.round((parseFloat(v ?? '0') || 0) * 100) / 100;
     const start = startDate || '1970-01-01';
-    const end = endDate || new Date().toISOString().slice(0, 10);
+    const end = endDate || businessToday();
 
     // Output tax (Sales Tax Payable 2300): credits = collected, debits = remitted.
     const [out] = await this.dataSource.query(
