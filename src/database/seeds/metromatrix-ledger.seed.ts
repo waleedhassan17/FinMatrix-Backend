@@ -244,6 +244,9 @@ async function run() {
           itemId: it.id, description: it.name, orderedQty: '30', unitCost: it.unitCost, taxRate: '0',
         })),
       } as any);
+      // A new PO is a requisition (draft); goods can only be received once it
+      // has been sent to the vendor (PurchaseOrdersService.assertIssued).
+      await pos.updateStatus(cid, po.id, 'sent', { userId: uid });
       const poFull = await pos.getById(cid, po.id).catch(() => null);
       const lines = (poFull as any)?.lines ?? (po as any).lines ?? [];
       await pos.receive(cid, uid, po.id, {
