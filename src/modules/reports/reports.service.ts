@@ -79,7 +79,7 @@ import {
   suggestedOrderQty,
 } from './item-stock';
 import { MediaUrlSigner } from '../inventory/images/media-url.signer';
-import { businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
+import { businessTimezone, businessToday, daysBetweenIso } from '../../common/utils/business-date.util';
 import { buildDashboardAlerts } from './dashboard-alerts';
 import { MONEY_TOLERANCE } from '../../common/utils/money.util';
 import {
@@ -410,6 +410,26 @@ const toIsoDay = (v: unknown): string | null => {
  * Exported so ReportsController can apply the same defaults at the edge
  * without a second copy of the literals to drift out of step.
  */
+/**
+ * SQL for the date from which a company's stock-value series is exact.
+ *
+ * `inventory_cost_history_from` is written once, by the 1789930000000
+ * backfill, and only for companies that already had stock movements then.
+ * Every movement since has had to carry its value (CHECK value_change IS NOT
+ * NULL, 1789920000000), so a company the backfill skipped — one created later,
+ * or one with no stock yet — has a series that is exact from its very first
+ * movement. Reading the column alone left every such company at NULL, and its
+ * owner was told no movement had recorded its cost, for stock whose cost was
+ * always recorded. MIN(date) is a lookup on the (company_id, date) index, and
+ * COALESCE only evaluates it when the column is NULL.
+ *
+ * `companyAlias` must name a `companies` row in the surrounding query.
+ */
+export const costHistoryFromSql = (companyAlias: string): string =>
+  `COALESCE(${companyAlias}.inventory_cost_history_from,
+            (SELECT MIN(hm.date) FROM inventory_movements hm
+              WHERE hm.company_id = ${companyAlias}.id))`;
+
 export const REPORT_RANGE_DEFAULTS = {
   startDate: '1970-01-01',
   endDate: '2999-12-31',
@@ -2551,7 +2571,7 @@ export class ReportsService {
                                 THEN -m.quantity_change::numeric ELSE 0 END), 0) AS qty_out,
               COALESCE(SUM(m.value_change::numeric), 0) AS value_net,
               bool_or(m.value_change IS NULL) AS value_missing,
-              (SELECT c.inventory_cost_history_from::text
+              (SELECT (${costHistoryFromSql('c')})::text
                  FROM companies c WHERE c.id = $1) AS since
          FROM inventory_movements m
         WHERE m.company_id = $1 AND m.item_id = $2
@@ -2986,8 +3006,8 @@ export class ReportsService {
     // range, because "not sold since March" is the answer to a range that is
     // empty. Returns are not sales here: taking stock back is not selling it.
     const [meta] = await this.dataSource.query(
-      `SELECT (SELECT inventory_cost_history_from::text
-                 FROM companies WHERE id = $1) AS since,
+      `SELECT (SELECT (${costHistoryFromSql('c')})::text
+                 FROM companies c WHERE c.id = $1) AS since,
               (SELECT MAX(l.date)::text
                  FROM (${this.itemSalesLinesSql(false)}) l
                 WHERE l.doc_type <> 'credit_memo') AS last_sold`,
@@ -3390,7 +3410,8 @@ export class ReportsService {
     ].filter((x) => Math.abs(x.revenue) > 0.005 || Math.abs(x.cogs) > 0.005);
 
     const [company] = await this.dataSource.query(
-      `SELECT inventory_cost_history_from::text AS since FROM companies WHERE id = $1`,
+      `SELECT (${costHistoryFromSql('c')})::text AS since
+         FROM companies c WHERE c.id = $1`,
       [companyId],
     );
 
@@ -3511,11 +3532,21 @@ export class ReportsService {
   }
 
   // ── Simple delivery status breakdown (legacy endpoint) ───────────
+  //
+  // The range is the business calendar day the delivery was created on. It
+  // was accepted and then ignored, so every range answered all-time counts.
   async deliveryReport(companyId: string, startDate: string, endDate: string) {
+    const s = startDate || REPORT_RANGE_DEFAULTS.startDate;
+    const e = endDate || REPORT_RANGE_DEFAULTS.endDate;
     const qb = this.deliveryRepo.createQueryBuilder('d')
       .select('d.status', 'status')
       .addSelect('COUNT(*)', 'count')
       .where('d.companyId = :cid', { cid: companyId })
+      .andWhere('CAST(d.createdAt AT TIME ZONE :tz AS date) BETWEEN :s AND :e', {
+        tz: businessTimezone(),
+        s,
+        e,
+      })
       .groupBy('d.status');
     return qb.getRawMany();
   }
