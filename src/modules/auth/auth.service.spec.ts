@@ -29,6 +29,7 @@ function repoMock() {
     create: jest.fn((x) => x),
     save: jest.fn(async (x) => x),
     update: jest.fn(async () => ({ affected: 1 })),
+    increment: jest.fn(async () => ({ affected: 1 })),
   };
 }
 
@@ -530,33 +531,84 @@ describe('AuthService', () => {
   // Rotation used to copy that forward forever, so an approved owner who never
   // signed out was refused NOT_COMPANY_MEMBER on every request.
   describe('refresh', () => {
-    const refreshWith = async (payloadCompanyId: string | null) => {
-      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: payloadCompanyId, role: 'admin' });
-      refreshRepo.findOne.mockResolvedValue({
-        tokenHash: 'h',
-        revokedAt: null,
-        expiresAt: new Date(Date.now() + 100000),
-      });
-      users.getByIdOrFail.mockResolvedValue({
-        id: 'u1',
-        email: 'owner@x.z',
-        role: 'admin',
-        defaultCompanyId: 'c1',
-      });
-      userCompanyRepo.findOne.mockResolvedValue({ userId: 'u1', companyId: 'c1', role: 'admin' });
+    const owner = {
+      id: 'u1',
+      email: 'owner@x.z',
+      role: 'admin',
+      isActive: true,
+      defaultCompanyId: 'c1',
+    };
+    /** Memberships the user holds right now, keyed by company. */
+    let memberships: Record<string, { userId: string; companyId: string; role: string }>;
+
+    beforeEach(() => {
+      memberships = { c1: { userId: 'u1', companyId: 'c1', role: 'admin' } };
+      userCompanyRepo.findOne.mockImplementation(
+        async ({ where }: { where: { companyId?: string } }) =>
+          where.companyId ? (memberships[where.companyId] ?? null) : (Object.values(memberships)[0] ?? null),
+      );
+      refreshRepo.update.mockResolvedValue({ affected: 1 });
+      users.getByIdOrFail.mockResolvedValue(owner);
       jwtMock.signAsync.mockResolvedValue('signed.jwt.token');
       jwtMock.decode.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600, iat: 0 });
+    });
+
+    const refreshWith = async (payload: Record<string, unknown>) => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', role: 'admin', typ: 'refresh', ...payload });
       await service.refresh('refresh.jwt');
-      return jwtMock.signAsync.mock.calls[0][0] as { companyId: string | null };
+      return jwtMock.signAsync.mock.calls[0][0] as { companyId: string | null; role: string };
     };
 
     it('fills in the company for a session that began before it existed', async () => {
-      expect((await refreshWith(null)).companyId).toBe('c1');
+      expect((await refreshWith({ companyId: null })).companyId).toBe('c1');
     });
 
-    it('keeps the company a token already names', async () => {
-      expect((await refreshWith('c9')).companyId).toBe('c9');
-      expect(userCompanyRepo.findOne).not.toHaveBeenCalled();
+    it('keeps the company a token names while the user is still a member', async () => {
+      memberships.c9 = { userId: 'u1', companyId: 'c9', role: 'admin' };
+      expect((await refreshWith({ companyId: 'c9' })).companyId).toBe('c9');
+    });
+
+    it('drops a company the user has been removed from', async () => {
+      // Token still names c9, but the membership row is gone.
+      expect((await refreshWith({ companyId: 'c9' })).companyId).toBe('c1');
+    });
+
+    it('takes the role from the membership, not from the old token', async () => {
+      memberships.c1.role = 'staff';
+      expect((await refreshWith({ companyId: 'c1', role: 'admin' })).role).toBe('staff');
+    });
+
+    it('accepts a legacy refresh token that carries no typ', async () => {
+      expect((await refreshWith({ companyId: 'c1', typ: undefined })).companyId).toBe('c1');
+    });
+
+    it('refuses an access token presented as a refresh token', async () => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'access' });
+      await expect(service.refresh('access.jwt')).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(refreshRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('lets only one of two concurrent refreshes with the same token win', async () => {
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'refresh' });
+      refreshRepo.update.mockResolvedValueOnce({ affected: 1 }).mockResolvedValueOnce({ affected: 0 });
+      const results = await Promise.allSettled([
+        service.refresh('refresh.jwt'),
+        service.refresh('refresh.jwt'),
+      ]);
+      expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    });
+
+    it('refuses a deactivated user', async () => {
+      users.getByIdOrFail.mockResolvedValue({ ...owner, isActive: false });
+      jwtMock.verify.mockReturnValue({ sub: 'u1', companyId: 'c1', role: 'admin', typ: 'refresh' });
+      await expect(service.refresh('refresh.jwt')).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('signs access and refresh tokens with their own typ', async () => {
+      await refreshWith({ companyId: 'c1' });
+      const [access, refresh] = jwtMock.signAsync.mock.calls.map((c) => c[0] as { typ: string });
+      expect(access.typ).toBe('access');
+      expect(refresh.typ).toBe('refresh');
     });
   });
 
@@ -628,6 +680,7 @@ describe('AuthService', () => {
     it('increments attempts on a wrong code', async () => {
       users.findByEmail.mockResolvedValue({ id: 'u1', email: 'a@b.c' });
       const record = {
+        id: 'otp1',
         userId: 'u1',
         otpHash: sha('111111'),
         attempts: 0,
@@ -639,6 +692,29 @@ describe('AuthService', () => {
         service.verifyOtp({ email: 'a@b.c', otp: '999999' }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(record.attempts).toBe(1);
+      expect(otpRepo.increment).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'otp1' }),
+        'attempts',
+        1,
+      );
+    });
+
+    it('locks the code when the conditional increment finds the limit reached', async () => {
+      // A parallel guess got there first: the row read as 4 attempts, but the
+      // increment (attempts < max) no longer matches.
+      users.findByEmail.mockResolvedValue({ id: 'u1', email: 'a@b.c' });
+      otpRepo.findOne.mockResolvedValue({
+        id: 'otp1',
+        userId: 'u1',
+        otpHash: sha('111111'),
+        attempts: 4,
+        expiresAt: new Date(Date.now() + 100000),
+        usedAt: null,
+      });
+      otpRepo.increment.mockResolvedValue({ affected: 0 });
+      await expect(
+        service.verifyOtp({ email: 'a@b.c', otp: '111111' }),
+      ).rejects.toMatchObject({ response: { code: 'OTP_LOCKED' } });
     });
 
     it('returns a reset token on the correct code', async () => {

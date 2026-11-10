@@ -22,6 +22,7 @@ import {
   ClosePeriodDto,
   CreateCompanyDto,
   JoinCompanyDto,
+  SelfSubscribeDto,
   UpdateCompanyDto,
 } from './dto/create-company.dto';
 import { RequiresFeature } from '../../common/features/requires-feature.decorator';
@@ -172,13 +173,19 @@ export class CompaniesController {
   @ApiOperation({ summary: 'Select a subscription plan for your company (onboarding).' })
   subscribe(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: { planId: string; companyId?: string },
+    @Body() dto: SelfSubscribeDto,
     @Headers('x-company-id') headerCompanyId?: string,
   ) {
     // A freshly-signed-up admin's JWT has no companyId yet, so accept it from
     // the body / x-company-id header, falling back to the token. selfSubscribe
-    // verifies the caller is a member of the company.
-    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? '';
+    // verifies the caller is that company's admin.
+    const companyId = dto.companyId ?? headerCompanyId ?? user.companyId ?? null;
+    if (!companyId || !isUUID(companyId)) {
+      throw new BadRequestException({
+        code: 'COMPANY_REQUIRED',
+        message: 'Set up your company before choosing a plan.',
+      });
+    }
     return this.companies.selfSubscribe(companyId, dto.planId, user.id);
   }
 

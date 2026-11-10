@@ -80,6 +80,31 @@ describe('JwtStrategy (signout denylist)', () => {
     expect(revokedRepo.exists).not.toHaveBeenCalled();
   });
 
+  it('rejects a refresh token presented as an access token', async () => {
+    await expect(strategy.validate(payload({ typ: 'refresh' }))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('accepts an access token', async () => {
+    await expect(strategy.validate(payload({ typ: 'access' }))).resolves.toMatchObject({
+      id: 'u1',
+    });
+  });
+
+  it('keeps accepting a legacy (typ-less) 15-minute access token', async () => {
+    await expect(
+      strategy.validate(payload({ typ: undefined, iat: 1_000, exp: 1_000 + 900 })),
+    ).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('rejects a legacy (typ-less) 30-day token: that was a refresh token', async () => {
+    await expect(
+      strategy.validate(payload({ typ: undefined, iat: 1_000, exp: 1_000 + 30 * 86_400 })),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('still rejects inactive users', async () => {
     users.findById.mockResolvedValue({ ...activeUser, isActive: false });
     await expect(strategy.validate(payload())).rejects.toBeInstanceOf(UnauthorizedException);

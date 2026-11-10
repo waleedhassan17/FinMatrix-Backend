@@ -3,7 +3,6 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
-  ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,7 +14,6 @@ import { UserCompany } from '../companies/entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import {
-  PLAN_CONFIG,
   TIER_PLAN_KEYS,
   formatMinorUnits,
   getPlanConfig,
@@ -483,11 +481,6 @@ export class SuperAdminService {
    * editable here.
    */
   async getSubscriptionPlans() {
-    const tierNames: Record<string, string> = {
-      small_business: 'Small Business',
-      large_org: 'Large Organization',
-      warehouse: 'Warehouse',
-    };
     return TIER_PLAN_KEYS.map((key, i) => this.planToView(key, i));
   }
 
@@ -703,13 +696,13 @@ export class SuperAdminService {
     const plan = await this.planRepo.findOne({ where: { id: dto.planId } });
     if (!plan) throw new NotFoundException('Plan not found');
 
-    // Cancel existing active subscriptions for this company
-    await this.subRepo
-      .createQueryBuilder()
-      .update(CompanySubscription)
-      .set({ status: 'cancelled' })
-      .where('companyId = :cid AND status = :s', { cid: dto.companyId, s: 'active' })
-      .execute();
+    // Cancel existing active subscriptions for this company. Object criteria,
+    // so TypeORM maps companyId to its company_id column (a raw
+    // 'companyId = :cid' string named a column that does not exist).
+    await this.subRepo.update(
+      { companyId: dto.companyId, status: 'active' },
+      { status: 'cancelled' },
+    );
 
     const sub = this.subRepo.create({
       companyId: dto.companyId,

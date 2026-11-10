@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
-  NotFoundException,
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -434,21 +433,23 @@ export class AuthService implements OnModuleInit {
   }
 
   async refresh(refreshToken: string): Promise<TokenPair> {
-    let payload: JwtPayload;
-    try {
-      payload = this.jwt.verify<JwtPayload>(refreshToken, {
-        secret: this.config.getOrThrow<string>('jwt.secret'),
-      });
-    } catch {
+    const payload = this.verifyRefreshToken(refreshToken);
+    if (!payload) {
       throw new UnauthorizedException({
         code: 'INVALID_TOKEN',
         message: 'Invalid or expired refresh token',
       });
     }
 
-    const hash = this.hashToken(refreshToken);
-    const stored = await this.refreshRepo.findOne({ where: { tokenHash: hash } });
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+    // Claim the token in one statement. Reading it and then marking it revoked
+    // let two concurrent refreshes with the same token both pass the read and
+    // both mint a new session; only one of them can win this update.
+    const now = new Date();
+    const claimed = await this.refreshRepo.update(
+      { tokenHash: this.hashToken(refreshToken), revokedAt: IsNull(), expiresAt: MoreThan(now) },
+      { revokedAt: now },
+    );
+    if (!claimed.affected) {
       throw new UnauthorizedException({
         code: 'INVALID_TOKEN',
         message: 'Refresh token has been revoked or expired',
@@ -456,26 +457,53 @@ export class AuthService implements OnModuleInit {
     }
 
     const user = await this.users.getByIdOrFail(payload.sub);
-    stored.revokedAt = new Date();
-    await this.refreshRepo.save(stored);
+    if (!user.isActive) {
+      throw new UnauthorizedException({
+        code: 'INVALID_TOKEN',
+        message: 'Invalid or expired refresh token',
+      });
+    }
 
-    // A session that began before the owner had a company — every session a
-    // new owner has, since signup and sign-in both come before onboarding —
-    // carries companyId: null, and rotation used to copy that forward for the
-    // life of the session. So an approved owner who never signed out kept a
-    // token CompanyGuard refused with NOT_COMPANY_MEMBER on every request, and
-    // the only cure was signing out. Resolve it the way sign-in does instead.
-    // A token that already names a company keeps it: this only fills a gap.
-    let companyId = payload.companyId;
-    let role = payload.role;
-    if (!companyId && role !== 'super_admin' && user.role !== 'super_admin') {
-      const membership = await this.resolveMembership(user);
-      if (membership) {
-        companyId = membership.companyId;
-        role = membership.role as UserRole;
+    // The company and role come from the membership as it stands NOW, never
+    // from the old token. Copying them forward meant a member who had been
+    // removed kept the company for as long as they kept refreshing, and a
+    // demoted admin stayed admin. A session that began before the owner had a
+    // company (companyId: null) is filled in the way sign-in does it.
+    if (user.role === 'super_admin') {
+      return this.issueTokens(user, null, 'super_admin');
+    }
+    const named = payload.companyId
+      ? await this.userCompanyRepo.findOne({
+          where: { userId: user.id, companyId: payload.companyId },
+        })
+      : null;
+    const membership = named ?? (await this.resolveMembership(user));
+    const companyId = membership?.companyId ?? null;
+    const role = (membership?.role ?? user.role) as UserRole;
+    return this.issueTokens(user, companyId, role);
+  }
+
+  /**
+   * Verify a refresh token's signature. Refresh tokens are signed with their
+   * own secret and carry `typ: 'refresh'`. Tokens from before that change were
+   * signed with the access secret and carry no `typ`; they are still accepted
+   * here because refresh() also requires the token's hash in refresh_tokens,
+   * which an access token never has.
+   */
+  private verifyRefreshToken(token: string): JwtPayload | null {
+    const secrets = [
+      this.config.get<string>('jwt.refreshSecret') || this.config.getOrThrow<string>('jwt.secret'),
+      this.config.getOrThrow<string>('jwt.secret'),
+    ];
+    for (const secret of secrets) {
+      try {
+        const payload = this.jwt.verify<JwtPayload>(token, { secret });
+        return payload.typ === undefined || payload.typ === 'refresh' ? payload : null;
+      } catch {
+        // Wrong secret or expired: try the next one.
       }
     }
-    return this.issueTokens(user, companyId, role);
+    return null;
   }
 
   /**
@@ -753,9 +781,26 @@ export class AuthService implements OnModuleInit {
       });
     }
 
+    // Count this attempt before comparing, in one conditional statement.
+    // Reading `attempts`, comparing, then saving let a burst of parallel
+    // guesses all read the same count and all get through — far more than
+    // maxAttempts tries at a 6-digit code.
+    const counted = await this.otpRepo.increment(
+      { id: record.id, usedAt: IsNull(), attempts: LessThan(maxAttempts) },
+      'attempts',
+      1,
+    );
+    if (!counted.affected) {
+      await this.otpRepo.update({ id: record.id }, { usedAt: new Date() });
+      this.logger.warn(`OTP locked (too many attempts): ${user.email}`);
+      throw new BadRequestException({
+        code: 'OTP_LOCKED',
+        message: 'Too many incorrect attempts. Please request a new code.',
+      });
+    }
+    record.attempts += 1;
+
     if (record.otpHash !== this.hashToken(dto.otp)) {
-      record.attempts += 1;
-      await this.otpRepo.save(record);
       this.logger.warn(
         `OTP mismatch (${record.attempts}/${maxAttempts}): ${user.email}`,
       );
@@ -917,6 +962,10 @@ export class AuthService implements OnModuleInit {
     const payload: JwtPayload = { sub: user.id, companyId, role };
 
     const secret = this.config.getOrThrow<string>('jwt.secret');
+    // A separate secret (and `typ`) so a refresh token can never be presented
+    // as an access token: they used to share both, which made every 30-day
+    // refresh token a 30-day bearer credential that sign-out did not revoke.
+    const refreshSecret = this.config.get<string>('jwt.refreshSecret') || secret;
     const accessExpires = this.config.get<string>('jwt.accessExpiresIn', '15m');
     const refreshExpires = this.config.get<string>('jwt.refreshExpiresIn', '30d');
 
@@ -924,7 +973,7 @@ export class AuthService implements OnModuleInit {
     // (revoked_access_tokens); without it a stateless access token stays
     // usable until exp even after signout.
     const accessToken = await this.jwt.signAsync(
-      { ...payload, jti: randomUUID() },
+      { ...payload, typ: 'access', jti: randomUUID() },
       {
         secret,
         expiresIn: accessExpires as unknown as number,
@@ -934,9 +983,9 @@ export class AuthService implements OnModuleInit {
     // same user within the same second mint byte-identical JWTs (iat has
     // second granularity) and the token_hash unique index 500s the second one.
     const refreshTokenStr = await this.jwt.signAsync(
-      { ...payload, jti: randomUUID() },
+      { ...payload, typ: 'refresh', jti: randomUUID() },
       {
-        secret,
+        secret: refreshSecret,
         expiresIn: refreshExpires as unknown as number,
       },
     );

@@ -9,6 +9,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -192,4 +193,18 @@ export class JoinCompanyDto {
   @IsString()
   @MinLength(4)
   code!: string;
+}
+
+/** POST /companies/subscribe — the legacy onboarding plan pick. */
+export class SelfSubscribeDto {
+  @ApiProperty({ description: 'Subscription plan id' })
+  @IsUUID()
+  planId!: string;
+
+  @ApiPropertyOptional({
+    description: "Company to subscribe. Defaults to the x-company-id header, then the token's company.",
+  })
+  @IsOptional()
+  @IsUUID()
+  companyId?: string;
 }

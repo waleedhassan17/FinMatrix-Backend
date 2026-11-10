@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DataSource, EntityManager, Not } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '../users/entities/user.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
@@ -18,6 +18,7 @@ import {
   CreateCompanyUserDto,
   ResetCompanyUserPasswordDto,
 } from './dto/company-user.dto';
+import { revokeRefreshTokens } from '../../common/utils/session-revocation.util';
 
 /**
  * How many staff accounts a company may have.
@@ -193,8 +194,12 @@ export class CompanyUsersService {
         await this.assertStaffSlotFree(em, companyId);
       }
 
+      const roleChanged = membership.role !== role;
       membership.role = role;
       await em.getRepository(UserCompany).save(membership);
+      // Sessions carry the role they were issued with; end them so the user
+      // signs back in under the new one.
+      if (roleChanged) await revokeRefreshTokens(em, userId);
 
       await this.audit.record({
         companyId,
@@ -232,6 +237,7 @@ export class CompanyUsersService {
       // history the account is referenced by.
       await em.getRepository(User).update(userId, { isActive });
       membership.user.isActive = isActive;
+      if (!isActive) await revokeRefreshTokens(em, userId);
 
       await this.audit.record({
         companyId,
@@ -267,6 +273,9 @@ export class CompanyUsersService {
         .getRepository(User)
         .update(userId, { passwordHash: await bcrypt.hash(password, cost) });
       await this.storeCredential(em, companyId, userId, password, actorUserId);
+      // An owner usually resets a password because someone else has it: the
+      // sessions already signed in with the old one must not outlive it.
+      await revokeRefreshTokens(em, userId);
       return membership.user;
     });
 

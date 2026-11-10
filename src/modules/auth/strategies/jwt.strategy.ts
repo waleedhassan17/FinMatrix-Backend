@@ -15,8 +15,31 @@ export interface JwtPayload {
   role: UserRole;
   /** Token id — present on all newly issued tokens; keys the signout denylist. */
   jti?: string;
+  /**
+   * What the token is for. Absent on tokens issued before it existed; see
+   * LEGACY_ACCESS_MAX_LIFETIME_S for how those are told apart.
+   */
+  typ?: 'access' | 'refresh';
   iat?: number;
   exp?: number;
+}
+
+/**
+ * Before `typ` existed, access and refresh tokens were signed with the same
+ * secret and carried the same claims, so a 30-day refresh token passed as an
+ * access token. Legacy access tokens lived 15 minutes; legacy refresh tokens
+ * 30 days. Anything without `typ` that was issued to live longer than a day is
+ * therefore a refresh token and is refused here.
+ */
+const LEGACY_ACCESS_MAX_LIFETIME_S = 24 * 60 * 60;
+
+/** True when the payload may be used as an access token. */
+export function isAccessTokenPayload(payload: JwtPayload): boolean {
+  if (payload.typ) return payload.typ === 'access';
+  if (payload.exp != null && payload.iat != null) {
+    return payload.exp - payload.iat <= LEGACY_ACCESS_MAX_LIFETIME_S;
+  }
+  return true;
 }
 
 @Injectable()
@@ -35,6 +58,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    // A refresh token is not a bearer credential for the API.
+    if (!isAccessTokenPayload(payload)) {
+      throw new UnauthorizedException({
+        code: 'INVALID_TOKEN',
+        message: 'Invalid or expired token',
+      });
+    }
     // Signed-out access tokens (denylisted jti) are rejected until they
     // expire. Tokens issued before jti existed have no jti and skip this.
     if (

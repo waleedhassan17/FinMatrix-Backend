@@ -38,6 +38,7 @@ import { SubscriptionPlan } from '../super-admin/entities/subscription-plan.enti
 import { CompanySubscription } from '../super-admin/entities/company-subscription.entity';
 import { MailService } from '../mail/mail.service';
 import { COMPANY_STATUS } from '../../types';
+import { revokeRefreshTokens } from '../../common/utils/session-revocation.util';
 
 /** Hours the owner is told a trial request takes to review. */
 export const TRIAL_ACTIVATION_HOURS = 24;
@@ -289,7 +290,12 @@ export class CompaniesService {
         message: 'User is not a member of this company',
       });
     }
-    await this.userCompanyRepo.remove(membership);
+    // Removing the membership and ending the member's sessions are one act:
+    // a refresh token that outlived the membership used to keep the company.
+    await this.dataSource.transaction(async (em) => {
+      await em.getRepository(UserCompany).remove(membership);
+      await revokeRefreshTokens(em, targetUserId);
+    });
     return { removed: true };
   }
 
@@ -617,36 +623,40 @@ export class CompaniesService {
   async selfSubscribe(companyId: string, planId: string, userId: string) {
     if (!companyId) throw new BadRequestException('No company associated with your account');
 
+    // The plan is the owner's decision. Any member — staff, a rider — could
+    // make it before.
+    await this.assertAdmin(userId, companyId);
+
     const plan = await this.planRepo.findOne({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Subscription plan not found');
 
-    const membership = await this.userCompanyRepo.findOne({
-      where: { userId, companyId },
-    });
-    if (!membership) throw new ForbiddenException('You are not a member of this company');
-
-    // Cancel existing active/trial subscriptions
-    await this.dataSource
-      .createQueryBuilder()
-      .update(CompanySubscription)
-      .set({ status: 'cancelled' })
-      .where('company_id = :cid AND status IN (:...s)', {
-        cid: companyId,
-        s: ['active', 'trial'],
-      })
-      .execute();
-
     const isFree = parseFloat(plan.priceMonthly) === 0;
-    const sub = this.subRepo.create({
-      companyId,
-      planId: plan.id,
-      status: isFree ? 'trial' : 'active',
-      startDate: new Date().toISOString().split('T')[0],
-      endDate: isFree ? null : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
-      notes: isFree ? 'Free plan — self-selected during onboarding' : null,
-      assignedBy: userId,
+    // Cancelling the old subscription and recording the new one stand or fall
+    // together: a failure between them used to leave the company with none.
+    const saved = await this.dataSource.transaction(async (em) => {
+      await em
+        .createQueryBuilder()
+        .update(CompanySubscription)
+        .set({ status: 'cancelled' })
+        .where('company_id = :cid AND status IN (:...s)', {
+          cid: companyId,
+          s: ['active', 'trial'],
+        })
+        .execute();
+
+      const repo = em.getRepository(CompanySubscription);
+      return repo.save(
+        repo.create({
+          companyId,
+          planId: plan.id,
+          status: isFree ? 'trial' : 'active',
+          startDate: new Date().toISOString().split('T')[0],
+          endDate: isFree ? null : new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+          notes: isFree ? 'Free plan — self-selected during onboarding' : null,
+          assignedBy: userId,
+        }),
+      );
     });
-    const saved = await this.subRepo.save(sub);
     return { ...saved, plan };
   }
 
