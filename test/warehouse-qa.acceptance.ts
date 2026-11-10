@@ -18,6 +18,7 @@
  *   npx ts-node -r tsconfig-paths/register test/warehouse-qa.acceptance.ts
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 const { Client } = require('pg');
 
@@ -28,7 +29,10 @@ const WH_PASSWORD = process.env.WH_PASSWORD || '123456';
 const R1_EMAIL = process.env.R1_EMAIL || 'rider1@warehouseco.com';
 const R2_EMAIL = process.env.R2_EMAIL || 'rider2@warehouseco.com';
 const RIDER_PASSWORD = process.env.RIDER_PASSWORD || '123456';
-const TODAY = new Date().toISOString().slice(0, 10);
+// The business day the server dates documents by (Asia/Karachi unless
+// BUSINESS_TIMEZONE says otherwise). The UTC date differs from it between
+// 00:00 and 05:00 PKT, which failed these checks depending on the hour CI ran.
+const TODAY = businessToday();
 
 let pass = 0;
 let fail = 0;

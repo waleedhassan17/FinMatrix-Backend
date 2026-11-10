@@ -28,6 +28,7 @@
  *   API_BASE=http://localhost:3000/api/v1 DATABASE_URL=postgres://... \
  *   npx ts-node -r tsconfig-paths/register test/voids.acceptance.ts
  */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 
 /* eslint-disable @typescript-eslint/no-var-requires */
@@ -37,7 +38,10 @@ const API = process.env.API_BASE || 'http://localhost:3000/api/v1';
 const DB = process.env.DATABASE_URL || '';
 const EMAIL = process.env.WH_EMAIL || 'warehouse@gmail.com';
 const PASSWORD = process.env.WH_PASSWORD || '123456';
-const TODAY = new Date().toISOString().slice(0, 10);
+// The business day the server dates documents by (Asia/Karachi unless
+// BUSINESS_TIMEZONE says otherwise). The UTC date differs from it between
+// 00:00 and 05:00 PKT, which failed these checks depending on the hour CI ran.
+const TODAY = businessToday();
 
 let pass = 0;
 let fail = 0;

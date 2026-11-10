@@ -17,6 +17,7 @@
  * Exits non-zero if any check fails.
  */
 import 'reflect-metadata';
+import { businessToday } from '../src/common/utils/business-date.util';
 
 const API =
   process.env.API_BASE ||
@@ -134,7 +135,8 @@ const PNG = Buffer.from(
  */
 async function deliveryE2E() {
   console.log('\n— phase2.md delivery E2E —');
-  const TODAY = new Date().toISOString().slice(0, 10);
+  // The server's business day, not the UTC date (they differ 00:00–05:00 PKT).
+  const TODAY = businessToday();
 
   async function invariants(label: string) {
     const tb = (await api('GET', '/reports/trial-balance')).body;

@@ -28,6 +28,7 @@
  *   PG_URL=postgres://user:pass@host:5432/db \
  *   npm run test:five-features
  */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { Client } = require('pg');
@@ -36,7 +37,10 @@ const API = process.env.API_BASE || 'http://localhost:3001/api/v1';
 const PG_URL = process.env.PG_URL as string;
 const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
 const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
-const TODAY = new Date().toISOString().slice(0, 10);
+// The business day the server dates documents by (Asia/Karachi unless
+// BUSINESS_TIMEZONE says otherwise). The UTC date differs from it between
+// 00:00 and 05:00 PKT, which failed these checks depending on the hour CI ran.
+const TODAY = businessToday();
 
 let pass = 0;
 let fail = 0;

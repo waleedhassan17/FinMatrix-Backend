@@ -28,6 +28,7 @@
  *   PG_URL=postgres://user:pass@localhost:5432/db \
  *   npm run test:tiering
  */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { Client } = require('pg');
@@ -567,8 +568,8 @@ async function main() {
     companyId: sb.companyId,
     json: {
       customerId: custId,
-      invoiceDate: new Date().toISOString().slice(0, 10),
-      dueDate: new Date().toISOString().slice(0, 10),
+      invoiceDate: businessToday(),
+      dueDate: businessToday(),
       status: 'sent',
       lines: [
         {

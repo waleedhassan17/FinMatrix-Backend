@@ -18,6 +18,7 @@
  *   BASE_URL=https://.../api/v1 [LIVE_CHECK=1] npm run verify:demo
  * Defaults: prod URL + metromatrix@gmail.com / 123456.
  */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 
 const BASE =
@@ -26,7 +27,10 @@ const BASE =
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'metromatrix@gmail.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '123456';
 const LIVE_CHECK = process.env.LIVE_CHECK === '1';
-const TODAY = new Date().toISOString().slice(0, 10);
+// The business day the server dates documents by (Asia/Karachi unless
+// BUSINESS_TIMEZONE says otherwise). The UTC date differs from it between
+// 00:00 and 05:00 PKT, which failed these checks depending on the hour CI ran.
+const TODAY = businessToday();
 
 let pass = 0;
 let fail = 0;

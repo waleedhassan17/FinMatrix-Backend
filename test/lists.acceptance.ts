@@ -19,6 +19,7 @@
  * Usage: boot the API, then
  *   API_BASE=http://localhost:3000/api/v1 npx ts-node -r tsconfig-paths/register test/lists.acceptance.ts
  */
+import { businessToday } from '../src/common/utils/business-date.util';
 export {};
 
 const API = process.env.API_BASE || 'http://localhost:3000/api/v1';
@@ -26,9 +27,11 @@ const EMAIL = process.env.WH_EMAIL || 'warehouse@gmail.com';
 const PASSWORD = process.env.WH_PASSWORD || '123456';
 const RUN = Date.now().toString().slice(-8);
 
+// Offsets from the server's business day, not the UTC date (they differ
+// between 00:00 and 05:00 PKT).
 const day = (offset: number): string => {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
+  const d = new Date(`${businessToday()}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + offset);
   return d.toISOString().slice(0, 10);
 };
 
