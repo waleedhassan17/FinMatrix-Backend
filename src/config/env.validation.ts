@@ -156,6 +156,25 @@ export const envValidationSchema = Joi.object({
     .optional(),
   MESSAGING_WORKER_ENABLED: Joi.boolean().default(true),
 
+  // ── Company backup (modules/data-portability) ──
+  // Signs the download link of a finished backup ZIP (ExportTokenSigner). The
+  // link carries its own authorisation — a browser's <a href> and a phone's
+  // download manager send no bearer header — so this key is what stands
+  // between a guessed export id and the whole company's books. REQUIRED in
+  // production for that reason; elsewhere a key is derived from JWT_SECRET
+  // under its own label, so a dev box boots without it.
+  EXPORT_TOKEN_SECRET: Joi.string().min(32).when('NODE_ENV', {
+    is: 'production',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  // false stops this process from building queued backups (the rows still
+  // queue; another process drains them). Mirrors MESSAGING_WORKER_ENABLED.
+  EXPORT_WORKER_ENABLED: Joi.boolean().default(true),
+  // How long a finished ZIP stays downloadable before the hourly sweep deletes
+  // it and marks the export expired. 24 h is the product contract.
+  EXPORT_RETENTION_HOURS: Joi.number().integer().min(1).max(168).default(24),
+
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {
     is: 'production',

@@ -9,7 +9,7 @@ import { Repository } from 'typeorm';
 import { v2 as cloudinary } from 'cloudinary';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 import { randomUUID } from 'crypto';
 import { StoredFileRecord } from './stored-file.entity';
 
@@ -32,6 +32,18 @@ export interface ReadableStoredFile {
   stream: Readable;
   mimeType: string | null;
   size: number | null;
+}
+
+/**
+ * A file being written as a stream (putStream). `key` is known up front so the
+ * caller can record it before the bytes have all arrived; `done` settles when
+ * the backend has the whole file. `abort()` drops whatever was written.
+ */
+export interface StorageStreamSink {
+  key: string;
+  stream: Writable;
+  done: Promise<{ size: number }>;
+  abort: () => Promise<void>;
 }
 
 /**
@@ -142,6 +154,118 @@ export class StorageService {
       `Stored db:${record.id} in Postgres (${opts.buffer.length} bytes)`,
     );
     return { key: `db:${record.id}`, ...base };
+  }
+
+  /**
+   * Persist a file that is produced as a stream — a company backup ZIP that
+   * can run to hundreds of megabytes and must never be held in memory on a
+   * 1 GB task. Two backends:
+   *
+   *   Cloudinary (when configured, which is production): a chunked raw upload
+   *   with `type: 'authenticated'`, exactly as putBuffer stores a receipt. The
+   *   key is `cld:<public_id>` and read()/remove() handle it like any other.
+   *
+   *   Local disk otherwise (development, CI): under UPLOAD_STORAGE_PATH, with
+   *   the relative path as the key — the legacy disk-key shape read() already
+   *   understands. Container storage is ephemeral, so this is never the
+   *   production path; the Postgres bytea fallback putBuffer uses is wrong for
+   *   files this size and is deliberately not offered here.
+   *
+   * `name` is the path under the bucket (`<companyId>/<exportId>.zip`), so a
+   * key is predictable and per-tenant without a lookup.
+   */
+  async putStream(opts: {
+    bucket: string;
+    name: string;
+    mimeType: string;
+  }): Promise<StorageStreamSink> {
+    if (this.cloudinaryEnabled) return this.cloudinaryStreamSink(opts);
+    return this.diskStreamSink(opts);
+  }
+
+  private async diskStreamSink(opts: {
+    bucket: string;
+    name: string;
+  }): Promise<StorageStreamSink> {
+    const key = `${opts.bucket}/${opts.name}`;
+    const absolutePath = path.join(this.root, key);
+    await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
+    const stream = fs.createWriteStream(absolutePath);
+    const done = new Promise<{ size: number }>((resolve, reject) => {
+      stream.on('error', reject);
+      stream.on('finish', () => {
+        fs.promises
+          .stat(absolutePath)
+          .then((st) => resolve({ size: st.size }))
+          .catch(reject);
+      });
+    });
+    // A rejected `done` that nobody awaits yet must not crash the process.
+    done.catch(() => undefined);
+    return {
+      key,
+      stream,
+      done,
+      abort: async () => {
+        stream.destroy();
+        await fs.promises.unlink(absolutePath).catch(() => undefined);
+      },
+    };
+  }
+
+  private cloudinaryStreamSink(opts: {
+    bucket: string;
+    name: string;
+    mimeType: string;
+  }): StorageStreamSink {
+    const publicId = `${opts.bucket}/${opts.name}`;
+    let settle: {
+      resolve: (v: { size: number }) => void;
+      reject: (e: Error) => void;
+    };
+    const done = new Promise<{ size: number }>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+    done.catch(() => undefined);
+    const stream = cloudinary.uploader.upload_chunked_stream(
+      {
+        public_id: publicId,
+        resource_type: 'raw',
+        type: 'authenticated',
+        overwrite: true,
+        chunk_size: 6_000_000,
+      },
+      (err, result) => {
+        if (err || !result) {
+          settle.reject(
+            new Error(
+              `Cloudinary upload failed: ${err?.message ?? 'no result'}`,
+            ),
+          );
+          return;
+        }
+        this.logger.log(
+          `Stored cld:${result.public_id} on Cloudinary (${result.bytes} bytes, streamed)`,
+        );
+        settle.resolve({ size: Number(result.bytes ?? 0) });
+      },
+    );
+    return {
+      key: `cld:${publicId}`,
+      stream,
+      done,
+      abort: async () => {
+        stream.destroy();
+        try {
+          await cloudinary.uploader.destroy(publicId, {
+            resource_type: 'raw',
+            type: 'authenticated',
+          });
+        } catch {
+          // best-effort; the expiry sweep is the backstop
+        }
+      },
+    };
   }
 
   /** Stream a previously-stored file back, regardless of backend. */
@@ -287,6 +411,8 @@ export class StorageService {
         return 'image/webp';
       case 'pdf':
         return 'application/pdf';
+      case 'zip':
+        return 'application/zip';
       default:
         return 'application/octet-stream';
     }
@@ -302,6 +428,8 @@ export class StorageService {
         return '.webp';
       case 'application/pdf':
         return '.pdf';
+      case 'application/zip':
+        return '.zip';
       default:
         return '.bin';
     }

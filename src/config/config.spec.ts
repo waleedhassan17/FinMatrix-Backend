@@ -179,6 +179,7 @@ describe('env validation', () => {
     COOKIE_SECRET: 'c'.repeat(32),
     CORS_ORIGINS: 'https://app.example.com',
     CREDENTIAL_ENCRYPTION_KEY: 'd'.repeat(32),
+    EXPORT_TOKEN_SECRET: 'e'.repeat(32),
   };
   const validate = (vars: Record<string, string>) =>
     envValidationSchema.validate(
@@ -206,6 +207,21 @@ describe('env validation', () => {
     expect(error).toBeUndefined();
     expect(value).not.toHaveProperty('DB_SSL');
     expect(value).not.toHaveProperty('DB_SSL_REJECT_UNAUTHORIZED');
+  });
+
+  it('requires the backup download-link secret in production only', () => {
+    const { error } = envValidationSchema.validate(
+      { ...base, EXPORT_TOKEN_SECRET: undefined, NODE_ENV: 'production' },
+      { allowUnknown: true },
+    );
+    expect(error?.message).toMatch(/EXPORT_TOKEN_SECRET/);
+    const dev = envValidationSchema.validate(
+      { ...base, EXPORT_TOKEN_SECRET: undefined, NODE_ENV: 'development' },
+      { allowUnknown: true },
+    );
+    expect(dev.error).toBeUndefined();
+    expect(dev.value.EXPORT_WORKER_ENABLED).toBe(true);
+    expect(dev.value.EXPORT_RETENTION_HOURS).toBe(24);
   });
 
   it('still requires the production-only encryption key', () => {
