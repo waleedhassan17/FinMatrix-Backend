@@ -175,6 +175,30 @@ export const envValidationSchema = Joi.object({
   // it and marks the export expired. 24 h is the product contract.
   EXPORT_RETENTION_HOURS: Joi.number().integer().min(1).max(168).default(24),
 
+  // ── Migration Center (modules/migrations) ──
+  // Largest single upload (XLSX, CSV, XML or ZIP) the Migration Center reads.
+  MIGRATION_MAX_FILE_BYTES: Joi.number()
+    .integer()
+    .min(1_048_576)
+    .max(104_857_600)
+    .default(26_214_400),
+  // Optional AI mapping assistant. Off by default; with it off (or without a
+  // key or model) the Migration Center maps with its deterministic rules only.
+  // The model is configuration, never code: e.g. MIGRATION_AI_MODEL=claude-opus-5-5.
+  ANTHROPIC_API_KEY: Joi.string().allow('').optional(),
+  MIGRATION_AI_ENABLED: Joi.boolean().default(false),
+  MIGRATION_AI_MODEL: Joi.string()
+    .allow('')
+    .when('MIGRATION_AI_ENABLED', {
+      is: true,
+      then: Joi.string().min(1).required(),
+      otherwise: Joi.optional(),
+    }),
+  // Calls to the model per migration batch, all sessions together.
+  MIGRATION_AI_MAX_CALLS: Joi.number().integer().min(0).max(50).default(10),
+  // Server-side refusal fallback (beta). Set false for a model that does not support it.
+  MIGRATION_AI_SERVER_FALLBACK: Joi.boolean().default(true),
+
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {
     is: 'production',

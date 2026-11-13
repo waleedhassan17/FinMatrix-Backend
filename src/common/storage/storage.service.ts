@@ -430,6 +430,12 @@ export class StorageService {
         return '.pdf';
       case 'application/zip':
         return '.zip';
+      case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+        return '.xlsx';
+      case 'text/csv':
+        return '.csv';
+      case 'application/xml':
+        return '.xml';
       default:
         return '.bin';
     }

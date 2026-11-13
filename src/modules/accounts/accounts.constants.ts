@@ -125,6 +125,19 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
     type: 'equity',
     subType: 'Opening Balance Equity',
   },
+  // Migration Center (modules/migrations). Every posting a migration makes
+  // nets through here: the trial balance's AR, AP and Inventory lines land on
+  // it instead of the control accounts, and the open invoices, open bills and
+  // stock detail post against it. A finished migration leaves it at exactly
+  // zero; anything else means the detail disagrees with the trial balance and
+  // the commit refuses. Kept apart from 3900 so an opening balance typed by
+  // hand and a migrated one never blur into one number.
+  {
+    accountNumber: '3950',
+    name: 'Migration Clearing',
+    type: 'equity',
+    subType: 'Other Equity',
+  },
   {
     accountNumber: '4000',
     name: 'Sales Revenue',
@@ -220,6 +233,8 @@ export const ACCT_TAX_PAYABLE = '2300';
 export const ACCT_PAYROLL_LIABILITIES = '2310';
 export const ACCT_CUSTOMER_ADVANCES = '2400';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
+/** Migration Center clearing account; nets to zero after a committed batch. */
+export const ACCT_MIGRATION_CLEARING = '3950';
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
 export const ACCT_SHRINKAGE_DAMAGE = '5400';
@@ -276,6 +291,11 @@ export const SYSTEM_ACCOUNT_DEFS: Record<
     name: 'Opening Balance Equity',
     type: 'equity',
     subType: 'Opening Balance Equity',
+  },
+  [ACCT_MIGRATION_CLEARING]: {
+    name: 'Migration Clearing',
+    type: 'equity',
+    subType: 'Other Equity',
   },
   [ACCT_GRNI]: {
     name: 'Inventory Received Not Billed (GRNI)',

@@ -62,6 +62,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { MessagingModule } from './modules/messaging/messaging.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { DataPortabilityModule } from './modules/data-portability/data-portability.module';
+import { MigrationsModule } from './modules/migrations/migrations.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SearchModule } from './modules/search/search.module';
 import { HealthModule } from './modules/health/health.module';
@@ -146,6 +147,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     MessagingModule,
     SettingsModule,
     DataPortabilityModule,
+    MigrationsModule,
     ReportsModule,
     SearchModule,
     HealthModule,

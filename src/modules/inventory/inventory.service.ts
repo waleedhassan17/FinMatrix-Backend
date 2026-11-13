@@ -869,6 +869,18 @@ export class InventoryService {
     entries: Array<{ item: InventoryItem; quantity: Decimal }>,
     date: string,
     memo: string,
+    /**
+     * Where the credit lands and how the entry is stamped. Defaults are the
+     * import's: Opening Balance Equity, `opening_stock`. The Migration Center
+     * credits Migration Clearing (3950) and stamps `migration` + the batch,
+     * so the same per-item value logic serves both and cannot drift apart.
+     */
+    opts: {
+      creditAccountNumber?: string;
+      creditDescription?: string;
+      sourceType?: string;
+      sourceId?: string;
+    } = {},
   ): Promise<{ id: string; reference: string } | null> {
     const lines = entries
       .map(({ item, quantity }) => ({
@@ -887,7 +899,7 @@ export class InventoryService {
     const obe = await this.accounts.getOrCreateSystemAccount(
       em,
       companyId,
-      ACCT_OPENING_BALANCE_EQUITY,
+      opts.creditAccountNumber ?? ACCT_OPENING_BALANCE_EQUITY,
     );
     const total = lines
       .reduce((sum, l) => sum.plus(l.amount), new Decimal(0))
@@ -909,13 +921,14 @@ export class InventoryService {
         })),
         {
           accountId: obe.id,
-          description: 'Opening balance equity',
+          description: opts.creditDescription ?? 'Opening balance equity',
           debit: '0',
           credit: total,
           lineOrder: lines.length,
         },
       ],
-      sourceType: 'opening_stock',
+      sourceType: opts.sourceType ?? 'opening_stock',
+      ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
     });
     return { id: entry.id, reference: entry.reference };
   }

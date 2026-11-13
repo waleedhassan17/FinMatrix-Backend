@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -542,6 +543,13 @@ export class InvoicesService {
           message: 'Invoice not found',
         });
       }
+      if (invoice.source === 'migration') {
+        throw new ConflictException({
+          code: 'MIGRATED_DOCUMENT_IMMUTABLE',
+          message:
+            'This invoice was brought in by a migration. Undo the migration to remove it, or settle it with a payment or credit memo.',
+        });
+      }
       if (isPositive(invoice.amountPaid)) {
         throw new BadRequestException({
           code: 'INVOICE_ALREADY_PAID',
@@ -684,6 +692,13 @@ export class InvoicesService {
         throw new NotFoundException({
           code: 'INVOICE_NOT_FOUND',
           message: 'Invoice not found',
+        });
+      }
+      if (invoice.source === 'migration') {
+        throw new ConflictException({
+          code: 'MIGRATED_DOCUMENT_IMMUTABLE',
+          message:
+            'This invoice was brought in by a migration. Undo the migration to remove it, or settle it with a payment or credit memo.',
         });
       }
       if (isPositive(invoice.amountPaid)) {

@@ -47,7 +47,7 @@ async function main() {
     const token = signin.data.tokens.accessToken as string;
     const userId = signup.data.user.id as string;
 
-    console.log(`Seeding ${DOCS} invoices (+2 lines each), ${Math.floor(DOCS / 2)} payments and ${DOCS * 2} ledger rows into ${companyId} …`);
+    console.log(`Seeding ${DOCS} invoices (+2 lines each) and ${DOCS * 2} ledger rows into ${companyId} …`);
     const seedStart = Date.now();
     await pg.query(`INSERT INTO customers (company_id, name, code) SELECT $1, 'Perf Customer ' || g, 'C-' || lpad(g::text, 5, '0') FROM generate_series(1, 200) g`, [companyId]);
     const { rows: custRows } = await pg.query(`SELECT id FROM customers WHERE company_id = $1`, [companyId]);
@@ -56,21 +56,21 @@ async function main() {
     const ar = acctRows.find((a: any) => a.account_number === '1100')?.id;
     const sales = acctRows.find((a: any) => a.account_number === '4000')?.id;
     await pg.query(
-      `INSERT INTO invoices (company_id, customer_id, invoice_number, invoice_date, due_date, subtotal, total, amount_paid, balance, status, payment_terms, created_by)
-       SELECT $1, ($2::uuid[])[1 + (g % $3)], 'PERF-' || g, CURRENT_DATE - (g % 365), CURRENT_DATE + 30, 1000, 1000, CASE WHEN g % 2 = 0 THEN 1000 ELSE 0 END, CASE WHEN g % 2 = 0 THEN 0 ELSE 1000 END, CASE WHEN g % 2 = 0 THEN 'paid' ELSE 'sent' END, 'net30', $4
+      `INSERT INTO invoices (company_id, customer_id, invoice_number, invoice_date, due_date, subtotal, total, amount_paid, balance, status, payment_terms, created_by, version)
+       SELECT $1, ($2::uuid[])[1 + (g % $3)], 'PERF-' || g, CURRENT_DATE - (g % 365), CURRENT_DATE + 30, 1000, 1000, CASE WHEN g % 2 = 0 THEN 1000 ELSE 0 END, CASE WHEN g % 2 = 0 THEN 0 ELSE 1000 END, CASE WHEN g % 2 = 0 THEN 'paid' ELSE 'sent' END, 'net30', $4, 1
        FROM generate_series(1, $5) g`,
       [companyId, custIds, custIds.length, userId, DOCS],
     );
     await pg.query(
       `INSERT INTO invoice_line_items (invoice_id, description, quantity, unit_price, tax_rate, tax_amount, line_total, account_id, line_order)
-       SELECT i.id, 'Perf line ' || l, 1, 500, 0, 0, 500, $2, l FROM invoices i CROSS JOIN generate_series(0, 1) l WHERE i.company_id = $1`,
+       SELECT i.id, 'Perf line ' || l, 1, 500, 0, 0, 500, $2::uuid, l FROM invoices i CROSS JOIN generate_series(0, 1) l WHERE i.company_id = $1::uuid`,
       [companyId, sales],
     );
     await pg.query(
       `INSERT INTO general_ledger (company_id, date, reference, account_id, debit, credit, balance, source_type, source_id, memo)
-       SELECT $1, i.invoice_date, 'JE-' || row_number() OVER (), $2, 1000, 0, 0, 'invoice', i.id, NULL FROM invoices i WHERE i.company_id = $1
+       SELECT $1::uuid, i.invoice_date, 'JE-' || row_number() OVER (), $2::uuid, 1000, 0, 0, 'invoice', i.id, NULL FROM invoices i WHERE i.company_id = $1::uuid
        UNION ALL
-       SELECT $1, i.invoice_date, 'JE-' || row_number() OVER (), $3, 0, 1000, 0, 'invoice', i.id, NULL FROM invoices i WHERE i.company_id = $1`,
+       SELECT $1::uuid, i.invoice_date, 'JE-' || row_number() OVER (), $3::uuid, 0, 1000, 0, 'invoice', i.id, NULL FROM invoices i WHERE i.company_id = $1::uuid`,
       [companyId, ar, sales],
     );
     console.log(`Seeded in ${((Date.now() - seedStart) / 1000).toFixed(1)} s`);

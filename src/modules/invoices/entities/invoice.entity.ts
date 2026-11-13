@@ -21,6 +21,7 @@ export type DiscountType = 'percent' | 'amount' | 'none';
 @Index(['companyId', 'status'])
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_invoices_migration_batch', ['migrationBatchId'])
 export class Invoice extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'customer_id' })
   customerId!: string;
@@ -103,6 +104,24 @@ export class Invoice extends BaseCompanyEntity {
 
   @Column({ type: 'uuid', nullable: true, name: 'journal_entry_id' })
   journalEntryId!: string | null;
+
+  /**
+   * Provenance. 'app' is a document raised here; 'migration' is an open item
+   * brought in by the Migration Center: a real receivable/payable, payable
+   * through the normal flows, that carries no revenue, tax or stock, whose
+   * ledger lines live on the batch's entry rather than one of its own. Void
+   * and delete refuse it (MIGRATED_DOCUMENT_IMMUTABLE); undo the migration or
+   * settle it with a credit instead.
+   */
+  @Column({ type: 'varchar', length: 16, default: 'app' })
+  source!: 'app' | 'migration';
+
+  /** The number this document had in the system it was migrated from. */
+  @Column({ type: 'varchar', length: 64, nullable: true, name: 'legacy_ref' })
+  legacyRef!: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'migration_batch_id' })
+  migrationBatchId!: string | null;
 
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
