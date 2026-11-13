@@ -4,7 +4,9 @@
  * generated companies can be migrated without hundreds of sign-ups through
  * the throttled auth routes. Used by test/migration-property.ts.
  */
+import './migration-harness.env';
 import { INestApplicationContext } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { randomBytes, randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
@@ -25,20 +27,12 @@ export interface Harness {
 }
 
 export async function bootHarness(): Promise<Harness> {
-  process.env.EXPORT_WORKER_ENABLED = 'false';
-  process.env.MESSAGING_WORKER_ENABLED = 'false';
-  // Local runs store files in Postgres, as the API is run for the acceptance
-  // scripts; a developer's Cloudinary credentials are not exercised here.
-  for (const k of [
-    'CLOUDINARY_CLOUD_NAME',
-    'CLOUDINARY_API_KEY',
-    'CLOUDINARY_API_SECRET',
-    'CLOUDINARY_URL',
-  ])
-    process.env[k] = '';
+  // Workers off, Cloudinary off, mail off: see migration-harness.env.ts,
+  // which must be (and is) imported before AppModule.
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: ['error'],
   });
+  assertIsolated(app.get(ConfigService));
   return {
     app,
     ds: app.get(DataSource),
@@ -46,6 +40,29 @@ export async function bootHarness(): Promise<Harness> {
     reports: app.get(ReportsService),
     close: () => app.close(),
   };
+}
+
+/**
+ * Refuse to run against live services. A harness run creates thousands of
+ * files and must never reach a developer's Cloudinary account or let its own
+ * workers claim jobs the API queued.
+ */
+function assertIsolated(config: ConfigService): void {
+  const live = [
+    'CLOUDINARY_CLOUD_NAME',
+    'CLOUDINARY_API_KEY',
+    'CLOUDINARY_API_SECRET',
+    'CLOUDINARY_URL',
+  ].filter((k) => !!config.get<string>(k));
+  const workers = ['EXPORT_WORKER_ENABLED', 'MESSAGING_WORKER_ENABLED'].filter(
+    (k) => String(config.get(k)) !== 'false',
+  );
+  if (live.length || workers.length) {
+    throw new Error(
+      `Migration harness is not isolated: ${[...live, ...workers].join(', ')} still set. ` +
+        'Import test/migration-harness.env.ts before anything that loads AppModule.',
+    );
+  }
 }
 
 /** A fresh warehouse-tier company with the default chart and no postings. */
