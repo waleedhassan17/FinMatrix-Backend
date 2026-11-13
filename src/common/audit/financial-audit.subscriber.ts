@@ -128,6 +128,13 @@ interface PendingAudit {
  *      journal entry, then saves again to attach journal_entry_id). Events are
  *      collapsed per resource per transaction before flushing.
  */
+/**
+ * Rows per INSERT. audit_trail binds 10 values a row; PostgreSQL allows at
+ * most 65,535 bind parameters in one statement (6,553 rows), so 500 leaves a
+ * wide margin.
+ */
+export const AUDIT_WRITE_CHUNK = 500;
+
 @Injectable()
 export class FinancialAuditSubscriber implements EntitySubscriberInterface {
   private readonly logger = new Logger(FinancialAuditSubscriber.name);
@@ -259,7 +266,21 @@ export class FinancialAuditSubscriber implements EntitySubscriberInterface {
         row.userAgent = r.userAgent;
         return row;
       });
-      await repo.save(entities);
+      // In chunks. One INSERT for every row of a large transaction (a
+      // migration commit creates ~11,000 audited records) exceeded
+      // PostgreSQL's 65,535 bind-parameter limit, and the whole audit trail of
+      // that transaction was lost. Each chunk is written on its own, so one
+      // failing chunk costs only its own rows.
+      for (let i = 0; i < entities.length; i += AUDIT_WRITE_CHUNK) {
+        const chunk = entities.slice(i, i + AUDIT_WRITE_CHUNK);
+        try {
+          await repo.save(chunk);
+        } catch (err) {
+          this.logger.error(
+            `Failed to write ${chunk.length} of ${entities.length} audit_trail row(s): ${(err as Error).message}`,
+          );
+        }
+      }
     } catch (err) {
       // Log and alert; never rethrow. The financial transaction has already
       // committed and must not be affected by a bookkeeping failure.
