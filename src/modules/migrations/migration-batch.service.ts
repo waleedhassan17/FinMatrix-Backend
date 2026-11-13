@@ -52,7 +52,13 @@ import {
 import { MigrationStagingRow } from './entities/migration-staging-row.entity';
 import { normalizeKey } from './parsers/text-normalize';
 import { readUpload } from './readers/read-upload';
-import { assertEditable, assertTransition, stepFor } from './state-machine';
+import {
+  assertEditable,
+  assertTransition,
+  lockEditable,
+  stepFor,
+  transitionAtomically,
+} from './state-machine';
 import { TARGET_SHEETS } from './targets';
 import { buildStarterWorkbook } from './template/starter-workbook';
 
@@ -188,6 +194,7 @@ export class MigrationBatchService {
         message: 'Choose at least one file to upload.',
       });
     }
+    const stored: Array<{ row: Partial<MigrationFile>; key: string }> = [];
     for (const f of files) {
       const name = utf8Name(f.originalname);
       if (f.size > this.maxBytes) {
@@ -205,29 +212,43 @@ export class MigrationBatchService {
       // The bytes decided the type, so the stored copy is labelled by them,
       // not by what the phone claimed (often application/octet-stream).
       const mimeType = KIND_MIME[contents.kind];
-      const stored = await this.storage.putBuffer({
+      const put = await this.storage.putBuffer({
         bucket: FILE_BUCKET,
         buffer: f.buffer,
         mimeType,
         originalName: name,
         publicPath: `/migrations/${id}/files/${fileId}`,
       });
-      await this.dataSource.manager.save(
-        this.dataSource.manager.create(MigrationFile, {
+      stored.push({
+        key: put.key,
+        row: {
           id: fileId,
           companyId,
           batchId: id,
           originalName: name.slice(0, 255),
           mimeType,
           sizeBytes: f.size,
-          storageKey: stored.key,
+          storageKey: put.key,
           sha256: createHash('sha256').update(f.buffer).digest('hex'),
           kind: contents.kind,
           detected: null,
-        }),
-      );
+        },
+      });
     }
-    await this.touch(batch, 'uploaded');
+    // The files join the batch only if it can still take them: checked under
+    // the batch lock, in the same transaction that records them.
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const live = await lockEditable(em, companyId, id);
+        assertTransition(live.status, 'uploaded');
+        for (const s of stored) await em.save(em.create(MigrationFile, s.row));
+        await this.touch(live, 'uploaded', em);
+      });
+    } catch (err) {
+      for (const s of stored)
+        await this.storage.remove(s.key).catch(() => undefined);
+      throw err;
+    }
     await this.log(companyId, user.id, 'migration_files_added', id, {
       files: files.map((f) => ({
         name: utf8Name(f.originalname),
@@ -264,9 +285,12 @@ export class MigrationBatchService {
         code: 'NOT_FOUND',
         message: 'File not found',
       });
-    await this.dataSource.manager.delete(MigrationFile, { id: fileId });
+    await this.dataSource.transaction(async (em) => {
+      const live = await lockEditable(em, companyId, id);
+      await em.delete(MigrationFile, { id: fileId, batchId: id, companyId });
+      await this.touch(live, 'uploaded', em);
+    });
     await this.storage.remove(file.storageKey);
-    await this.touch(batch, 'uploaded');
     await this.log(companyId, user.id, 'migration_file_removed', id, {
       file: file.originalName,
     });
@@ -662,6 +686,7 @@ export class MigrationBatchService {
     decisions: Decision[],
   ) {
     await this.dataSource.transaction(async (em) => {
+      await lockEditable(em, companyId, batchId);
       for (const dcs of decisions) {
         await em.delete(MigrationMapping, {
           batchId,
@@ -766,10 +791,12 @@ export class MigrationBatchService {
           'Confirm the certificate and tick every spot check before signing off.',
       });
     }
-    await this.dataSource.manager.update(
-      MigrationBatch,
-      { id },
+    await transitionAtomically(
+      this.dataSource.manager,
+      batch,
+      'ready',
       { signedOffBy: user.id, signedOffAt: new Date() },
+      { from: ['ready'] },
     );
     await this.log(companyId, user.id, 'migration_signed_off', id, {});
     return this.get(companyId, id);
@@ -845,10 +872,12 @@ export class MigrationBatchService {
   async close(companyId: string, user: AuthenticatedUser, id: string) {
     const batch = await this.load(companyId, id);
     assertTransition(batch.status, 'closed');
-    await this.dataSource.manager.update(
-      MigrationBatch,
-      { id },
-      { status: 'closed', closedAt: new Date() },
+    await transitionAtomically(
+      this.dataSource.manager,
+      batch,
+      'closed',
+      { closedAt: new Date() },
+      { from: ['committed'] },
     );
     await this.log(companyId, user.id, 'migration_closed', id, {});
     return this.get(companyId, id);
@@ -1049,12 +1078,18 @@ export class MigrationBatchService {
   }
 
   /** Move to a new pre-commit status and drop the sign-off. */
-  private async touch(batch: MigrationBatch, to: MigrationStatus) {
+  private async touch(
+    batch: MigrationBatch,
+    to: MigrationStatus,
+    em: EntityManager = this.dataSource.manager,
+  ) {
     if (batch.status !== to) assertTransition(batch.status, to);
-    await this.dataSource.manager.update(
-      MigrationBatch,
-      { id: batch.id },
-      { status: to, signedOffAt: null, signedOffBy: null },
+    await transitionAtomically(
+      em,
+      batch,
+      to,
+      { signedOffAt: null, signedOffBy: null },
+      { editableOnly: true },
     );
   }
 

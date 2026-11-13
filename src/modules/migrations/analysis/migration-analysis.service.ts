@@ -38,6 +38,7 @@ import { matchMasters, nearestMasters } from '../matching/master-matcher';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
 import { parseDate } from '../parsers/date.parser';
 import { readbackAgrees, ReadbackOrder } from '../parsers/readback';
+import { lockEditable } from '../state-machine';
 import { CHECK_CODES } from '../validation/migration-checks.service';
 import { normalizeKey } from '../parsers/text-normalize';
 import { readUpload, SourceGrid } from '../readers/read-upload';
@@ -101,9 +102,10 @@ export class MigrationAnalysisService {
 
   async analyse(batchId: string, companyId: string): Promise<MigrationBatch> {
     return this.dataSource.transaction(async (em) => {
-      const batch = await em.findOneOrFail(MigrationBatch, {
-        where: { id: batchId, companyId },
-      });
+      // Locked and re-checked here, not trusted from the caller's earlier
+      // read: an analysis must never rebuild the staging rows of, or reset
+      // the status of, a batch a concurrent request has committed.
+      const batch = await lockEditable(em, companyId, batchId);
       const files = await em.find(MigrationFile, {
         where: { batchId, companyId },
         order: { createdAt: 'ASC' },

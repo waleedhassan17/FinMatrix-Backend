@@ -1224,6 +1224,103 @@ async function main() {
           Number(tb2.data?.totalCredits) === 0,
         [r1.status, codeOf(r1), r2.status, codeOf(r2), tb2.data?.totalDebits],
       );
+
+      // The same company again: its books are empty after the undo.
+      const tbNow = async () =>
+        (
+          await req(
+            'GET',
+            '/reports/trial-balance?startDate=1970-01-01&endDate=2999-12-31',
+            undefined,
+            H.token,
+          )
+        ).data;
+      const readyBatch = async () => {
+        const nb = await newBatch(H.token);
+        await upload(H.token, nb.id, 'a-clean-starter.xlsx');
+        const vv = await req(
+          'POST',
+          `/migrations/${nb.id}/validate`,
+          {},
+          H.token,
+        );
+        const ss = await req(
+          'POST',
+          `/migrations/${nb.id}/sign-off`,
+          { confirmed: true, spotCheckDone: true },
+          H.token,
+        );
+        if (vv.data?.status !== 'ready' || ss.status !== 200)
+          throw new Error(
+            `could not ready a batch: ${vv.data?.status} ${ss.status}`,
+          );
+        return nb;
+      };
+      const posted = (tb: any) =>
+        tb?.isBalanced === true && Number(tb?.totalDebits) === 1092500.5;
+      const empty = (tb: any) =>
+        Number(tb?.totalDebits) === 0 && Number(tb?.totalCredits) === 0;
+
+      // An upload arriving while the commit runs must not rebuild the
+      // staging rows under it, nor reset a committed batch to 'mapped'.
+      const b2 = await readyBatch();
+      const [cm, up] = await Promise.all([
+        req('POST', `/migrations/${b2.id}/commit`, {}, H.token),
+        upload(H.token, b2.id, 'a-clean-starter.xlsx'),
+      ]);
+      const st2 = (await req('GET', `/migrations/${b2.id}`, undefined, H.token))
+        .data;
+      const tb3 = await tbNow();
+      ok(
+        'commit racing an upload: neither errors, and the outcome is whole (committed with the books posted once, or still editable with nothing posted)',
+        cm.status !== 500 &&
+          up.status !== 500 &&
+          ((cm.status === 200 &&
+            up.status === 409 &&
+            st2?.status === 'committed' &&
+            posted(tb3)) ||
+            (cm.status === 409 &&
+              up.status === 200 &&
+              st2?.status !== 'committed' &&
+              empty(tb3))),
+        [
+          cm.status,
+          codeOf(cm),
+          up.status,
+          codeOf(up),
+          st2?.status,
+          tb3?.totalDebits,
+        ],
+      );
+      let b3 = b2;
+      if (st2?.status !== 'committed') {
+        b3 = await readyBatch();
+        await req('POST', `/migrations/${b3.id}/commit`, {}, H.token);
+      }
+
+      // Close and undo at the same moment: one wins, and the batch never
+      // reads 'closed' over books that were reversed.
+      const [cl, ud] = await Promise.all([
+        req('POST', `/migrations/${b3.id}/close`, {}, H.token),
+        req('POST', `/migrations/${b3.id}/rollback`, {}, H.token),
+      ]);
+      const st3 = (await req('GET', `/migrations/${b3.id}`, undefined, H.token))
+        .data;
+      const tb4 = await tbNow();
+      ok(
+        'close racing an undo: exactly one wins, and the status matches the books',
+        [cl.status, ud.status].sort().join() === '200,409' &&
+          ((st3?.status === 'closed' && posted(tb4) && !st3?.rolledBackAt) ||
+            (st3?.status === 'rolled_back' && empty(tb4) && !st3?.closedAt)),
+        [
+          cl.status,
+          codeOf(cl),
+          ud.status,
+          codeOf(ud),
+          st3?.status,
+          tb4?.totalDebits,
+        ],
+      );
     }
   } finally {
     await pg.end();
