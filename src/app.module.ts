@@ -5,6 +5,7 @@ import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
+import { redactingRequestSerializer } from './common/logging/redact-token';
 
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
@@ -173,6 +174,9 @@ import { SentryModule } from '@sentry/nestjs/setup';
               : undefined,
           autoLogging: true,
           redact: ['req.headers.authorization', 'req.headers.cookie'],
+          // Signed backup-download links carry their authorisation in the
+          // query; the token must never reach the log store.
+          serializers: { req: redactingRequestSerializer },
         },
       }),
     }),

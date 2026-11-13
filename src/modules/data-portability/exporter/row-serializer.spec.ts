@@ -1,5 +1,6 @@
 import {
   clampForXlsx,
+  neutraliseFormula,
   serializeCell,
   serializeRow,
   XLSX_CELL_LIMIT,
@@ -48,5 +49,30 @@ describe('serializeCell', () => {
     const long = 'x'.repeat(XLSX_CELL_LIMIT + 10);
     expect(clampForXlsx(long)).toHaveLength(XLSX_CELL_LIMIT);
     expect(clampForXlsx('short')).toBe('short');
+  });
+});
+
+describe('backup cells never start a spreadsheet formula', () => {
+  it('prefixes text that a spreadsheet would run', () => {
+    expect(neutraliseFormula('=cmd|/c calc!A0')).toBe("'=cmd|/c calc!A0");
+    expect(neutraliseFormula('+1+1')).toBe("'+1+1");
+    expect(neutraliseFormula('@SUM(A1)')).toBe("'@SUM(A1)");
+    expect(neutraliseFormula('-2+3')).toBe("'-2+3");
+    expect(neutraliseFormula('\tx')).toBe("'\tx");
+  });
+
+  it('leaves figures and ordinary text alone', () => {
+    expect(neutraliseFormula('-1000.0000')).toBe('-1000.0000');
+    expect(neutraliseFormula('+92')).toBe('+92');
+    expect(neutraliseFormula('1200')).toBe('1200');
+    expect(neutraliseFormula('Al-Noor Traders')).toBe('Al-Noor Traders');
+    expect(neutraliseFormula('گلشن کریانہ')).toBe('گلشن کریانہ');
+    expect(neutraliseFormula('')).toBe('');
+  });
+
+  it('applies to string cells only', () => {
+    expect(serializeCell('=1+1')).toBe("'=1+1");
+    expect(serializeCell(-5)).toBe('-5');
+    expect(serializeCell('-5.2500')).toBe('-5.2500');
   });
 });

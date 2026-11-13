@@ -12,13 +12,26 @@ import { ExportColumn } from './export-entities';
 export function serializeCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return neutraliseFormula(value);
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number')
     return Number.isFinite(value) ? String(value) : '';
   if (typeof value === 'bigint') return value.toString();
   if (Buffer.isBuffer(value)) return value.toString('base64');
   return JSON.stringify(value);
+}
+
+/**
+ * A cell that begins with =, +, -, @ or a control character is a formula to
+ * Excel and LibreOffice, which would run it when the owner opens the backup.
+ * Text that starts that way gets a leading apostrophe, which spreadsheets
+ * treat as "this is text" and hide. A figure is left alone: money columns
+ * arrive as strings ("-1000.0000") and must stay numbers.
+ */
+export function neutraliseFormula(text: string): string {
+  if (!/^[=+\-@\t\r]/.test(text)) return text;
+  if (/^[+-]?\d+(\.\d+)?$/.test(text)) return text;
+  return `'${text}`;
 }
 
 export function serializeRow(
