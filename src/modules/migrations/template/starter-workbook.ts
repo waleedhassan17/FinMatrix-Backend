@@ -89,7 +89,7 @@ function addSheet(
 
   if (target.key === 'trial_balance') {
     sheet.getCell('A1').note =
-      `Balances as at the cutover date (${cutover}). Debits must equal credits.`;
+      `Balances at the start of the cutover date (${cutover}), i.e. at the close of the day before. Debits must equal credits.`;
   }
 }
 
@@ -108,7 +108,7 @@ function addReadMe(
   };
   sheet.addRow([]);
   for (const line of [
-    `Fill in each sheet as at your cutover date, ${opts.cutoverDate}. Every balance, open invoice, open bill and stock quantity is "as at the close of business" on that day.`,
+    `Fill in each sheet as at the start of your cutover date, ${opts.cutoverDate}: every balance, open invoice, open bill and stock quantity as it stood at the close of business on the day before. Anything dated ${opts.cutoverDate} or later is entered in FinMatrix, which closes the books before that day.`,
     'Row 1 of each sheet holds the column names — leave them exactly as they are. Rows 2–4 are instructions and an example; you may delete them or leave them, FinMatrix ignores them.',
     'Columns with a blue header are required. Column order does not matter, and extra columns are ignored.',
     'Amounts may be typed as 1,20,000 or 120,000 or Rs 1,20,000. Dates as dd/mm/yyyy or yyyy-mm-dd.',
