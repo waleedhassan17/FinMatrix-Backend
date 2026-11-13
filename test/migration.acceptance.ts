@@ -9,7 +9,7 @@
  *   2. Faulty golden files cannot import, each failing the right check:
  *      (b) unbalanced TB, (c) AR detail ≠ control, (d) stock ≠ inventory.
  *   3. (e) duplicates + ambiguous dates raise the right issues, and resolving
- *      them (dd/mm, merge, skip) makes the batch ready with all nine checks.
+ *      them (dd/mm, merge, skip) makes the batch ready with all ten checks.
  *   4. (f) a messy generic spreadsheet is read, mapped and questioned.
  *   5. (a) the clean starter workbook: validate → dry run → sign-off → commit;
  *      every check Rs 0; TB balances; A = L + E; Migration Clearing = 0.
@@ -36,6 +36,8 @@ const RUN = Date.now().toString().slice(-8);
 const PASSWORD = 'Test1234!';
 const FIX = path.join(__dirname, 'fixtures', 'migration');
 const CUTOVER = '2026-06-30';
+/** The hard checks: SOURCE_READBACK first, then the nine of §1.7. */
+const CHECKS = 10;
 const TODAY = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Karachi',
 }).format(new Date());
@@ -466,10 +468,10 @@ async function main() {
       );
       const v = await req('POST', `/migrations/${b.id}/validate`, {}, A.token);
       ok(
-        '(e) resolved: ready, readiness 100, all nine checks pass',
+        '(e) resolved: ready, readiness 100, all ten checks pass',
         v.data?.status === 'ready' &&
           v.data?.readiness === 100 &&
-          (v.data?.checks ?? []).length === 9 &&
+          (v.data?.checks ?? []).length === CHECKS &&
           v.data.checks.every((c: any) => c.passed),
         v.data,
       );
@@ -937,7 +939,7 @@ async function main() {
       );
       const vt = await req('POST', `/migrations/${t.id}/validate`, {}, C.token);
       ok(
-        'Tally: ready at 100%, all nine checks pass at zero difference',
+        'Tally: ready at 100%, all ten checks pass at zero difference',
         vt.data?.status === 'ready' &&
           vt.data?.readiness === 100 &&
           (vt.data?.checks ?? []).every((c: any) => c.passed),
@@ -1016,6 +1018,213 @@ async function main() {
       Number(leaked) === 0,
       leaked,
     );
+
+    // ── 10 ────────────────────────────────────────────────────────────────
+    console.log('\n── 10. Readback: every figure read two ways (fixture g)');
+    {
+      const G = await provision(pg, 'g');
+      const b = await newBatch(G.token);
+      const up = await upload(G.token, b.id, 'g-amount-forms.xlsx');
+      ok(
+        '(g) uploaded and analysed',
+        up.status === 200 && up.data?.status === 'mapped',
+        up.body,
+      );
+      const iss = await issues(G.token, b.id);
+      const rb = (iss.items ?? []).filter(
+        (i: any) => i.code === 'AMOUNT_READBACK_MISMATCH',
+      );
+      const blocking = (iss.items ?? []).filter(
+        (i: any) => i.severity === 'blocking',
+      );
+      ok(
+        '(g): the one cell the two readers disagree on ("12,0000") is raised, and nothing else',
+        rb.length === 1 &&
+          rb[0].field === 'amountDue' &&
+          rb[0].severity === 'blocking' &&
+          blocking.length === 1,
+        iss.groups,
+      );
+      const v0 = await req('POST', `/migrations/${b.id}/validate`, {}, G.token);
+      ok(
+        '(g): not ready while the owner has not decided that cell',
+        v0.data?.status !== 'ready' && v0.data?.readiness < 100,
+        [v0.data?.status, v0.data?.readiness],
+      );
+      const fix = await req(
+        'PATCH',
+        `/migrations/${b.id}/issues/${rb[0].id}`,
+        { action: 'edit', value: '120000' },
+        G.token,
+      );
+      ok(
+        '(g): the owner types the amount plainly',
+        fix.status === 200,
+        fix.body,
+      );
+      const v = await req('POST', `/migrations/${b.id}/validate`, {}, G.token);
+      const checks = v.data?.checks ?? [];
+      ok(
+        '(g): ready at 100% with all ten checks passing, SOURCE_READBACK first',
+        v.data?.status === 'ready' &&
+          v.data?.readiness === 100 &&
+          checks.length === CHECKS &&
+          checks[0]?.code === 'SOURCE_READBACK' &&
+          checks.every((c: any) => c.passed),
+        checks.map((c: any) => [c.code, c.passed, c.expected, c.actual]),
+      );
+      const dry = await req('POST', `/migrations/${b.id}/dry-run`, {}, G.token);
+      const cert = dry.data?.certificate;
+      const at = cert?.asTyped;
+      const cash = at?.trialBalance?.find((r: any) => r.account === '1000');
+      const inv = at?.openItems?.find((r: any) => r.document === 'INV-1001');
+      const stock = at?.stock?.find((r: any) => r.sku === 'CHR-001');
+      ok(
+        '(g): the certificate carries every figure as typed, as read and as posted',
+        cash?.debitText === '۱۵۰۰۰۰' &&
+          cash?.readAs === 'Dr 150000' &&
+          Number(String(cash?.posted).replace(/^Dr /, '')) === 150000 &&
+          inv?.asTyped === '120000' &&
+          inv?.readAs === '120000' &&
+          stock?.costText === 'Rs 8,500' &&
+          stock?.quantityText === '12' &&
+          Number(String(stock?.onHand).split('×')[0]) === 12,
+        { cash, inv, stock },
+      );
+      ok(
+        '(g): every spot check lists its documents as typed',
+        (cert?.spotChecks ?? []).length > 0 &&
+          cert.spotChecks.every(
+            (s: any) =>
+              Array.isArray(s.asTyped) && s.asTyped.length === s.documents,
+          ),
+        cert?.spotChecks,
+      );
+
+      // A bug in the first reader, simulated: two parsed figures changed,
+      // the text as typed untouched, the trial balance still balanced.
+      const mutate = async (acct: string, col: string, value: string) =>
+        pg.query(
+          `UPDATE migration_staging_rows SET normalized = jsonb_set(normalized, $3, to_jsonb($4::text))
+            WHERE batch_id = $1 AND entity_type = 'trial_balance' AND normalized->>'accountNumber' = $2`,
+          [b.id, acct, `{${col}}`, value],
+        );
+      await mutate('1000', 'debit', '140000');
+      await mutate('3100', 'credit', '219250.5');
+      const vm = await req('POST', `/migrations/${b.id}/validate`, {}, G.token);
+      const cm = vm.data?.checks ?? [];
+      const rbm = cm.find((c: any) => c.code === 'SOURCE_READBACK');
+      ok(
+        'mutation: the nine older checks all pass on the misread figures (both their sides read the same parse)',
+        cm.length === CHECKS &&
+          cm
+            .filter((c: any) => c.code !== 'SOURCE_READBACK')
+            .every((c: any) => c.passed),
+        cm.map((c: any) => [c.code, c.passed, c.difference]),
+      );
+      ok(
+        'mutation: SOURCE_READBACK alone catches it, naming both cells, and the batch is not ready',
+        !!rbm &&
+          rbm.passed === false &&
+          rbm.details.length === 2 &&
+          rbm.details.every((d: any) =>
+            ['1,50,000', '۱۵۰۰۰۰', '2,29,250.50'].includes(d.asTyped),
+          ) &&
+          vm.data?.status === 'validated' &&
+          vm.data?.readiness < 100,
+        rbm,
+      );
+      const so = await req(
+        'POST',
+        `/migrations/${b.id}/sign-off`,
+        { confirmed: true, spotCheckDone: true },
+        G.token,
+      );
+      ok('mutation: sign-off is refused', so.status === 409, so.body);
+      await mutate('1000', 'debit', '150000');
+      await mutate('3100', 'credit', '229250.5');
+      const vr = await req('POST', `/migrations/${b.id}/validate`, {}, G.token);
+      ok(
+        'restored: ready again once the figures read the same two ways',
+        vr.data?.status === 'ready' && vr.data?.readiness === 100,
+        [vr.data?.status, vr.data?.readiness],
+      );
+    }
+
+    // ── 11 ────────────────────────────────────────────────────────────────
+    console.log('\n── 11. Concurrency: a retried commit cannot post twice');
+    {
+      const H = await provision(pg, 'h');
+      const b = await newBatch(H.token);
+      await upload(H.token, b.id, 'a-clean-starter.xlsx');
+      const v = await req('POST', `/migrations/${b.id}/validate`, {}, H.token);
+      ok('(h) ready', v.data?.status === 'ready', [
+        v.data?.status,
+        v.data?.readiness,
+      ]);
+      const so = await req(
+        'POST',
+        `/migrations/${b.id}/sign-off`,
+        { confirmed: true, spotCheckDone: true },
+        H.token,
+      );
+      ok('(h) signed off', so.status === 200, so.body);
+      const commit = () =>
+        req('POST', `/migrations/${b.id}/commit`, {}, H.token);
+      const [c1, c2] = await Promise.all([commit(), commit()]);
+      const statuses = [c1.status, c2.status].sort();
+      ok(
+        'one of two simultaneous commits posts; the other is refused as already imported',
+        statuses[0] === 200 &&
+          statuses[1] === 409 &&
+          [c1, c2].some((c) => codeOf(c) === 'MIGRATION_INVALID_TRANSITION'),
+        [c1.status, codeOf(c1), c2.status, codeOf(c2)],
+      );
+      const tb = await req(
+        'GET',
+        '/reports/trial-balance?startDate=1970-01-01&endDate=2999-12-31',
+        undefined,
+        H.token,
+      );
+      ok(
+        'the books were posted exactly once',
+        tb.data?.isBalanced === true &&
+          Number(tb.data?.totalDebits) === 1092500.5,
+        [tb.data?.totalDebits, tb.data?.totalCredits],
+      );
+      const lateDry = await req(
+        'POST',
+        `/migrations/${b.id}/dry-run`,
+        {},
+        H.token,
+      );
+      const after = await req('GET', `/migrations/${b.id}`, undefined, H.token);
+      ok(
+        'a dry-run arriving after the commit is refused and leaves the batch committed',
+        lateDry.status === 409 &&
+          after.data?.status === 'committed' &&
+          !!after.data?.signedOffAt,
+        [lateDry.status, codeOf(lateDry), after.data?.status],
+      );
+      const undo = () =>
+        req('POST', `/migrations/${b.id}/rollback`, {}, H.token);
+      const [r1, r2] = await Promise.all([undo(), undo()]);
+      const rs = [r1.status, r2.status].sort();
+      const tb2 = await req(
+        'GET',
+        '/reports/trial-balance?startDate=1970-01-01&endDate=2999-12-31',
+        undefined,
+        H.token,
+      );
+      ok(
+        'one of two simultaneous undos reverses; the other is refused; the books are back to zero',
+        rs[0] === 200 &&
+          rs[1] === 409 &&
+          Number(tb2.data?.totalDebits) === 0 &&
+          Number(tb2.data?.totalCredits) === 0,
+        [r1.status, codeOf(r1), r2.status, codeOf(r2), tb2.data?.totalDebits],
+      );
+    }
   } finally {
     await pg.end();
   }

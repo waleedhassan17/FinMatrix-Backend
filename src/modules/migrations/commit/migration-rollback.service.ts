@@ -11,6 +11,7 @@ import { InventoryMovement } from '../../inventory/entities/inventory-movement.e
 import { Invoice } from '../../invoices/entities/invoice.entity';
 import { InvoiceLineItem } from '../../invoices/entities/invoice-line-item.entity';
 import { JournalEntry } from '../../journal-entries/entities/journal-entry.entity';
+import { assertTransition } from '../state-machine';
 import { PostingService } from '../../journal-entries/posting.service';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { MigrationBatch } from '../entities/migration-batch.entity';
@@ -62,6 +63,13 @@ export class MigrationRollbackService {
         where: { id: batch.companyId },
         lock: { mode: 'pessimistic_write' },
       });
+      // The caller checked the status before this transaction; a commit or
+      // close may have landed since. Decide on the row as it is now.
+      const live = await em.findOneOrFail(MigrationBatch, {
+        where: { id: batch.id, companyId: batch.companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      assertTransition(live.status, 'rolled_back');
       const records = await em.find(MigrationBatchRecord, {
         where: { batchId: batch.id, companyId: batch.companyId },
       });

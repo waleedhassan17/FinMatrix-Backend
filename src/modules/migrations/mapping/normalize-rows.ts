@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { cellToText } from '../../inventory/import/cell-value';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
 import { DateOrder, detectDateOrder, parseDate } from '../parsers/date.parser';
+import { numberAsTyped } from '../parsers/readback';
 import { cleanText } from '../parsers/text-normalize';
 import { TargetSheet, TEMPLATE_ROW_MARKERS } from '../targets';
 import { ColumnProposal } from './column-mapper';
@@ -51,6 +52,20 @@ const TOTAL_WORDS = new Set([
   'ٹوٹل',
   'میزان',
 ]);
+
+/**
+ * The cell as the owner typed it, kept beside every parsed amount, quantity
+ * and date as `<field>Text`. The second reader (parsers/readback.ts) reads
+ * this text again and must agree with the parsed value; the certificate
+ * shows it beside the figure FinMatrix holds. A number cell has no typed
+ * text, so it is represented at the precision a spreadsheet displays.
+ */
+export function asTypedText(value: unknown): string | null {
+  const v = rawCell(value);
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return numberAsTyped(v);
+  return String(v);
+}
 
 /** JSON-safe copy of a raw cell: dates as ISO text, rich text flattened. */
 export function rawCell(value: unknown): unknown {
@@ -140,6 +155,7 @@ export function normalizeRows(
         }
         case 'amount':
         case 'quantity': {
+          normalized[`${field.key}Text`] = asTypedText(value);
           const r =
             field.kind === 'amount' ? parseAmount(value) : parseQuantity(value);
           if (!r.ok) {
@@ -169,6 +185,8 @@ export function normalizeRows(
           break;
         }
         case 'date': {
+          normalized[`${field.key}Text`] = asTypedText(value);
+          normalized[`${field.key}Order`] = dateOrder[field.key] ?? null;
           if (blank) {
             normalized[field.key] = null;
             break;

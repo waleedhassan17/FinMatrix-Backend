@@ -178,9 +178,15 @@ describe('normalizeRows', () => {
       customer: 'Al-Noor',
       invoiceNumber: 'INV-2451',
       invoiceDate: '2026-09-25',
+      invoiceDateText: '25/09/2026',
+      invoiceDateOrder: 'dmy',
       dueDate: '2026-10-25',
+      dueDateText: '25/10/2026',
+      dueDateOrder: 'dmy',
       originalAmount: '120000',
+      originalAmountText: 'Rs 1,20,000',
       amountDue: '-45000',
+      amountDueText: '(45,000)',
     });
     expect(r.rows[0].errors).toEqual([]);
     expect(r.rows[0].rowHash).toMatch(/^[0-9a-f]{64}$/);

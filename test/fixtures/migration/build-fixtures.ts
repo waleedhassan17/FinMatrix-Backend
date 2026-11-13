@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  amountFormsBooks,
   arMismatchBooks,
   buildMessyGenericXlsx,
   buildStarterXlsx,
@@ -30,6 +31,7 @@ async function main() {
       buildStarterXlsx(duplicatesAndAmbiguousBooks()),
     ],
     ['f-messy-generic.xlsx', buildMessyGenericXlsx()],
+    ['g-amount-forms.xlsx', buildStarterXlsx(amountFormsBooks())],
   ];
   for (const [name, p] of files) {
     fs.writeFileSync(path.join(dir, name), await p);

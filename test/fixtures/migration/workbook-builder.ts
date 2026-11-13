@@ -452,6 +452,27 @@ export function cleanBooks(): BooksSpec {
 }
 
 /** Fixture (b): the trial balance is fifty paisa short on the credit side. */
+/**
+ * (g) The clean books with every amount form a Pakistani ledger uses — Urdu
+ * digits, PKR and Rs prefixes, a /- suffix, a trailing decimal, month-name
+ * dates — plus one cell, INV-1001's amount due, typed as "12,0000". The
+ * first reader strips the commas and reads 120,000 (the right figure, as it
+ * happens); the second reader refuses the shape, so the owner is asked.
+ */
+export function amountFormsBooks(): BooksSpec {
+  const b = cleanBooks();
+  const tb = (n: string) => b.trialBalance.find((t) => t.number === n)!;
+  tb('1000').debit = '۱۵۰۰۰۰';
+  tb('1100').debit = 'PKR 245,000';
+  tb('1200').debit = '182000.00';
+  tb('1500').debit = '95,000/-';
+  tb('3000').credit = '500,000';
+  b.openInvoices[0].amountDue = '12,0000';
+  b.openInvoices[0].date = '15 Apr 2026';
+  b.stock[0].cost = 'Rs 8,500';
+  return b;
+}
+
 export function unbalancedBooks(): BooksSpec {
   const b = cleanBooks();
   b.trialBalance = b.trialBalance.map((t) =>
@@ -624,10 +645,16 @@ export function randomBooks(
           w.slice(-3)
         : w;
     const intl = w.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    const pick = int(0, 3);
+    const pick = int(0, 5);
     const body =
       (pick === 0 ? w : pick === 1 ? lakh : intl) + (f ? `.${f}` : '');
-    return pick === 3 ? `Rs ${body}` : body;
+    if (pick === 3) return `Rs ${body}`;
+    if (pick === 4) return `${body}/-`;
+    if (pick === 5)
+      return body.replace(/\d/g, (ch) =>
+        String.fromCharCode(0x6f0 + Number(ch)),
+      );
+    return body;
   };
   const date = (forceDayOver12: boolean) => {
     const m = int(1, 6);

@@ -7,7 +7,7 @@
  * as a starter workbook, migrates it into a fresh company and asserts:
  *
  *   • analysis raises no blocking issue and readiness reaches 100%
- *   • all nine checks pass at zero difference
+ *   • all ten checks pass at zero difference (SOURCE_READBACK among them)
  *   • after commit: the trial balance balances, Assets = Liabilities +
  *     Equity, Migration Clearing is exactly 0, and the period lock is the day
  *     before the cutover
@@ -66,6 +66,16 @@ async function main() {
         }
         const v = await h.svc.validate(companyId, user, batch.id);
         const failed = (v.checks ?? []).filter((c) => !c.passed);
+        if (!(v.checks ?? []).some((c) => c.code === 'SOURCE_READBACK'))
+          failed.push({
+            code: 'SOURCE_READBACK',
+            label: 'missing',
+            expected: '',
+            actual: '',
+            difference: '',
+            passed: false,
+            details: [],
+          } as (typeof failed)[number]);
         if (failed.length)
           throw new Error(
             `checks failed: ${failed.map((c) => `${c.code} diff ${c.difference} ${JSON.stringify(c.details).slice(0, 300)}`).join(' | ')}`,

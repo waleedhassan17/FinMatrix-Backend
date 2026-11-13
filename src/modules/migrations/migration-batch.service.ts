@@ -20,6 +20,7 @@ import {
   readinessOf,
 } from './analysis/migration-analysis.service';
 import { MigrationAiService } from './ai/migration-ai.service';
+import { buildAsTyped } from './certificate/as-typed';
 import { renderCertificatePdf } from './certificate/certificate-pdf';
 import {
   assertBooksEmpty,
@@ -714,10 +715,12 @@ export class MigrationBatchService {
     const ready =
       preview.allPassed && readiness === 100 && counts.issues.blocking === 0;
     const status: MigrationStatus = ready ? 'ready' : 'validated';
-    // A new result un-signs: the owner signs what they last saw.
-    await em.update(
+    // A new result un-signs: the owner signs what they last saw. The write
+    // is conditional on the batch still being where the checks found it: a
+    // commit that landed meanwhile must not be overwritten with 'validated'.
+    const written = await em.update(
       MigrationBatch,
-      { id },
+      { id, status: In(['mapped', 'validated', 'ready']) },
       {
         status,
         readiness,
@@ -729,6 +732,10 @@ export class MigrationBatchService {
           : {}),
       },
     );
+    if (!written.affected) {
+      const now = await this.load(companyId, id);
+      assertTransition(now.status, 'validated');
+    }
     await this.log(companyId, user.id, 'migration_validated', id, {
       status,
       readiness,
@@ -895,6 +902,12 @@ export class MigrationBatchService {
           0,
         ),
         spotChecks: [],
+        asTyped: buildAsTyped(
+          await this.dataSource.manager.find(MigrationStagingRow, {
+            where: { batchId: id, companyId },
+          }),
+          null,
+        ),
         postings: [],
         created: {},
       };

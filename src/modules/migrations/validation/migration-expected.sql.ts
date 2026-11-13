@@ -145,6 +145,28 @@ export async function expectedStockTotal(
 }
 
 /** Source rows per entity and their outcomes — the first check. */
+export interface ReadbackRow {
+  sheet: string;
+  rowNumber: number;
+  entityType: string;
+  normalized: Record<string, unknown> | null;
+}
+
+/** Every imported row with its figures and the text they were typed as. */
+export async function expectedReadbackRows(
+  em: EntityManager,
+  batchId: string,
+  companyId: string,
+): Promise<ReadbackRow[]> {
+  return em.query(
+    `SELECT sheet, row_number AS "rowNumber", entity_type AS "entityType", normalized
+       FROM migration_staging_rows
+      WHERE ${IMPORTED}
+      ORDER BY sheet, row_number`,
+    [batchId, companyId],
+  );
+}
+
 export async function expectedRowsAccounted(
   em: EntityManager,
   batchId: string,

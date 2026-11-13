@@ -58,7 +58,7 @@ export function renderCertificatePdf(input: {
       {
         label: 'Result',
         value: preview.allPassed
-          ? 'All nine checks passed'
+          ? 'All ten checks passed'
           : 'Checks failing — not importable',
       },
       ...(input.signedOff
@@ -92,6 +92,7 @@ export function renderCertificatePdf(input: {
         ]),
         note: 'Expected values are computed from the source files; actual values are read back from the posted books. The two are calculated independently.',
       },
+      ...asTypedSections(preview),
       {
         heading: 'Source rows',
         columns: [
@@ -169,4 +170,83 @@ export function renderCertificatePdf(input: {
     footer: `FinMatrix migration ${preview.batchId} · generated ${pdfDate(preview.generatedAt)}`,
   };
   return renderReportPdf(model);
+}
+
+/**
+ * The before-and-after statement: every figure exactly as it stood in the
+ * file, what FinMatrix read it as, and what the books hold. The owner reads
+ * the first column against their old system; the checks compare the rest.
+ */
+function asTypedSections(
+  preview: CertificatePreview,
+): ReportPdfModel['sections'] {
+  const a = preview.asTyped;
+  if (!a) return [];
+  const sections: ReportPdfModel['sections'] = [];
+  const dash = (v: string | null) => (v === null || v === '' ? '—' : v);
+  const moreNote = (n: number, what: string) =>
+    n > 0 ? `${n} more ${what} not shown; every one is checked.` : undefined;
+  if (a.trialBalance.length) {
+    sections.push({
+      heading: 'As you typed them — trial balance',
+      columns: [
+        { header: 'Account', width: 0.3 },
+        { header: 'Debit (as typed)', width: 0.17, align: 'right' },
+        { header: 'Credit (as typed)', width: 0.17, align: 'right' },
+        { header: 'Read as', width: 0.18, align: 'right' },
+        { header: 'In FinMatrix', width: 0.18, align: 'right' },
+      ],
+      rows: a.trialBalance.map((r) => [
+        `${r.account} ${r.name}`.trim(),
+        dash(r.debitText),
+        dash(r.creditText),
+        dash(r.readAs),
+        dash(r.posted),
+      ]),
+      note:
+        moreNote(a.more.trialBalance, 'accounts') ??
+        'Urdu digits typed in the file appear as boxes in this PDF; they are shown correctly in the app.',
+    });
+  }
+  if (a.openItems.length) {
+    sections.push({
+      heading: 'As you typed them — open invoices and bills',
+      columns: [
+        { header: 'Party', width: 0.3 },
+        { header: 'Document', width: 0.2 },
+        { header: 'Due (as typed)', width: 0.17, align: 'right' },
+        { header: 'Read as', width: 0.16, align: 'right' },
+        { header: 'Party balance', width: 0.17, align: 'right' },
+      ],
+      rows: a.openItems.map((r) => [
+        r.party,
+        `${r.kind === 'invoice' ? 'Invoice' : 'Bill'} ${r.document}`,
+        dash(r.asTyped),
+        dash(r.readAs),
+        dash(r.partyBalance),
+      ]),
+      note: moreNote(a.more.openItems, 'documents'),
+    });
+  }
+  if (a.stock.length) {
+    sections.push({
+      heading: 'As you typed them — stock',
+      columns: [
+        { header: 'SKU', width: 0.28 },
+        { header: 'Quantity (as typed)', width: 0.18, align: 'right' },
+        { header: 'Unit cost (as typed)', width: 0.18, align: 'right' },
+        { header: 'Read as', width: 0.18, align: 'right' },
+        { header: 'On hand × cost', width: 0.18, align: 'right' },
+      ],
+      rows: a.stock.map((r) => [
+        r.sku,
+        dash(r.quantityText),
+        dash(r.costText),
+        dash(r.readAs),
+        dash(r.onHand),
+      ]),
+      note: moreNote(a.more.stock, 'items'),
+    });
+  }
+  return sections;
 }

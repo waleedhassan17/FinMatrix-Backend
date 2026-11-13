@@ -37,6 +37,12 @@ import {
   PostingService,
 } from '../../journal-entries/posting.service';
 import { dayBefore } from '../../reports/fiscal-year';
+import {
+  AsTypedActuals,
+  AsTypedFigures,
+  buildAsTyped,
+} from '../certificate/as-typed';
+import { assertTransition } from '../state-machine';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { AccountType, PaymentTerms } from '../../../types';
 import {
@@ -64,6 +70,8 @@ export interface SpotCheck {
   kind: 'customer' | 'vendor';
   name: string;
   documents: number;
+  /** Each open document's amount due exactly as typed in the file. */
+  asTyped: string[];
   sourceBalance: string;
   finmatrixBalance: string;
   matches: boolean;
@@ -89,6 +97,8 @@ export interface CertificatePreview {
   rejectedRows: Array<{ sheet: string; rowNumber: number; reason: string }>;
   rejectedTotal: number;
   spotChecks: SpotCheck[];
+  /** Every figure as typed, as read, and as the books now hold it. */
+  asTyped?: AsTypedFigures;
   postings: Array<{
     reference: string;
     memo: string;
@@ -124,7 +134,7 @@ const d = (v: unknown) =>
  * Posts a migration batch (§1.6), and dry-runs it — one code path for both.
  *
  * Everything happens inside ONE transaction. The dry run executes every
- * step exactly as the commit would, runs the nine checks against what it
+ * step exactly as the commit would, runs the ten checks against what it
  * wrote, and then throws a private signal that rolls the transaction back;
  * the commit runs the same steps and the same checks and commits only when
  * every check passes, so a failing check can never leave half a migration in
@@ -215,6 +225,24 @@ export class MigrationCommitService {
       where: { id: batch.companyId },
       lock: { mode: 'pessimistic_write' },
     });
+    // The caller checked the batch before this transaction began; another
+    // request may have committed, closed or re-analysed it while we waited
+    // for the company lock. Decide on the row as it is now, under a lock of
+    // its own, so a retried commit is refused rather than posted twice.
+    const live = await em.findOneOrFail(MigrationBatch, {
+      where: { id: batch.id, companyId: batch.companyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (mode === 'commit') {
+      assertTransition(live.status, 'committed');
+      if (!live.signedOffAt)
+        throw new ConflictException({
+          code: 'NOT_SIGNED_OFF',
+          message: 'Sign off the certificate before importing.',
+        });
+    } else {
+      assertTransition(live.status, 'validated');
+    }
     await assertBooksEmpty(em, batch.companyId, batch.id);
 
     const state: RunState = {
@@ -259,12 +287,14 @@ export class MigrationCommitService {
             [...stagingChecks, ...postingChecks],
             mode,
             [],
+            buildAsTyped(staging, null),
           );
         }
         throw err;
       }
       postingChecks = await this.checks.postingChecks(em, batch, m);
       const spot = await this.spotChecks(em, batch, staging, m);
+      const actuals = await this.asTypedActuals(em, batch.companyId, m);
       if (mode === 'commit') await this.finish(state, company, staging);
       return this.preview(
         state,
@@ -273,6 +303,7 @@ export class MigrationCommitService {
         [...stagingChecks, ...postingChecks],
         mode,
         spot,
+        buildAsTyped(staging, actuals),
       );
     }
     return this.preview(
@@ -282,7 +313,55 @@ export class MigrationCommitService {
       [...stagingChecks, ...postingChecks],
       mode,
       [],
+      buildAsTyped(staging, null),
     );
+  }
+
+  /** What the books hold after posting, for the "as you typed them" statement. */
+  private async asTypedActuals(
+    em: EntityManager,
+    companyId: string,
+    m: Materialised,
+  ): Promise<AsTypedActuals> {
+    const accounts = await em.find(Account, { where: { companyId } });
+    const accountBalance = new Map(
+      accounts.map((a) => [
+        a.accountNumber,
+        { balance: String(a.balance), type: String(a.type) },
+      ]),
+    );
+    const partyBalance = new Map<string, string>();
+    for (const [table, map] of [
+      ['customers', m.customers],
+      ['vendors', m.vendors],
+    ] as const) {
+      const ids = [...new Set(map.values())];
+      if (!ids.length) continue;
+      const rows: Array<{ id: string; balance: string }> = await em.query(
+        `SELECT id, balance::text AS balance FROM ${table} WHERE company_id = $1 AND id = ANY($2::uuid[])`,
+        [companyId, ids],
+      );
+      const byId = new Map(rows.map((r) => [r.id, r.balance]));
+      for (const [key, id] of map) {
+        const b = byId.get(id);
+        if (b !== undefined) partyBalance.set(key, b);
+      }
+    }
+    const item = new Map<string, { quantity: string; cost: string }>();
+    const itemIds = [...new Set(m.items.values())];
+    if (itemIds.length) {
+      const rows: Array<{ id: string; quantity: string; cost: string }> =
+        await em.query(
+          `SELECT id, quantity_on_hand::text AS quantity, unit_cost::text AS cost FROM inventory_items WHERE company_id = $1 AND id = ANY($2::uuid[])`,
+          [companyId, itemIds],
+        );
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      for (const [key, id] of m.items) {
+        const r = byId.get(id);
+        if (r) item.set(key, { quantity: r.quantity, cost: r.cost });
+      }
+    }
+    return { accountBalance, partyBalance, item };
   }
 
   // ── Posting ───────────────────────────────────────────────────────────
@@ -1093,7 +1172,7 @@ export class MigrationCommitService {
     ] as const) {
       const byParty = new Map<
         string,
-        { name: string; due: Decimal; docs: number }
+        { name: string; due: Decimal; docs: number; asTyped: string[] }
       >();
       for (const r of staging.filter(
         (x) => x.entityType === type && x.outcome === 'imported',
@@ -1106,9 +1185,11 @@ export class MigrationCommitService {
           name: String(v[kind] ?? ''),
           due: new Decimal(0),
           docs: 0,
+          asTyped: [] as string[],
         };
         cur.due = cur.due.plus(d(v.amountDue));
         cur.docs += 1;
+        cur.asTyped.push(String(v.amountDueText ?? v.amountDue ?? ''));
         byParty.set(id, cur);
       }
       const ids = seededPick(
@@ -1131,6 +1212,7 @@ export class MigrationCommitService {
           kind,
           name: row?.name ?? exp.name,
           documents: exp.docs,
+          asTyped: exp.asTyped,
           sourceBalance: exp.due.toFixed(2),
           finmatrixBalance: actual.toFixed(2),
           matches: actual.equals(exp.due),
@@ -1147,6 +1229,7 @@ export class MigrationCommitService {
     checks: MigrationCheckResult[],
     mode: 'dry-run' | 'commit',
     spot: SpotCheck[],
+    asTyped: AsTypedFigures,
   ): Promise<CertificatePreview> {
     const counts = new Map<string, CertificatePreview['rowCounts'][number]>();
     for (const r of staging) {
@@ -1182,6 +1265,7 @@ export class MigrationCommitService {
       })),
       rejectedTotal: rejected.length,
       spotChecks: spot,
+      asTyped,
       postings: state.postings,
       created: state.created,
     };

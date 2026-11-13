@@ -64,3 +64,16 @@ describe('readUpload', () => {
     ).rejects.toMatchObject({ response: { code: 'MIGRATION_FILE_TOO_LARGE' } });
   });
 });
+
+describe('readUpload: XML', () => {
+  it('refuses an XML with a DOCTYPE, which no Tally export carries', async () => {
+    const bomb = `<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;">]><ENVELOPE>&lol2;</ENVELOPE>`;
+    await expect(readUpload(Buffer.from(bomb), 'tally.xml')).rejects.toThrow(
+      /DOCTYPE/,
+    );
+    const plain = `<?xml version="1.0"?><ENVELOPE><BODY>Ahmed &amp; Sons</BODY></ENVELOPE>`;
+    const r = await readUpload(Buffer.from(plain), 'tally.xml');
+    expect(r.kind).toBe('xml');
+    expect(r.xml?.[0]).toContain('Ahmed &amp; Sons');
+  });
+});

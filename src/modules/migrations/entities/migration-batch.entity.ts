@@ -35,7 +35,7 @@ export const MIGRATION_SOURCE_SYSTEMS: MigrationSourceSystem[] = [
   'odoo',
 ];
 
-/** One of the nine hard checks, as last computed. Amounts are strings. */
+/** One of the ten hard checks, as last computed. Amounts are strings. */
 export interface MigrationCheckResult {
   code: string;
   label: string;

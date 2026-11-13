@@ -52,7 +52,7 @@ export interface AssistOutcome {
  * sheet, and returns mappings only. Its proposals are stored with origin
  * `ai` and their confidence; below 0.9 the owner is asked. Every amount and
  * date still comes from the files through the deterministic parsers, and the
- * nine checks still decide whether anything can be imported.
+ * ten checks still decide whether anything can be imported.
  *
  * Calls are capped per batch (MIGRATION_AI_MAX_CALLS, default 10) and the
  * token usage of each call is added to the batch and logged.

@@ -82,11 +82,17 @@ export async function readUpload(
     head.startsWith('<ENVELOPE') ||
     head.startsWith('<TALLYMESSAGE')
   ) {
-    return {
-      kind: 'xml',
-      sheets: [],
-      xml: [buffer.toString('utf8').replace(/^\uFEFF/, '')],
-    };
+    const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+    // A DOCTYPE can declare entities that expand without bound and pin the
+    // server. Tally never writes one, so its presence means the file is not
+    // a Tally export, whatever else it is.
+    if (/<!DOCTYPE|<!ENTITY/i.test(text)) {
+      throw new UnsupportedMediaTypeException({
+        code: 'MIGRATION_FILE_UNREADABLE',
+        message: `${originalName} contains a DOCTYPE, which a Tally export never has. Export it again from Tally and upload that file.`,
+      });
+    }
+    return { kind: 'xml', sheets: [], xml: [text] };
   }
   if (buffer.subarray(0, 8192).includes(0)) {
     throw new UnsupportedMediaTypeException({

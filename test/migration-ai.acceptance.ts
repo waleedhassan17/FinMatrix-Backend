@@ -375,7 +375,7 @@ async function main() {
     }
     const v = await svc.validate(co.companyId, co.user, b.id);
     ok(
-      'once the owner confirms, fixture (f) passes all nine checks',
+      'once the owner confirms, fixture (f) passes all ten checks',
       v.status === 'ready' && (v.checks ?? []).every((c) => c.passed),
       [
         v.status,

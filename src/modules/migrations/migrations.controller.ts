@@ -218,7 +218,7 @@ export class MigrationsController {
   @Post(':id/validate')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Run the nine hard checks; returns readiness and every check.',
+    summary: 'Run the ten hard checks; returns readiness and every check.',
   })
   validate(
     @CurrentCompany() companyId: string,

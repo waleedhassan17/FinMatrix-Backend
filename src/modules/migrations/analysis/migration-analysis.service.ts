@@ -37,6 +37,8 @@ import { enumOptions, mapEnumValue } from '../mapping/value-mapper';
 import { matchMasters, nearestMasters } from '../matching/master-matcher';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
 import { parseDate } from '../parsers/date.parser';
+import { readbackAgrees, ReadbackOrder } from '../parsers/readback';
+import { CHECK_CODES } from '../validation/migration-checks.service';
 import { normalizeKey } from '../parsers/text-normalize';
 import { readUpload, SourceGrid } from '../readers/read-upload';
 import { parseTallyDocuments } from '../sources/tally/tally-xml.parser';
@@ -486,6 +488,15 @@ export class MigrationAnalysisService {
                 mapValue,
                 field.key,
               );
+              if (
+                field.kind === 'amount' ||
+                field.kind === 'quantity' ||
+                field.kind === 'date'
+              ) {
+                // The correction is now what was "typed": the second reader
+                // reads it too, below.
+                row.normalized[`${field.key}Text`] = edit === '' ? null : edit;
+              }
               if (parsed.ok) row.normalized[field.key] = parsed.value;
               else
                 row.errors.push({
@@ -493,6 +504,40 @@ export class MigrationAnalysisService {
                   code: parsed.code,
                   message: `${field.header} ${parsed.message}`,
                 });
+            }
+          }
+          // ── 4. Readback: the second reader must agree with the first on
+          // every figure, or the owner decides what the cell means.
+          for (const row of normalised.rows) {
+            for (const field of target.fields) {
+              if (
+                field.kind !== 'amount' &&
+                field.kind !== 'quantity' &&
+                field.kind !== 'date'
+              )
+                continue;
+              if (row.errors.some((e) => e.field === field.key)) continue;
+              const text = row.normalized[`${field.key}Text`];
+              const first = row.normalized[field.key];
+              if ((text ?? null) === null && (first ?? null) === null) continue;
+              const verdict = readbackAgrees(
+                field.kind,
+                first,
+                row.normalized[`${field.key}Side`],
+                text,
+                row.normalized[`${field.key}Order`] as
+                  | ReadbackOrder
+                  | undefined,
+              );
+              if (verdict.agrees) continue;
+              row.errors.push({
+                field: field.key,
+                code:
+                  field.kind === 'date'
+                    ? MIGRATION_CODES.DATE_READBACK_MISMATCH
+                    : MIGRATION_CODES.AMOUNT_READBACK_MISMATCH,
+                message: `${field.header}: "${text ?? ''}" reads as ${String(first ?? '(blank)')} one way and as ${verdict.readback} the other. Type it plainly${field.kind === 'date' ? ', e.g. 2026-06-30' : ', e.g. 120000'}, so there is only one way to read it.`,
+              });
             }
           }
           works.push({ grid, fileId: file.id, target, rows: normalised.rows });
@@ -1533,7 +1578,7 @@ export function readinessOf(
   }
   num += counts.mappings.confident;
   den += counts.mappings.total;
-  const totalChecks = 9;
+  const totalChecks = CHECK_CODES.length;
   num += checks ? checks.filter((c) => c.passed).length : 0;
   den += totalChecks;
   if (den === 0) return 0;

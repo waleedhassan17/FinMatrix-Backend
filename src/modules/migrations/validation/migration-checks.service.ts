@@ -17,9 +17,12 @@ import {
   MigrationBatch,
   MigrationCheckResult,
 } from '../entities/migration-batch.entity';
+import { readbackAgrees, ReadbackOrder } from '../parsers/readback';
 import { normalizeKey } from '../parsers/text-normalize';
+import { TARGET_SHEETS } from '../targets';
 import {
   expectedAccountNets,
+  expectedReadbackRows,
   expectedControlNet,
   expectedOpenItemsByParty,
   expectedOpenItemsTotal,
@@ -43,6 +46,7 @@ export interface Materialised {
 }
 
 export const CHECK_LABELS: Record<string, string> = {
+  SOURCE_READBACK: 'Every figure reads the same two ways',
   ROWS_ACCOUNTED: 'Every source row accounted for',
   SOURCE_TB_BALANCED: 'Source trial balance balances',
   ACCOUNT_BY_ACCOUNT: 'Each account balance equals its source',
@@ -61,7 +65,13 @@ const d = (v: unknown) =>
 const s = (v: Decimal) => v.toFixed(2);
 
 /**
- * The nine hard checks (§1.7), zero tolerance.
+ * The ten hard checks (§1.7 plus the readback), zero tolerance.
+ *
+ * Check 0, SOURCE_READBACK, guards the other nine: their `expected` side is
+ * computed from the figures as the first reader understood them, so a
+ * misread would be invisible to them. The second reader
+ * (parsers/readback.ts) reads every figure again from the text as typed and
+ * must agree exactly.
  *
  * `expected` comes from migration-expected.sql.ts — plain SQL over the staging
  * rows. `actual` is read back here from what the posting engine and the
@@ -81,9 +91,66 @@ export class MigrationChecksService {
     batch: MigrationBatch,
   ): Promise<MigrationCheckResult[]> {
     return [
+      await this.sourceReadback(em, batch),
       await this.rowsAccounted(em, batch),
       await this.sourceTbBalanced(em, batch),
     ];
+  }
+
+  // 0 ──────────────────────────────────────────────────────────────────
+  private async sourceReadback(
+    em: EntityManager,
+    batch: MigrationBatch,
+  ): Promise<MigrationCheckResult> {
+    const rows = await expectedReadbackRows(em, batch.id, batch.companyId);
+    const fieldsByType = new Map(
+      TARGET_SHEETS.map((t) => [
+        t.key as string,
+        t.fields.filter(
+          (f) =>
+            f.kind === 'amount' || f.kind === 'quantity' || f.kind === 'date',
+        ),
+      ]),
+    );
+    let figures = 0;
+    let agree = 0;
+    const details: Array<Record<string, unknown>> = [];
+    for (const r of rows) {
+      const n = r.normalized ?? {};
+      for (const f of fieldsByType.get(r.entityType) ?? []) {
+        const text = n[`${f.key}Text`];
+        const first = n[f.key];
+        if ((text ?? null) === null && (first ?? null) === null) continue;
+        figures += 1;
+        const v = readbackAgrees(
+          f.kind as 'amount' | 'quantity' | 'date',
+          first,
+          n[`${f.key}Side`],
+          text,
+          n[`${f.key}Order`] as ReadbackOrder | undefined,
+        );
+        if (v.agrees) agree += 1;
+        else if (details.length < 50)
+          details.push({
+            sheet: r.sheet,
+            row: r.rowNumber,
+            field: f.header,
+            asTyped: text,
+            firstReader: first,
+            secondReader: v.readback,
+          });
+      }
+    }
+    const res = this.result(
+      'SOURCE_READBACK',
+      new Decimal(figures),
+      new Decimal(agree),
+      details,
+    );
+    res.expected = `${figures} figures`;
+    res.actual = `${agree} agree`;
+    res.difference = String(agree - figures);
+    return res;
   }
 
   async postingChecks(

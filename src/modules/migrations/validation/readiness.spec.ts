@@ -41,10 +41,11 @@ describe('readinessOf', () => {
   });
 
   it('counts unrun checks as not passed and floors the percentage', () => {
-    // 4 rows + 10 mappings decided, 0 of 9 checks → 14 / 23 = 60.8 → 60
+    // 4 rows + 10 mappings decided, 0 of the checks → 14 / (14 + checks), floored
     expect(
       readinessOf(counts({ customers: [4, 4, 0, 0, 0] }, [10, 10]), null),
-    ).toBe(60);
+    ).toBe(Math.floor((14 / (14 + CHECK_CODES.length)) * 100));
+    expect(CHECK_CODES.length).toBe(10);
     // Rejected and merged rows are decided rows.
     expect(
       readinessOf(counts({ customers: [4, 1, 2, 1, 0] }, [0, 0]), allPass),
@@ -113,6 +114,7 @@ describe('renderCertificatePdf', () => {
             kind: 'customer',
             name: 'Al-Noor Traders',
             documents: 2,
+            asTyped: [],
             sourceBalance: '165000.00',
             finmatrixBalance: '165000.00',
             matches: true,
