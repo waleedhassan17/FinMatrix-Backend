@@ -1010,7 +1010,13 @@ export class MigrationCommitService {
         recordId: customerId,
         meta: { delta: due.toFixed(4) },
       });
-    state.records.push({ recordType: 'invoice', recordId: invoice.id });
+    // What the migration set as paid, so an undo can see later settlement
+    // with a key lookup instead of re-deriving it from the staging rows.
+    state.records.push({
+      recordType: 'invoice',
+      recordId: invoice.id,
+      meta: { amountPaid: String(invoice.amountPaid) },
+    });
     return invoice.id;
   }
 

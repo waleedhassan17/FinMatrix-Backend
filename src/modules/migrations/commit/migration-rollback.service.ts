@@ -117,24 +117,21 @@ export class MigrationRollbackService {
         await em.save(entry);
       }
 
-      // 2. Documents.
+      // 2. Documents. Id lists go in chunks: each id is one bind parameter,
+      // and PostgreSQL refuses a statement with more than 65,535.
       const invoiceIds = ids('invoice');
       const billIds = ids('bill');
-      if (invoiceIds.length) {
-        await em.delete(InvoiceLineItem, { invoiceId: In(invoiceIds) });
-        await em.delete(Invoice, {
-          id: In(invoiceIds),
-          companyId: batch.companyId,
-        });
+      for (const part of chunked(invoiceIds)) {
+        await em.delete(InvoiceLineItem, { invoiceId: In(part) });
+        await em.delete(Invoice, { id: In(part), companyId: batch.companyId });
       }
-      if (billIds.length) {
-        await em.delete(BillLineItem, { billId: In(billIds) });
-        await em.delete(Bill, { id: In(billIds), companyId: batch.companyId });
+      for (const part of chunked(billIds)) {
+        await em.delete(BillLineItem, { billId: In(part) });
+        await em.delete(Bill, { id: In(part), companyId: batch.companyId });
       }
-      const movementIds = ids('movement');
-      if (movementIds.length)
+      for (const part of chunked(ids('movement')))
         await em.delete(InventoryMovement, {
-          id: In(movementIds),
+          id: In(part),
           companyId: batch.companyId,
         });
 
@@ -166,28 +163,22 @@ export class MigrationRollbackService {
       const customerIds = ids('customer');
       const vendorIds = ids('vendor');
       const itemIds = ids('item');
-      if (customerIds.length)
-        await em.delete(Customer, {
-          id: In(customerIds),
-          companyId: batch.companyId,
-        });
-      if (vendorIds.length)
-        await em.delete(Vendor, {
-          id: In(vendorIds),
-          companyId: batch.companyId,
-        });
-      if (itemIds.length)
+      for (const part of chunked(customerIds))
+        await em.delete(Customer, { id: In(part), companyId: batch.companyId });
+      for (const part of chunked(vendorIds))
+        await em.delete(Vendor, { id: In(part), companyId: batch.companyId });
+      for (const part of chunked(itemIds))
         await em.delete(InventoryItem, {
-          id: In(itemIds),
+          id: In(part),
           companyId: batch.companyId,
         });
 
       // 4. Accounts it added: deactivated, never deleted (the void entries name them).
       const accountIds = ids('account');
-      if (accountIds.length)
+      for (const part of chunked(accountIds))
         await em.update(
           Account,
-          { id: In(accountIds), companyId: batch.companyId },
+          { id: In(part), companyId: batch.companyId },
           { isActive: false },
         );
 
@@ -215,7 +206,7 @@ export class MigrationRollbackService {
         removed: {
           invoices: invoiceIds.length,
           bills: billIds.length,
-          movements: movementIds.length,
+          movements: ids('movement').length,
           customers: customerIds.length,
           vendors: vendorIds.length,
           items: itemIds.length,
@@ -268,10 +259,18 @@ export class MigrationRollbackService {
       );
       add(
         await q(
+          // The commit recorded what it set as paid on each invoice's batch
+          // record; anything different now was settled afterwards. A key
+          // join, so it stays fast however many invoices were migrated (the
+          // staging-JSON join it replaces passed 30 s at 15,000 invoices).
           `SELECT i.id, 'Invoice ' || i.invoice_number || ' was paid or credited after the migration' AS label
-                     FROM invoices i JOIN migration_batch_records r ON r.record_id = i.id AND r.batch_id = $3
-                    WHERE i.company_id = $1 AND i.id = ANY($2::uuid[]) AND i.amount_paid <> (i.total - (SELECT (s.normalized->>'amountDue')::numeric FROM migration_staging_rows s WHERE s.batch_id = $3 AND s.entity_type = 'open_invoices' AND s.outcome = 'imported' AND s.normalized->>'invoiceNumber' = i.legacy_ref LIMIT 1))`,
-          [c, invoices, batch.id],
+             FROM migration_batch_records r
+             JOIN invoices i ON i.id = r.record_id
+            WHERE r.batch_id = $2 AND r.record_type = 'invoice'
+              AND i.company_id = $1
+              AND r.meta ? 'amountPaid'
+              AND i.amount_paid <> (r.meta->>'amountPaid')::numeric`,
+          [c, batch.id],
         ),
         'invoice_settled',
       );
@@ -389,4 +388,11 @@ export class MigrationRollbackService {
     }
     return out;
   }
+}
+
+/** Id lists for IN (...) in slices well under PostgreSQL's 65,535 bind parameters. */
+export function chunked<T>(xs: T[], size = 5000): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
 }

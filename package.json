@@ -78,7 +78,8 @@
     "qa:provision": "ts-node -r tsconfig-paths/register qa/provision-flow-ctx.ts",
     "qa:flow": "node qa/flow-e2e.js",
     "qa:gate": "npm run qa:scenario && npm run qa:provision && npm run qa:flow && npm run test:accounting",
-    "test:conformance": "DB_NAME=${DB_NAME:-finmatrix_e2e} DB_SYNCHRONIZE=true jest --config ./test/jest-e2e.json --testPathPattern=role-conformance --runInBand"
+    "test:conformance": "DB_NAME=${DB_NAME:-finmatrix_e2e} DB_SYNCHRONIZE=true jest --config ./test/jest-e2e.json --testPathPattern=role-conformance --runInBand",
+    "perf:migration": "ts-node -r tsconfig-paths/register scripts/perf-migration.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
