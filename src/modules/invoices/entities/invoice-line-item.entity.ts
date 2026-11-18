@@ -147,6 +147,10 @@ export class InvoiceLineItem {
   @Column({ type: 'int', default: 0, name: 'line_order' })
   lineOrder!: number;
 
+  /** The sales-order line this line bills, when raised from a sales order. */
+  @Column({ type: 'uuid', nullable: true, name: 'sales_order_line_id' })
+  salesOrderLineId!: string | null;
+
   @ManyToOne(() => Invoice, (i) => i.lines, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'invoice_id' })
   invoice!: Invoice;

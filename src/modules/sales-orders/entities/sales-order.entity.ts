@@ -3,11 +3,24 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 import { SalesOrderLineItem } from './sales-order-line-item.entity';
 
 export type DiscountType = 'percent' | 'amount' | 'none';
+/**
+ * open       nothing shipped or invoiced yet
+ * partial    some goods shipped or invoiced, more to come
+ * fulfilled  everything shipped, not all of it invoiced yet
+ * invoiced   everything invoiced (goods billed ahead of delivery may still be
+ *            awaiting shipment on orders converted before partial invoicing)
+ * closed     short-closed by hand: the rest will not ship (reopenable)
+ * cancelled  withdrawn before anything shipped or was invoiced
+ *
+ * Only closed and cancelled are set by hand; the rest follow from the lines
+ * (see deriveSalesOrderStatus).
+ */
 export type SalesOrderStatus =
   | 'open'
   | 'partial'
   | 'fulfilled'
   | 'invoiced'
+  | 'closed'
   | 'cancelled';
 
 @Entity('sales_orders')
@@ -78,6 +91,8 @@ export class SalesOrder extends BaseCompanyEntity {
   @Column({ type: 'uuid', nullable: true, name: 'source_estimate_id' })
   sourceEstimateId!: string | null;
 
+  /** The latest live invoice raised from this order. An order can have several
+   *  (one per shipment); invoices.sales_order_id lists them all. */
   @Column({ type: 'uuid', nullable: true, name: 'invoice_id' })
   invoiceId!: string | null;
 

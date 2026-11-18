@@ -17,7 +17,9 @@ import { SalesOrderLineItem } from './entities/sales-order-line-item.entity';
 import { Customer } from '../customers/entities/customer.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
 import {
+  CloseSalesOrderDto,
   ConvertSalesOrderDto,
   CreateSalesOrderDto,
   FulfillSalesOrderDto,
@@ -50,6 +52,30 @@ import {
   pagedResponse,
   statusSummary,
 } from '../../common/utils/paged-response.util';
+import { OperationalAuditService } from '../../common/audit/operational-audit.service';
+import { liveInvoiceDiscount, lockSalesOrder } from './sales-order-invoicing';
+import {
+  ApprovedConversion,
+  billedNotShippedQty,
+  deriveSalesOrderStatus,
+  hasAnyInvoiced,
+  hasAnyShipped,
+  hasShippedUninvoiced,
+  InvoicePlan,
+  invoiceableQty,
+  isUntouched,
+  planSalesOrderInvoice,
+  shipmentChange,
+  toShipQty,
+  validateApprovedConversion,
+} from './sales-order-status.util';
+
+/** Statuses an order is still being worked under (shipping or invoicing). */
+const OPEN_STATUSES: SalesOrderStatus[] = ['open', 'partial', 'fulfilled'];
+
+function appendNote(notes: string | null, line: string): string {
+  return notes ? `${notes}\n${line}` : line;
+}
 
 /** Options for sales orders created by the system rather than typed by a user. */
 export interface CreateSalesOrderOptions {
@@ -81,6 +107,7 @@ export class SalesOrdersService {
     private readonly lineRepo: Repository<SalesOrderLineItem>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    private readonly audit: OperationalAuditService,
   ) {}
 
   async list(
@@ -148,34 +175,83 @@ export class SalesOrdersService {
   }
 
   /**
-   * The order as the detail screen shows it: each stock line with its live
-   * stock position — on hand, promised elsewhere, available — and how much of
-   * it is on backorder.
+   * The order as the detail screen shows it: each line with what has shipped,
+   * been invoiced and is left, each stock line's live stock position and
+   * backorder, the invoices raised from it, what the next invoice would bill,
+   * and which actions apply now (so web and mobile cannot disagree).
    */
   async getDetail(companyId: string, id: string) {
     const so = await this.getById(companyId, id);
+    const manager = this.dataSource.manager;
+    const delivery = await manager.findOne(Delivery, {
+      where: { companyId, salesOrderId: so.id },
+      select: ['id', 'referenceNo'],
+    });
+    const managed = !!delivery;
     const positions = await stockPositions(
-      this.dataSource.manager,
+      manager,
       companyId,
       so.lines.map((l) => l.itemId).filter((x): x is string => !!x),
       { excludeSalesOrderId: so.id },
     );
-    const open = so.status !== 'invoiced' && so.status !== 'cancelled';
+    const open = OPEN_STATUSES.includes(so.status);
+    const shippable =
+      !managed && so.status !== 'closed' && so.status !== 'cancelled';
+    // This order's own goods that have gone but are still in the books'
+    // on-hand: they cannot also cover what it has still to ship.
+    const ownOut = new Map<string, Decimal>();
+    for (const l of so.lines) {
+      if (!l.itemId) continue;
+      ownOut.set(
+        l.itemId,
+        (ownOut.get(l.itemId) ?? new Decimal(0)).plus(invoiceableQty(l)),
+      );
+    }
     let hasBackorder = false;
+    const totals = {
+      ordered: new Decimal(0),
+      shipped: new Decimal(0),
+      invoiced: new Decimal(0),
+      toInvoice: new Decimal(0),
+      toShip: new Decimal(0),
+      billedNotShipped: new Decimal(0),
+    };
     const lines = so.lines.map((l) => {
       const pos = l.itemId ? positions.get(l.itemId) : undefined;
-      const stillToShip = Decimal.max(
-        toDecimal(l.quantity).minus(toDecimal(l.quantityFulfilled)),
+      const toShip = shippable ? toShipQty(l) : new Decimal(0);
+      const toInvoice = managed ? new Decimal(0) : invoiceableQty(l);
+      const stillFromShelf = Decimal.max(
+        toDecimal(l.quantity).minus(
+          Decimal.max(
+            toDecimal(l.quantityFulfilled),
+            toDecimal(l.quantityInvoiced),
+          ),
+        ),
         0,
       );
       const backorderQty =
-        pos && open
+        pos && open && !managed
           ? Decimal.max(
-              stillToShip.minus(Decimal.max(toDecimal(pos.available), 0)),
+              stillFromShelf.minus(
+                Decimal.max(
+                  toDecimal(pos.available).minus(
+                    ownOut.get(l.itemId!) ?? new Decimal(0),
+                  ),
+                  0,
+                ),
+              ),
               0,
             )
           : new Decimal(0);
       if (backorderQty.greaterThan(0)) hasBackorder = true;
+      totals.ordered = totals.ordered.plus(toDecimal(l.quantity));
+      totals.shipped = totals.shipped.plus(toDecimal(l.quantityFulfilled));
+      totals.invoiced = totals.invoiced.plus(toDecimal(l.quantityInvoiced));
+      totals.toInvoice = totals.toInvoice.plus(toInvoice);
+      totals.toShip = totals.toShip.plus(toShip);
+      totals.billedNotShipped = totals.billedNotShipped.plus(
+        billedNotShippedQty(l),
+      );
       return Object.assign(l, {
         lineKind: lineKindOf(l.itemId),
         stock: pos
@@ -187,9 +263,87 @@ export class SalesOrdersService {
             }
           : null,
         backorderQty: backorderQty.toFixed(4),
+        toInvoice: toInvoice.toFixed(4),
+        toShip: toShip.toFixed(4),
       });
     });
-    return Object.assign(so, { lines, hasBackorder });
+
+    const invoices = await this.invoices.listForSalesOrder(companyId, so.id);
+    const nextInvoice =
+      open && !managed ? await this.previewNextInvoice(manager, so) : null;
+    const untouched = isUntouched(so.lines);
+    const actions = {
+      ship: shippable && totals.toShip.greaterThan(0),
+      invoice: !!nextInvoice,
+      close:
+        !managed && so.status === 'partial' && !hasShippedUninvoiced(so.lines),
+      reopen: !managed && so.status === 'closed',
+      cancel:
+        !managed &&
+        untouched &&
+        so.status !== 'cancelled' &&
+        so.status !== 'closed',
+      delete: !managed && untouched && invoices.length === 0,
+      edit: !managed && open,
+      editLines: !managed && open && untouched,
+    };
+    return Object.assign(so, {
+      lines,
+      hasBackorder,
+      deliveryId: delivery?.id ?? null,
+      deliveryReference: delivery?.referenceNo ?? null,
+      invoices,
+      nextInvoice,
+      totals: {
+        ordered: totals.ordered.toFixed(4),
+        shipped: totals.shipped.toFixed(4),
+        invoiced: totals.invoiced.toFixed(4),
+        toInvoice: totals.toInvoice.toFixed(4),
+        toShip: totals.toShip.toFixed(4),
+        billedNotShipped: totals.billedNotShipped.toFixed(4),
+      },
+      actions,
+    });
+  }
+
+  /** What the next invoice raised from this order would bill (nothing saved). */
+  async invoicePreview(companyId: string, id: string) {
+    const so = await this.getById(companyId, id);
+    this.assertInvoiceable(so);
+    await this.assertNotDeliveryOrder(
+      this.dataSource.manager,
+      companyId,
+      so.id,
+    );
+    const preview = await this.previewNextInvoice(this.dataSource.manager, so);
+    if (!preview) throw this.nothingToInvoice(so);
+    return preview;
+  }
+
+  private async previewNextInvoice(manager: EntityManager, so: SalesOrder) {
+    const used = await liveInvoiceDiscount(manager, so.companyId, so.id);
+    const plan = planSalesOrderInvoice(so, so.lines, used);
+    if (!plan) return null;
+    const lines = this.invoiceLinesFor(so, plan);
+    const totals = this.invoices.previewTotals(
+      lines,
+      plan.discount.type,
+      plan.discount.value,
+    );
+    return {
+      mode: plan.mode,
+      isFinal: plan.isFinal,
+      discountType: plan.discount.type,
+      discountValue: plan.discount.value,
+      lines: lines.map((l, idx) => ({
+        salesOrderLineId: plan.lines[idx].lineId,
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        taxRate: l.taxRate,
+      })),
+      ...totals,
+    };
   }
 
   async create(
@@ -312,19 +466,24 @@ export class SalesOrdersService {
     dto: UpdateSalesOrderDto,
   ): Promise<SalesOrder> {
     return this.dataSource.transaction(async (manager) => {
-      const order = await manager.findOne(SalesOrder, {
-        where: { id, companyId },
-        relations: { lines: true },
-      });
-      if (!order)
-        throw new NotFoundException({
-          code: 'SALES_ORDER_NOT_FOUND',
-          message: 'Sales order not found',
-        });
-      if (order.status === 'invoiced' || order.status === 'cancelled') {
+      const order = await lockSalesOrder(manager, companyId, id);
+      if (!OPEN_STATUSES.includes(order.status)) {
         throw new BadRequestException({
           code: 'CANNOT_EDIT',
           message: `Cannot edit a ${order.status} sales order`,
+        });
+      }
+      if (
+        hasAnyInvoiced(order.lines) &&
+        (dto.lines ||
+          dto.discountType !== undefined ||
+          dto.discountValue !== undefined)
+      ) {
+        // Invoices already carry their share of these prices and discount.
+        throw new BadRequestException({
+          code: 'SO_HAS_INVOICES',
+          message:
+            'This order has been invoiced in part, so its lines and discount can no longer be changed.',
         });
       }
 
@@ -425,36 +584,49 @@ export class SalesOrdersService {
     });
   }
 
+  /**
+   * Record shipped quantities (running totals per line). Allowed while the
+   * order is open, partly shipped or fully shipped but not yet invoiced — and
+   * on an order invoiced in full before partial invoicing existed whose goods
+   * have not all been delivered yet (billed, delivery pending).
+   *
+   * Only units that are new to the books — above both what was shipped and
+   * what was invoiced — are checked against stock and the credit limit: units
+   * already invoiced left the shelf and are already owed.
+   */
   async fulfill(
     companyId: string,
     id: string,
     dto: FulfillSalesOrderDto,
     creditOverride: CreditOverride | null = null,
-  ): Promise<SalesOrder> {
-    return this.dataSource.transaction(async (manager) => {
-      const order = await manager.findOne(SalesOrder, {
-        where: { id, companyId },
-        relations: { lines: true },
-      });
-      if (!order)
-        throw new NotFoundException({
-          code: 'SALES_ORDER_NOT_FOUND',
-          message: 'Sales order not found',
-        });
-      if (order.status === 'invoiced' || order.status === 'cancelled') {
+  ) {
+    await this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      if (order.status === 'cancelled' || order.status === 'closed') {
         throw new BadRequestException({
           code: 'CANNOT_FULFILL',
-          message: `Cannot fulfill a ${order.status} sales order`,
+          message:
+            order.status === 'closed'
+              ? `${order.orderNumber} is closed. Reopen it to ship more.`
+              : `Cannot fulfill a cancelled sales order`,
         });
       }
       await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      if (
+        order.status === 'invoiced' &&
+        !order.lines.some((l) => toShipQty(l).greaterThan(0))
+      ) {
+        throw new BadRequestException({
+          code: 'CANNOT_FULFILL',
+          message: `${order.orderNumber} is fully shipped and invoiced.`,
+        });
+      }
 
       const byId = new Map(order.lines.map((l) => [l.id, l]));
       // Shipping is where "we don't have it" becomes a hard stop: an order may
       // be taken on backorder, but goods cannot leave that are not on the shelf.
       const shippingByItem = new Map<string, Decimal>();
-      const updates: Array<{ line: SalesOrderLineItem; fulfilled: Decimal }> =
-        [];
+      const updates: Array<{ line: SalesOrderLineItem; next: Decimal }> = [];
       let shippedValue = new Decimal(0);
       for (const f of dto.lines) {
         const line = byId.get(f.lineId);
@@ -463,31 +635,26 @@ export class SalesOrdersService {
             code: 'LINE_NOT_FOUND',
             message: `Line ${f.lineId} not found`,
           });
-        const fulfilled = toDecimal(f.quantityFulfilled);
-        if (fulfilled.lessThan(0)) {
+        const change = shipmentChange(line, toDecimal(f.quantityFulfilled));
+        if (!change.ok) {
           throw new BadRequestException({
-            code: 'VALIDATION_FAILED',
-            message: 'Shipped quantity cannot be negative',
+            code: change.code,
+            message: change.message,
           });
         }
-        if (fulfilled.greaterThan(toDecimal(line.quantity))) {
-          throw new BadRequestException({
-            code: 'OVER_FULFILLED',
-            message: 'Fulfilled quantity exceeds ordered quantity',
-          });
-        }
-        const delta = fulfilled.minus(toDecimal(line.quantityFulfilled));
-        if (line.itemId && delta.greaterThan(0)) {
+        if (line.itemId && change.checkDelta.greaterThan(0)) {
           shippingByItem.set(
             line.itemId,
-            (shippingByItem.get(line.itemId) ?? new Decimal(0)).plus(delta),
+            (shippingByItem.get(line.itemId) ?? new Decimal(0)).plus(
+              change.checkDelta,
+            ),
           );
         }
-        if (delta.greaterThan(0))
+        if (change.checkDelta.greaterThan(0))
           shippedValue = shippedValue.plus(
-            grossValue(delta, line.unitPrice, line.taxRate),
+            grossValue(change.checkDelta, line.unitPrice, line.taxRate),
           );
-        updates.push({ line, fulfilled });
+        updates.push({ line, next: change.next });
       }
       // Goods leaving on credit: the customer's credit limit is checked here,
       // before anything is recorded as shipped.
@@ -505,50 +672,25 @@ export class SalesOrdersService {
           },
         );
       }
-      if (shippingByItem.size > 0) {
-        const positions = await stockPositions(manager, companyId, [
-          ...shippingByItem.keys(),
-        ]);
-        for (const [itemId, qty] of shippingByItem) {
-          const pos = positions.get(itemId);
-          if (pos && qty.greaterThan(toDecimal(pos.onHand))) {
-            throw new UnprocessableEntityException({
-              code: 'INSUFFICIENT_STOCK',
-              message: `Cannot ship ${qty.toFixed(0)} x ${pos.name}: only ${toDecimal(pos.onHand).toFixed(0)} on hand.`,
-            });
-          }
-        }
-      }
+      await this.assertPhysicallyOnShelf(manager, companyId, shippingByItem);
       for (const u of updates) {
-        u.line.quantityFulfilled = u.fulfilled.toFixed(4);
+        u.line.quantityFulfilled = u.next.toFixed(4);
         await manager.save(u.line);
       }
-
-      // Recompute status from fulfillment progress.
-      const fresh = await manager.find(SalesOrderLineItem, {
-        where: { salesOrderId: order.id },
-      });
-      const allFull = fresh.every((l) =>
-        toDecimal(l.quantityFulfilled).greaterThanOrEqualTo(
-          toDecimal(l.quantity),
-        ),
+      await manager.update(
+        SalesOrder,
+        { id: order.id, companyId },
+        { status: deriveSalesOrderStatus(order.lines) },
       );
-      const anyFull = fresh.some((l) =>
-        toDecimal(l.quantityFulfilled).greaterThan(0),
-      );
-      order.status = allFull ? 'fulfilled' : anyFull ? 'partial' : 'open';
-      await manager.save(order);
-      return (await manager.findOne(SalesOrder, {
-        where: { id, companyId },
-        relations: { lines: true },
-      }))!;
     });
+    return this.getDetail(companyId, id);
   }
 
   /**
    * What converting this order would invoice, without posting anything. A
    * staff member's conversion is filed as an invoice approval carrying this,
-   * so the owner reviews the actual lines and amounts before it posts.
+   * so the owner reviews the actual lines and amounts before it posts — and
+   * the approval bills exactly these, or refuses if the order changed since.
    */
   async conversionPayload(
     companyId: string,
@@ -556,6 +698,335 @@ export class SalesOrdersService {
     dto: ConvertSalesOrderDto,
   ) {
     const order = await this.getById(companyId, id);
+    this.assertInvoiceable(order);
+    await this.assertNotDeliveryOrder(
+      this.dataSource.manager,
+      companyId,
+      order.id,
+    );
+    const preview = await this.previewNextInvoice(
+      this.dataSource.manager,
+      order,
+    );
+    if (!preview) throw this.nothingToInvoice(order);
+    const byId = new Map(order.lines.map((l) => [l.id, l]));
+    return {
+      orderNumber: order.orderNumber,
+      preview,
+      payload: {
+        sourceSalesOrderId: order.id,
+        customerId: order.customerId,
+        invoiceDate: businessToday(),
+        dueDate: dto.dueDate ?? addDaysIso(businessToday(), 30),
+        mode: preview.mode,
+        closeRemaining: dto.closeRemaining === true,
+        discountType: preview.discountType,
+        discountValue: preview.discountValue,
+        notes: `Converted from sales order ${order.orderNumber}`,
+        expectedTotal: preview.total,
+        lines: preview.lines.map((l) => {
+          const so = byId.get(l.salesOrderLineId)!;
+          return {
+            salesOrderLineId: l.salesOrderLineId,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            taxRate: l.taxRate,
+            accountId: so.accountId ?? undefined,
+            itemId: so.itemId ?? undefined,
+            lineKind: lineKindOf(so.itemId),
+          };
+        }),
+      },
+    };
+  }
+
+  /**
+   * Invoice what has shipped and is not billed yet. An order with nothing
+   * shipped or invoiced is shipped and invoiced in one step, in full. The order
+   * stays open for whatever has not shipped; `closeRemaining` closes it
+   * instead. `opts.approved` is a staff request the owner approved: it bills
+   * exactly what was reviewed, or refuses (409) if the order changed since.
+   */
+  async convertToInvoice(
+    companyId: string,
+    userId: string,
+    id: string,
+    dto: ConvertSalesOrderDto,
+    creditOverride: CreditOverride | null = null,
+    opts: { approved?: ApprovedConversion } = {},
+  ) {
+    let closedReason: string | null = null;
+    // One transaction with the order row locked: converting twice at once (a
+    // double tap) used to raise two invoices for one order.
+    const invoice = await this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      this.assertInvoiceable(order);
+      await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      const used = await liveInvoiceDiscount(manager, companyId, order.id);
+      let plan: InvoicePlan | null;
+      if (opts.approved) {
+        const v = validateApprovedConversion(
+          order,
+          order.lines,
+          used,
+          opts.approved,
+        );
+        if (!v.ok) {
+          throw new ConflictException({
+            code: 'SO_CHANGED_SINCE_REQUEST',
+            message: `${order.orderNumber} changed since this invoice was requested (${v.reason}). Request it again from the order as it is now.`,
+          });
+        }
+        plan = v.plan;
+      } else {
+        plan = planSalesOrderInvoice(order, order.lines, used);
+      }
+      if (!plan) throw this.nothingToInvoice(order);
+
+      const byId = new Map(order.lines.map((l) => [l.id, l]));
+      if (plan.mode === 'ship_and_invoice') {
+        // Invoicing records the shipment too: the goods must be on the shelf.
+        const byItem = new Map<string, Decimal>();
+        for (const pl of plan.lines) {
+          const l = byId.get(pl.lineId)!;
+          if (!l.itemId) continue;
+          byItem.set(
+            l.itemId,
+            (byItem.get(l.itemId) ?? new Decimal(0)).plus(pl.quantity),
+          );
+        }
+        await this.assertPhysicallyOnShelf(manager, companyId, byItem);
+      }
+      // Quantities first, invoice second: the credit check inside the invoice
+      // then sees exactly the shipped goods still unbilled on this order (now
+      // without these) plus the invoice itself — nothing counted twice.
+      for (const pl of plan.lines) {
+        const l = byId.get(pl.lineId)!;
+        if (plan.mode === 'ship_and_invoice') l.quantityFulfilled = l.quantity;
+        l.quantityInvoiced = toDecimal(l.quantityInvoiced)
+          .plus(pl.quantity)
+          .toFixed(4);
+        await manager.save(l);
+      }
+      const closeRemaining = dto.closeRemaining === true;
+      if (closeRemaining && hasShippedUninvoiced(order.lines)) {
+        throw new BadRequestException({
+          code: 'SO_HAS_UNINVOICED_SHIPMENTS',
+          message: `Some goods shipped on ${order.orderNumber} are not on this invoice. Invoice them before closing the order.`,
+        });
+      }
+
+      const today = businessToday();
+      const created = await this.invoices.createInTransaction(
+        manager,
+        companyId,
+        userId,
+        {
+          customerId: order.customerId,
+          invoiceDate: today,
+          dueDate: dto.dueDate ?? addDaysIso(today, 30),
+          discountType: plan.discount.type,
+          discountValue: plan.discount.value,
+          status: 'sent',
+          notes: `Converted from sales order ${order.orderNumber}`,
+          // itemId rides along: the invoice is created as 'sent', so it posts,
+          // and posting is where the ordered item finally means something --
+          // Dr COGS / Cr Inventory and a stock movement per line. Conversion is
+          // refused (INSUFFICIENT_STOCK) when the stock is not there.
+          lines: this.invoiceLinesFor(order, plan),
+        },
+        {
+          credit: { override: creditOverride },
+          salesOrder: {
+            id: order.id,
+            lineIds: plan.lines.map((l) => l.lineId),
+            autoShipped: plan.mode === 'ship_and_invoice',
+          },
+        },
+      );
+
+      let status: SalesOrderStatus = deriveSalesOrderStatus(order.lines);
+      let notes = order.notes;
+      if (closeRemaining && status !== 'invoiced') {
+        status = 'closed';
+        closedReason = 'Closed with its final invoice';
+        notes = appendNote(
+          notes,
+          `[CLOSED] ${closedReason} ${created.invoiceNumber}`,
+        );
+      }
+      await manager.update(
+        SalesOrder,
+        { id: order.id, companyId },
+        { status, invoiceId: created.id, notes },
+      );
+      return created;
+    });
+    if (closedReason) {
+      await this.audit.record({
+        companyId,
+        actorUserId: userId,
+        action: 'sales_order_closed',
+        targetType: 'sales_order',
+        targetId: id,
+        details: { reason: closedReason, invoiceId: invoice.id },
+      });
+    }
+    return { salesOrder: await this.getDetail(companyId, id), invoice };
+  }
+
+  /**
+   * Short-close an order: what has not shipped will not ship. Posts nothing,
+   * so staff may do it (as with closing a purchase order). Refused while goods
+   * shipped on it are unbilled — they would never be invoiced.
+   */
+  async close(
+    companyId: string,
+    userId: string,
+    id: string,
+    dto: CloseSalesOrderDto,
+  ) {
+    const reason = dto.reason?.trim() || null;
+    const changed = await this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      if (order.status === 'closed') return false;
+      if (isUntouched(order.lines)) {
+        throw new BadRequestException({
+          code: 'SO_NOTHING_TO_CLOSE',
+          message: `Nothing has shipped on ${order.orderNumber} yet. Cancel it instead.`,
+        });
+      }
+      if (hasShippedUninvoiced(order.lines)) {
+        throw new BadRequestException({
+          code: 'SO_HAS_UNINVOICED_SHIPMENTS',
+          message: `Invoice the goods shipped on ${order.orderNumber} before closing it, so they are billed.`,
+        });
+      }
+      if (order.status !== 'partial') {
+        throw new BadRequestException({
+          code: 'INVALID_STATUS_TRANSITION',
+          message:
+            order.status === 'invoiced'
+              ? `${order.orderNumber} is fully invoiced; there is nothing left to close.`
+              : `A ${order.status} sales order cannot be closed.`,
+        });
+      }
+      await manager.update(
+        SalesOrder,
+        { id: order.id, companyId },
+        {
+          status: 'closed',
+          notes: appendNote(
+            order.notes,
+            `[CLOSED] ${reason ?? 'The rest of the order will not ship.'}`,
+          ),
+        },
+      );
+      return true;
+    });
+    if (changed) {
+      await this.audit.record({
+        companyId,
+        actorUserId: userId,
+        action: 'sales_order_closed',
+        targetType: 'sales_order',
+        targetId: id,
+        details: { reason },
+      });
+    }
+    return this.getDetail(companyId, id);
+  }
+
+  /** A closed order goes back to where its shipments and invoices put it. */
+  async reopen(companyId: string, userId: string, id: string) {
+    await this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      if (order.status !== 'closed') {
+        throw new BadRequestException({
+          code: 'INVALID_STATUS_TRANSITION',
+          message: `${order.orderNumber} is not closed.`,
+        });
+      }
+      await manager.update(
+        SalesOrder,
+        { id: order.id, companyId },
+        { status: deriveSalesOrderStatus(order.lines) },
+      );
+    });
+    await this.audit.record({
+      companyId,
+      actorUserId: userId,
+      action: 'sales_order_reopened',
+      targetType: 'sales_order',
+      targetId: id,
+    });
+    return this.getDetail(companyId, id);
+  }
+
+  async cancel(companyId: string, id: string) {
+    await this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      if (order.status === 'cancelled') return;
+      await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      if (order.status === 'invoiced') {
+        throw new BadRequestException({
+          code: 'ALREADY_INVOICED',
+          message: 'Invoiced sales orders cannot be cancelled',
+        });
+      }
+      if (hasAnyInvoiced(order.lines) || order.status === 'closed') {
+        throw new BadRequestException({
+          code: 'SO_HAS_INVOICES',
+          message: `${order.orderNumber} has been invoiced in part. Close it instead, so the rest does not ship.`,
+        });
+      }
+      if (hasAnyShipped(order.lines)) {
+        throw new BadRequestException({
+          code: 'SO_HAS_SHIPMENTS',
+          message: `Goods have shipped on ${order.orderNumber}. Invoice them and close the order, or set the shipped quantities back to 0 first.`,
+        });
+      }
+      await manager.update(
+        SalesOrder,
+        { id: order.id, companyId },
+        { status: 'cancelled' },
+      );
+    });
+    return this.getDetail(companyId, id);
+  }
+
+  async delete(companyId: string, id: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const order = await lockSalesOrder(manager, companyId, id);
+      await this.assertNotDeliveryOrder(manager, companyId, order.id);
+      const invoiced = await manager.count(Invoice, {
+        where: { companyId, salesOrderId: order.id },
+      });
+      if (
+        order.status === 'invoiced' ||
+        invoiced > 0 ||
+        hasAnyInvoiced(order.lines)
+      ) {
+        throw new BadRequestException({
+          code: 'CANNOT_DELETE',
+          message: `${order.orderNumber} has invoices against it and cannot be deleted. Close it instead.`,
+        });
+      }
+      if (hasAnyShipped(order.lines)) {
+        throw new BadRequestException({
+          code: 'CANNOT_DELETE',
+          message: `Goods have shipped on ${order.orderNumber}, so it cannot be deleted.`,
+        });
+      }
+      await manager.remove(order);
+      return { id, deleted: true };
+    });
+  }
+
+  private assertInvoiceable(order: SalesOrder): void {
     if (order.status === 'invoiced') {
       throw new BadRequestException({
         code: 'ALREADY_INVOICED',
@@ -568,132 +1039,68 @@ export class SalesOrdersService {
         message: 'Cancelled sales orders cannot be invoiced',
       });
     }
-    await this.assertNotDeliveryOrder(
-      this.dataSource.manager,
-      companyId,
-      order.id,
-    );
-    return {
-      orderNumber: order.orderNumber,
-      payload: {
-        sourceSalesOrderId: order.id,
-        customerId: order.customerId,
-        invoiceDate: businessToday(),
-        dueDate: dto.dueDate ?? addDaysIso(businessToday(), 30),
-        discountType: order.discountType,
-        discountValue: order.discountValue,
-        notes: `Converted from sales order ${order.orderNumber}`,
-        lines: order.lines.map((l) => ({
-          description: l.description,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          taxRate: l.taxRate,
-          itemId: l.itemId ?? undefined,
-          lineKind: lineKindOf(l.itemId),
-        })),
-      },
-    };
+    if (order.status === 'closed') {
+      throw new BadRequestException({
+        code: 'ORDER_CLOSED',
+        message: `${order.orderNumber} is closed. Reopen it to invoice more.`,
+      });
+    }
   }
 
-  async convertToInvoice(
-    companyId: string,
-    userId: string,
-    id: string,
-    dto: ConvertSalesOrderDto,
-    creditOverride: CreditOverride | null = null,
-  ) {
-    // One transaction with the order row locked: converting twice at once (a
-    // double tap) used to raise two invoices for one order.
-    const invoice = await this.dataSource.transaction(async (manager) => {
-      const order = await manager
-        .createQueryBuilder(SalesOrder, 'o')
-        .setLock('pessimistic_write')
-        .where('o.id = :id AND o.companyId = :companyId', { id, companyId })
-        .getOne();
-      if (!order)
-        throw new NotFoundException({
-          code: 'SALES_ORDER_NOT_FOUND',
-          message: 'Sales order not found',
-        });
-      if (order.status === 'invoiced') {
-        throw new BadRequestException({
-          code: 'ALREADY_INVOICED',
-          message: 'Sales order already invoiced',
-        });
-      }
-      if (order.status === 'cancelled') {
-        throw new BadRequestException({
-          code: 'ORDER_CANCELLED',
-          message: 'Cancelled sales orders cannot be invoiced',
-        });
-      }
-      await this.assertNotDeliveryOrder(manager, companyId, order.id);
-      const lines = await manager.find(SalesOrderLineItem, {
-        where: { salesOrderId: order.id },
-        order: { lineOrder: 'ASC' },
-      });
-      const today = businessToday();
-      const created = await this.invoices.createInTransaction(
-        manager,
-        companyId,
-        userId,
-        {
-          customerId: order.customerId,
-          invoiceDate: today,
-          dueDate: dto.dueDate ?? addDaysIso(today, 30),
-          discountType: order.discountType,
-          discountValue: order.discountValue,
-          status: 'sent',
-          notes: `Converted from sales order ${order.orderNumber}`,
-          // itemId rides along: the invoice is created as 'sent', so it posts,
-          // and posting is where the ordered item finally means something --
-          // Dr COGS / Cr Inventory and a stock movement per line. Conversion is
-          // refused (INSUFFICIENT_STOCK) when the stock is not there.
-          lines: lines.map((l) => ({
-            description: l.description,
-            quantity: l.quantity,
-            unitPrice: l.unitPrice,
-            taxRate: l.taxRate,
-            accountId: l.accountId ?? undefined,
-            itemId: l.itemId ?? undefined,
-            lineKind: lineKindOf(l.itemId),
-          })),
-        },
-        // This order's shipped value is already part of the customer's
-        // exposure; it becomes the invoice rather than adding to it.
-        { credit: { excludeSalesOrderId: order.id, override: creditOverride } },
-      );
-      order.status = 'invoiced';
-      order.invoiceId = created.id;
-      await manager.save(order);
-      return created;
+  private nothingToInvoice(order: SalesOrder) {
+    return new BadRequestException({
+      code: 'NOTHING_TO_INVOICE',
+      message: `Everything shipped on ${order.orderNumber} has already been invoiced. Record the next shipment first.`,
     });
-    return { salesOrder: await this.getById(companyId, id), invoice };
   }
 
-  async cancel(companyId: string, id: string): Promise<SalesOrder> {
-    const order = await this.getById(companyId, id);
-    if (order.status === 'invoiced') {
-      throw new BadRequestException({
-        code: 'ALREADY_INVOICED',
-        message: 'Invoiced sales orders cannot be cancelled',
-      });
-    }
-    order.status = 'cancelled';
-    await this.repo.save(order);
-    return order;
+  /** The invoice lines a plan bills, in plan order. */
+  private invoiceLinesFor(order: SalesOrder, plan: InvoicePlan) {
+    const byId = new Map(order.lines.map((l) => [l.id, l]));
+    return plan.lines.map((pl) => {
+      const l = byId.get(pl.lineId)!;
+      return {
+        description: l.description,
+        quantity: pl.quantity.toFixed(4),
+        unitPrice: l.unitPrice,
+        taxRate: l.taxRate,
+        accountId: l.accountId ?? undefined,
+        itemId: l.itemId ?? undefined,
+        lineKind: lineKindOf(l.itemId),
+      };
+    });
   }
 
-  async delete(companyId: string, id: string) {
-    const order = await this.getById(companyId, id);
-    if (order.status === 'invoiced') {
-      throw new BadRequestException({
-        code: 'CANNOT_DELETE',
-        message: 'Invoiced sales orders cannot be deleted',
-      });
+  /**
+   * Goods can only leave if they are on the shelf. Units shipped on any open
+   * order but not yet invoiced are still in the books' on-hand, so they are
+   * taken off first.
+   */
+  private async assertPhysicallyOnShelf(
+    manager: EntityManager,
+    companyId: string,
+    byItem: Map<string, Decimal>,
+  ): Promise<void> {
+    if (byItem.size === 0) return;
+    const positions = await stockPositions(manager, companyId, [
+      ...byItem.keys(),
+    ]);
+    for (const [itemId, qty] of byItem) {
+      const pos = positions.get(itemId);
+      if (!pos) continue;
+      const shelf = Decimal.max(toDecimal(pos.physicallyAvailable), 0);
+      if (qty.greaterThan(shelf)) {
+        const out = toDecimal(pos.shippedNotInvoiced);
+        throw new UnprocessableEntityException({
+          code: 'INSUFFICIENT_STOCK',
+          message:
+            `Cannot ship ${qty.toFixed(0)} x ${pos.name}: only ${shelf.toFixed(0)} on the shelf` +
+            (out.greaterThan(0)
+              ? ` (${toDecimal(pos.onHand).toFixed(0)} on hand, ${out.toFixed(0)} already shipped on orders not invoiced yet).`
+              : '.'),
+        });
+      }
     }
-    await this.repo.remove(order);
-    return { id, deleted: true };
   }
 
   /**

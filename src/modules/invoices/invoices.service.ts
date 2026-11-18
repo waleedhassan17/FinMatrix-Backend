@@ -55,6 +55,8 @@ import {
   enforceCreditLimit,
 } from '../../common/utils/credit-control.util';
 import { MessagingService } from '../messaging/messaging.service';
+import { SalesOrder } from '../sales-orders/entities/sales-order.entity';
+import { releaseSalesOrderInvoicing } from '../sales-orders/sales-order-invoicing';
 import {
   DeliverOption,
   invoiceCancelledMessage,
@@ -81,9 +83,18 @@ export interface CreateInvoiceOptions {
   credit?: {
     /** A delivery's invoice: its credit was checked when it was dispatched. */
     skip?: boolean;
-    /** Converting a sales order: its shipped value is already in exposure. */
+    /** Leave this sales order out of the shipped-not-invoiced exposure. */
     excludeSalesOrderId?: string | null;
     override?: CreditOverride | null;
+  };
+  /**
+   * Raised from a sales order (internal — never read from a request body).
+   * `lineIds` is aligned with `dto.lines` by index, like poLineLinks on bills.
+   */
+  salesOrder?: {
+    id: string;
+    lineIds: Array<string | null>;
+    autoShipped: boolean;
   };
 }
 
@@ -217,11 +228,83 @@ export class InvoicesService {
       : null;
     // A fresh object, never the entity: the displayed status must not be
     // saved back as the stored one.
+    // The sales order it was raised from, so the screen can link back.
+    const so = inv.salesOrderId
+      ? await this.dataSource.manager.findOne(SalesOrder, {
+          where: { id: inv.salesOrderId, companyId },
+          select: ['id', 'orderNumber'],
+        })
+      : null;
     return {
       ...inv,
       status: derivedStatus(inv, INVOICE_OPEN_STATUSES, businessToday()),
       customerName: customer?.name ?? '',
+      salesOrderNumber: so?.orderNumber ?? null,
     } as Invoice;
+  }
+
+  /** Every invoice raised from a sales order, oldest first. */
+  async listForSalesOrder(
+    companyId: string,
+    salesOrderId: string,
+    manager?: EntityManager,
+  ) {
+    const runner = manager ?? this.dataSource.manager;
+    const rows = await runner.find(Invoice, {
+      where: { companyId, salesOrderId },
+      order: { createdAt: 'ASC' },
+    });
+    const today = businessToday();
+    return rows.map((r) => ({
+      id: r.id,
+      invoiceNumber: r.invoiceNumber,
+      invoiceDate: r.invoiceDate,
+      dueDate: r.dueDate,
+      total: r.total,
+      balance: r.balance,
+      status: derivedStatus(r, INVOICE_OPEN_STATUSES, today),
+    }));
+  }
+
+  /** The totals an invoice with these lines would carry (nothing is saved). */
+  previewTotals(
+    lines: InvoiceLineDto[],
+    discountType: DiscountType | undefined,
+    discountValue: string | undefined,
+  ) {
+    const t = this.computeTotals(lines, discountType, discountValue);
+    return {
+      subtotal: t.subtotal,
+      discountAmount: t.discountAmount,
+      taxAmount: t.taxAmount,
+      total: t.total,
+    };
+  }
+
+  /**
+   * Lock an invoice row (SELECT … FOR UPDATE — no join, which Postgres refuses
+   * to lock), then load its lines.
+   */
+  private async lockInvoice(
+    manager: EntityManager,
+    companyId: string,
+    id: string,
+  ): Promise<Invoice> {
+    const invoice = await manager.findOne(Invoice, {
+      where: { id, companyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!invoice) {
+      throw new NotFoundException({
+        code: 'INVOICE_NOT_FOUND',
+        message: 'Invoice not found',
+      });
+    }
+    invoice.lines = await manager.find(InvoiceLineItem, {
+      where: { invoiceId: invoice.id },
+      order: { lineOrder: 'ASC' },
+    });
+    return invoice;
   }
 
   /** Check an invoice's lines without creating anything (a staff request is filed only if they pass). */
@@ -347,10 +430,12 @@ export class InvoicesService {
         notes: dto.notes ?? null,
         journalEntryId: null,
         createdBy: userId,
+        salesOrderId: opts.salesOrder?.id ?? null,
+        salesOrderAutoShipped: opts.salesOrder?.autoShipped ?? false,
       });
       await manager.save(invoice);
 
-      const lines = totals.lines.map((l) =>
+      const lines = totals.lines.map((l, idx) =>
         manager.create(InvoiceLineItem, {
           invoiceId: invoice.id,
           description: l.description,
@@ -362,6 +447,7 @@ export class InvoicesService {
           accountId: l.accountId,
           itemId: l.itemId,
           lineOrder: l.lineOrder,
+          salesOrderLineId: opts.salesOrder?.lineIds[idx] ?? null,
         }),
       );
       await manager.save(lines);
@@ -532,14 +618,12 @@ export class InvoicesService {
     dto: VoidInvoiceDto,
   ): Promise<Invoice> {
     return this.dataSource.transaction(async (manager) => {
-      const invoice = await manager.findOne(Invoice, {
-        where: { id, companyId },
-        relations: { lines: true },
-      });
-      if (!invoice) {
-        throw new NotFoundException({
-          code: 'INVOICE_NOT_FOUND',
-          message: 'Invoice not found',
+      // Locked: voiding twice at once used to reverse the ledger twice.
+      const invoice = await this.lockInvoice(manager, companyId, id);
+      if (invoice.status === 'void') {
+        throw new BadRequestException({
+          code: 'ALREADY_VOID',
+          message: `Invoice ${invoice.invoiceNumber} is already void.`,
         });
       }
       if (isPositive(invoice.amountPaid)) {
@@ -548,6 +632,11 @@ export class InvoicesService {
           message: 'Cannot void an invoice that already has payments',
         });
       }
+
+      // Raised from a sales order: its quantities can be invoiced again.
+      // Before the customer row is touched (lock order: invoice → order →
+      // customer).
+      await releaseSalesOrderInvoicing(manager, companyId, invoice);
 
       if (invoice.journalEntryId) {
         // Create reversing entry
@@ -676,22 +765,18 @@ export class InvoicesService {
    */
   async delete(companyId: string, id: string, userId: string) {
     return this.dataSource.transaction(async (manager) => {
-      const invoice = await manager.findOne(Invoice, {
-        where: { id, companyId },
-        relations: { lines: true },
-      });
-      if (!invoice) {
-        throw new NotFoundException({
-          code: 'INVOICE_NOT_FOUND',
-          message: 'Invoice not found',
-        });
-      }
+      const invoice = await this.lockInvoice(manager, companyId, id);
       if (isPositive(invoice.amountPaid)) {
         throw new BadRequestException({
           code: 'INVOICE_HAS_PAYMENTS',
           message:
             'Cannot delete an invoice that has payments. Remove the payments first.',
         });
+      }
+
+      // A void invoice already gave its quantities back when it was voided.
+      if (invoice.status !== 'void') {
+        await releaseSalesOrderInvoicing(manager, companyId, invoice);
       }
 
       // A voided invoice was already reversed (GL, inventory, customer balance)
