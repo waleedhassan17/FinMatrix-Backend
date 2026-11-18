@@ -89,13 +89,6 @@ export type EstimateStatus =
   | 'declined'
   | 'expired';
 
-export type SalesOrderStatus =
-  | 'draft'
-  | 'open'
-  | 'partial'
-  | 'fulfilled'
-  | 'closed';
-
 export type PurchaseOrderStatus =
   | 'draft'
   | 'sent'

@@ -21,6 +21,7 @@ export type DiscountType = 'percent' | 'amount' | 'none';
 @Index(['companyId', 'status'])
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_invoices_sales_order_id', ['salesOrderId'])
 export class Invoice extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'customer_id' })
   customerId!: string;
@@ -106,6 +107,23 @@ export class Invoice extends BaseCompanyEntity {
 
   @Column({ type: 'uuid', name: 'created_by' })
   createdBy!: string;
+
+  /** The sales order this invoice bills shipments of, when it was raised from
+   *  one. Voiding or deleting the invoice gives the quantities back to it. */
+  @Column({ type: 'uuid', nullable: true, name: 'sales_order_id' })
+  salesOrderId!: string | null;
+
+  /**
+   * True when converting the order also recorded its shipment ("ship and
+   * invoice everything" on an order with nothing shipped yet). Voiding such an
+   * invoice un-ships what it shipped, so no phantom shipment is left behind.
+   */
+  @Column({
+    type: 'boolean',
+    default: false,
+    name: 'sales_order_auto_shipped',
+  })
+  salesOrderAutoShipped!: boolean;
 
   // Optimistic lock (FinMatrixGuide §6.7): blocks two concurrent payments from
   // both reading the same balance and overpaying — the second save fails.

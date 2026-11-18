@@ -32,6 +32,22 @@ export class SalesOrderLineItem {
   })
   quantityFulfilled!: string;
 
+  /**
+   * How much of this line has been billed on live invoices raised from the
+   * order. Stock and COGS move when an invoice posts, so this is also what has
+   * left the books. Normally 0 ≤ invoiced ≤ fulfilled ≤ quantity; orders
+   * invoiced in full before partial invoicing existed may have
+   * invoiced > fulfilled (billed, delivery still pending).
+   */
+  @Column({
+    type: 'decimal',
+    precision: 18,
+    scale: 4,
+    default: 0,
+    name: 'quantity_invoiced',
+  })
+  quantityInvoiced!: string;
+
   @Column({
     type: 'decimal',
     precision: 18,

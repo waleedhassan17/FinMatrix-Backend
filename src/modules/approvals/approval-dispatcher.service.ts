@@ -257,12 +257,26 @@ export class ApprovalDispatcher {
         // A staff member's sales-order or estimate conversion: replay the
         // conversion itself, so the source document is marked invoiced too.
         if (payload.sourceSalesOrderId) {
+          // Bill exactly what the owner reviewed; refused (409, the request
+          // stays pending) if the order has changed since it was filed.
           const { invoice } = await this.salesOrders.convertToInvoice(
             companyId,
             reviewerId,
             this.requireId(payload.sourceSalesOrderId, 'sourceSalesOrderId'),
-            { dueDate: payload.dueDate },
+            {
+              dueDate: payload.dueDate,
+              closeRemaining: payload.closeRemaining === true,
+            },
             opts.creditOverride ?? null,
+            {
+              approved: {
+                mode: payload.mode,
+                lines: Array.isArray(payload.lines) ? payload.lines : [],
+                // Requests filed before this carried the order's own discount.
+                discountType: payload.mode ? payload.discountType : undefined,
+                discountValue: payload.mode ? payload.discountValue : undefined,
+              },
+            },
           );
           return {
             id: invoice.id,
