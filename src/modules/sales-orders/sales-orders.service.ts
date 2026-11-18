@@ -473,12 +473,13 @@ export class SalesOrdersService {
           message: `Cannot edit a ${order.status} sales order`,
         });
       }
-      if (
-        hasAnyInvoiced(order.lines) &&
-        (dto.lines ||
-          dto.discountType !== undefined ||
-          dto.discountValue !== undefined)
-      ) {
+      // Clients send the discount with every edit; only a real change counts.
+      const discountChanged =
+        (dto.discountType !== undefined &&
+          dto.discountType !== order.discountType) ||
+        (dto.discountValue !== undefined &&
+          !toDecimal(dto.discountValue).equals(toDecimal(order.discountValue)));
+      if (hasAnyInvoiced(order.lines) && (dto.lines || discountChanged)) {
         // Invoices already carry their share of these prices and discount.
         throw new BadRequestException({
           code: 'SO_HAS_INVOICES',

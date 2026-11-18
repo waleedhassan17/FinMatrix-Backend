@@ -236,6 +236,26 @@ async function main() {
     errCode(lower) === 'SHIPPED_BELOW_INVOICED',
     lower.body,
   );
+  // Clients send the discount with every edit: an unchanged one is fine.
+  const noteEdit = await req('PATCH', `/sales-orders/${so.id}`, {
+    notes: 'Rest ships next week',
+    discountType: 'none',
+    discountValue: '0',
+  });
+  ok(
+    'P3b notes still edit on a partly invoiced order',
+    noteEdit.status === 200,
+    noteEdit.body,
+  );
+  const discountEdit = await req('PATCH', `/sales-orders/${so.id}`, {
+    discountType: 'percent',
+    discountValue: '5',
+  });
+  ok(
+    'P3c the discount cannot change once invoiced',
+    errCode(discountEdit) === 'SO_HAS_INVOICES',
+    discountEdit.body,
+  );
   await ship(d, [10]);
   d = await detail(so.id);
   ok('P4a fully shipped → fulfilled', d.status === 'fulfilled', d.status);
