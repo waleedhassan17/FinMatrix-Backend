@@ -1,5 +1,6 @@
 import {
   CellError,
+  NegativeValueError,
   cellToBoolean,
   cellToDecimal,
   cellToText,
@@ -71,6 +72,52 @@ describe('cell values', () => {
     it('treats negative zero as zero', () => {
       expect(cellToDecimal(-0, 2)).toBe('0');
     });
+
+    it.each([
+      '-',
+      ' - ',
+      '–',
+      '—',
+      '--',
+      '---',
+      'N/A',
+      'n/a',
+      'NA',
+      'nil',
+      'None',
+      'null',
+    ])('reads the placeholder %p as a blank cell', (placeholder) => {
+      expect(cellToDecimal(placeholder, 4)).toBeNull();
+    });
+
+    it('reads amounts closed the Pakistani way', () => {
+      expect(cellToDecimal('1250/-', 2)).toBe('1250');
+      expect(cellToDecimal('Rs. 1,250/-', 2)).toBe('1250');
+      expect(cellToDecimal('1250/=', 2)).toBe('1250');
+      expect(cellToDecimal('Rs 1,250.50 /-', 2)).toBe('1250.5');
+    });
+
+    it('reads a unit after a quantity, only where the column allows it', () => {
+      expect(cellToDecimal('12 pcs', 4, { unitSuffix: true })).toBe('12');
+      expect(cellToDecimal('12pcs', 4, { unitSuffix: true })).toBe('12');
+      expect(cellToDecimal('1,000 sets', 4, { unitSuffix: true })).toBe('1000');
+      // A price never takes a unit: "12 pcs" in a price column is a mistake.
+      expect(() => cellToDecimal('12 pcs', 2)).toThrow(/not a number/);
+      expect(() => cellToDecimal('abc', 4, { unitSuffix: true })).toThrow(
+        /"abc" is not a number/,
+      );
+    });
+
+    it('tells a negative apart from an unreadable value', () => {
+      expect(() => cellToDecimal(-5, 4)).toThrow(NegativeValueError);
+      expect(() => cellToDecimal('(5)', 4)).toThrow(NegativeValueError);
+      expect(() => cellToDecimal('abc', 4)).not.toThrow(NegativeValueError);
+      try {
+        cellToDecimal('(2.5)', 4);
+      } catch (e) {
+        expect((e as NegativeValueError).value).toBe('-2.5');
+      }
+    });
   });
 
   describe('cellToBoolean', () => {
@@ -81,6 +128,8 @@ describe('cell values', () => {
         expect(cellToBoolean(v)).toBe(false);
       expect(cellToBoolean('')).toBeNull();
       expect(() => cellToBoolean('maybe')).toThrow(/Yes or No/);
+      expect(cellToBoolean('-')).toBeNull();
+      expect(cellToBoolean('N/A')).toBeNull();
     });
   });
 

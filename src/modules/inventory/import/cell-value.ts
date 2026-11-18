@@ -11,7 +11,29 @@ import Decimal from 'decimal.js';
  */
 export class CellError extends Error {}
 
+/** The value reads fine but is below zero — a different problem from "can't be read". */
+export class NegativeValueError extends CellError {
+  constructor(readonly value: string) {
+    super('cannot be negative.');
+  }
+}
+
 const UPPER_LIMIT = new Decimal('1e12');
+
+/**
+ * How a sheet writes "nothing here": a dash (Excel's Accounting format shows
+ * zero as "-", and a CSV saved from it keeps the dash), N/A, nil, none. Read
+ * as a blank cell, never as an error.
+ */
+const PLACEHOLDER = /^(?:[-‐‑‒–—―]+|n\/?a|nil|none|null)$/i;
+
+export const isPlaceholder = (text: string): boolean =>
+  PLACEHOLDER.test(text.trim());
+
+export interface DecimalOptions {
+  /** Quantity columns: "12 pcs", "5 sets" read as 12 and 5. Never prices. */
+  unitSuffix?: boolean;
+}
 
 /** Unwrap rich text, hyperlinks and formulas down to a plain value. */
 function unwrap(value: unknown): unknown {
@@ -54,8 +76,17 @@ export function cellToText(value: unknown): string | null {
  * Numbers are taken through toPrecision(15) first: Excel stores `0.1 + 0.2` as
  * 0.30000000000000004, and without that a price of 0.3 would fail the
  * decimal-places check for a reason no user could see in the cell.
+ *
+ * Typed amounts are read the ways they are actually written: "Rs 1,250.50",
+ * "PKR 1250", "1250/-" and "Rs. 1,250/=" (the Pakistani way of closing an
+ * amount), "(5)" as an accounting negative, and — for quantity columns only —
+ * "12 pcs". A placeholder such as "-" or "N/A" is a blank cell.
  */
-export function cellToDecimal(value: unknown, decimals: number): string | null {
+export function cellToDecimal(
+  value: unknown,
+  decimals: number,
+  opts: DecimalOptions = {},
+): string | null {
   const v = unwrap(value);
   if (v === null) return null;
 
@@ -69,16 +100,21 @@ export function cellToDecimal(value: unknown, decimals: number): string | null {
     throw new CellError('is TRUE/FALSE, not a number.');
   } else {
     const raw = String(v).trim();
-    if (raw === '') return null;
-    // "Rs 1,250.50", "PKR 1250", "1 250" — how prices are actually typed.
-    const cleaned = raw.replace(/^(rs\.?|pkr)\s*/i, '').replace(/[,\s]/g, '');
+    if (raw === '' || isPlaceholder(raw)) return null;
+    let text = raw
+      .replace(/^(rs\.?|pkr)\s*/i, '') // "Rs 1,250", "PKR 1250"
+      .replace(/\s*\/\s*[-=]$/, ''); // "1250/-", "1250/="
+    if (opts.unitSuffix) text = text.replace(/\s*[a-z][a-z.]*$/i, ''); // "12 pcs"
+    let cleaned = text.replace(/[,\s]/g, ''); // "1,000", "1 250"
+    const accountingNegative = /^\((.+)\)$/.exec(cleaned); // "(5)"
+    if (accountingNegative) cleaned = `-${accountingNegative[1]}`;
     if (!/^-?\d+(\.\d+)?$/.test(cleaned))
       throw new CellError(`"${raw}" is not a number.`);
     parsed = new Decimal(cleaned);
   }
 
   if (parsed.isNegative() && !parsed.isZero())
-    throw new CellError('cannot be negative.');
+    throw new NegativeValueError(parsed.toFixed());
   if (parsed.greaterThanOrEqualTo(UPPER_LIMIT))
     throw new CellError('is too large.');
   if (parsed.decimalPlaces() > decimals) {
@@ -104,7 +140,7 @@ export function cellToBoolean(value: unknown): boolean | null {
     if (v === 0) return false;
   }
   const word = String(v).trim().toLowerCase();
-  if (word === '') return null;
+  if (word === '' || isPlaceholder(word)) return null;
   if (TRUE_WORDS.has(word)) return true;
   if (FALSE_WORDS.has(word)) return false;
   throw new CellError(`"${String(v).trim()}" should be Yes or No.`);

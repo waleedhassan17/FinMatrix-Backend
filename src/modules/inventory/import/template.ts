@@ -163,7 +163,9 @@ function addInstructions(workbook: ExcelJS.Workbook) {
   for (const line of [
     'Fill in the Items sheet, one item per row, then upload the file from Inventory → Import.',
     'Each row is matched to an item by its SKU. A new SKU creates an item; an existing SKU updates it.',
-    'A blank cell leaves an existing item’s value as it is. Only filled-in cells change anything.',
+    'A blank cell leaves an existing item’s value as it is. Only filled-in cells change anything. A "-" or N/A counts as blank.',
+    'Stock never stops an item from importing: blank, 0 or "-" means no opening stock, and a quantity that cannot be used is skipped with a note — the item is saved with 0 in stock. A negative quantity is refused, as stock cannot be below 0.',
+    'Stock is read from the Opening quantity column, or from a column named Quantity, Qty, Stock or On hand.',
     'You will see a preview of every change before anything is saved, and rows with problems are listed so you can fix them.',
     `Up to ${MAX_IMPORT_ROWS.toLocaleString('en-US')} items per file. Column order does not matter, and extra columns are ignored.`,
     'Item photos are added on each item’s page, not through this file.',
