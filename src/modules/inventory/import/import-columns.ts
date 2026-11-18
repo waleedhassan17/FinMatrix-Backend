@@ -8,10 +8,14 @@
  * ORDER never matters. The aliases cover what shops already call these columns
  * in their own sheets.
  *
- * "Quantity", "Qty" and "On hand" are deliberately NOT aliases of Opening
- * quantity. An exported file carries the current stock in an "On hand
- * (read-only)" column; if that header were read as an opening quantity,
- * re-importing your own export could post stock a second time.
+ * A shop's own sheet calls its stock "Quantity", "Qty", "Stock" or "On hand",
+ * so those read as Opening quantity too (`looseAliases`). That cannot post
+ * stock twice: opening stock is the owner's, only for items that have never
+ * had stock, and shown in the preview to confirm with a date. The export's own
+ * "On hand (read-only)" column normalises to "onhandreadonly", which is not an
+ * alias of anything, so re-importing an export still never touches stock.
+ * When a file has both, the column named for the field ("Opening quantity")
+ * wins over a loose one ("Qty"), whatever their order.
  */
 export type ImportField =
   | 'sku'
@@ -37,18 +41,30 @@ export interface ImportColumn {
   header: string;
   /** Normalised header spellings that map to this column (header included). */
   aliases: string[];
+  /**
+   * Looser spellings, read only when no column uses one of `aliases` — e.g.
+   * "Qty" counts as Opening quantity unless "Opening quantity" is also there.
+   */
+  looseAliases?: string[];
   kind: ImportColumnKind;
   required?: boolean;
   maxLength?: number;
   /** Decimal places allowed — the DTO and the web form's limits. */
   decimals?: number;
+  /** A count of things, so "12 pcs" reads as 12. Never set on an amount. */
+  unitSuffix?: boolean;
   /** Template column width, in characters. */
   width: number;
   /** One line for the Instructions sheet. */
   note: string;
 }
 
-export const MAX_IMPORT_ROWS = 1000;
+/**
+ * Rows per file. A 1,000-row preview plans in about 150 ms and the commit only
+ * writes rows that change, so this is set by what a person reviews in one go —
+ * and high enough that a company's own export of its items imports back.
+ */
+export const MAX_IMPORT_ROWS = 5000;
 export const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 export const ON_HAND_HEADER = 'On hand (read-only)';
 
@@ -124,6 +140,7 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
     aliases: ['reorderpoint', 'reorderlevel'],
     kind: 'decimal',
     decimals: 4,
+    unitSuffix: true,
     width: 14,
     note: 'Optional. Stock level at which the item shows as low.',
   },
@@ -133,6 +150,7 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
     aliases: ['reorderquantity', 'reorderqty'],
     kind: 'decimal',
     decimals: 4,
+    unitSuffix: true,
     width: 16,
     note: 'Optional. How many you usually order.',
   },
@@ -142,6 +160,7 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
     aliases: ['minstock', 'minimumstock'],
     kind: 'decimal',
     decimals: 4,
+    unitSuffix: true,
     width: 12,
     note: 'Optional.',
   },
@@ -151,6 +170,7 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
     aliases: ['maxstock', 'maximumstock'],
     kind: 'decimal',
     decimals: 4,
+    unitSuffix: true,
     width: 12,
     note: 'Optional. Cannot be below Min stock.',
   },
@@ -175,12 +195,29 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
     field: 'openingQuantity',
     header: 'Opening quantity',
     aliases: ['openingquantity', 'openingqty', 'openingstock'],
+    looseAliases: [
+      'quantity',
+      'qty',
+      'stock',
+      'instock',
+      'onhand',
+      'qtyonhand',
+      'quantityonhand',
+      'currentstock',
+      'stockqty',
+      'stockquantity',
+      'closingstock',
+    ],
     kind: 'decimal',
     decimals: 4,
+    unitSuffix: true,
     width: 18,
     note:
       'Owner only, optional. Stock you already have, for items with no stock history yet. ' +
-      'Needs a unit cost. Posted to Inventory / Opening Balance Equity on the date you choose when importing.',
+      'Needs a unit cost. Posted to Inventory / Opening Balance Equity on the date you choose when importing. ' +
+      'Blank, 0 or "-" means no opening stock. A quantity that cannot be used (not a number, or no unit cost) ' +
+      'is skipped with a note and the item is still imported, with 0 in stock. A negative quantity is refused: ' +
+      'stock cannot be below 0. Also read from a column named Quantity, Qty, Stock or On hand.',
   },
 ];
 
@@ -196,7 +233,26 @@ export const normaliseHeader = (raw: string): string =>
 const FIELD_BY_ALIAS = new Map<string, ImportField>(
   IMPORT_COLUMNS.flatMap((c) => c.aliases.map((a) => [a, c.field] as const)),
 );
+const FIELD_BY_LOOSE_ALIAS = new Map<string, ImportField>(
+  IMPORT_COLUMNS.flatMap((c) =>
+    (c.looseAliases ?? []).map((a) => [a, c.field] as const),
+  ),
+);
 
 /** The field a header names, or null for a column the import ignores. */
 export const fieldForHeader = (raw: string): ImportField | null =>
-  FIELD_BY_ALIAS.get(normaliseHeader(raw)) ?? null;
+  headerMatch(raw)?.field ?? null;
+
+/**
+ * The field a header names and how firmly: `exact` for one of the column's
+ * own spellings, `loose` for a looser one ("Qty" for Opening quantity).
+ */
+export const headerMatch = (
+  raw: string,
+): { field: ImportField; strength: 'exact' | 'loose' } | null => {
+  const key = normaliseHeader(raw);
+  const exact = FIELD_BY_ALIAS.get(key);
+  if (exact) return { field: exact, strength: 'exact' };
+  const loose = FIELD_BY_LOOSE_ALIAS.get(key);
+  return loose ? { field: loose, strength: 'loose' } : null;
+};

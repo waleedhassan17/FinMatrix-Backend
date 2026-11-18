@@ -18,8 +18,15 @@
  *      Committing the same file again changes nothing.
  *   D. Staff can import the catalogue, but their opening quantities are
  *      ignored with a warning and post nothing.
- *   E. (IMPORT_PERF=1) 1,000 new items with opening stock import in one
- *      request well inside Heroku's 30 s.
+ *   E. Stock never stops an item from importing: a formula that works out to
+ *      0, a "-", an unreadable quantity or one with no unit cost all import the
+ *      item with 0 in stock (the last two with a note); a "Stock" column is
+ *      read as the opening quantity; a negative quantity is refused and only
+ *      that item is left out. A new cost on an item with stock is kept as it
+ *      is while the row's price still saves. The company's own export imports
+ *      back unchanged.
+ *   F. (IMPORT_PERF=1) 5,000 new items with opening stock, then 5,000 updates,
+ *      each in one request inside Heroku's 30 s (IMPORT_PERF_ROWS to change).
  *
  * Each run makes its own items, so it holds on books that already contain
  * data.
@@ -42,6 +49,7 @@ const EMAIL = process.env.WH_EMAIL || 'warehouse@gmail.com';
 const PASSWORD = process.env.WH_PASSWORD || '123456';
 const RUN = Date.now().toString().slice(-8);
 const PERF = process.env.IMPORT_PERF === '1';
+const PERF_ROWS = Number(process.env.IMPORT_PERF_ROWS ?? 5000);
 
 /** Today in the business zone. */
 const TODAY = new Intl.DateTimeFormat('en-CA', {
@@ -727,9 +735,180 @@ async function main() {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  console.log('\n— E. stock that is zero, missing or unreadable');
+  const stockFile = await workbook(
+    ['SKU', 'Name', 'Unit cost', 'Selling price', 'Stock'],
+    [
+      [`Z-${RUN}-F`, 'Formula zero', 100, 150, { formula: '5-5', result: 0 }],
+      [`Z-${RUN}-D`, 'Dash', 100, 150, '-'],
+      [`Z-${RUN}-A`, 'Accounting zero', 100, 150, ' - '],
+      [`Z-${RUN}-X`, 'Unreadable', 100, 150, 'abc'],
+      [`Z-${RUN}-N`, 'Negative', 100, 150, -3],
+      [`Z-${RUN}-C`, 'No cost', null, 150, 6],
+      [`Z-${RUN}-P`, 'Pieces', 40, '1,250/-', '5 pcs'],
+      [`PH-${RUN}`, null, 1200, 1999, null], // has stock: new cost kept, price saved
+    ],
+  );
+  const zp = await upload(
+    '/inventory/import/preview',
+    fileForm('file', stockFile, 'stock.xlsx', XLSX),
+  );
+  const zpv = data(zp);
+  const zrow = (suffix: string) =>
+    zpv?.rows?.find((r: any) => r.sku === `Z-${RUN}-${suffix}`);
+  ok(
+    'E1 a "Stock" column is read as the opening quantity',
+    zpv?.columns?.recognized?.includes('Stock') &&
+      !zpv?.columns?.ignored?.includes('Stock'),
+    zpv?.columns,
+  );
+  ok(
+    'E2 stock written as a formula that works out to 0, "-" or an accounting zero imports with nothing to fix',
+    ['F', 'D', 'A'].every(
+      (k) =>
+        zrow(k)?.action === 'create' &&
+        zrow(k)?.errors.length === 0 &&
+        zrow(k)?.warnings.length === 0,
+    ),
+    ['F', 'D', 'A'].map(zrow),
+  );
+  ok(
+    'E3 an unreadable quantity imports the item with 0 in stock, and says why',
+    zrow('X')?.action === 'create' &&
+      /^No opening stock was recorded: Opening quantity "abc" is not a number\..*saved with 0 in stock/.test(
+        zrow('X')?.warnings?.[0] ?? '',
+      ),
+    zrow('X'),
+  );
+  ok(
+    'E4 a negative quantity is refused, and only that item is left out',
+    zrow('N')?.action === 'error' &&
+      zrow('N')?.errors?.[0] ===
+        "Opening quantity -3 can't be negative: stock must be 0 or more. Correct it in the file; until then this item is left out of the import.",
+    zrow('N'),
+  );
+  ok(
+    'E5 a quantity with no unit cost imports the item with 0 in stock, and says why',
+    zrow('C')?.action === 'create' &&
+      zrow('C')?.openingStock === null &&
+      /needs a unit cost above 0/.test(zrow('C')?.warnings?.[0] ?? ''),
+    zrow('C'),
+  );
+  ok(
+    'E6 "5 pcs" and a "1,250/-" price are read as written',
+    zrow('P')?.openingStock?.quantity === '5' &&
+      zrow('P')?.changes?.some(
+        (c: any) => c.field === 'sellingPrice' && c.to === '1250',
+      ),
+    zrow('P'),
+  );
+  const zph = zpv?.rows?.find((r: any) => r.sku === `PH-${RUN}`);
+  ok(
+    'E7 a new cost on an item with stock is kept as it is; the price on that row still saves',
+    zph?.action === 'update' &&
+      zph.errors.length === 0 &&
+      zph.changes.some((c: any) => c.field === 'sellingPrice') &&
+      !zph.changes.some((c: any) => c.field === 'unitCost') &&
+      /^Unit cost stays /.test(zph.warnings[0] ?? ''),
+    zph,
+  );
+  ok(
+    'E8 the summary: six new items, one update, one problem, 200 of opening stock',
+    zpv?.summary?.create === 6 &&
+      zpv?.summary?.update === 1 &&
+      zpv?.summary?.error === 1 &&
+      zpv?.summary?.openingStock?.items === 1 &&
+      near(n(zpv?.summary?.openingStock?.value), 200),
+    zpv?.summary,
+  );
+  const beforeZero = await books();
+  const zc = await upload(
+    '/inventory/import',
+    fileForm('file', stockFile, 'stock.xlsx', XLSX, {
+      openingStockDate: TODAY,
+      confirmOpeningStockValue: '200',
+    }),
+  );
+  const afterZero = await books();
+  ok(
+    'E9 the commit saves the six new items and the update, and skips the negative one',
+    zc.status === 200 &&
+      data(zc)?.applied?.created === 6 &&
+      data(zc)?.applied?.updated === 1,
+    data(zc)?.applied ?? zc.body,
+  );
+  const saved = await db.query(
+    `SELECT sku, quantity_on_hand, unit_cost, selling_price FROM inventory_items
+      WHERE company_id = $1 AND (sku LIKE $2 OR sku = $3)`,
+    [COMPANY, `Z-${RUN}-%`, `PH-${RUN}`],
+  );
+  const savedBy = new Map<string, any>(saved.rows.map((r: any) => [r.sku, r]));
+  ok(
+    'E10 every imported item is there with 0 in stock, except the one with real stock',
+    ['F', 'D', 'A', 'X', 'C'].every(
+      (k) => n(savedBy.get(`Z-${RUN}-${k}`)?.quantity_on_hand) === 0,
+    ) &&
+      n(savedBy.get(`Z-${RUN}-P`)?.quantity_on_hand) === 5 &&
+      !savedBy.has(`Z-${RUN}-N`),
+    saved.rows,
+  );
+  ok(
+    'E11 the item with stock kept its cost and took the new price',
+    n(savedBy.get(`PH-${RUN}`)?.unit_cost) !== 1200 &&
+      n(savedBy.get(`PH-${RUN}`)?.selling_price) === 1999,
+    savedBy.get(`PH-${RUN}`),
+  );
+  ok(
+    'E12 the books moved by exactly the 200 of opening stock',
+    near(afterZero.gl - beforeZero.gl, 200) &&
+      near(afterZero.moves - beforeZero.moves, 200) &&
+      near(afterZero.valuation - beforeZero.valuation, 200) &&
+      afterZero.entries - beforeZero.entries === 1,
+    { beforeZero, afterZero },
+  );
+  const fixedFile = await workbook(
+    ['SKU', 'Name', 'Unit cost', 'Selling price', 'Stock'],
+    [[`Z-${RUN}-N`, 'Negative', 100, 150, 3]],
+  );
+  const fixed = await upload(
+    '/inventory/import',
+    fileForm('file', fixedFile, 'fixed.xlsx', XLSX, {
+      openingStockDate: TODAY,
+      confirmOpeningStockValue: '300',
+    }),
+  );
+  ok(
+    'E13 corrected in the file, the refused item imports',
+    data(fixed)?.applied?.created === 1,
+    data(fixed)?.applied ?? fixed.body,
+  );
+  const ownExport = await send(
+    'GET',
+    '/inventory/import/template?prefill=true',
+  );
+  const roundTrip = await upload(
+    '/inventory/import/preview',
+    fileForm(
+      'file',
+      Buffer.from(await ownExport.arrayBuffer()),
+      'items.xlsx',
+      XLSX,
+    ),
+  );
+  const rt = data(roundTrip);
+  ok(
+    `E14 the company's own export (${rt?.summary?.totalRows ?? '?'} items) imports back unchanged`,
+    roundTrip.status === 200 &&
+      rt?.summary?.error === 0 &&
+      rt?.summary?.create === 0 &&
+      rt?.summary?.update === 0,
+    rt?.summary ?? roundTrip.body,
+  );
+
+  // ═══════════════════════════════════════════════════════════════
   if (PERF) {
-    console.log('\n— E. 1,000 items');
-    const many = Array.from({ length: 1000 }, (_, i) => [
+    console.log(`\n— F. ${PERF_ROWS.toLocaleString('en-US')} items`);
+    const many = Array.from({ length: PERF_ROWS }, (_, i) => [
       `PERF-${RUN}-${i}`,
       `Perf item ${i}`,
       10 + (i % 7),
@@ -752,10 +931,10 @@ async function main() {
     );
     const ms = Date.now() - startPerf;
     ok(
-      `E1 1,000 items with opening stock import in ${ms} ms (< 15 s)`,
+      `F1 ${PERF_ROWS} items with opening stock import in ${ms} ms (< 25 s; Heroku cuts at 30 s)`,
       perf.status === 200 &&
-        data(perf)?.applied?.created === 1000 &&
-        ms < 15_000,
+        data(perf)?.applied?.created === PERF_ROWS &&
+        ms < 25_000,
       data(perf)?.applied ?? perf.body,
     );
     // Park them: re-import as inactive so they stay out of everyday lists.
@@ -768,9 +947,10 @@ async function main() {
       '/inventory/import',
       fileForm('file', park, 'park.xlsx', XLSX),
     );
+    const updMs = Date.now() - t2;
     ok(
-      `E2 …and 1,000 updates in ${Date.now() - t2} ms`,
-      data(parked)?.applied?.updated === 1000,
+      `F2 …and ${PERF_ROWS} updates in ${updMs} ms (< 25 s)`,
+      data(parked)?.applied?.updated === PERF_ROWS && updMs < 25_000,
       data(parked)?.applied ?? parked.body,
     );
   }
