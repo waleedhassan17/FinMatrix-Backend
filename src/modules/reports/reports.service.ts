@@ -844,7 +844,9 @@ export class ReportsService {
     // account of that subtype (rows arrive ordered by account number).
     const reAccount =
       rows.find((r) => r.systemRole === SYS.RETAINED_EARNINGS) ??
-      rows.find((r) => r.type === 'equity' && r.subType === 'Retained Earnings');
+      rows.find(
+        (r) => r.type === 'equity' && r.subType === 'Retained Earnings',
+      );
 
     for (const row of rows) {
       const dr = num(row.dr);

@@ -392,7 +392,15 @@ describe('ReportsService — cashFlow indirect operating', () => {
   });
 
   it('classifies by kind and role, not number: Peachtree numbering lands on the same lines', async () => {
-    const own = (n: string, name: string, type: string, sub: string, role: string | null, dr: number, cr: number): GlRow => ({
+    const own = (
+      n: string,
+      name: string,
+      type: string,
+      sub: string,
+      role: string | null,
+      dr: number,
+      cr: number,
+    ): GlRow => ({
       ...gl(n, name, type, sub, dr, cr),
       systemRole: role,
     });
@@ -406,8 +414,24 @@ describe('ReportsService — cashFlow indirect operating', () => {
       closing: [],
       period: [
         own('12000', 'Inventory', 'asset', 'Inventory', 'inventory', 300, 0),
-        own('12500', 'Goods in Transit', 'asset', 'Inventory', 'goods_in_transit', 200, 0),
-        own('20760', 'Received Not Billed', 'liability', 'Other Liability', 'grni', 0, 150),
+        own(
+          '12500',
+          'Goods in Transit',
+          'asset',
+          'Inventory',
+          'goods_in_transit',
+          200,
+          0,
+        ),
+        own(
+          '20760',
+          'Received Not Billed',
+          'liability',
+          'Other Liability',
+          'grni',
+          0,
+          150,
+        ),
       ],
     });
     const svc = await makeService(query);

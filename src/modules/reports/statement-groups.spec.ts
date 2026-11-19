@@ -194,7 +194,12 @@ describe('a system account keeps its place whatever number it carries', () => {
   // A company that moved from another system keeps that system's numbers:
   // FinMatrix's own accounts take them, so the ranges cannot judge them.
   it('Salary Expense on a Sage "7000 Gross Wages" stays operating', () => {
-    const wages = { accountNumber: '7000', subType: 'Payroll', type: 'expense', systemRole: 'salary_expense' };
+    const wages = {
+      accountNumber: '7000',
+      subType: 'Payroll',
+      type: 'expense',
+      systemRole: 'salary_expense',
+    };
     expect(isNonOperatingAccount(wages)).toBe(false);
     expect(pnlGroupFor(wages)).toBe('expenses');
     // An ordinary 7xxx account keeps the old rule.
@@ -202,15 +207,46 @@ describe('a system account keeps its place whatever number it carries', () => {
   });
 
   it('a payroll account on a 5xxx number is not cost of goods; FinMatrix COGS is, on any number', () => {
-    expect(isCogsAccount({ accountNumber: '5100', subType: 'Payroll', systemRole: 'salary_expense' })).toBe(false);
-    expect(isCogsAccount({ accountNumber: '50000', subType: 'Cost of Goods', systemRole: 'cogs' })).toBe(true);
-    expect(isCogsAccount({ accountNumber: '310', subType: 'Cost of Goods', systemRole: 'cogs' })).toBe(true);
+    expect(
+      isCogsAccount({
+        accountNumber: '5100',
+        subType: 'Payroll',
+        systemRole: 'salary_expense',
+      }),
+    ).toBe(false);
+    expect(
+      isCogsAccount({
+        accountNumber: '50000',
+        subType: 'Cost of Goods',
+        systemRole: 'cogs',
+      }),
+    ).toBe(true);
+    expect(
+      isCogsAccount({
+        accountNumber: '310',
+        subType: 'Cost of Goods',
+        systemRole: 'cogs',
+      }),
+    ).toBe(true);
   });
 
   it('Input Tax and GRNI on five-digit numbers stay current', () => {
-    expect(classifyForStatement('asset', 'Other Asset', '14100', 'input_tax')).toBe('otherCurrentAssets');
-    expect(classifyForStatement('asset', 'Other Asset', '14100', null)).toBe('fixedAssets');
-    expect(classifyForStatement('liability', 'Other Liability', '27600', 'grni')).toBe('currentLiabilities');
-    expect(accountGroupFor({ accountNumber: '12000', subType: 'Inventory', type: 'asset', systemRole: 'inventory' })).toBe('inventory');
+    expect(
+      classifyForStatement('asset', 'Other Asset', '14100', 'input_tax'),
+    ).toBe('otherCurrentAssets');
+    expect(classifyForStatement('asset', 'Other Asset', '14100', null)).toBe(
+      'fixedAssets',
+    );
+    expect(
+      classifyForStatement('liability', 'Other Liability', '27600', 'grni'),
+    ).toBe('currentLiabilities');
+    expect(
+      accountGroupFor({
+        accountNumber: '12000',
+        subType: 'Inventory',
+        type: 'asset',
+        systemRole: 'inventory',
+      }),
+    ).toBe('inventory');
   });
 });
