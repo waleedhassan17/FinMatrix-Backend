@@ -5,6 +5,7 @@ import { DataSource, EntityManager, In, Not } from 'typeorm';
 import { StorageService } from '../../../common/storage/storage.service';
 import { companyFeatures } from '../../../common/features/company-features.util';
 import { Account } from '../../accounts/entities/account.entity';
+import { healLegacyCharts } from '../../accounts/legacy-roles.util';
 import {
   SYS,
   SYSTEM_ACCOUNT_DEFS,
@@ -126,6 +127,11 @@ export class MigrationAnalysisService {
   }
 
   async analyse(batchId: string, companyId: string): Promise<MigrationBatch> {
+    // The chart plan matches the owner's accounts to FinMatrix's by role, so a
+    // chart an older release wrote without roles takes them first (see
+    // legacy-roles.util.ts). Outside the transaction below, which can run for
+    // a while and must not hold this company's accounts locked meanwhile.
+    await healLegacyCharts(this.dataSource.manager, [companyId]);
     return this.dataSource.transaction(async (em) => {
       // Locked and re-checked here, not trusted from the caller's earlier
       // read: an analysis must never rebuild the staging rows of, or reset

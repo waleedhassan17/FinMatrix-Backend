@@ -2,7 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
@@ -20,7 +23,14 @@ import {
   SystemRole,
 } from './accounts.constants';
 import { freeNumber } from './account-number.util';
+import { healLegacyCharts } from './legacy-roles.util';
 import { AccountType } from '../../types';
+
+/**
+ * A deploy drains the older release's tasks for a few minutes after this one
+ * starts; charts they write meanwhile are healed by a second sweep.
+ */
+const LEGACY_SWEEP_AFTER_MS = 15 * 60_000;
 
 // Canonical accounts that auto-posting (invoices, payments, bills, tax,
 // payroll, inventory) depends on — these may never be deleted OR deactivated.
@@ -78,7 +88,12 @@ import { businessToday } from '../../common/utils/business-date.util';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
-export class AccountsService {
+export class AccountsService
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
+  private readonly logger = new Logger(AccountsService.name);
+  private legacySweep: NodeJS.Timeout | null = null;
+
   constructor(
     @InjectRepository(Account)
     private readonly repo: Repository<Account>,
@@ -87,6 +102,60 @@ export class AccountsService {
     private readonly dataSource: DataSource,
     private readonly posting: PostingService,
   ) {}
+
+  /**
+   * Heal charts an older release wrote without system roles (see
+   * legacy-roles.util.ts): now, and once more after the deploy has drained
+   * the older tasks. Not awaited, so boot never waits on it; the resolvers
+   * below heal a company on first use either way.
+   */
+  onApplicationBootstrap(): void {
+    void this.sweepLegacyCharts('at startup');
+    this.legacySweep = setTimeout(
+      () => void this.sweepLegacyCharts('after the rollout'),
+      LEGACY_SWEEP_AFTER_MS,
+    );
+    this.legacySweep.unref();
+  }
+
+  onModuleDestroy(): void {
+    if (this.legacySweep) clearTimeout(this.legacySweep);
+    this.legacySweep = null;
+  }
+
+  private async sweepLegacyCharts(when: string): Promise<void> {
+    try {
+      const healed = await healLegacyCharts(this.dataSource.manager);
+      if (healed > 0) {
+        this.logger.warn(
+          `${healed} accounts in charts without system roles took their role (${when})`,
+        );
+      }
+    } catch (e) {
+      // Boot must not depend on this: the resolvers heal on first use too.
+      this.logger.warn(
+        `Charts without system roles not swept (${when}): ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * The account holding `role` once a chart from before roles is healed, or
+   * null when no account can hold it. Runs on the caller's manager, so inside
+   * its transaction when there is one. Read again whatever the heal changed:
+   * a concurrent request may have healed the chart first (this one waited on
+   * its rows, then found nothing left to change).
+   */
+  private async adoptLegacy(
+    manager: EntityManager,
+    companyId: string,
+    role: SystemRole,
+  ): Promise<Account | null> {
+    await healLegacyCharts(manager, [companyId]);
+    return manager
+      .getRepository(Account)
+      .findOne({ where: { companyId, systemRole: role } });
+  }
 
   async list(companyId: string, query: ListAccountsQueryDto) {
     const qb = this.repo
@@ -301,9 +370,9 @@ export class AccountsService {
     role: SystemRole,
   ): Promise<Account> {
     const repo = manager.getRepository(Account);
-    const existing = await repo.findOne({
-      where: { companyId, systemRole: role },
-    });
+    const existing =
+      (await repo.findOne({ where: { companyId, systemRole: role } })) ??
+      (await this.adoptLegacy(manager, companyId, role));
     if (existing) {
       if (!existing.isActive) {
         existing.isActive = true;
@@ -560,7 +629,9 @@ export class AccountsService {
     manager?: EntityManager,
   ): Promise<Account> {
     const repo = manager ? manager.getRepository(Account) : this.repo;
-    const acc = await repo.findOne({ where: { companyId, systemRole: role } });
+    const acc =
+      (await repo.findOne({ where: { companyId, systemRole: role } })) ??
+      (await this.adoptLegacy(repo.manager, companyId, role));
     const label = SYSTEM_ACCOUNT_DEFS[role]?.name ?? role;
     if (!acc) {
       throw new NotFoundException({
