@@ -23,6 +23,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { SalesOrdersService } from './sales-orders.service';
 import {
+  CloseSalesOrderDto,
   ConvertSalesOrderDto,
   CreateSalesOrderDto,
   FulfillSalesOrderDto,
@@ -58,6 +59,18 @@ export class SalesOrdersController {
     @Query(ParsePaginationPipe) pagination: PaginationParams,
   ) {
     return this.salesOrders.list(companyId, query, pagination);
+  }
+
+  @Get(':orderId/invoice-preview')
+  @ApiOperation({
+    summary:
+      'What the next invoice from this order would bill (shipped, not yet invoiced). Posts nothing.',
+  })
+  invoicePreview(
+    @CurrentCompany() companyId: string,
+    @Param('orderId', ParseUUIDPipe) id: string,
+  ) {
+    return this.salesOrders.invoicePreview(companyId, id);
   }
 
   @Get(':orderId')
@@ -112,7 +125,10 @@ export class SalesOrdersController {
   @Post(':orderId/convert-to-invoice')
   @Roles('admin', 'staff')
   @HttpCode(201)
-  @ApiOperation({ summary: 'Invoice a fulfilled sales order.' })
+  @ApiOperation({
+    summary:
+      'Invoice what has shipped and is not billed yet (an order with nothing shipped is shipped and invoiced in full). closeRemaining closes the rest.',
+  })
   async convertToInvoice(
     @CurrentCompany() companyId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -135,13 +151,46 @@ export class SalesOrdersController {
       id,
       dto,
     );
+    const what =
+      payload.mode === 'shipped'
+        ? `${payload.lines.length} line(s) of shipped goods`
+        : `${payload.lines.length} line(s)`;
     return this.approvals.createRequest(
       'invoice',
       payload as unknown as Record<string, unknown>,
-      `Invoice from sales order ${orderNumber}: ${payload.lines.length} line(s), due ${payload.dueDate}`,
+      `Invoice from sales order ${orderNumber}: ${what}, total ${Number(payload.expectedTotal).toFixed(2)}, due ${payload.dueDate}` +
+        (payload.closeRemaining ? '; closes the rest of the order' : ''),
       user,
       companyId,
     );
+  }
+
+  @Post(':orderId/close')
+  @Roles('admin', 'staff')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Short-close: what has not shipped will not ship. Refused while shipped goods are uninvoiced. Posts nothing.',
+  })
+  close(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) id: string,
+    @Body() dto: CloseSalesOrderDto,
+  ) {
+    return this.salesOrders.close(companyId, user.id, id, dto);
+  }
+
+  @Post(':orderId/reopen')
+  @Roles('admin', 'staff')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Reopen a closed sales order.' })
+  reopen(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) id: string,
+  ) {
+    return this.salesOrders.reopen(companyId, user.id, id);
   }
 
   @Post(':orderId/cancel')

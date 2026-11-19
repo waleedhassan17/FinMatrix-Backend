@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { CreditOverrideDto } from '../../../common/validation/credit-override.dto';
@@ -109,7 +110,7 @@ export class UpdateSalesOrderDto {
 export class ListSalesOrdersQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsIn(['open', 'partial', 'fulfilled', 'invoiced', 'cancelled'])
+  @IsIn(['open', 'partial', 'fulfilled', 'invoiced', 'closed', 'cancelled'])
   status?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() customerId?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() startDate?: string;
@@ -153,6 +154,14 @@ export class ConvertSalesOrderDto {
   dueDate?: string;
 
   @ApiPropertyOptional({
+    description:
+      'Close the rest of the order after this invoice: the goods not yet shipped will not ship.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  closeRemaining?: boolean;
+
+  @ApiPropertyOptional({
     type: CreditOverrideDto,
     description:
       "Owner only: let this go past the customer's credit limit, with a reason (audited).",
@@ -161,4 +170,16 @@ export class ConvertSalesOrderDto {
   @ValidateNested()
   @Type(() => CreditOverrideDto)
   creditOverride?: CreditOverrideDto;
+}
+
+export class CloseSalesOrderDto {
+  @ApiPropertyOptional({
+    example: 'Customer does not need the rest',
+    description:
+      'Why the rest of the order will not ship (kept on the order and audited).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

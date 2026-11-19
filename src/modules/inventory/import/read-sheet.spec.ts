@@ -45,6 +45,79 @@ describe('readImportFile', () => {
     });
   });
 
+  it('keeps a formula’s saved result of 0 (exceljs drops it from cell.value)', async () => {
+    // Stock is often a formula. Excel saves "=B2-C2" that works out to 0 as
+    // <f>B2-C2</f><v>0</v>; exceljs's cell.value then carries no result, so
+    // every zero-stock item used to be refused as "a formula with no saved
+    // value" while the others imported.
+    const buf = await xlsx((wb) => {
+      const ws = wb.addWorksheet('Items');
+      ws.addRow(['SKU', 'Name', 'Opening quantity', 'Active']);
+      ws.addRow(['A', 'Zero', { formula: '5-5', result: 0 }, 'Yes']);
+      ws.addRow([
+        'B',
+        'Seven',
+        { formula: '10-3', result: 7 },
+        { formula: '1=2', result: false },
+      ]);
+      ws.addRow(['C', 'Never calculated', { formula: '1+1' }, 'Yes']);
+    });
+    const sheet = await readImportFile(buf);
+    expect(sheet.rows.map((r) => r.cells.openingQuantity)).toEqual([
+      { formula: '5-5', result: 0 },
+      { formula: '10-3', result: 7 },
+      { formula: '1+1', result: undefined },
+    ]);
+    expect(sheet.rows[1].cells.isActive).toEqual({
+      formula: '1=2',
+      result: false,
+    });
+  });
+
+  it('reads a stock column under the names shops give it', async () => {
+    for (const header of [
+      'Quantity',
+      'Qty',
+      'Stock',
+      'In stock',
+      'On hand',
+      'Qty on hand',
+      'Current stock',
+    ]) {
+      const buf = await xlsx((wb) => {
+        const ws = wb.addWorksheet('Items');
+        ws.addRow(['SKU', 'Name', header]);
+        ws.addRow(['A', 'First', 7]);
+      });
+      const sheet = await readImportFile(buf);
+      expect(sheet.rows[0].cells).toEqual({
+        sku: 'A',
+        name: 'First',
+        openingQuantity: 7,
+      });
+      expect(sheet.ignored).toEqual([]);
+    }
+  });
+
+  it('prefers the Opening quantity column over a loose "Qty", in either order', async () => {
+    for (const headers of [
+      ['SKU', 'Qty', 'Opening quantity'],
+      ['SKU', 'Opening quantity', 'Qty'],
+    ]) {
+      const buf = await xlsx((wb) => {
+        const ws = wb.addWorksheet('Items');
+        ws.addRow(headers);
+        ws.addRow([
+          'A',
+          ...headers.slice(1).map((h) => (h === 'Qty' ? 99 : 3)),
+        ]);
+      });
+      const sheet = await readImportFile(buf);
+      expect(sheet.rows[0].cells.openingQuantity).toBe(3);
+      expect(sheet.ignored).toEqual(['Qty']);
+    }
+  });
+
   it('skips blank rows and ignores the read-only On hand column', async () => {
     const buf = await xlsx((wb) => {
       const ws = wb.addWorksheet('Items');

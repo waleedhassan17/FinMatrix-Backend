@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import { COLUMN_BY_FIELD, IMPORT_COLUMNS, ImportField } from './import-columns';
 import {
   CellError,
+  NegativeValueError,
   cellToBoolean,
   cellToDecimal,
   cellToText,
@@ -97,17 +98,32 @@ const label = (field: ImportField) => COLUMN_BY_FIELD.get(field)!.header;
 const key = (sku: string) => sku.trim().toLowerCase();
 const dec = (v: string | null | undefined) => new Decimal(v ?? '0');
 
-/** A row's cells as typed values, plus a sentence for every cell that can't be read. */
+/** Said whenever an item is saved without the opening stock its row asked for. */
+const SAVED_WITHOUT_STOCK =
+  'The item is saved with 0 in stock — set its stock later with Opening stock on the item.';
+
+/**
+ * A row's cells as typed values, plus a sentence for every cell that can't be
+ * read.
+ *
+ * Opening quantity is the exception: it is about stock, not the item, so a
+ * quantity that can't be used costs the row its opening stock (with a note
+ * saying why) rather than the whole item. A negative one is still an error —
+ * stock cannot be below zero, and the user must correct it.
+ */
 function parseCells(row: RawImportRow) {
   const values: Partial<Record<ImportField, string | boolean | null>> = {};
   const errors: string[] = [];
+  const warnings: string[] = [];
   for (const column of IMPORT_COLUMNS) {
     if (!(column.field in row.cells)) continue;
     const raw = row.cells[column.field];
     try {
       let value: string | boolean | null;
       if (column.kind === 'decimal')
-        value = cellToDecimal(raw, column.decimals ?? 4);
+        value = cellToDecimal(raw, column.decimals ?? 4, {
+          unitSuffix: column.unitSuffix,
+        });
       else if (column.kind === 'boolean') value = cellToBoolean(raw);
       else value = cellToText(raw);
 
@@ -121,10 +137,21 @@ function parseCells(row: RawImportRow) {
       values[column.field] = value;
     } catch (err) {
       if (!(err instanceof CellError)) throw err;
-      errors.push(`${column.header} ${err.message}`);
+      if (column.field !== 'openingQuantity') {
+        errors.push(`${column.header} ${err.message}`);
+      } else if (err instanceof NegativeValueError) {
+        errors.push(
+          `${column.header} ${err.value} can't be negative: stock must be 0 or more. ` +
+            'Correct it in the file; until then this item is left out of the import.',
+        );
+      } else {
+        warnings.push(
+          `No opening stock was recorded: ${column.header} ${err.message} ${SAVED_WITHOUT_STOCK}`,
+        );
+      }
     }
   }
-  return { values, errors };
+  return { values, errors, warnings };
 }
 
 const display = (v: string | boolean | null | undefined): string | null => {
@@ -150,6 +177,11 @@ const display = (v: string | boolean | null | undefined): string | null => {
  *   • Opening quantity is the owner's, and only for an item that has never had
  *     stock — the same one-time rule as the Opening Stock button. Anything else
  *     is ignored with a warning, never silently posted.
+ *   • Stock never stops an item from importing. Blank, 0, "-" or N/A means no
+ *     opening stock; a quantity that can't be used (not a number, no unit
+ *     cost) is left out with a note and the item is saved with 0 in stock. A
+ *     negative quantity is the one stock error: it is bad data to correct, so
+ *     that row is refused.
  *   • Activating or deactivating is the owner's too, as it is on the item page.
  */
 export function planImport(
@@ -165,8 +197,9 @@ export function planImport(
   const firstRowForSku = new Map<string, number>();
 
   const planned = rows.map((row): PlannedRow => {
-    const { values, errors } = parseCells(row);
-    const warnings: string[] = [];
+    const parsed = parseCells(row);
+    const { values, errors } = parsed;
+    const warnings: string[] = [...parsed.warnings];
     const sku = typeof values.sku === 'string' ? values.sku : '';
     const result: PlannedRow = {
       rowNumber: row.rowNumber,
@@ -312,9 +345,10 @@ function planUpdate(
     if (dec(next).equals(dec(current))) continue;
 
     if (field === 'unitCost' && dec(item.quantityOnHand).greaterThan(0)) {
-      result.errors.push(
-        `Unit cost can't change while ${item.quantityOnHand} are in stock — it is the average of what you paid. ` +
-          'Leave the cell blank, or correct the quantity with a Stock Adjustment.',
+      // A note, not an error: the cost is kept, the rest of the row applies.
+      result.warnings.push(
+        `Unit cost stays ${dec(current).toFixed()}: it can't change while ${dec(item.quantityOnHand).toFixed()} are in stock, ` +
+          'as it is the average of what you paid. The other changes on this row are saved.',
       );
       continue;
     }
@@ -383,15 +417,17 @@ function planOpeningStock(
     (result.patch.unitCost as string | undefined) ?? item?.unitCost,
   );
   if (cost.lessThanOrEqualTo(0)) {
-    result.errors.push(
-      'An opening quantity needs a unit cost above 0 — stock with no cost has no value to record.',
+    result.warnings.push(
+      'No opening stock was recorded: an opening quantity needs a unit cost above 0 — stock with no cost has no value to record. ' +
+        SAVED_WITHOUT_STOCK,
     );
     return;
   }
   const value = dec(raw).times(cost);
   if (new Decimal(value.toFixed(4)).isZero()) {
-    result.errors.push(
-      'Opening quantity × unit cost rounds to zero, so there is nothing to record.',
+    result.warnings.push(
+      'No opening stock was recorded: opening quantity × unit cost rounds to zero, so there is no value to record. ' +
+        SAVED_WITHOUT_STOCK,
     );
     return;
   }

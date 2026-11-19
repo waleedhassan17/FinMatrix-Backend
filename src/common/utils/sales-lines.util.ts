@@ -71,15 +71,28 @@ export interface StockPosition {
   committed: string;
   /** on hand − committed. May be negative when already over-promised. */
   available: string;
+  /**
+   * Recorded as shipped on open orders but not invoiced yet. Stock leaves the
+   * books when the invoice posts, so these units are still in `onHand` even
+   * though they have physically gone.
+   */
+  shippedNotInvoiced: string;
+  /** on hand − shipped not invoiced: what is actually on the shelf. */
+  physicallyAvailable: string;
 }
 
 /**
  * On-hand, committed and available quantity for a set of items.
  *
  * Committed is the quantity on sales orders that are still open, partially or
- * fully fulfilled but not yet invoiced — stock that is promised but has not
- * left the books. Orders created by a delivery are excluded: a dispatch moves
+ * fully fulfilled and not yet invoiced — stock that is promised but has not
+ * left the books (an invoice takes its quantity off the books, so a partly
+ * invoiced order commits only the rest). Closed, invoiced and cancelled orders
+ * commit nothing. Orders created by a delivery are excluded: a dispatch moves
  * the stock off the shelf itself.
+ *
+ * `excludeSalesOrderId` leaves that order out of `committed` only; its
+ * shipped-not-invoiced goods still count against what is physically there.
  */
 export async function stockPositions(
   manager: EntityManager,
@@ -100,25 +113,38 @@ export async function stockPositions(
     `SELECT id, name, sku, quantity_on_hand FROM inventory_items WHERE company_id = $1 AND id = ANY($2::uuid[])`,
     [companyId, ids],
   );
-  const committedRows: Array<{ item_id: string; committed: string }> =
-    await manager.query(
-      `SELECT l.item_id, SUM(l.quantity) AS committed
+  const committedRows: Array<{
+    item_id: string;
+    committed: string | null;
+    shipped_not_invoiced: string | null;
+  }> = await manager.query(
+    `SELECT l.item_id,
+            SUM(GREATEST(l.quantity - l.quantity_invoiced, 0))
+              FILTER (WHERE $3::uuid IS NULL OR o.id <> $3::uuid) AS committed,
+            SUM(GREATEST(l.quantity_fulfilled - l.quantity_invoiced, 0))
+              AS shipped_not_invoiced
        FROM sales_order_line_items l
        JOIN sales_orders o ON o.id = l.sales_order_id
       WHERE o.company_id = $1
         AND o.status IN ('open', 'partial', 'fulfilled')
         AND l.item_id = ANY($2::uuid[])
-        AND ($3::uuid IS NULL OR o.id <> $3::uuid)
         AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.sales_order_id = o.id)
       GROUP BY l.item_id`,
-      [companyId, ids, opts.excludeSalesOrderId ?? null],
-    );
+    [companyId, ids, opts.excludeSalesOrderId ?? null],
+  );
   const committed = new Map(
-    committedRows.map((r) => [r.item_id, toDecimal(r.committed)]),
+    committedRows.map((r) => [r.item_id, toDecimal(r.committed ?? 0)]),
+  );
+  const shippedOut = new Map(
+    committedRows.map((r) => [
+      r.item_id,
+      toDecimal(r.shipped_not_invoiced ?? 0),
+    ]),
   );
   for (const item of items) {
     const onHand = toDecimal(item.quantity_on_hand);
     const promised = committed.get(item.id) ?? new Decimal(0);
+    const gone = shippedOut.get(item.id) ?? new Decimal(0);
     positions.set(item.id, {
       itemId: item.id,
       name: item.name,
@@ -126,6 +152,8 @@ export async function stockPositions(
       onHand: onHand.toFixed(4),
       committed: promised.toFixed(4),
       available: onHand.minus(promised).toFixed(4),
+      shippedNotInvoiced: gone.toFixed(4),
+      physicallyAvailable: onHand.minus(gone).toFixed(4),
     });
   }
   return positions;

@@ -3,7 +3,12 @@ import {
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
-import { ImportField, MAX_IMPORT_ROWS, fieldForHeader } from './import-columns';
+import {
+  ImportField,
+  MAX_IMPORT_ROWS,
+  fieldForHeader,
+  headerMatch,
+} from './import-columns';
 import { cellToText, isBlankCell } from './cell-value';
 
 /** One data row, keyed by the import column each cell belongs to. */
@@ -97,11 +102,25 @@ function gridOf(sheet: ExcelJS.Worksheet, maxRows = Infinity): Grid {
     if (rowNumber > maxRows) return;
     const values: unknown[] = [];
     row.eachCell({ includeEmpty: false }, (cell, col) => {
-      values[col - 1] = cell.value;
+      values[col - 1] = cellValue(cell);
     });
     grid.push({ rowNumber, values });
   });
   return grid;
+}
+
+/**
+ * A cell's value, with a formula's saved result kept even when it is 0.
+ *
+ * exceljs (4.4) builds `cell.value` for a formula by copying only truthy
+ * fields, so a saved result of 0, FALSE or "" vanishes and the cell looks like
+ * a formula Excel never calculated. `cell.result` still holds it. Stock is
+ * often a formula (=Purchased-Sold), so without this every item whose stock
+ * works out to 0 was refused while the others imported.
+ */
+function cellValue(cell: ExcelJS.Cell): unknown {
+  if (cell.type !== ExcelJS.ValueType.Formula) return cell.value;
+  return { formula: cell.formula ?? '', result: cell.result };
 }
 
 /**
@@ -244,22 +263,35 @@ function fromGrid(sheetName: string, grid: Grid): ImportSheet {
   }
 
   const header = grid[headerIndex].values;
-  const fieldAt = new Map<number, ImportField>();
-  const recognized: string[] = [];
-  const ignored: string[] = [];
+  // One column per field. A column named for the field ("Opening quantity")
+  // beats a loose name for it ("Qty") wherever they sit; between two of the
+  // same strength, the first wins. Everything else is listed as ignored —
+  // e.g. "On hand (read-only)" from an export, or a second copy of a column.
+  const chosen = new Map<
+    ImportField,
+    { col: number; label: string; strength: 'exact' | 'loose' }
+  >();
+  const labels: Array<{ col: number; label: string }> = [];
   header.forEach((raw, col) => {
     const label = headerLabel(raw);
     if (!label) return;
-    const field = fieldForHeader(label);
-    if (field && ![...fieldAt.values()].includes(field)) {
-      fieldAt.set(col, field);
-      recognized.push(label);
-    } else {
-      // A column the import doesn't read (e.g. "On hand (read-only)"), or a
-      // second copy of one it already has — the first copy wins.
-      ignored.push(label);
+    labels.push({ col, label });
+    const match = headerMatch(label);
+    if (!match) return;
+    const current = chosen.get(match.field);
+    if (
+      !current ||
+      (current.strength === 'loose' && match.strength === 'exact')
+    ) {
+      chosen.set(match.field, { col, label, strength: match.strength });
     }
   });
+  const fieldAt = new Map<number, ImportField>();
+  for (const [field, c] of chosen) fieldAt.set(c.col, field);
+  const recognized = labels
+    .filter((l) => fieldAt.has(l.col))
+    .map((l) => l.label);
+  const ignored = labels.filter((l) => !fieldAt.has(l.col)).map((l) => l.label);
 
   const rows: RawImportRow[] = [];
   for (const { rowNumber, values } of grid.slice(headerIndex + 1)) {

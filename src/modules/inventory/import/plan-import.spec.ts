@@ -145,15 +145,20 @@ describe('planImport', () => {
       ]);
     });
 
-    it('locks the unit cost while stock is on hand', () => {
+    it('keeps the unit cost while stock is on hand, and still saves the rest of the row', () => {
       const plan = planImport(
-        [row({ sku: 'CHR-001', unitCost: 9000 })],
+        [row({ sku: 'CHR-001', unitCost: 9000, sellingPrice: 13000 })],
         [item({ quantityOnHand: '12.0000', hasMovements: true })],
         owner,
       );
-      expect(plan.rows[0].action).toBe('error');
-      expect(plan.rows[0].errors[0]).toMatch(
-        /Unit cost can't change while 12.0000 are in stock/,
+      expect(plan.rows[0]).toMatchObject({
+        action: 'update',
+        errors: [],
+        patch: { sellingPrice: '13000' },
+      });
+      expect(plan.rows[0].patch).not.toHaveProperty('unitCost');
+      expect(plan.rows[0].warnings[0]).toMatch(
+        /Unit cost stays 8500: it can't change while 12 are in stock/,
       );
     });
 
@@ -293,14 +298,118 @@ describe('planImport', () => {
       expect(plan.summary.openingStock.items).toBe(0);
     });
 
-    it('needs a unit cost, since stock with no cost has no value', () => {
+    it('without a unit cost, records no stock but still creates the item', () => {
       const plan = planImport(
         [row({ sku: 'N-1', name: 'New', openingQuantity: 5 })],
         [],
         owner,
       );
-      expect(plan.rows[0].action).toBe('error');
-      expect(plan.rows[0].errors[0]).toMatch(/needs a unit cost above 0/);
+      expect(plan.rows[0]).toMatchObject({
+        action: 'create',
+        errors: [],
+        openingStock: null,
+      });
+      expect(plan.rows[0].warnings[0]).toMatch(
+        /No opening stock was recorded: an opening quantity needs a unit cost above 0.*saved with 0 in stock/,
+      );
+      expect(plan.summary.openingStock.items).toBe(0);
+    });
+
+    it.each([
+      ['"abc"', 'abc', /"abc" is not a number/],
+      ['a date', new Date('2026-01-01'), /is a date, not a number/],
+      ['TRUE', true, /TRUE\/FALSE/],
+      ['too many decimals', 1.23456, /at most 4 decimal places/],
+      ['an error cell', { error: '#N/A' }, /#N\/A/],
+      ['a formula never calculated', { formula: 'B2*C2' }, /no saved value/],
+    ])(
+      'a quantity that cannot be read (%s) creates the item with 0 in stock and says why',
+      (_name, openingQuantity, why) => {
+        const plan = planImport(
+          [row({ sku: 'N-1', name: 'New', unitCost: 100, openingQuantity })],
+          [],
+          owner,
+        );
+        expect(plan.rows[0]).toMatchObject({
+          action: 'create',
+          errors: [],
+          openingStock: null,
+        });
+        expect(plan.rows[0].warnings[0]).toMatch(
+          /^No opening stock was recorded: Opening quantity /,
+        );
+        expect(plan.rows[0].warnings[0]).toMatch(why);
+        expect(plan.rows[0].warnings[0]).toMatch(/saved with 0 in stock/);
+      },
+    );
+
+    it.each([
+      ['-', '-'],
+      ['Excel accounting zero', ' - '],
+      ['an en dash', '–'],
+      ['N/A', 'N/A'],
+      ['nil', 'nil'],
+      ['a formula that works out to 0', { formula: 'B2-C2', result: 0 }],
+    ])(
+      'reads %s as no stock, with nothing to fix',
+      (_name, openingQuantity) => {
+        const plan = planImport(
+          [row({ sku: 'N-1', name: 'New', unitCost: 100, openingQuantity })],
+          [],
+          owner,
+        );
+        expect(plan.rows[0]).toMatchObject({
+          action: 'create',
+          errors: [],
+          warnings: [],
+          openingStock: null,
+        });
+      },
+    );
+
+    it('an existing item with no stock imports with a dash in its stock column', () => {
+      const plan = planImport(
+        [row({ sku: 'CHR-001', sellingPrice: 13000, openingQuantity: '-' })],
+        [item()],
+        owner,
+      );
+      expect(plan.rows[0]).toMatchObject({ action: 'update', errors: [] });
+    });
+
+    it.each([
+      ['-5', -5, '-5'],
+      ['an accounting negative', '(5)', '-5'],
+    ])(
+      'refuses a negative quantity (%s): stock cannot be below 0',
+      (_name, openingQuantity, shown) => {
+        const plan = planImport(
+          [row({ sku: 'N-1', name: 'New', unitCost: 100, openingQuantity })],
+          [],
+          owner,
+        );
+        expect(plan.rows[0].action).toBe('error');
+        expect(plan.rows[0].errors[0]).toBe(
+          `Opening quantity ${shown} can't be negative: stock must be 0 or more. ` +
+            'Correct it in the file; until then this item is left out of the import.',
+        );
+        expect(plan.summary).toMatchObject({ create: 0, error: 1 });
+      },
+    );
+
+    it('reads a quantity written with its unit', () => {
+      const plan = planImport(
+        [
+          row({
+            sku: 'N-1',
+            name: 'New',
+            unitCost: 100,
+            openingQuantity: '12 pcs',
+          }),
+        ],
+        [],
+        owner,
+      );
+      expect(plan.rows[0].openingStock).toMatchObject({ quantity: '12' });
     });
 
     it('treats a zero opening quantity as blank', () => {

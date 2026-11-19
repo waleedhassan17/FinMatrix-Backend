@@ -76,7 +76,10 @@ export async function assessCredit(
                 -- instead. Every other advance is an unapplied receipt, netted
                 -- off through "advances" like any other.
                 AND NOT (d.prepaid AND d.advance_payment_id IS NULL)) AS in_transit,
-            (SELECT COALESCE(SUM(l.quantity_fulfilled * l.unit_price * (1 + l.tax_rate / 100)), 0)
+            -- Shipped but not yet invoiced: once invoiced, the amount is in
+            -- open_invoices above, so counting it here too would double it.
+            (SELECT COALESCE(SUM(GREATEST(l.quantity_fulfilled - l.quantity_invoiced, 0)
+                                 * l.unit_price * (1 + l.tax_rate / 100)), 0)
                FROM sales_orders o JOIN sales_order_line_items l ON l.sales_order_id = o.id
               WHERE o.company_id = $1 AND o.customer_id = $2
                 AND o.status IN ('partial', 'fulfilled')
