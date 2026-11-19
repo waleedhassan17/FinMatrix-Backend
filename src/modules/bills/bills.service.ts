@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -1061,6 +1062,13 @@ export class BillsService {
         throw new NotFoundException({
           code: 'BILL_NOT_FOUND',
           message: 'Bill not found',
+        });
+      }
+      if (bill.source === 'migration') {
+        throw new ConflictException({
+          code: 'MIGRATED_DOCUMENT_IMMUTABLE',
+          message:
+            'This bill was brought in by a migration. Undo the migration to remove it, or settle it with a payment or vendor credit.',
         });
       }
       if (isPositive(bill.amountPaid)) {

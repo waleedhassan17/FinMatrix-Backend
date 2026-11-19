@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -626,6 +627,13 @@ export class InvoicesService {
           message: `Invoice ${invoice.invoiceNumber} is already void.`,
         });
       }
+      if (invoice.source === 'migration') {
+        throw new ConflictException({
+          code: 'MIGRATED_DOCUMENT_IMMUTABLE',
+          message:
+            'This invoice was brought in by a migration. Undo the migration to remove it, or settle it with a payment or credit memo.',
+        });
+      }
       if (isPositive(invoice.amountPaid)) {
         throw new BadRequestException({
           code: 'INVOICE_ALREADY_PAID',
@@ -766,6 +774,13 @@ export class InvoicesService {
   async delete(companyId: string, id: string, userId: string) {
     return this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(manager, companyId, id);
+      if (invoice.source === 'migration') {
+        throw new ConflictException({
+          code: 'MIGRATED_DOCUMENT_IMMUTABLE',
+          message:
+            'This invoice was brought in by a migration. Undo the migration to remove it, or settle it with a payment or credit memo.',
+        });
+      }
       if (isPositive(invoice.amountPaid)) {
         throw new BadRequestException({
           code: 'INVOICE_HAS_PAYMENTS',

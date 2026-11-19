@@ -17,10 +17,18 @@
  * row gone, its postings and their reversal still in the book — is traced to
  * its party through the before-image its delete left in audit_trail.
  *
+ * A Migration Center import posts its open invoices and bills in entries of a
+ * thousand lines; each receivable or payable row of those entries (and of
+ * their undo) names its own document in `source_id`, under source_type
+ * 'migration' / 'migration_rollback', so it is joined like the document's own
+ * posting. The rest of a migration — trial-balance lines, Migration Clearing —
+ * names the batch, which is no document.
+ *
  * Rows whose source names no party (a manual journal straight to 1100, an
  * opening balance) come back with a NULL party: they are the difference
  * between the parties' total and the control account.
  */
+const MIGRATED = `'migration', 'migration_rollback'`;
 export type LedgerPartyType = 'customer' | 'vendor';
 
 interface PartySources {
@@ -40,7 +48,7 @@ const SOURCES: Record<LedgerPartyType, PartySources> = {
   customer: {
     joins: `
       LEFT JOIN invoices i
-        ON g.source_type IN ('invoice', 'invoice_void') AND i.id = g.source_id
+        ON g.source_type IN ('invoice', 'invoice_void', ${MIGRATED}) AND i.id = g.source_id
       LEFT JOIN payments p
         ON g.source_type IN ('payment', 'payment_void', 'payment_application', 'payment_application_void')
        AND p.id = g.source_id
@@ -61,6 +69,7 @@ const SOURCES: Record<LedgerPartyType, PartySources> = {
       ) gone ON TRUE`,
     documentType: `CASE
         WHEN g.source_type IN ('invoice', 'invoice_void') THEN 'invoice'
+        WHEN g.source_type IN (${MIGRATED}) AND i.id IS NOT NULL THEN 'invoice'
         WHEN g.source_type LIKE 'payment%' THEN 'payment'
         WHEN g.source_type LIKE 'credit_memo%' THEN 'credit_memo'
         WHEN g.source_type LIKE 'delivery%' THEN 'delivery'
@@ -72,7 +81,7 @@ const SOURCES: Record<LedgerPartyType, PartySources> = {
   vendor: {
     joins: `
       LEFT JOIN bills b
-        ON g.source_type IN ('bill', 'bill_void') AND b.id = g.source_id
+        ON g.source_type IN ('bill', 'bill_void', ${MIGRATED}) AND b.id = g.source_id
       LEFT JOIN bill_payments bp
         ON g.source_type = 'bill_payment' AND bp.id = g.source_id
       LEFT JOIN vendor_credits vc
@@ -90,6 +99,7 @@ const SOURCES: Record<LedgerPartyType, PartySources> = {
       ) gone ON TRUE`,
     documentType: `CASE
         WHEN g.source_type IN ('bill', 'bill_void') THEN 'bill'
+        WHEN g.source_type IN (${MIGRATED}) AND b.id IS NOT NULL THEN 'bill'
         WHEN g.source_type = 'bill_payment' THEN 'bill_payment'
         WHEN g.source_type IN ('vendor_credit', 'vendor_credit_void') THEN 'vendor_credit'
       END`,

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TallyPrime "All Masters" export (Data Interchange XML), hand-written for the
+     FinMatrix Migration Center fixtures. Same books as a-clean-starter.xlsx.
+     No real customer data. -->
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES><SVCURRENTCOMPANY>Al-Noor Furniture</SVCURRENTCOMPANY></STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Assets" RESERVEDNAME="Current Assets"><PARENT></PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Current Liabilities" RESERVEDNAME="Current Liabilities"><PARENT></PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Debtors" RESERVEDNAME="Sundry Debtors"><PARENT>Current Assets</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Sundry Creditors" RESERVEDNAME="Sundry Creditors"><PARENT>Current Liabilities</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Bank Accounts" RESERVEDNAME="Bank Accounts"><PARENT>Current Assets</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Cash-in-Hand" RESERVEDNAME="Cash-in-Hand"><PARENT>Current Assets</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Fixed Assets" RESERVEDNAME="Fixed Assets"><PARENT></PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Capital Account" RESERVEDNAME="Capital Account"><PARENT></PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Loans (Liability)" RESERVEDNAME="Loans (Liability)"><PARENT></PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Unsecured Loans" RESERVEDNAME="Unsecured Loans"><PARENT>Loans (Liability)</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Stock-in-Hand" RESERVEDNAME="Stock-in-Hand"><PARENT>Current Assets</PARENT></GROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <GROUP NAME="Lahore Customers"><PARENT>Sundry Debtors</PARENT></GROUP>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Cash" RESERVEDNAME="Cash">
+            <PARENT>Cash-in-Hand</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Meezan Bank" RESERVEDNAME="">
+            <PARENT>Bank Accounts</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Furniture &amp; Fixtures" RESERVEDNAME="">
+            <PARENT>Fixed Assets</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Short-term Loan" RESERVEDNAME="">
+            <PARENT>Unsecured Loans</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Owner Capital" RESERVEDNAME="">
+            <PARENT>Capital Account</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Profit &amp; Loss A/c" RESERVEDNAME="Profit &amp; Loss A/c">
+            <PARENT></PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Al-Noor Traders" RESERVEDNAME="">
+            <PARENT>Lahore Customers</PARENT>
+            <ADDRESS.LIST TYPE="String"><ADDRESS>Shop 12, Anarkali Bazaar</ADDRESS><ADDRESS>Lahore</ADDRESS></ADDRESS.LIST>
+            <LEDGERMOBILE>0300-1234567</LEDGERMOBILE>
+            <INCOMETAXNUMBER>1234567-8</INCOMETAXNUMBER>
+            <BILLCREDITPERIOD>30 Days</BILLCREDITPERIOD>
+            <CREDITLIMIT>-500000.00</CREDITLIMIT>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Bismillah Store" RESERVEDNAME="">
+            <PARENT>Lahore Customers</PARENT>
+            <LEDGERPHONE>0321-7654321</LEDGERPHONE>
+            <BILLCREDITPERIOD>15 Days</BILLCREDITPERIOD>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Raza &amp; Sons" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="گلشن کریانہ" RESERVEDNAME="">
+            <PARENT>Sundry Debtors</PARENT>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Karachi Packaging" RESERVEDNAME="">
+            <PARENT>Sundry Creditors</PARENT>
+            <LEDGERPHONE>021-34567890</LEDGERPHONE>
+            <BILLCREDITPERIOD>45 Days</BILLCREDITPERIOD>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="Lahore Mills" RESERVEDNAME="">
+            <PARENT>Sundry Creditors</PARENT>
+            <ISBILLWISEON>Yes</ISBILLWISEON>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKGROUP NAME="Chairs"><PARENT></PARENT></STOCKGROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKGROUP NAME="Tables"><PARENT></PARENT></STOCKGROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKGROUP NAME="Accessories"><PARENT></PARENT></STOCKGROUP>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Dining chair — walnut" RESERVEDNAME="">
+            <PARENT>Chairs</PARENT>
+            <BASEUNITS>pcs</BASEUNITS>
+            <PARTNUMBER>CHR-001</PARTNUMBER>
+            <OPENINGRATE>8500.00/pcs</OPENINGRATE>
+            <STANDARDPRICELIST.LIST><DATE>20260401</DATE><RATE>12500.00/pcs</RATE></STANDARDPRICELIST.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Dining table — walnut" RESERVEDNAME="">
+            <PARENT>Tables</PARENT>
+            <BASEUNITS>pcs</BASEUNITS>
+            <PARTNUMBER>TBL-001</PARTNUMBER>
+            <OPENINGRATE>25000.00/pcs</OPENINGRATE>
+            <STANDARDPRICELIST.LIST><DATE>20260401</DATE><RATE>38000.00/pcs</RATE></STANDARDPRICELIST.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="Seat cushion" RESERVEDNAME="">
+            <PARENT>Accessories</PARENT>
+            <BASEUNITS>pcs</BASEUNITS>
+            <PARTNUMBER>CUS-001</PARTNUMBER>
+            <OPENINGRATE>1250.00/pcs</OPENINGRATE>
+            <STANDARDPRICELIST.LIST><DATE>20260401</DATE><RATE>2000.00/pcs</RATE></STANDARDPRICELIST.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>

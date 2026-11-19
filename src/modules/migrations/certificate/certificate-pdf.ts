@@ -1,0 +1,282 @@
+import { companyForPdf, pdfDate } from '../../../common/pdf/document-pdf.util';
+import {
+  renderReportPdf,
+  ReportPdfModel,
+} from '../../../common/pdf/report-table-pdf.util';
+import { Company } from '../../companies/entities/company.entity';
+import { CertificatePreview } from '../commit/migration-commit.service';
+import { openingDateOf } from '../opening-date';
+
+const SOURCE_LABELS: Record<string, string> = {
+  finmatrix_template: 'FinMatrix starter workbook',
+  generic_spreadsheet: 'Spreadsheet',
+  tally: 'TallyPrime',
+  peachtree: 'Peachtree / Sage 50',
+  quickbooks_online: 'QuickBooks Online',
+  quickbooks_desktop: 'QuickBooks Desktop',
+  xero: 'Xero',
+  zoho_books: 'Zoho Books',
+  odoo: 'Odoo',
+  sage_50: 'Sage 50 Accounts (UK)',
+  sage_accounting: 'Sage Accounting',
+  busy: 'Busy',
+  marg: 'Marg',
+};
+
+const ENTITY_LABELS: Record<string, string> = {
+  accounts: 'Accounts',
+  customers: 'Customers',
+  vendors: 'Vendors',
+  items: 'Items',
+  trial_balance: 'Trial balance lines',
+  open_invoices: 'Open invoices',
+  open_bills: 'Open bills',
+  stock: 'Stock lines',
+  peachtree_proof: "Lines compared with Peachtree's reports",
+};
+
+/**
+ * The reconciliation certificate (§1.7): proof, in one document, that the
+ * books brought into FinMatrix agree with the source to the rupee. Every
+ * check with its expected, actual and difference; how every source row was
+ * treated; every rejected row with its reason; and who signed it off when.
+ * A dry run renders the same document stamped PREVIEW.
+ */
+export function renderCertificatePdf(input: {
+  company: Company;
+  preview: CertificatePreview;
+  signedOff: { name: string; at: Date } | null;
+  committedAt: Date | null;
+}): Promise<Buffer> {
+  const { company, preview } = input;
+  const pc = companyForPdf(company);
+  const isPreview = preview.mode !== 'commit' || !input.committedAt;
+  // Derived, not read: a certificate stored before the field existed has none.
+  const openingDate = openingDateOf(preview.cutoverDate);
+  const model: ReportPdfModel = {
+    title: isPreview
+      ? 'Migration Certificate (preview)'
+      : 'Migration Certificate',
+    subtitle: `Opening balances at the close of ${pdfDate(openingDate)}; books start ${pdfDate(preview.cutoverDate)}`,
+    company: { name: pc.name, lines: [...pc.addressLines, ...pc.contactLines] },
+    meta: [
+      {
+        label: 'Source',
+        value: SOURCE_LABELS[preview.sourceSystem] ?? preview.sourceSystem,
+      },
+      { label: 'Migration', value: preview.batchId.slice(0, 8).toUpperCase() },
+      {
+        label: 'Result',
+        value: preview.allPassed
+          ? 'All eleven checks passed'
+          : 'Checks failing — not importable',
+      },
+      ...(input.signedOff
+        ? [
+            {
+              label: 'Signed off',
+              value: `${input.signedOff.name}, ${pdfDate(input.signedOff.at)}`,
+            },
+          ]
+        : []),
+      ...(input.committedAt
+        ? [{ label: 'Imported', value: pdfDate(input.committedAt) }]
+        : []),
+    ],
+    sections: [
+      {
+        heading: 'Reconciliation checks (zero tolerance)',
+        columns: [
+          { header: 'Check', width: 0.4 },
+          { header: 'Expected', width: 0.17, align: 'right' },
+          { header: 'Actual', width: 0.17, align: 'right' },
+          { header: 'Difference', width: 0.14, align: 'right' },
+          { header: 'Result', width: 0.12, align: 'right' },
+        ],
+        rows: preview.checks.map((c) => [
+          c.label,
+          c.expected,
+          c.actual,
+          c.difference,
+          c.passed ? 'PASS' : 'FAIL',
+        ]),
+        note: 'Expected values are computed from the source files; actual values are read back from the posted books. The two are calculated independently.',
+      },
+      ...(preview.backup
+        ? [
+            {
+              heading: 'Peachtree backup',
+              columns: [
+                { header: 'File', width: 0.34 },
+                { header: 'Size', width: 0.14, align: 'right' as const },
+                { header: 'SHA-256', width: 0.52 },
+              ],
+              rows: [
+                [
+                  preview.backup.name,
+                  `${(preview.backup.sizeBytes / 1_048_576).toFixed(1)} MB`,
+                  preview.backup.sha256,
+                ],
+              ],
+              note: "Read directly from Peachtree's database files. Every account, customer, vendor and item was compared with Peachtree's own Trial Balance, Aged Receivables, Aged Payables and Inventory Valuation (check: Matches Peachtree's own reports).",
+            },
+          ]
+        : []),
+      ...asTypedSections(preview),
+      {
+        heading: 'Source rows',
+        columns: [
+          { header: 'Sheet', width: 0.3 },
+          { header: 'Rows', width: 0.14, align: 'right' },
+          { header: 'Imported', width: 0.14, align: 'right' },
+          { header: 'Matched', width: 0.14, align: 'right' },
+          { header: 'Rejected', width: 0.14, align: 'right' },
+          { header: 'Open', width: 0.14, align: 'right' },
+        ],
+        rows: preview.rowCounts.map((r) => [
+          ENTITY_LABELS[r.entity] ?? r.entity,
+          String(r.source),
+          String(r.imported),
+          String(r.merged),
+          String(r.rejected),
+          String(r.pending),
+        ]),
+      },
+      {
+        heading: `Rejected rows (${preview.rejectedTotal})`,
+        columns: [
+          { header: 'Sheet', width: 0.25 },
+          { header: 'Row', width: 0.1, align: 'right' },
+          { header: 'Reason', width: 0.65 },
+        ],
+        rows: preview.rejectedRows.map((r) => [
+          r.sheet,
+          String(r.rowNumber),
+          r.reason,
+        ]),
+        note:
+          preview.rejectedTotal > preview.rejectedRows.length
+            ? `Showing the first ${preview.rejectedRows.length}.`
+            : undefined,
+      },
+      {
+        heading: 'Postings',
+        columns: [
+          { header: 'Reference', width: 0.18 },
+          { header: 'What', width: 0.52 },
+          { header: 'Lines', width: 0.1, align: 'right' },
+          { header: 'Amount', width: 0.2, align: 'right' },
+        ],
+        rows: preview.postings.map((p) => [
+          p.reference,
+          p.memo,
+          String(p.lines),
+          p.total,
+        ]),
+        note: `All postings are dated ${pdfDate(openingDate)}, the close of business before the cutover day, and net through Migration Clearing (3950), which ends at zero. The books are closed through that day.`,
+      },
+      ...(preview.spotChecks.length
+        ? [
+            {
+              heading: 'Spot checks',
+              columns: [
+                { header: 'Party', width: 0.4 },
+                { header: 'Docs', width: 0.1, align: 'right' as const },
+                { header: 'Source', width: 0.2, align: 'right' as const },
+                { header: 'FinMatrix', width: 0.2, align: 'right' as const },
+                { header: 'Match', width: 0.1, align: 'right' as const },
+              ],
+              rows: preview.spotChecks.map((s) => [
+                `${s.name} (${s.kind})`,
+                String(s.documents),
+                s.sourceBalance,
+                s.finmatrixBalance,
+                s.matches ? 'Yes' : 'No',
+              ]),
+            },
+          ]
+        : []),
+    ],
+    footer: `FinMatrix migration ${preview.batchId} · generated ${pdfDate(preview.generatedAt)}`,
+  };
+  return renderReportPdf(model);
+}
+
+/**
+ * The before-and-after statement: every figure exactly as it stood in the
+ * file, what FinMatrix read it as, and what the books hold. The owner reads
+ * the first column against their old system; the checks compare the rest.
+ */
+function asTypedSections(
+  preview: CertificatePreview,
+): ReportPdfModel['sections'] {
+  const a = preview.asTyped;
+  if (!a) return [];
+  const sections: ReportPdfModel['sections'] = [];
+  const dash = (v: string | null) => (v === null || v === '' ? '—' : v);
+  const moreNote = (n: number, what: string) =>
+    n > 0 ? `${n} more ${what} not shown; every one is checked.` : undefined;
+  if (a.trialBalance.length) {
+    sections.push({
+      heading: 'As you typed them — trial balance',
+      columns: [
+        { header: 'Account', width: 0.3 },
+        { header: 'Debit (as typed)', width: 0.17, align: 'right' },
+        { header: 'Credit (as typed)', width: 0.17, align: 'right' },
+        { header: 'Read as', width: 0.18, align: 'right' },
+        { header: 'In FinMatrix', width: 0.18, align: 'right' },
+      ],
+      rows: a.trialBalance.map((r) => [
+        `${r.account} ${r.name}`.trim(),
+        dash(r.debitText),
+        dash(r.creditText),
+        dash(r.readAs),
+        dash(r.posted),
+      ]),
+      note:
+        moreNote(a.more.trialBalance, 'accounts') ??
+        'Urdu digits typed in the file appear as boxes in this PDF; they are shown correctly in the app.',
+    });
+  }
+  if (a.openItems.length) {
+    sections.push({
+      heading: 'As you typed them — open invoices and bills',
+      columns: [
+        { header: 'Party', width: 0.3 },
+        { header: 'Document', width: 0.2 },
+        { header: 'Due (as typed)', width: 0.17, align: 'right' },
+        { header: 'Read as', width: 0.16, align: 'right' },
+        { header: 'Party balance', width: 0.17, align: 'right' },
+      ],
+      rows: a.openItems.map((r) => [
+        r.party,
+        `${r.kind === 'invoice' ? 'Invoice' : 'Bill'} ${r.document}`,
+        dash(r.asTyped),
+        dash(r.readAs),
+        dash(r.partyBalance),
+      ]),
+      note: moreNote(a.more.openItems, 'documents'),
+    });
+  }
+  if (a.stock.length) {
+    sections.push({
+      heading: 'As you typed them — stock',
+      columns: [
+        { header: 'SKU', width: 0.28 },
+        { header: 'Quantity (as typed)', width: 0.18, align: 'right' },
+        { header: 'Unit cost (as typed)', width: 0.18, align: 'right' },
+        { header: 'Read as', width: 0.18, align: 'right' },
+        { header: 'On hand × cost', width: 0.18, align: 'right' },
+      ],
+      rows: a.stock.map((r) => [
+        r.sku,
+        dash(r.quantityText),
+        dash(r.costText),
+        dash(r.readAs),
+        dash(r.onHand),
+      ]),
+      note: moreNote(a.more.stock, 'items'),
+    });
+  }
+  return sections;
+}

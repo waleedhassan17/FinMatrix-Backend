@@ -60,3 +60,6 @@ DEPLOY-VERCEL.md
 
 # flow harness context: throwaway company credentials, never committed
 qa/.flow-ctx.json
+
+# Local disk storage backend (UPLOAD_STORAGE_PATH) — dev only
+/storage/

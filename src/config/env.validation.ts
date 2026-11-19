@@ -156,6 +156,59 @@ export const envValidationSchema = Joi.object({
     .optional(),
   MESSAGING_WORKER_ENABLED: Joi.boolean().default(true),
 
+  // ── Company backup (modules/data-portability) ──
+  // Signs the download link of a finished backup ZIP (ExportTokenSigner). The
+  // link carries its own authorisation — a browser's <a href> and a phone's
+  // download manager send no bearer header — so this key is what stands
+  // between a guessed export id and the whole company's books. REQUIRED in
+  // production for that reason; elsewhere a key is derived from JWT_SECRET
+  // under its own label, so a dev box boots without it.
+  EXPORT_TOKEN_SECRET: Joi.string().min(32).when('NODE_ENV', {
+    is: 'production',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  // false stops this process from building queued backups (the rows still
+  // queue; another process drains them). Mirrors MESSAGING_WORKER_ENABLED.
+  EXPORT_WORKER_ENABLED: Joi.boolean().default(true),
+  // How long a finished ZIP stays downloadable before the hourly sweep deletes
+  // it and marks the export expired. 24 h is the product contract.
+  EXPORT_RETENTION_HOURS: Joi.number().integer().min(1).max(168).default(24),
+
+  // ── Migration Center (modules/migrations) ──
+  // Largest single upload (XLSX, CSV, XML or ZIP) the Migration Center reads.
+  MIGRATION_MAX_FILE_BYTES: Joi.number()
+    .integer()
+    .min(1_048_576)
+    .max(104_857_600)
+    .default(26_214_400),
+  // Largest Peachtree backup (.ptb). It arrives in 8 MB pieces, is held in the
+  // database only until read, and is read on disk, never in memory whole.
+  MIGRATION_MAX_UPLOAD_BYTES: Joi.number()
+    .integer()
+    .min(1_048_576)
+    .max(2_147_483_648)
+    .default(2_147_483_648),
+  // The background reader for uploaded backups. Off only in tests that must
+  // not pick up another process's work.
+  MIGRATION_READ_WORKER_ENABLED: Joi.boolean().default(true),
+  // Optional AI mapping assistant. Off by default; with it off (or without a
+  // key or model) the Migration Center maps with its deterministic rules only.
+  // The model is configuration, never code: e.g. MIGRATION_AI_MODEL=claude-opus-5-5.
+  ANTHROPIC_API_KEY: Joi.string().allow('').optional(),
+  MIGRATION_AI_ENABLED: Joi.boolean().default(false),
+  MIGRATION_AI_MODEL: Joi.string()
+    .allow('')
+    .when('MIGRATION_AI_ENABLED', {
+      is: true,
+      then: Joi.string().min(1).required(),
+      otherwise: Joi.optional(),
+    }),
+  // Calls to the model per migration batch, all sessions together.
+  MIGRATION_AI_MAX_CALLS: Joi.number().integer().min(0).max(50).default(10),
+  // Server-side refusal fallback (beta). Set false for a model that does not support it.
+  MIGRATION_AI_SERVER_FALLBACK: Joi.boolean().default(true),
+
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {
     is: 'production',

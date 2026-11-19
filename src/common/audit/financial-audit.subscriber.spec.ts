@@ -1,5 +1,8 @@
 import { DataSource, EntityMetadata, QueryRunner } from 'typeorm';
-import { FinancialAuditSubscriber } from './financial-audit.subscriber';
+import {
+  AUDIT_WRITE_CHUNK,
+  FinancialAuditSubscriber,
+} from './financial-audit.subscriber';
 import { AuditTrailEntry } from './audit-trail.entity';
 import { Invoice } from '../../modules/invoices/entities/invoice.entity';
 import { CreditMemo } from '../../modules/credit-memos/entities/credit-memo.entity';
@@ -234,5 +237,56 @@ describe('FinancialAuditSubscriber', () => {
         action: 'update',
       });
     });
+  });
+
+  it('writes a large transaction in chunks, so it stays under the bind-parameter limit', async () => {
+    const calls: number[] = [];
+    saveImpl = async (rows) => {
+      calls.push(rows.length);
+      saved.push(...rows);
+      return rows;
+    };
+    const n = AUDIT_WRITE_CHUNK * 2 + 37;
+    for (let i = 0; i < n; i++) {
+      subscriber.afterInsert(
+        insertEvent(Customer, {
+          id: `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+          companyId: COMPANY,
+          displayName: `Customer ${i}`,
+        }),
+      );
+    }
+    subscriber.afterTransactionCommit({ queryRunner: txRunner } as any);
+    for (let t = 0; t < 20 && saved.length < n; t++)
+      await new Promise((r) => setImmediate(r));
+    expect(saved).toHaveLength(n);
+    expect(calls).toEqual([AUDIT_WRITE_CHUNK, AUDIT_WRITE_CHUNK, 37]);
+    // 10 bound values a row must stay far below PostgreSQL's 65,535.
+    expect(AUDIT_WRITE_CHUNK * 10).toBeLessThan(65_535);
+  });
+
+  it('keeps the other chunks when one chunk fails', async () => {
+    let call = 0;
+    saveImpl = async (rows) => {
+      call += 1;
+      if (call === 1) throw new Error('boom');
+      saved.push(...rows);
+      return rows;
+    };
+    const n = AUDIT_WRITE_CHUNK + 5;
+    for (let i = 0; i < n; i++) {
+      subscriber.afterInsert(
+        insertEvent(Customer, {
+          id: `10000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+          companyId: COMPANY,
+          displayName: `Customer ${i}`,
+        }),
+      );
+    }
+    subscriber.afterTransactionCommit({ queryRunner: txRunner } as any);
+    for (let t = 0; t < 20 && call < 2; t++)
+      await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(saved).toHaveLength(5);
   });
 });

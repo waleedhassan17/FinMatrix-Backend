@@ -3,12 +3,12 @@ import {
   Controller,
   Delete,
   Get,
+  GoneException,
   HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
-  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -31,6 +31,12 @@ import {
 } from './dto/company-user.dto';
 import { CompaniesService } from '../companies/companies.service';
 import { UsersService } from '../users/users.service';
+
+/** The answer of the retired /settings/export and /settings/import routes. */
+export const SETTINGS_EXPORT_IMPORT_MOVED = {
+  code: 'MOVED',
+  message: 'Use /data-portability/exports or /migrations',
+} as const;
 
 @ApiTags('Settings')
 @ApiBearerAuth()
@@ -263,23 +269,23 @@ export class SettingsController {
     return this.companyUsers.setActive(companyId, userId, false, user.id);
   }
 
-  // Export / Import stubs
+  // ── Retired: export and import ─────────────────────────────────────────
+  // Both were stubs: export answered with a made-up download URL and import
+  // imported nothing. The real features have their own modules — a company
+  // backup is POST /data-portability/exports, bringing books in from another
+  // system is POST /migrations. The two paths stay registered so an old
+  // client gets one plain answer, 410 Gone with where to go, rather than a
+  // 404 it would read as "the server is down".
   @Get('export')
   @Roles('admin')
-  async exportData(
-    @Query('format') format: string,
-    @Query('entities') entities: string,
-  ) {
-    return {
-      downloadUrl: `https://example.com/export/${format}?entities=${entities}`,
-    };
+  exportData(): never {
+    throw new GoneException(SETTINGS_EXPORT_IMPORT_MOVED);
   }
 
   @Post('import')
   @Roles('admin')
-  @HttpCode(200)
-  async importData() {
-    return { imported: 0, skipped: 0, errors: [] };
+  importData(): never {
+    throw new GoneException(SETTINGS_EXPORT_IMPORT_MOVED);
   }
 
   @Post('clear-demo-data')

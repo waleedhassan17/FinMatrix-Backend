@@ -39,6 +39,8 @@ const POSTING_LABELS: Record<string, string> = {
   bill_payment: 'Bill payment',
   vendor_credit: 'Vendor credit',
   vendor_credit_void: 'Vendor credit voided',
+  migration: 'Brought forward',
+  migration_rollback: 'Brought forward (undone)',
 };
 
 export const postingLabel = (postingType: string): string =>
@@ -441,6 +443,8 @@ export class PartyLedgerService {
       id: string;
       date: string;
       postingType: string;
+      /** The posting's document kind, for the line's `kind`. */
+      partyDocumentType: string | null;
       sourceId: string;
       documentType: string | null;
       documentId: string | null;
@@ -461,6 +465,7 @@ export class PartyLedgerService {
         id: r.id,
         date: r.date,
         postingType: r.postingType,
+        partyDocumentType: r.documentType,
         sourceId: r.sourceId,
         documentType: r.documentType,
         documentId: r.documentId,
@@ -480,9 +485,11 @@ export class PartyLedgerService {
       bySource.set(l.sourceId, list);
     }
     const cancelled = new Set<string>();
+    const reverses = (t: string) =>
+      t.endsWith('_void') || t === 'migration_rollback';
     for (const [sourceId, list] of bySource) {
-      const hasVoid = list.some((l) => l.postingType.endsWith('_void'));
-      const hasOriginal = list.some((l) => !l.postingType.endsWith('_void'));
+      const hasVoid = list.some((l) => reverses(l.postingType));
+      const hasOriginal = list.some((l) => !reverses(l.postingType));
       const net = r2(list.reduce((t, l) => t + l.amount, 0));
       if (hasVoid && hasOriginal && Math.abs(net) < 0.005)
         cancelled.add(sourceId);
@@ -497,7 +504,7 @@ export class PartyLedgerService {
         return {
           id: l.id,
           date: l.date,
-          kind: statementKind(l.postingType),
+          kind: statementKind(l.postingType, l.partyDocumentType),
           label: postingLabel(l.postingType),
           reference: l.reference,
           documentType: l.documentType,
@@ -547,8 +554,21 @@ export class PartyLedgerService {
   }
 }
 
-/** A statement line's kind, from the posting that made it. */
-function statementKind(postingType: string): string {
+/**
+ * A statement line's kind, from the posting that made it. An open invoice or
+ * bill brought in by a migration is that document, so it reads as one: an
+ * invoice (or bill) whose number is the old system's, and its undo as the
+ * document voided.
+ */
+function statementKind(
+  postingType: string,
+  documentType: string | null = null,
+): string {
+  if (
+    (postingType === 'migration' || postingType === 'migration_rollback') &&
+    (documentType === 'invoice' || documentType === 'bill')
+  )
+    return postingType === 'migration' ? documentType : `${documentType}_void`;
   switch (postingType) {
     case 'invoice':
     case 'invoice_void':

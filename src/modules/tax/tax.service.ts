@@ -19,6 +19,7 @@ import {
   ACCT_CASH,
   ACCT_TAX_PAYABLE,
   ACCT_INPUT_TAX,
+  OPENING_POSITION_SOURCE_TYPES,
 } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
@@ -270,34 +271,49 @@ export class TaxService {
    * output tax (Sales Tax Payable 2300 collected) − input tax recoverable
    * (Sales Tax Recoverable 1300, registered businesses) − tax already remitted.
    * For a non-registered business there is no input tax, so net = output − paid.
+   *
+   * A balance brought in from before the books started — an opening-balance
+   * entry or a Migration Center import (OPENING_POSITION_SOURCE_TYPES) — was
+   * collected or recovered in the old books, not in this period. It is still
+   * owed (or claimable), so it counts in the net, on a row of its own; it is
+   * never reported as tax collected, remitted or recoverable.
    */
   async getLiability(companyId: string, startDate?: string, endDate?: string) {
     const r2 = (v: any) => Math.round((parseFloat(v ?? '0') || 0) * 100) / 100;
     const start = startDate || '1970-01-01';
     const end = endDate || businessToday();
+    const opening = [...OPENING_POSITION_SOURCE_TYPES];
 
     // Output tax (Sales Tax Payable 2300): credits = collected, debits = remitted.
     const [out] = await this.dataSource.query(
-      `SELECT COALESCE(SUM(g.credit::numeric), 0) AS collected,
-              COALESCE(SUM(g.debit::numeric), 0)  AS remitted
+      `SELECT COALESCE(SUM(g.credit::numeric) FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS collected,
+              COALESCE(SUM(g.debit::numeric)  FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS remitted,
+              COALESCE(SUM(g.credit::numeric - g.debit::numeric)
+                         FILTER (WHERE g.source_type = ANY($5::text[])), 0) AS brought_forward
          FROM general_ledger g JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id = $1 AND a.account_number = $2
           AND g.date >= $3 AND g.date <= $4`,
-      [companyId, ACCT_TAX_PAYABLE, start, end],
+      [companyId, ACCT_TAX_PAYABLE, start, end, opening],
     );
 
     // Input tax recoverable (1300): net debit = recoverable (registered only).
     const [inp] = await this.dataSource.query(
-      `SELECT COALESCE(SUM(g.debit::numeric), 0) - COALESCE(SUM(g.credit::numeric), 0) AS recoverable
+      `SELECT COALESCE(SUM(g.debit::numeric - g.credit::numeric)
+                         FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS recoverable,
+              COALESCE(SUM(g.debit::numeric - g.credit::numeric)
+                         FILTER (WHERE g.source_type = ANY($5::text[])), 0) AS brought_forward
          FROM general_ledger g JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id = $1 AND a.account_number = $2
           AND g.date >= $3 AND g.date <= $4`,
-      [companyId, ACCT_INPUT_TAX, start, end],
+      [companyId, ACCT_INPUT_TAX, start, end, opening],
     );
 
     const outputCollected = r2(out?.collected);
     const remitted = r2(out?.remitted);
     const inputRecoverable = r2(inp?.recoverable);
+    const outputBroughtForward = r2(out?.brought_forward);
+    const inputBroughtForward = r2(inp?.brought_forward);
+    const broughtForward = r2(outputBroughtForward - inputBroughtForward);
 
     const rows: Array<{
       taxRateId: string;
@@ -330,8 +346,21 @@ export class TaxService {
         net: r2(-inputRecoverable),
       });
     }
+    if (outputBroughtForward !== 0 || inputBroughtForward !== 0) {
+      rows.push({
+        taxRateId: 'brought-forward',
+        taxName: 'Brought forward (opening balances)',
+        taxType: 'opening',
+        rate: 0,
+        collected: 0,
+        paid: 0,
+        net: broughtForward,
+      });
+    }
 
-    const totalNet = r2(outputCollected - remitted - inputRecoverable);
+    const totalNet = r2(
+      outputCollected - remitted - inputRecoverable + broughtForward,
+    );
     return {
       fromDate: start,
       toDate: end,
@@ -343,6 +372,10 @@ export class TaxService {
       outputTax: outputCollected,
       inputTaxRecoverable: inputRecoverable,
       taxRemitted: remitted,
+      // Owed (or claimable, when negative) from before the books started.
+      broughtForward,
+      outputTaxBroughtForward: outputBroughtForward,
+      inputTaxBroughtForward: inputBroughtForward,
       // Backwards-compatible scalar fields (legacy shape).
       collectedAmount: outputCollected,
       paidAmount: remitted,

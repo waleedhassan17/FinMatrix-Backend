@@ -431,18 +431,26 @@ function isCharge(type: LedgerPartyType, postingType: string): boolean {
   );
 }
 
-/** Sales are invoices less credit memos; a refund is money paid back, not a sale. */
+/**
+ * Sales are invoices less credit memos; a refund is money paid back, not a
+ * sale. A migrated open invoice (or bill) is a charge brought forward from the
+ * old books, and its undo takes it back.
+ */
 const CUSTOMER_CHARGES = [
   'invoice',
   'invoice_void',
   'credit_memo',
   'credit_memo_void',
+  'migration',
+  'migration_rollback',
 ];
 const VENDOR_CHARGES = [
   'bill',
   'bill_void',
   'vendor_credit',
   'vendor_credit_void',
+  'migration',
+  'migration_rollback',
 ];
 
 /** Peachtree words for the record's own events. */

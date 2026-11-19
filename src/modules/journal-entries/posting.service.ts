@@ -20,6 +20,14 @@ export interface PostingLineInput {
   debit: string;
   credit: string;
   lineOrder?: number;
+  /**
+   * The document this one line belongs to, when it is not the entry's own
+   * source. Written to this line's general_ledger row only; the entry and
+   * every other line keep the entry's source. A Migration Center entry
+   * carries a thousand open invoices, and each receivable line must name its
+   * invoice for the customer's ledger and statement to find it.
+   */
+  source?: { sourceType: string; sourceId: string } | null;
 }
 
 export interface CreatePostingInput {
@@ -216,10 +224,17 @@ export class PostingService {
     entry.lines = lineEntities;
 
     if (input.status === 'posted') {
-      await this.applyPosting(manager, entry, accountMap, {
-        sourceType: input.sourceType ?? 'journal_entry',
-        sourceId: input.sourceId ?? entry.id,
-      });
+      await this.applyPosting(
+        manager,
+        entry,
+        accountMap,
+        {
+          sourceType: input.sourceType ?? 'journal_entry',
+          sourceId: input.sourceId ?? entry.id,
+        },
+        // Aligned with entry.lines, which were built from input.lines in order.
+        input.lines.map((l) => l.source ?? null),
+      );
     }
 
     return entry;
@@ -289,6 +304,8 @@ export class PostingService {
     entry: JournalEntry,
     accountMap: Map<string, Account>,
     source: { sourceType: string; sourceId: string },
+    /** Per-line overrides of `source`, index-aligned with entry.lines. */
+    lineSources: Array<{ sourceType: string; sourceId: string } | null> = [],
   ): Promise<void> {
     // Aggregate deltas per account
     const deltas = new Map<string, Decimal>();
@@ -329,7 +346,8 @@ export class PostingService {
     // Write GL rows with running balance per account
     const accountsTouched = new Map<string, Decimal>();
     const glRows: GeneralLedgerEntry[] = [];
-    for (const l of entry.lines) {
+    for (const [index, l] of entry.lines.entries()) {
+      const rowSource = lineSources[index] ?? source;
       const acc = accountMap.get(l.accountId)!;
       const d = toDecimal(l.debit);
       const c = toDecimal(l.credit);
@@ -349,8 +367,8 @@ export class PostingService {
           debit: d.toFixed(4),
           credit: c.toFixed(4),
           balance: running.toFixed(4),
-          sourceType: source.sourceType,
-          sourceId: source.sourceId,
+          sourceType: rowSource.sourceType,
+          sourceId: rowSource.sourceId,
           memo: entry.memo,
         }),
       );

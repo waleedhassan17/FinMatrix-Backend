@@ -182,12 +182,14 @@ function assertZipWithinLimits(buffer: Buffer): void {
  * than becoming the number 123. The delimiter is sniffed from the first line:
  * Excel writes `;` instead of `,` in locales that use a decimal comma.
  */
-export function parseCsv(text: string): Grid {
+export function parseCsv(text: string, given?: string): Grid {
   const body = text.replace(/^﻿/, '');
   const firstLine = body.slice(0, body.search(/\r?\n|$/));
-  const delimiter = [',', ';', '\t'].reduce((best, d) =>
-    firstLine.split(d).length > firstLine.split(best).length ? d : best,
-  );
+  const delimiter =
+    given ??
+    [',', ';', '\t'].reduce((best, d) =>
+      firstLine.split(d).length > firstLine.split(best).length ? d : best,
+    );
 
   const grid: Grid = [];
   let row: string[] = [];
