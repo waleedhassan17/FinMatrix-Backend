@@ -408,6 +408,8 @@ async function editSheet(
 async function main() {
   const b = sampleBooks();
   const tally = tallyFiles(b);
+  /** The clash case's final chart, to compare its run on a chart without roles. */
+  let clashChart: unknown[] | null = null;
   const cases: Case[] = [
     {
       folder: '01-starter',
@@ -565,18 +567,32 @@ async function main() {
         { name: 'Books.xlsx', buffer: await genericWorkbook(b) },
       ],
     },
-    (() => {
+    ...[false, true].map((legacy): Case => {
       // Sage 50 UK numbering: the bank at 1200 (FinMatrix's Inventory), stock
       // at 1001, and rent at 6200 (FinMatrix's Salary Expense). Each must be
       // its own account, never merged by number.
+      //
+      // Run twice: the second time on a chart written by the release from
+      // before system roles (a company it created while this one rolled out),
+      // which the analysis must give its roles back first.
       const sage = renumbered(
         b,
         { '1050': '1200', '1200': '1001', '6060': '6200' },
         { '1050': 'Bank Current Account', '1200': 'Stock' },
       );
       return {
-        folder: 'clash-sage-numbering',
+        folder: legacy
+          ? 'clash-sage-numbering (a chart written before roles)'
+          : 'clash-sage-numbering',
         source: 'finmatrix_template',
+        prepare: legacy
+          ? async (h: Harness, companyId: string) => {
+              await h.ds.query(
+                `UPDATE accounts SET system_role = NULL WHERE company_id = $1`,
+                [companyId],
+              );
+            }
+          : undefined,
         // Its own numbering: checked account by account below.
         numbersDiffer: true,
         files: async () => [
@@ -711,9 +727,33 @@ async function main() {
               roles.cogs === '5000',
             hit,
           );
+
+          // Account for account — number, name, type, kind, role, balance —
+          // the chart without roles ends exactly as the chart with them.
+          const chart: unknown[] = await h.ds.query(
+            `SELECT account_number AS number, name, type, sub_type AS "subType", system_role AS role,
+                    is_active AS active, balance::text AS balance
+               FROM accounts WHERE company_id = $1 ORDER BY account_number`,
+            [companyId],
+          );
+          if (!legacy) clashChart = chart;
+          else {
+            const before = clashChart;
+            ok(
+              'clash, chart written before roles: it ends exactly as the chart with roles',
+              before !== null &&
+                JSON.stringify(chart) === JSON.stringify(before),
+              before === null
+                ? 'run clash-sage-numbering first'
+                : chart
+                    .map((row, i) => [row, before[i]])
+                    .filter(([x, y]) => JSON.stringify(x) !== JSON.stringify(y))
+                    .slice(0, 6),
+            );
+          }
         },
       } as Case;
-    })(),
+    }),
   ];
   const only = process.argv.slice(2);
   const h = await bootHarness();
