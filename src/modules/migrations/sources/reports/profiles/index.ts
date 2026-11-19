@@ -4,7 +4,10 @@
  */
 import { ReportProfile } from '../report-engine';
 import { PEACHTREE_PROFILE } from './peachtree';
-import { QUICKBOOKS_DESKTOP_PROFILE, QUICKBOOKS_ONLINE_PROFILE } from './quickbooks';
+import {
+  QUICKBOOKS_DESKTOP_PROFILE,
+  QUICKBOOKS_ONLINE_PROFILE,
+} from './quickbooks';
 import { XERO_PROFILE, ZOHO_BOOKS_PROFILE } from './xero-zoho';
 
 export const REPORT_PROFILES: ReportProfile[] = [

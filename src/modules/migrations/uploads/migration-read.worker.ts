@@ -330,11 +330,18 @@ export class MigrationReadWorker {
    * Any other large export (a ZIP of reports, a big CSV, workbook, IIF or
    * XML): read once, keeping only the sheets a migration uses.
    */
-  private async readOtherExport(upload: MigrationUpload, file: string, sha256: string): Promise<void> {
+  private async readOtherExport(
+    upload: MigrationUpload,
+    file: string,
+    sha256: string,
+  ): Promise<void> {
     const batch = await this.dataSource.manager.findOneOrFail(MigrationBatch, {
       where: { id: upload.batchId, companyId: upload.companyId },
     });
-    await this.progress(upload.id, { stage: 'reading', detail: upload.originalName });
+    await this.progress(upload.id, {
+      stage: 'reading',
+      detail: upload.originalName,
+    });
     let last = 0;
     let extract: SourceExtract;
     try {
@@ -361,7 +368,12 @@ export class MigrationReadWorker {
   }
 
   /** Store what was read, record it as the batch's file, and analyse. */
-  private async record(upload: MigrationUpload, sha256: string, extract: unknown, kind: 'ptb' | 'extract') {
+  private async record(
+    upload: MigrationUpload,
+    sha256: string,
+    extract: unknown,
+    kind: 'ptb' | 'extract',
+  ) {
     await this.progress(upload.id, { stage: 'analysing' });
     const put = await this.storage.putBuffer({
       bucket: 'migration-files',
@@ -384,8 +396,13 @@ export class MigrationReadWorker {
       });
     } catch (err) {
       await this.storage.remove(put.key).catch(() => undefined);
-      const body = (err as { response?: { code?: string; message?: string } }).response;
-      throw new ReadFailure(body?.code ?? 'MIGRATION_INVALID_TRANSITION', body?.message ?? (err as Error).message, true);
+      const body = (err as { response?: { code?: string; message?: string } })
+        .response;
+      throw new ReadFailure(
+        body?.code ?? 'MIGRATION_INVALID_TRANSITION',
+        body?.message ?? (err as Error).message,
+        true,
+      );
     }
   }
 

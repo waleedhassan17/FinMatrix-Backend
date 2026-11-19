@@ -46,14 +46,38 @@ const CONTROL_NUMBER: Record<string, string> = {
 const isNumber = (k: string) => /^\d[\d.\-/]*$/.test(k);
 
 /** A finer kind from what an account is called or its detail type, where the type alone is too broad. */
-function refineKind(t: { type: string; kind: string }, name: string, detail: string | undefined) {
+function refineKind(
+  t: { type: string; kind: string },
+  name: string,
+  detail: string | undefined,
+) {
   const text = `${name} ${detail ?? ''}`;
-  if (t.type === 'Asset' && /\binventory\b/i.test(text) && t.kind !== 'Inventory') return { ...t, kind: 'Inventory' };
-  if (t.type === 'Asset' && t.kind === 'Bank' && /\b(cash on hand|cash in hand|petty cash|cash)\b/i.test(name)) return { ...t, kind: 'Cash' };
-  if (t.type === 'Equity' && /retained earnings/i.test(text)) return { ...t, kind: 'Retained Earnings' };
-  if (t.type === 'Asset' && /\b(accounts receivable|trade debtors|debtors control)\b/i.test(name)) return { ...t, kind: 'Accounts Receivable' };
-  if (t.type === 'Liability' && /\b(accounts payable|trade creditors|creditors control)\b/i.test(name)) return { ...t, kind: 'Accounts Payable' };
-  if (t.type === 'Equity' && /opening balance equity/i.test(text)) return { ...t, kind: 'Opening Balance Equity' };
+  if (
+    t.type === 'Asset' &&
+    /\binventory\b/i.test(text) &&
+    t.kind !== 'Inventory'
+  )
+    return { ...t, kind: 'Inventory' };
+  if (
+    t.type === 'Asset' &&
+    t.kind === 'Bank' &&
+    /\b(cash on hand|cash in hand|petty cash|cash)\b/i.test(name)
+  )
+    return { ...t, kind: 'Cash' };
+  if (t.type === 'Equity' && /retained earnings/i.test(text))
+    return { ...t, kind: 'Retained Earnings' };
+  if (
+    t.type === 'Asset' &&
+    /\b(accounts receivable|trade debtors|debtors control)\b/i.test(name)
+  )
+    return { ...t, kind: 'Accounts Receivable' };
+  if (
+    t.type === 'Liability' &&
+    /\b(accounts payable|trade creditors|creditors control)\b/i.test(name)
+  )
+    return { ...t, kind: 'Accounts Payable' };
+  if (t.type === 'Equity' && /opening balance equity/i.test(text))
+    return { ...t, kind: 'Opening Balance Equity' };
   return t;
 }
 
@@ -86,10 +110,17 @@ export interface CanonicalOptions {
 }
 
 const D = (v: Decimal.Value) => new Decimal(v);
-const money = (v: Decimal.Value) => D(v).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+const money = (v: Decimal.Value) =>
+  D(v).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+const hash = (s: string) =>
+  createHash('sha256').update(s).digest('hex').slice(0, 16);
 /** Reports that carry balances at a date, which must be the opening date. */
-const DATED: ReportKind[] = ['trial_balance', 'aged_receivables', 'aged_payables', 'inventory_valuation'];
+const DATED: ReportKind[] = [
+  'trial_balance',
+  'aged_receivables',
+  'aged_payables',
+  'inventory_valuation',
+];
 
 export function buildCanonical(
   reports: ParsedSourceReport[],
@@ -100,8 +131,21 @@ export function buildCanonical(
   const warnings: string[] = [];
   const proof: SourceProofLine[] = [];
   const label = profile.label;
-  const block = (code: IssueDraft['code'], field: string, message: string, sheet: string | null = null, options?: IssueDraft['options']) =>
-    issues.push({ code, severity: 'blocking', sheet, field: `report::${field}`, message, options });
+  const block = (
+    code: IssueDraft['code'],
+    field: string,
+    message: string,
+    sheet: string | null = null,
+    options?: IssueDraft['options'],
+  ) =>
+    issues.push({
+      code,
+      severity: 'blocking',
+      sheet,
+      field: `report::${field}`,
+      message,
+      options,
+    });
 
   // One of each report.
   const byKind = new Map<ReportKind, ParsedSourceReport>();
@@ -122,12 +166,23 @@ export function buildCanonical(
 
   // Every report must be read cleanly, add up to its own totals, and (for
   // balances) be as of the opening date.
-  const reportDates = new Set([...byKind.values()].filter((r) => DATED.includes(r.kind) && r.asOf).map((r) => r.asOf!));
+  const reportDates = new Set(
+    [...byKind.values()]
+      .filter((r) => DATED.includes(r.kind) && r.asOf)
+      .map((r) => r.asOf!),
+  );
   const sharedDate = reportDates.size === 1 ? [...reportDates][0] : null;
   for (const r of byKind.values()) {
-    r.problems.slice(0, 10).forEach((p) =>
-      block(MIGRATION_CODES.SOURCE_TOTALS_MISMATCH, `problem::${hash(p)}`, `${p}. Export the report again from ${label}, unchanged.`, r.sheet),
-    );
+    r.problems
+      .slice(0, 10)
+      .forEach((p) =>
+        block(
+          MIGRATION_CODES.SOURCE_TOTALS_MISMATCH,
+          `problem::${hash(p)}`,
+          `${p}. Export the report again from ${label}, unchanged.`,
+          r.sheet,
+        ),
+      );
     for (const t of r.totals) {
       for (const f of Object.keys(t.values) as Field[]) {
         proof.push({
@@ -145,7 +200,8 @@ export function buildCanonical(
     if (r.asOf && r.asOf !== opts.openingDate) {
       // Every report on one other date: most likely the cutover date was
       // chosen wrongly, and one click puts it right.
-      const cutover = sharedDate && sharedDate === r.asOf ? dayAfter(sharedDate) : null;
+      const cutover =
+        sharedDate && sharedDate === r.asOf ? dayAfter(sharedDate) : null;
       block(
         MIGRATION_CODES.SOURCE_REPORT_DATE,
         `date::${r.kind}`,
@@ -155,7 +211,14 @@ export function buildCanonical(
             : `Run it again in ${label} for that date and upload it again.`
         }`,
         r.sheet,
-        cutover ? [{ value: `cutover:${cutover}`, label: `Change the cutover date to ${cutover} (the reports are as of ${r.asOf})` }] : undefined,
+        cutover
+          ? [
+              {
+                value: `cutover:${cutover}`,
+                label: `Change the cutover date to ${cutover} (the reports are as of ${r.asOf})`,
+              },
+            ]
+          : undefined,
       );
     } else if (!r.asOf && !opts.accepted(`date::${r.kind}`)) {
       block(
@@ -179,7 +242,9 @@ export function buildCanonical(
     const unknown = new Set<string>();
     for (const l of chart.lines) {
       const base =
-        profile.accountTypes[`${norm(l.values.type)}|${norm(l.values.detail)}`] ?? profile.accountTypes[norm(l.values.type)];
+        profile.accountTypes[
+          `${norm(l.values.type)}|${norm(l.values.detail)}`
+        ] ?? profile.accountTypes[norm(l.values.type)];
       if (!base) {
         unknown.add(l.values.type ?? '(blank)');
         continue;
@@ -205,32 +270,58 @@ export function buildCanonical(
   if (tb) {
     // The year-to-date pair is the one that balances (balance-sheet accounts
     // to date, profit and loss from the year's start): use it for every line.
-    const hasYtd = tb.lines.some((l) => l.values.ytdDebit !== undefined || l.values.ytdCredit !== undefined);
+    const hasYtd = tb.lines.some(
+      (l) =>
+        l.values.ytdDebit !== undefined || l.values.ytdCredit !== undefined,
+    );
     for (const l of tb.lines) {
       const v = hasYtd
-        ? D(l.values.ytdDebit ?? 0).abs().minus(D(l.values.ytdCredit ?? 0).abs())
+        ? D(l.values.ytdDebit ?? 0)
+            .abs()
+            .minus(D(l.values.ytdCredit ?? 0).abs())
         : l.values.balance !== undefined
           ? D(l.values.balance)
-          : D(l.values.debit ?? 0).abs().minus(D(l.values.credit ?? 0).abs());
+          : D(l.values.debit ?? 0)
+              .abs()
+              .minus(D(l.values.credit ?? 0).abs());
       balanceOf.set(l.key, (balanceOf.get(l.key) ?? D(0)).plus(v));
     }
     for (const l of tb.lines) {
       if (tbRows.some((r) => r[0] === l.key)) continue;
       const v = balanceOf.get(l.key)!;
-      tbRows.push([l.key, l.name ?? null, v.greaterThan(0) ? money(v) : null, v.lessThan(0) ? money(v.negated()) : null]);
+      tbRows.push([
+        l.key,
+        l.name ?? null,
+        v.greaterThan(0) ? money(v) : null,
+        v.lessThan(0) ? money(v.negated()) : null,
+      ]);
     }
   }
   const controlBalance = (kind: string) =>
-    [...kindOf.entries()].filter(([, k]) => k.kind === kind).reduce((t, [n]) => t.plus(balanceOf.get(n) ?? 0), D(0));
+    [...kindOf.entries()]
+      .filter(([, k]) => k.kind === kind)
+      .reduce((t, [n]) => t.plus(balanceOf.get(n) ?? 0), D(0));
 
   // Required reports for what the books hold.
   const missing: string[] = [];
   if (!tb) missing.push(REPORT_KIND_LABEL.trial_balance);
   if (!chart) missing.push(REPORT_KIND_LABEL.chart_of_accounts);
   if (chart && tb) {
-    if (!controlBalance('Accounts Receivable').isZero() && !byKind.has('aged_receivables')) missing.push(REPORT_KIND_LABEL.aged_receivables);
-    if (!controlBalance('Accounts Payable').isZero() && !byKind.has('aged_payables')) missing.push(REPORT_KIND_LABEL.aged_payables);
-    if (!controlBalance('Inventory').isZero() && !byKind.has('inventory_valuation')) missing.push(REPORT_KIND_LABEL.inventory_valuation);
+    if (
+      !controlBalance('Accounts Receivable').isZero() &&
+      !byKind.has('aged_receivables')
+    )
+      missing.push(REPORT_KIND_LABEL.aged_receivables);
+    if (
+      !controlBalance('Accounts Payable').isZero() &&
+      !byKind.has('aged_payables')
+    )
+      missing.push(REPORT_KIND_LABEL.aged_payables);
+    if (
+      !controlBalance('Inventory').isZero() &&
+      !byKind.has('inventory_valuation')
+    )
+      missing.push(REPORT_KIND_LABEL.inventory_valuation);
   }
   if (missing.length)
     block(
@@ -245,7 +336,12 @@ export function buildCanonical(
   const byName = profile.partyCodes === false;
   const topParty = (k: string) => (byName ? k.split(':')[0].trim() : k);
   const jobs = new Set<string>();
-  for (const kind of ['customer_list', 'vendor_list', 'aged_receivables', 'aged_payables'] as const) {
+  for (const kind of [
+    'customer_list',
+    'vendor_list',
+    'aged_receivables',
+    'aged_payables',
+  ] as const) {
     const r = byKind.get(kind);
     if (!r || !byName) continue;
     r.lines = r.lines.filter((l) => {
@@ -272,38 +368,87 @@ export function buildCanonical(
     // column (where there is one) says which side each belongs to.
     const fromContacts = (contacts?.lines ?? []).filter((l) => {
       const t = norm(l.values.contactType);
-      return !t || (kind === 'customer' ? /customer|client|debtor/.test(t) : /vendor|supplier|creditor/.test(t));
+      return (
+        !t ||
+        (kind === 'customer'
+          ? /customer|client|debtor/.test(t)
+          : /vendor|supplier|creditor/.test(t))
+      );
     });
-    const agedNames = new Set((aged?.lines ?? []).map((l) => normalizeKey(l.key)));
-    const listed = [...(list?.lines ?? []), ...fromContacts.filter((l) => !norm(l.values.contactType) ? agedNames.has(normalizeKey(l.key)) || agedNames.has(normalizeKey(l.name)) : true)];
+    const agedNames = new Set(
+      (aged?.lines ?? []).map((l) => normalizeKey(l.key)),
+    );
+    const listed = [
+      ...(list?.lines ?? []),
+      ...fromContacts.filter((l) =>
+        !norm(l.values.contactType)
+          ? agedNames.has(normalizeKey(l.key)) ||
+            agedNames.has(normalizeKey(l.name))
+          : true,
+      ),
+    ];
     for (const l of listed) {
       const v = l.values;
       const terms = v.terms ?? null;
-      const base = [l.key, l.name ?? l.key, v.phone ?? null, v.email ?? null, v.address ?? null, v.city ?? null, terms];
-      rows.set(l.key, kind === 'customer' ? [...base, v.creditLimit ?? null, v.taxId ?? null] : [...base, v.taxId ?? null]);
+      const base = [
+        l.key,
+        l.name ?? l.key,
+        v.phone ?? null,
+        v.email ?? null,
+        v.address ?? null,
+        v.city ?? null,
+        terms,
+      ];
+      rows.set(
+        l.key,
+        kind === 'customer'
+          ? [...base, v.creditLimit ?? null, v.taxId ?? null]
+          : [...base, v.taxId ?? null],
+      );
     }
     for (const l of aged?.lines ?? []) {
       if (rows.has(l.key)) continue;
       const base = [l.key, l.name ?? l.key, null, null, null, null, null];
-      rows.set(l.key, kind === 'customer' ? [...base, null, null] : [...base, null]);
+      rows.set(
+        l.key,
+        kind === 'customer' ? [...base, null, null] : [...base, null],
+      );
     }
     return [...rows.values()];
   };
-  const customerRows = parties(byKind.get('customer_list'), byKind.get('aged_receivables'), 'customer');
-  const vendorRows = parties(byKind.get('vendor_list'), byKind.get('aged_payables'), 'vendor');
+  const customerRows = parties(
+    byKind.get('customer_list'),
+    byKind.get('aged_receivables'),
+    'customer',
+  );
+  const vendorRows = parties(
+    byKind.get('vendor_list'),
+    byKind.get('aged_payables'),
+    'vendor',
+  );
   // A contact list without a customer/supplier column (Xero's) places a
   // contact only by its open documents; one with none cannot be placed, and
   // is named rather than guessed.
   if (contacts) {
     const placed = new Set(
-      [...customerRows, ...vendorRows].flatMap((r) => [normalizeKey(r[0]), normalizeKey(r[1])]).filter(Boolean),
+      [...customerRows, ...vendorRows]
+        .flatMap((r) => [normalizeKey(r[0]), normalizeKey(r[1])])
+        .filter(Boolean),
     );
     const unplaced = contacts.lines.filter(
-      (l) => !norm(l.values.contactType) && !placed.has(normalizeKey(l.key)) && !placed.has(normalizeKey(l.name)),
+      (l) =>
+        !norm(l.values.contactType) &&
+        !placed.has(normalizeKey(l.key)) &&
+        !placed.has(normalizeKey(l.name)),
     );
     if (unplaced.length)
       warnings.push(
-        `${unplaced.length} contact${unplaced.length === 1 ? '' : 's'} with nothing open (${unplaced.slice(0, 10).map((l) => l.name ?? l.key).join(', ')}${unplaced.length > 10 ? ', …' : ''}) ${unplaced.length === 1 ? 'is' : 'are'} not brought in: ${label}'s contact list does not say whether a contact is a customer or a supplier. Add ${unplaced.length === 1 ? 'it' : 'them'} in FinMatrix when needed.`,
+        `${unplaced.length} contact${unplaced.length === 1 ? '' : 's'} with nothing open (${unplaced
+          .slice(0, 10)
+          .map((l) => l.name ?? l.key)
+          .join(
+            ', ',
+          )}${unplaced.length > 10 ? ', …' : ''}) ${unplaced.length === 1 ? 'is' : 'are'} not brought in: ${label}'s contact list does not say whether a contact is a customer or a supplier. Add ${unplaced.length === 1 ? 'it' : 'them'} in FinMatrix when needed.`,
       );
   }
 
@@ -312,14 +457,19 @@ export function buildCanonical(
     const docs: Array<Array<string | null>> = [];
     const residual = new Map<string, Decimal>();
     const byParty = new Map<string, ReportLine[]>();
-    for (const l of aged?.lines ?? []) byParty.set(l.key, [...(byParty.get(l.key) ?? []), l]);
+    for (const l of aged?.lines ?? [])
+      byParty.set(l.key, [...(byParty.get(l.key) ?? []), l]);
     const seen = new Map<string, number>();
     for (const [party, lines] of byParty) {
       const open = lines
         .filter((l) => D(l.values.amount ?? 0).greaterThan(0))
-        .sort((a, b) => (a.values.date ?? '').localeCompare(b.values.date ?? ''))
+        .sort((a, b) =>
+          (a.values.date ?? '').localeCompare(b.values.date ?? ''),
+        )
         .map((l) => ({ l, due: D(l.values.amount!) }));
-      let credit = lines.filter((l) => D(l.values.amount ?? 0).lessThan(0)).reduce((t, l) => t.plus(D(l.values.amount!).abs()), D(0));
+      let credit = lines
+        .filter((l) => D(l.values.amount ?? 0).lessThan(0))
+        .reduce((t, l) => t.plus(D(l.values.amount!).abs()), D(0));
       for (const o of open) {
         if (credit.isZero()) break;
         const used = Decimal.min(credit, o.due);
@@ -333,8 +483,16 @@ export function buildCanonical(
         const k = normalizeKey(raw);
         const n = (seen.get(k) ?? 0) + 1;
         seen.set(k, n);
-        const number = n > 1 ? `${raw}/${party}`.slice(0, 32) : raw.slice(0, 32);
-        docs.push([party, number, o.l.values.date ?? opts.openingDate, o.l.values.due ?? null, money(o.l.values.original ?? o.l.values.amount!), money(o.due)]);
+        const number =
+          n > 1 ? `${raw}/${party}`.slice(0, 32) : raw.slice(0, 32);
+        docs.push([
+          party,
+          number,
+          o.l.values.date ?? opts.openingDate,
+          o.l.values.due ?? null,
+          money(o.l.values.original ?? o.l.values.amount!),
+          money(o.due),
+        ]);
       }
     }
     return { docs, residual };
@@ -343,18 +501,28 @@ export function buildCanonical(
   const ap = openDocs(byKind.get('aged_payables'));
 
   // Residual credits: held on an advances account only when accepted.
-  const used = new Set([...opts.existingAccounts, ...accountRows.map((r) => String(r[0])), ...tbRows.map((r) => String(r[0]))]);
+  const used = new Set([
+    ...opts.existingAccounts,
+    ...accountRows.map((r) => String(r[0])),
+    ...tbRows.map((r) => String(r[0])),
+  ]);
   const freshNumber = (start: number) => {
     let n = start;
     while (used.has(String(n))) n++;
     used.add(String(n));
     return String(n);
   };
-  const holdResidual = (residual: Map<string, Decimal>, kind: 'customer' | 'vendor') => {
+  const holdResidual = (
+    residual: Map<string, Decimal>,
+    kind: 'customer' | 'vendor',
+  ) => {
     if (!residual.size) return;
     const total = [...residual.values()].reduce((t, v) => t.plus(v), D(0));
     const key = kind === 'customer' ? 'customer-credits' : 'vendor-advances';
-    const listed = [...residual].slice(0, 10).map(([p, v]) => `${p} ${money(v)}`).join(', ');
+    const listed = [...residual]
+      .slice(0, 10)
+      .map(([p, v]) => `${p} ${money(v)}`)
+      .join(', ');
     if (!opts.accepted(key)) {
       block(
         MIGRATION_CODES.SOURCE_NET_CREDIT,
@@ -368,16 +536,36 @@ export function buildCanonical(
       return;
     }
     // The control account in the TB already nets the credit; move it out.
-    const control = [...kindOf.entries()].find(([, k]) => k.kind === (kind === 'customer' ? 'Accounts Receivable' : 'Accounts Payable'))?.[0];
+    const control = [...kindOf.entries()].find(
+      ([, k]) =>
+        k.kind ===
+        (kind === 'customer' ? 'Accounts Receivable' : 'Accounts Payable'),
+    )?.[0];
     const row = tbRows.find((r) => r[0] === control);
     if (!row) return;
-    const bal = D(row[2] ?? 0).minus(row[3] ?? 0).plus(kind === 'customer' ? total : total.negated());
+    const bal = D(row[2] ?? 0)
+      .minus(row[3] ?? 0)
+      .plus(kind === 'customer' ? total : total.negated());
     row[2] = bal.greaterThan(0) ? money(bal) : null;
     row[3] = bal.lessThan(0) ? money(bal.negated()) : null;
     const n = freshNumber(kind === 'customer' ? 2400 : 1400);
-    const title = kind === 'customer' ? `Customer Advances (from ${label})` : `Advances to Suppliers (from ${label})`;
-    accountRows.push([n, title, kind === 'customer' ? 'Liability' : 'Asset', kind === 'customer' ? 'Other Liability' : 'Other Asset', null]);
-    tbRows.push([n, title, kind === 'customer' ? null : money(total), kind === 'customer' ? money(total) : null]);
+    const title =
+      kind === 'customer'
+        ? `Customer Advances (from ${label})`
+        : `Advances to Suppliers (from ${label})`;
+    accountRows.push([
+      n,
+      title,
+      kind === 'customer' ? 'Liability' : 'Asset',
+      kind === 'customer' ? 'Other Liability' : 'Other Asset',
+      null,
+    ]);
+    tbRows.push([
+      n,
+      title,
+      kind === 'customer' ? null : money(total),
+      kind === 'customer' ? money(total) : null,
+    ]);
     warnings.push(`${title}: Rs ${money(total)} — ${listed}.`);
   };
   holdResidual(ar.residual, 'customer');
@@ -388,12 +576,21 @@ export function buildCanonical(
   const itemRows = new Map<string, Array<string | null>>();
   // An item's FinMatrix SKU: its own SKU column where it has one, else its ID or name.
   const itemCode = new Map<string, string>();
-  const NOT_STOCK = /^(serv|service|othc|other charge|disc|discount|pmt|payment|grp|group|bundle|subt|subtotal|comptax|tax|salestax|sales tax item|category)$/i;
+  const NOT_STOCK =
+    /^(serv|service|othc|other charge|disc|discount|pmt|payment|grp|group|bundle|subt|subtotal|comptax|tax|salestax|sales tax item|category)$/i;
   for (const l of byKind.get('item_list')?.lines ?? []) {
     if (l.values.category && NOT_STOCK.test(l.values.category.trim())) continue;
     const code = (l.values.number ?? l.key).slice(0, 64);
     itemCode.set(l.key, code);
-    itemRows.set(code, [code, l.name ?? l.key, l.values.category ?? null, l.values.unit ?? null, l.values.cost ?? null, l.values.price ?? null, null]);
+    itemRows.set(code, [
+      code,
+      l.name ?? l.key,
+      l.values.category ?? null,
+      l.values.unit ?? null,
+      l.values.cost ?? null,
+      l.values.price ?? null,
+      null,
+    ]);
   }
   const stockRows: Array<Array<string | null>> = [];
   for (const l of valuation?.lines ?? []) {
@@ -409,11 +606,26 @@ export function buildCanonical(
       );
       continue;
     }
-    const unitCost = value.dividedBy(qty).toDecimalPlaces(4, Decimal.ROUND_HALF_UP).toFixed(4);
-    const code = itemCode.get(l.key) ?? (l.values.number ? itemCode.get(l.values.number) ?? l.values.number : l.key);
+    const unitCost = value
+      .dividedBy(qty)
+      .toDecimalPlaces(4, Decimal.ROUND_HALF_UP)
+      .toFixed(4);
+    const code =
+      itemCode.get(l.key) ??
+      (l.values.number
+        ? (itemCode.get(l.values.number) ?? l.values.number)
+        : l.key);
     stockRows.push([code, qty.toString(), unitCost, value.toFixed(2)]);
     if (!itemRows.has(code)) {
-      itemRows.set(code, [code, l.name ?? l.key, null, l.values.unit ?? null, unitCost, null, null]);
+      itemRows.set(code, [
+        code,
+        l.name ?? l.key,
+        null,
+        l.values.unit ?? null,
+        unitCost,
+        null,
+        null,
+      ]);
     }
   }
   const unpriced = [...itemRows.values()].filter((r) => !r[5]);
@@ -421,7 +633,12 @@ export function buildCanonical(
     block(
       MIGRATION_CODES.SOURCE_REPORTS_MISSING,
       'item-prices',
-      `${unpriced.length} item${unpriced.length === 1 ? ' has' : 's have'} no selling price (${unpriced.slice(0, 8).map((r) => r[0]).join(', ')}${unpriced.length > 8 ? ', …' : ''}). Upload the Item List from ${label} — it carries the prices.`,
+      `${unpriced.length} item${unpriced.length === 1 ? ' has' : 's have'} no selling price (${unpriced
+        .slice(0, 8)
+        .map((r) => r[0])
+        .join(
+          ', ',
+        )}${unpriced.length > 8 ? ', …' : ''}). Upload the Item List from ${label} — it carries the prices.`,
     );
 
   // Accounts without numbers get FinMatrix numbers: control accounts its
@@ -434,8 +651,16 @@ export function buildCanonical(
       const c = CONTROL_NUMBER[String(r[3])];
       if (c) byControl.set(c, [...(byControl.get(c) ?? []), String(r[0])]);
     }
-    for (const [num, keys] of byControl) if (keys.length === 1) numbering.set(keys[0], num);
-    const usedNumbers = new Set([...accountRows.filter((r) => isNumber(String(r[0]))).map((r) => String(r[0])), ...opts.existingAccounts.filter((n) => !Object.values(CONTROL_NUMBER).includes(n))]);
+    for (const [num, keys] of byControl)
+      if (keys.length === 1) numbering.set(keys[0], num);
+    const usedNumbers = new Set([
+      ...accountRows
+        .filter((r) => isNumber(String(r[0])))
+        .map((r) => String(r[0])),
+      ...opts.existingAccounts.filter(
+        (n) => !Object.values(CONTROL_NUMBER).includes(n),
+      ),
+    ]);
     const next = new Map<string, number>();
     for (const r of unnumbered) {
       const k = String(r[0]);
@@ -446,27 +671,41 @@ export function buildCanonical(
       next.set(String(r[2]), n + 1);
       numbering.set(k, String(n));
     }
-    for (const r of accountRows) if (numbering.has(String(r[0]))) r[0] = numbering.get(String(r[0]))!;
-    for (const r of tbRows) if (numbering.has(String(r[0]))) r[0] = numbering.get(String(r[0]))!;
+    for (const r of accountRows)
+      if (numbering.has(String(r[0]))) r[0] = numbering.get(String(r[0]))!;
+    for (const r of tbRows)
+      if (numbering.has(String(r[0]))) r[0] = numbering.get(String(r[0]))!;
     const strays = tbRows.filter((r) => !isNumber(String(r[0])));
     if (strays.length)
       block(
         MIGRATION_CODES.UNKNOWN_ACCOUNT,
         `tb-not-in-chart::${hash(strays.map((r) => r[0]).join('|'))}`,
-        `The trial balance has accounts the chart of accounts does not list: ${strays.slice(0, 8).map((r) => r[0]).join(', ')}${strays.length > 8 ? ', …' : ''}. Export both from ${label} at the same time.`,
+        `The trial balance has accounts the chart of accounts does not list: ${strays
+          .slice(0, 8)
+          .map((r) => r[0])
+          .join(
+            ', ',
+          )}${strays.length > 8 ? ', …' : ''}. Export both from ${label} at the same time.`,
       );
   }
   if (profile.partyCodes === false) {
     for (const r of [...customerRows, ...vendorRows]) r[0] = null;
   }
 
-  if (accountRows.length) grids.push(grid(name('Accounts'), 'accounts', accountRows));
-  if (customerRows.length) grids.push(grid(name('Customers'), 'customers', customerRows));
-  if (vendorRows.length) grids.push(grid(name('Vendors'), 'vendors', vendorRows));
-  if (itemRows.size) grids.push(grid(name('Items'), 'items', [...itemRows.values()]));
-  if (tbRows.length) grids.push(grid(name('Trial Balance'), 'trial_balance', tbRows));
-  if (ar.docs.length) grids.push(grid(name('Open Invoices'), 'open_invoices', ar.docs));
-  if (ap.docs.length) grids.push(grid(name('Open Bills'), 'open_bills', ap.docs));
+  if (accountRows.length)
+    grids.push(grid(name('Accounts'), 'accounts', accountRows));
+  if (customerRows.length)
+    grids.push(grid(name('Customers'), 'customers', customerRows));
+  if (vendorRows.length)
+    grids.push(grid(name('Vendors'), 'vendors', vendorRows));
+  if (itemRows.size)
+    grids.push(grid(name('Items'), 'items', [...itemRows.values()]));
+  if (tbRows.length)
+    grids.push(grid(name('Trial Balance'), 'trial_balance', tbRows));
+  if (ar.docs.length)
+    grids.push(grid(name('Open Invoices'), 'open_invoices', ar.docs));
+  if (ap.docs.length)
+    grids.push(grid(name('Open Bills'), 'open_bills', ap.docs));
   if (stockRows.length) grids.push(grid(name('Stock'), 'stock', stockRows));
   return { grids, issues, warnings, proof };
 }

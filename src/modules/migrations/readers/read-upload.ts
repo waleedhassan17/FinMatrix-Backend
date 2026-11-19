@@ -102,8 +102,14 @@ export async function readUpload(
     });
   }
   // QuickBooks Desktop IIF: tab-separated lists, each after a "!KEYWORD" header.
-  if (/\.iif$/i.test(originalName) || /^!(HDR|ACCNT|CUST|VEND|INVITEM|TRNS)\t/m.test(text.slice(0, 4096))) {
-    return { kind: 'csv', sheets: parseIif(text, limits.maxRows, originalName) };
+  if (
+    /\.iif$/i.test(originalName) ||
+    /^!(HDR|ACCNT|CUST|VEND|INVITEM|TRNS)\t/m.test(text.slice(0, 4096))
+  ) {
+    return {
+      kind: 'csv',
+      sheets: parseIif(text, limits.maxRows, originalName),
+    };
   }
   const grid = parseCsv(text, sniffDelimiter(text));
   if (grid.length > limits.maxRows)
@@ -157,7 +163,11 @@ export function sniffDelimiter(text: string): string {
   for (const d of [',', '\t', ';', '|']) {
     const counts = lines.map((l) => l.split(d).length - 1).filter((n) => n > 0);
     if (!counts.length) continue;
-    const mode = counts.sort((a, b) => counts.filter((x) => x === b).length - counts.filter((x) => x === a).length)[0];
+    const mode = counts.sort(
+      (a, b) =>
+        counts.filter((x) => x === b).length -
+        counts.filter((x) => x === a).length,
+    )[0];
     const score = counts.filter((n) => n === mode).length * mode;
     if (score > bestScore) {
       best = d;
@@ -173,7 +183,11 @@ export function sniffDelimiter(text: string): string {
  * line's field names as its header. Transactions (TRNS/SPL) are skipped:
  * a migration brings in balances, not history.
  */
-export function parseIif(text: string, maxRows: number, originalName: string): SourceGrid[] {
+export function parseIif(
+  text: string,
+  maxRows: number,
+  originalName: string,
+): SourceGrid[] {
   const sheets = new Map<string, SourceGrid>();
   let header: { keyword: string; fields: string[] } | null = null;
   let rows = 0;
@@ -183,8 +197,14 @@ export function parseIif(text: string, maxRows: number, originalName: string): S
     if (cells[0].startsWith('!')) {
       const keyword = cells[0].slice(1).toUpperCase();
       header = { keyword, fields: cells.slice(1) };
-      if (!['HDR', 'TRNS', 'SPL', 'ENDTRNS'].includes(keyword) && !sheets.has(keyword)) {
-        sheets.set(keyword, { name: keyword, rows: [{ rowNumber: i + 1, cells: cells.slice(1) }] });
+      if (
+        !['HDR', 'TRNS', 'SPL', 'ENDTRNS'].includes(keyword) &&
+        !sheets.has(keyword)
+      ) {
+        sheets.set(keyword, {
+          name: keyword,
+          rows: [{ rowNumber: i + 1, cells: cells.slice(1) }],
+        });
       }
       return;
     }
@@ -280,7 +300,8 @@ async function readZip(
     const lower = name.toLowerCase();
     if (!/\.(xlsx|csv|xml|tsv|txt|iif)$/.test(lower)) continue;
     // Zoho Books always locks its backups; other systems offer to.
-    if (entry.header.flags & 0x1) throw fail('MIGRATION_FILE_UNREADABLE', ZIP_LOCKED);
+    if (entry.header.flags & 0x1)
+      throw fail('MIGRATION_FILE_UNREADABLE', ZIP_LOCKED);
     const data = entry.getData();
     if (data.length > limits.maxBytes)
       throw fail(

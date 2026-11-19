@@ -8,7 +8,13 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
  * uploaded.
  */
 /** 'extract': a large export already read by the background reader (its sheets, as JSON). */
-export type MigrationFileKind = 'xlsx' | 'csv' | 'zip' | 'xml' | 'ptb' | 'extract';
+export type MigrationFileKind =
+  | 'xlsx'
+  | 'csv'
+  | 'zip'
+  | 'xml'
+  | 'ptb'
+  | 'extract';
 
 export interface DetectedSheet {
   /** Sheet name inside the file (or the file name for a CSV). */

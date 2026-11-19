@@ -33,7 +33,9 @@ export function isStarterSheet(g: SourceGrid): boolean {
     return g.rows.slice(0, 5).some((r) => {
       const cells = r.cells.map((c) => normalizeKey(c)).filter(Boolean);
       const matched = cells.filter((c) => titles.has(c)).length;
-      return matched >= Math.min(3, titles.size) && matched >= cells.length * 0.75;
+      return (
+        matched >= Math.min(3, titles.size) && matched >= cells.length * 0.75
+      );
     });
   });
 }
@@ -58,7 +60,13 @@ export type ReportKind =
   | 'transactions';
 
 /** Reports a migration does not need: listed as skipped. */
-export const SKIPPED_KINDS: ReportKind[] = ['general_ledger', 'journal', 'profit_and_loss', 'balance_sheet', 'transactions'];
+export const SKIPPED_KINDS: ReportKind[] = [
+  'general_ledger',
+  'journal',
+  'profit_and_loss',
+  'balance_sheet',
+  'transactions',
+];
 
 export const REPORT_KIND_LABEL: Record<ReportKind, string> = {
   chart_of_accounts: 'Chart of accounts',
@@ -116,10 +124,28 @@ export type Field =
   | 'contactType'
   | 'status';
 
-const AMOUNT_FIELDS: Field[] = ['debit', 'credit', 'balance', 'original', 'amount', 'value', 'ytdDebit', 'ytdCredit'];
+const AMOUNT_FIELDS: Field[] = [
+  'debit',
+  'credit',
+  'balance',
+  'original',
+  'amount',
+  'value',
+  'ytdDebit',
+  'ytdCredit',
+];
 const QUANTITY_FIELDS: Field[] = ['qty'];
 /** Fields whose printed totals are checked. */
-const TOTALLED: Field[] = ['debit', 'credit', 'balance', 'amount', 'value', 'qty', 'ytdDebit', 'ytdCredit'];
+const TOTALLED: Field[] = [
+  'debit',
+  'credit',
+  'balance',
+  'amount',
+  'value',
+  'qty',
+  'ytdDebit',
+  'ytdCredit',
+];
 
 export interface ReportSpec {
   kind: ReportKind;
@@ -234,12 +260,20 @@ export function recogniseReport(
     const sheetName = ` ${norm(grid.name)} `;
     for (const profile of ordered) {
       for (const spec of profile.specs) {
-        if (spec.title && !spec.title.some((t) => above.includes(` ${t} `) || sheetName.includes(` ${t} `))) continue;
+        if (
+          spec.title &&
+          !spec.title.some(
+            (t) => above.includes(` ${t} `) || sheetName.includes(` ${t} `),
+          )
+        )
+          continue;
         const col: Partial<Record<Field, number>> = {};
         const taken = new Set<number>();
         let ok = true;
         for (const field of spec.need) {
-          const at = cells.findIndex((c, k) => !taken.has(k) && (spec.columns[field] ?? []).includes(c));
+          const at = cells.findIndex(
+            (c, k) => !taken.has(k) && (spec.columns[field] ?? []).includes(c),
+          );
           if (at < 0) {
             ok = false;
             break;
@@ -249,15 +283,23 @@ export function recogniseReport(
         }
         if (!ok) continue;
         if (spec.implicitKey && col.key === undefined) {
-          const firstNamed = Math.min(...Object.values(col).filter((v): v is number => v !== undefined));
-          const blank = cells.findIndex((c, k) => k < firstNamed && c === '' && !taken.has(k));
+          const firstNamed = Math.min(
+            ...Object.values(col).filter((v): v is number => v !== undefined),
+          );
+          const blank = cells.findIndex(
+            (c, k) => k < firstNamed && c === '' && !taken.has(k),
+          );
           if (blank < 0) continue;
           col.key = blank;
           taken.add(blank);
         }
-        for (const [field, names] of Object.entries(spec.columns) as Array<[Field, string[]]>) {
+        for (const [field, names] of Object.entries(spec.columns) as Array<
+          [Field, string[]]
+        >) {
           if (col[field] !== undefined) continue;
-          const at = cells.findIndex((c, k) => !taken.has(k) && names.includes(c));
+          const at = cells.findIndex(
+            (c, k) => !taken.has(k) && names.includes(c),
+          );
           if (at >= 0) {
             col[field] = at;
             taken.add(at);
@@ -265,8 +307,12 @@ export function recogniseReport(
         }
         // The more columns a spec explains, the better it fits; a preferred
         // profile wins a tie.
-        const score = Object.keys(col).length * 10 + (spec.title ? 5 : 0) + (profile.source === preferred ? 1 : 0);
-        if (!best || score > best.score) best = { profile, spec, headerIndex: i, col, score };
+        const score =
+          Object.keys(col).length * 10 +
+          (spec.title ? 5 : 0) +
+          (profile.source === preferred ? 1 : 0);
+        if (!best || score > best.score)
+          best = { profile, spec, headerIndex: i, col, score };
       }
     }
   }
@@ -276,7 +322,20 @@ export function recogniseReport(
   return rest;
 }
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const MONTHS = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+];
 const iso = (y: number, m: number, d: number) =>
   `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
@@ -289,19 +348,31 @@ export function reportDate(lines: string[], order: DateOrder): string | null {
   const text = lines.join(' | ');
   // A two-digit year only in "Sep 30, 26" (QuickBooks Desktop), after the comma:
   // elsewhere "1 - September 30, 2026" would read "30" as a year.
-  const monthName = /([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}|\d{2})|\s+(\d{4}))\b|(\d{1,2})(?:st|nd|rd|th)?[\s-]+([a-z]{3})[a-z]*\.?[\s-]+(\d{4})\b/gi;
+  const monthName =
+    /([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}|\d{2})|\s+(\d{4}))\b|(\d{1,2})(?:st|nd|rd|th)?[\s-]+([a-z]{3})[a-z]*\.?[\s-]+(\d{4})\b/gi;
   const numeric = /(\d{1,4})[/.-](\d{1,2})[/.-](\d{2,4})/g;
   const found: Array<{ at: number; iso: string; marked: boolean }> = [];
-  const marked = (at: number) => /\b(as\s+(of|at|on)|to|through|ending|-|–)\s*$/i.test(text.slice(Math.max(0, at - 14), at));
+  const marked = (at: number) =>
+    /\b(as\s+(of|at|on)|to|through|ending|-|–)\s*$/i.test(
+      text.slice(Math.max(0, at - 14), at),
+    );
   for (const m of text.matchAll(monthName)) {
-    const [mon, day, year] = m[1] ? [m[1], m[2], m[3] ?? m[4]] : [m[6], m[5], m[7]];
+    const [mon, day, year] = m[1]
+      ? [m[1], m[2], m[3] ?? m[4]]
+      : [m[6], m[5], m[7]];
     const month = MONTHS.indexOf(mon.toLowerCase()) + 1;
     const y = year.length === 2 ? 2000 + Number(year) : Number(year);
-    if (month > 0) found.push({ at: m.index!, iso: iso(y, month, Number(day)), marked: marked(m.index!) });
+    if (month > 0)
+      found.push({
+        at: m.index!,
+        iso: iso(y, month, Number(day)),
+        marked: marked(m.index!),
+      });
   }
   for (const m of text.matchAll(numeric)) {
     const r = parseDate(m[0], order);
-    if (r.ok && r.iso) found.push({ at: m.index!, iso: r.iso, marked: marked(m.index!) });
+    if (r.ok && r.iso)
+      found.push({ at: m.index!, iso: r.iso, marked: marked(m.index!) });
   }
   if (!found.length) return null;
   // "As of …" wins; otherwise the latest date (a period's end).
@@ -328,13 +399,21 @@ const textOf = (v: unknown): string =>
  * is that part's leading number, if any. `path` is the whole cell, unique
  * where names repeat under different parents.
  */
-export function splitAccountCell(cell: string): { number: string | null; name: string; path: string } {
+export function splitAccountCell(cell: string): {
+  number: string | null;
+  name: string;
+  path: string;
+} {
   const path = cell.trim().replace(/\s+/g, ' ');
-  const parts = path.split(':').map((p) => p.trim()).filter(Boolean);
+  const parts = path
+    .split(':')
+    .map((p) => p.trim())
+    .filter(Boolean);
   const last = parts.length ? parts[parts.length - 1] : path;
   // "Sales (200)": the code in brackets after the name (Xero).
   const bracketed = /^(.+?)\s*\((\d[\w.\-/]*)\)$/.exec(last);
-  if (bracketed) return { number: bracketed[2], name: bracketed[1].trim(), path };
+  if (bracketed)
+    return { number: bracketed[2], name: bracketed[1].trim(), path };
   const m = /^(\d[\d.\-/]*)\s*(?:·|•|-|–)?\s+(.+)$/.exec(last);
   if (m) return { number: m[1], name: m[2].trim(), path };
   if (/^\d[\d.\-/]*$/.test(last)) return { number: last, name: last, path };
@@ -347,7 +426,11 @@ export function splitAccountCell(cell: string): { number: string | null; name: s
  * separately), is that list: its file name says which. A combined list
  * keeps its kind, and is placed contact by contact.
  */
-function contactListKind(kind: ReportKind, typed: boolean, sheet: string): ReportKind {
+function contactListKind(
+  kind: ReportKind,
+  typed: boolean,
+  sheet: string,
+): ReportKind {
   if (kind !== 'contact_list' || typed) return kind;
   const name = ` ${norm(sheet)} `;
   if (/ (vendors?|suppliers?|creditors?) /.test(name)) return 'vendor_list';
@@ -355,27 +438,54 @@ function contactListKind(kind: ReportKind, typed: boolean, sheet: string): Repor
   return kind;
 }
 
-export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSourceReport {
+export function parseSourceReport(
+  grid: SourceGrid,
+  r: Recognised,
+): ParsedSourceReport {
   const { spec, profile, headerIndex, col } = r;
   const problems: string[] = [];
-  const at = (row: { cells: unknown[] }, f: Field) => (col[f] === undefined ? undefined : row.cells[col[f]!]);
+  const at = (row: { cells: unknown[] }, f: Field) =>
+    col[f] === undefined ? undefined : row.cells[col[f]!];
   // A sheet written with decimal commas (1.500,00) writes thousands with dots
   // everywhere, quantities included (1.500 is fifteen hundred there).
-  const numericCols = [...AMOUNT_FIELDS, ...QUANTITY_FIELDS].map((f) => col[f]).filter((c): c is number => c !== undefined);
-  const texts = grid.rows.slice(headerIndex + 1).flatMap((rw) => numericCols.map((c) => rw.cells[c])).filter((v): v is string => typeof v === 'string');
+  const numericCols = [...AMOUNT_FIELDS, ...QUANTITY_FIELDS]
+    .map((f) => col[f])
+    .filter((c): c is number => c !== undefined);
+  const texts = grid.rows
+    .slice(headerIndex + 1)
+    .flatMap((rw) => numericCols.map((c) => rw.cells[c]))
+    .filter((v): v is string => typeof v === 'string');
   const decimalComma =
-    texts.some((t) => /\d,\d{1,2}\s*$/.test(t)) && !texts.some((t) => /\d\.\d{1,2}\s*$/.test(t));
+    texts.some((t) => /\d,\d{1,2}\s*$/.test(t)) &&
+    !texts.some((t) => /\d\.\d{1,2}\s*$/.test(t));
   const localised = (raw: unknown) =>
-    decimalComma && typeof raw === 'string' && /^[\s\d.]+$/.test(raw.trim()) && /^\d{1,3}(\.\d{3})+$/.test(raw.trim())
+    decimalComma &&
+    typeof raw === 'string' &&
+    /^[\s\d.]+$/.test(raw.trim()) &&
+    /^\d{1,3}(\.\d{3})+$/.test(raw.trim())
       ? raw.replace(/\./g, '')
       : raw;
-  const read = (row: { rowNumber: number; cells: unknown[] }, f: Field): string | undefined => {
+  const read = (
+    row: { rowNumber: number; cells: unknown[] },
+    f: Field,
+  ): string | undefined => {
     const raw = at(row, f);
-    if (raw === null || raw === undefined || textOf(raw) === '') return undefined;
-    if (AMOUNT_FIELDS.includes(f) || QUANTITY_FIELDS.includes(f) || f === 'cost' || f === 'price' || f === 'creditLimit') {
-      const res = (QUANTITY_FIELDS.includes(f) ? parseQuantity : parseAmount)(localised(raw));
+    if (raw === null || raw === undefined || textOf(raw) === '')
+      return undefined;
+    if (
+      AMOUNT_FIELDS.includes(f) ||
+      QUANTITY_FIELDS.includes(f) ||
+      f === 'cost' ||
+      f === 'price' ||
+      f === 'creditLimit'
+    ) {
+      const res = (QUANTITY_FIELDS.includes(f) ? parseQuantity : parseAmount)(
+        localised(raw),
+      );
       if (!res.ok) {
-        problems.push(`${grid.name} row ${row.rowNumber}: "${textOf(raw)}" in ${f} ${res.error}`);
+        problems.push(
+          `${grid.name} row ${row.rowNumber}: "${textOf(raw)}" in ${f} ${res.error}`,
+        );
         return undefined;
       }
       if (!res.amount) return undefined;
@@ -385,7 +495,9 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
     if (f === 'date' || f === 'due') {
       const d = parseDate(raw, profile.dateOrder);
       if (!d.ok || !d.iso) {
-        problems.push(`${grid.name} row ${row.rowNumber}: "${textOf(raw)}" is not a date FinMatrix can read`);
+        problems.push(
+          `${grid.name} row ${row.rowNumber}: "${textOf(raw)}" is not a date FinMatrix can read`,
+        );
         return undefined;
       }
       return d.iso;
@@ -417,11 +529,15 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
         !!group &&
         !/\b(report|grand)\b/i.test(label) &&
         !/^\s*totals?\s*:?\s*$/i.test(label) &&
-        (spec.grouped || spec.sections || (heading !== '' && norm(label).includes(norm(heading))));
+        (spec.grouped ||
+          spec.sections ||
+          (heading !== '' && norm(label).includes(norm(heading))));
       const scopeLines = inGroup ? lines.slice(groupStart) : lines;
       const computed: Partial<Record<Field, string>> = {};
       for (const f of Object.keys(values) as Field[]) {
-        computed[f] = scopeLines.reduce((t, l) => t.plus(l.values[f] ?? 0), new Decimal(0)).toFixed(2);
+        computed[f] = scopeLines
+          .reduce((t, l) => t.plus(l.values[f] ?? 0), new Decimal(0))
+          .toFixed(2);
       }
       totals.push({
         rowNumber: row.rowNumber,
@@ -444,9 +560,12 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
         continue;
       }
       if (!docNo) continue;
-      const party = read(row, 'party') ?? (spec.partyFromSection ? group?.key ?? '' : '');
+      const party =
+        read(row, 'party') ?? (spec.partyFromSection ? (group?.key ?? '') : '');
       if (!party) {
-        problems.push(`${grid.name} row ${row.rowNumber}: document ${docNo} names no customer or vendor`);
+        problems.push(
+          `${grid.name} row ${row.rowNumber}: document ${docNo} names no customer or vendor`,
+        );
         continue;
       }
       const values: Partial<Record<Field, string>> = {};
@@ -455,7 +574,13 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
         const v = read(row, f);
         if (v !== undefined) values[f] = v;
       }
-      lines.push({ rowNumber: row.rowNumber, key: party, name: party, group: group ?? undefined, values });
+      lines.push({
+        rowNumber: row.rowNumber,
+        key: party,
+        name: party,
+        group: group ?? undefined,
+        values,
+      });
       continue;
     }
     if (spec.grouped) {
@@ -466,12 +591,17 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
       }
       if (!docNo) continue; // a heading or note inside a group
       if (!group) {
-        problems.push(`${grid.name} row ${row.rowNumber}: document ${docNo} is not under any party`);
+        problems.push(
+          `${grid.name} row ${row.rowNumber}: document ${docNo} is not under any party`,
+        );
         continue;
       }
     } else if (!key && !read(row, 'name')) {
       continue;
-    } else if ((spec.kind === 'trial_balance' || spec.kind === 'inventory_valuation') && !amountsIn(row)) {
+    } else if (
+      (spec.kind === 'trial_balance' || spec.kind === 'inventory_valuation') &&
+      !amountsIn(row)
+    ) {
       // A section heading ("Assets", "Inventory", "Grocery"): its subtotal,
       // "Total <heading>", closes it.
       group = { key: key || read(row, 'name') || '', name: null };
@@ -513,16 +643,24 @@ export function parseSourceReport(grid: SourceGrid, r: Recognised): ParsedSource
         );
       }
     }
-    const ytd = t.values.ytdDebit !== undefined && t.values.ytdCredit !== undefined;
-    if (spec.kind === 'trial_balance' && (ytd || (t.values.debit !== undefined && t.values.credit !== undefined))) {
+    const ytd =
+      t.values.ytdDebit !== undefined && t.values.ytdCredit !== undefined;
+    if (
+      spec.kind === 'trial_balance' &&
+      (ytd || (t.values.debit !== undefined && t.values.credit !== undefined))
+    ) {
       const d = new Decimal((ytd ? t.values.ytdDebit : t.values.debit)!);
       const c = new Decimal((ytd ? t.values.ytdCredit : t.values.credit)!);
       if (!d.abs().equals(c.abs())) {
-        problems.push(`${grid.name} row ${t.rowNumber}: the trial balance's total debits ${d.toFixed(2)} and credits ${c.abs().toFixed(2)} differ`);
+        problems.push(
+          `${grid.name} row ${t.rowNumber}: the trial balance's total debits ${d.toFixed(2)} and credits ${c.abs().toFixed(2)} differ`,
+        );
       }
     }
   }
-  const titleLines = grid.rows.slice(0, headerIndex).map((rw) => rw.cells.map(textOf).join(' '));
+  const titleLines = grid.rows
+    .slice(0, headerIndex)
+    .map((rw) => rw.cells.map(textOf).join(' '));
   return {
     source: profile.source,
     kind: contactListKind(spec.kind, col.contactType !== undefined, grid.name),

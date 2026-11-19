@@ -3,14 +3,28 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { readExport } from '../../uploads/export-reader';
-import { decodeText, parseIif, readUpload, sniffDelimiter } from '../../readers/read-upload';
+import {
+  decodeText,
+  parseIif,
+  readUpload,
+  sniffDelimiter,
+} from '../../readers/read-upload';
 import { SourceGrid } from '../../readers/read-upload';
 import { parseAmount } from '../../parsers/amount.parser';
 import { buildCanonical } from './canonical';
 import { REPORT_PROFILES } from './profiles';
-import { QUICKBOOKS_DESKTOP_PROFILE, QUICKBOOKS_ONLINE_PROFILE } from './profiles/quickbooks';
+import {
+  QUICKBOOKS_DESKTOP_PROFILE,
+  QUICKBOOKS_ONLINE_PROFILE,
+} from './profiles/quickbooks';
 import { XERO_PROFILE, ZOHO_BOOKS_PROFILE } from './profiles/xero-zoho';
-import { isStarterSheet, parseSourceReport, recogniseReport, reportDate, splitAccountCell } from './report-engine';
+import {
+  isStarterSheet,
+  parseSourceReport,
+  recogniseReport,
+  reportDate,
+  splitAccountCell,
+} from './report-engine';
 
 const sheet = (name: string, rows: unknown[][]): SourceGrid => ({
   name,
@@ -24,17 +38,32 @@ const parse = (g: SourceGrid, preferred?: string) => {
 
 describe('report engine', () => {
   it('reads an account cell however a system prints it', () => {
-    expect(splitAccountCell('1000 · Checking')).toMatchObject({ number: '1000', name: 'Checking' });
-    expect(splitAccountCell('1000 - Cash in Hand')).toMatchObject({ number: '1000', name: 'Cash in Hand' });
-    expect(splitAccountCell('Utilities:Gas & Electric')).toMatchObject({ number: null, name: 'Gas & Electric', path: 'Utilities:Gas & Electric' });
-    expect(splitAccountCell('6100 · Utilities:6110 · Gas')).toMatchObject({ number: '6110', name: 'Gas' });
+    expect(splitAccountCell('1000 · Checking')).toMatchObject({
+      number: '1000',
+      name: 'Checking',
+    });
+    expect(splitAccountCell('1000 - Cash in Hand')).toMatchObject({
+      number: '1000',
+      name: 'Cash in Hand',
+    });
+    expect(splitAccountCell('Utilities:Gas & Electric')).toMatchObject({
+      number: null,
+      name: 'Gas & Electric',
+      path: 'Utilities:Gas & Electric',
+    });
+    expect(splitAccountCell('6100 · Utilities:6110 · Gas')).toMatchObject({
+      number: '6110',
+      name: 'Gas',
+    });
   });
 
   it('finds the report date in its title, in every form', () => {
     expect(reportDate(['As of September 30, 2026'], 'mdy')).toBe('2026-09-30');
     expect(reportDate(['As at 30/09/2026'], 'dmy')).toBe('2026-09-30');
     expect(reportDate(['', 'Sep 30, 26'], 'mdy')).toBe('2026-09-30');
-    expect(reportDate(['July 1 - September 30, 2026'], 'mdy')).toBe('2026-09-30');
+    expect(reportDate(['July 1 - September 30, 2026'], 'mdy')).toBe(
+      '2026-09-30',
+    );
     expect(reportDate(['As on 30-Sep-2026'], 'dmy')).toBe('2026-09-30');
     expect(reportDate(['Trial Balance'], 'mdy')).toBeNull();
   });
@@ -58,7 +87,11 @@ describe('report engine', () => {
     );
     expect(r.source).toBe('quickbooks_online');
     expect(r.kind).toBe('trial_balance');
-    expect(r.lines.map((l) => l.key)).toEqual(['Checking', 'Utilities:Electricity', 'Sales']);
+    expect(r.lines.map((l) => l.key)).toEqual([
+      'Checking',
+      'Utilities:Electricity',
+      'Sales',
+    ]);
     expect(r.problems).toEqual([]);
   });
 
@@ -68,13 +101,53 @@ describe('report engine', () => {
       ['A/R Aging Detail'],
       ['As of September 30, 2026'],
       [],
-      ['', 'Date', 'Transaction Type', 'Num', 'Customer', 'Due Date', 'Past Due', 'Amount', 'Open Balance'],
+      [
+        '',
+        'Date',
+        'Transaction Type',
+        'Num',
+        'Customer',
+        'Due Date',
+        'Past Due',
+        'Amount',
+        'Open Balance',
+      ],
       ['Current'],
-      ['', '09/20/2026', 'Invoice', '1001', 'Ali Traders', '10/20/2026', 0, 500, 500],
+      [
+        '',
+        '09/20/2026',
+        'Invoice',
+        '1001',
+        'Ali Traders',
+        '10/20/2026',
+        0,
+        500,
+        500,
+      ],
       ['Total for Current', '', '', '', '', '', '', 500, 500],
       ['1 - 30 days past due'],
-      ['', '08/20/2026', 'Invoice', '1002', 'Bismillah Store', '09/19/2026', 11, 300, 250],
-      ['', '08/25/2026', 'Credit Memo', '1003', 'Bismillah Store', '08/25/2026', 36, -50, -50],
+      [
+        '',
+        '08/20/2026',
+        'Invoice',
+        '1002',
+        'Bismillah Store',
+        '09/19/2026',
+        11,
+        300,
+        250,
+      ],
+      [
+        '',
+        '08/25/2026',
+        'Credit Memo',
+        '1003',
+        'Bismillah Store',
+        '08/25/2026',
+        36,
+        -50,
+        -50,
+      ],
       ['Total for 1 - 30 days past due', '', '', '', '', '', '', 250, 200],
       ['TOTAL', '', '', '', '', '', '', 750, 700],
     ];
@@ -89,7 +162,11 @@ describe('report engine', () => {
     expect(r.problems).toEqual([]);
     // A changed line no longer matches its bucket's printed total.
     rows[9][8] = 260;
-    expect(parse(sheet('A/R Aging Detail', rows), 'quickbooks_online').problems.join(' ')).toMatch(/Total for 1 - 30 days past due.*add up to 210\.00/);
+    expect(
+      parse(sheet('A/R Aging Detail', rows), 'quickbooks_online').problems.join(
+        ' ',
+      ),
+    ).toMatch(/Total for 1 - 30 days past due.*add up to 210\.00/);
   });
 
   it('subtotals under headings are proven against their own lines, the grand total against all', () => {
@@ -122,7 +199,10 @@ describe('report engine', () => {
         ['', 'Total:', '1.500,00', '1.500,00'],
       ]),
     );
-    expect(r.lines.map((l) => l.values.debit ?? l.values.credit)).toEqual(['1500', '1500']);
+    expect(r.lines.map((l) => l.values.debit ?? l.values.credit)).toEqual([
+      '1500',
+      '1500',
+    ]);
     expect(r.problems).toEqual([]);
   });
 
@@ -131,12 +211,14 @@ describe('report engine', () => {
       ['Customer code', 'Name', 'Phone'],
       ['C1', 'Ali', '0300'],
     ]);
-    expect(recogniseReport(customers, REPORT_PROFILES, 'quickbooks_desktop')).toBeNull();
+    expect(
+      recogniseReport(customers, REPORT_PROFILES, 'quickbooks_desktop'),
+    ).toBeNull();
   });
 });
 
 describe('canonical sheets from QuickBooks', () => {
-  it('numbers unnumbered accounts (controls get FinMatrix\'s own) and codes no parties', () => {
+  it("numbers unnumbered accounts (controls get FinMatrix's own) and codes no parties", () => {
     const chart = parse(
       sheet('Account List', [
         ['Co'],
@@ -144,7 +226,11 @@ describe('canonical sheets from QuickBooks', () => {
         [],
         ['Account', 'Type', 'Detail Type'],
         ['Checking', 'Bank', 'Checking'],
-        ['Accounts Receivable (A/R)', 'Accounts receivable (A/R)', 'Accounts Receivable (A/R)'],
+        [
+          'Accounts Receivable (A/R)',
+          'Accounts receivable (A/R)',
+          'Accounts Receivable (A/R)',
+        ],
         ['Inventory Asset', 'Other Current Assets', 'Inventory'],
         ['Owner Equity', 'Equity', "Owner's Equity"],
       ]),
@@ -163,23 +249,50 @@ describe('canonical sheets from QuickBooks', () => {
       ]),
       'quickbooks_online',
     );
-    const out = buildCanonical([chart, tb], QUICKBOOKS_ONLINE_PROFILE, { openingDate: '2026-09-30', accepted: () => false, existingAccounts: ['1000', '1100', '1200', '2000', '3100'] });
-    const accounts = out.grids.find((g) => g.name.startsWith('Accounts'))!.rows.slice(1).map((r) => [r.cells[0], r.cells[1], r.cells[3]]);
+    const out = buildCanonical([chart, tb], QUICKBOOKS_ONLINE_PROFILE, {
+      openingDate: '2026-09-30',
+      accepted: () => false,
+      existingAccounts: ['1000', '1100', '1200', '2000', '3100'],
+    });
+    const accounts = out.grids
+      .find((g) => g.name.startsWith('Accounts'))!
+      .rows.slice(1)
+      .map((r) => [r.cells[0], r.cells[1], r.cells[3]]);
     expect(accounts).toEqual([
       ['18001', 'Checking', 'Bank'],
       ['1100', 'Accounts Receivable (A/R)', 'Accounts Receivable'],
       ['1200', 'Inventory Asset', 'Inventory'],
       ['38001', 'Owner Equity', 'Owner Equity'],
     ]);
-    const tbRows = out.grids.find((g) => g.name.startsWith('Trial Balance'))!.rows.slice(1).map((r) => r.cells[0]);
+    const tbRows = out.grids
+      .find((g) => g.name.startsWith('Trial Balance'))!
+      .rows.slice(1)
+      .map((r) => r.cells[0]);
     expect(tbRows).toEqual(['18001', '1100', '1200', '38001']);
     // The receivables balance has no aged receivables yet: asked for.
     expect(out.issues.map((i) => i.code)).toContain('SOURCE_REPORTS_MISSING');
   });
 
   it('a customer credit beyond its open invoices is held on an advances account only when accepted', () => {
-    const chart = parse(sheet('ACCNT', [['NAME', 'ACCNTTYPE', 'ACCNUM'], ['Accounts Receivable', 'AR', '1100'], ['Equity', 'EQUITY', '3000'], ['Purchase Orders', 'NONPOSTING', '']]), 'quickbooks_desktop');
-    const tb = parse(sheet('Trial Balance', [['', 'Sep 30, 26'], ['', 'Debit', 'Credit'], ['1100 · Accounts Receivable', null, 40], ['3000 · Equity', 40, null], ['TOTAL', 40, 40]]), 'quickbooks_desktop');
+    const chart = parse(
+      sheet('ACCNT', [
+        ['NAME', 'ACCNTTYPE', 'ACCNUM'],
+        ['Accounts Receivable', 'AR', '1100'],
+        ['Equity', 'EQUITY', '3000'],
+        ['Purchase Orders', 'NONPOSTING', ''],
+      ]),
+      'quickbooks_desktop',
+    );
+    const tb = parse(
+      sheet('Trial Balance', [
+        ['', 'Sep 30, 26'],
+        ['', 'Debit', 'Credit'],
+        ['1100 · Accounts Receivable', null, 40],
+        ['3000 · Equity', 40, null],
+        ['TOTAL', 40, 40],
+      ]),
+      'quickbooks_desktop',
+    );
     const ar = parse(
       sheet('A_R Aging Detail', [
         ['A/R Aging Detail'],
@@ -194,20 +307,33 @@ describe('canonical sheets from QuickBooks', () => {
       'quickbooks_desktop',
     );
     const run = (accepted: boolean) =>
-      buildCanonical([chart, tb, ar], QUICKBOOKS_DESKTOP_PROFILE, { openingDate: '2026-09-30', accepted: (k) => accepted && k === 'customer-credits', existingAccounts: [] });
+      buildCanonical([chart, tb, ar], QUICKBOOKS_DESKTOP_PROFILE, {
+        openingDate: '2026-09-30',
+        accepted: (k) => accepted && k === 'customer-credits',
+        existingAccounts: [],
+      });
     const asked = run(false);
-    expect(asked.issues.find((i) => i.code === 'SOURCE_NET_CREDIT')?.message).toMatch(/Ali 40\.00/);
+    expect(
+      asked.issues.find((i) => i.code === 'SOURCE_NET_CREDIT')?.message,
+    ).toMatch(/Ali 40\.00/);
     expect(asked.warnings.join(' ')).toMatch(/Ali:Job 1/);
     const held = run(true);
     expect(held.issues.filter((i) => i.severity === 'blocking')).toEqual([]);
-    const tbOut = held.grids.find((g) => g.name.startsWith('Trial Balance'))!.rows.slice(1).map((r) => r.cells);
+    const tbOut = held.grids
+      .find((g) => g.name.startsWith('Trial Balance'))!
+      .rows.slice(1)
+      .map((r) => r.cells);
     expect(tbOut).toEqual([
       ['1100', 'Accounts Receivable', null, null],
       ['3000', 'Equity', '40.00', null],
       ['2400', 'Customer Advances (from QuickBooks Desktop)', null, '40.00'],
     ]);
     // The non-posting account carries nothing and is left out.
-    expect(held.grids.find((g) => g.name.startsWith('Accounts'))!.rows.some((r) => r.cells[1] === 'Purchase Orders')).toBe(false);
+    expect(
+      held.grids
+        .find((g) => g.name.startsWith('Accounts'))!
+        .rows.some((r) => r.cells[1] === 'Purchase Orders'),
+    ).toBe(false);
   });
 });
 
@@ -217,13 +343,57 @@ describe('Xero and Zoho Books', () => {
     ['Indus Co'],
     ['As at 30 September 2026'],
     [],
-    ['Invoice Date', 'Invoice Number', 'Invoice Reference', 'Due Date', 'Current', '< 1 Month', '1 Month', '2 Months', 'Older', 'Total'],
+    [
+      'Invoice Date',
+      'Invoice Number',
+      'Invoice Reference',
+      'Due Date',
+      'Current',
+      '< 1 Month',
+      '1 Month',
+      '2 Months',
+      'Older',
+      'Total',
+    ],
     ['Ali Traders'],
-    ['01 Sep 2026', 'INV-0001', '', '01 Oct 2026', 500, null, null, null, null, 500],
-    ['10 Aug 2026', 'INV-0002', '', '09 Sep 2026', null, 250, null, null, null, 250],
+    [
+      '01 Sep 2026',
+      'INV-0001',
+      '',
+      '01 Oct 2026',
+      500,
+      null,
+      null,
+      null,
+      null,
+      500,
+    ],
+    [
+      '10 Aug 2026',
+      'INV-0002',
+      '',
+      '09 Sep 2026',
+      null,
+      250,
+      null,
+      null,
+      null,
+      250,
+    ],
     ['Total Ali Traders', '', '', '', 500, 250, null, null, null, 750],
     ['Bismillah Store'],
-    ['05 Jul 2026', 'INV-0003', '', '04 Aug 2026', null, null, 300, null, null, 300],
+    [
+      '05 Jul 2026',
+      'INV-0003',
+      '',
+      '04 Aug 2026',
+      null,
+      null,
+      300,
+      null,
+      null,
+      300,
+    ],
     ['Total Bismillah Store', '', '', '', null, null, 300, null, null, 300],
     ['Total', '', '', '', 500, 250, 300, null, null, 1050],
   ];
@@ -241,7 +411,9 @@ describe('Xero and Zoho Books', () => {
     ]);
     expect(r.problems).toEqual([]);
     rows[7][9] = 260;
-    expect(parse(sheet('Aged Receivables Detail', rows), 'xero').problems.join(' ')).toMatch(/Total Ali Traders/);
+    expect(
+      parse(sheet('Aged Receivables Detail', rows), 'xero').problems.join(' '),
+    ).toMatch(/Total Ali Traders/);
   });
 
   it('Xero trial balance: "Sales (200)" gives the code, and the year-to-date pair is the one proven', () => {
@@ -251,7 +423,15 @@ describe('Xero and Zoho Books', () => {
         ['Indus Co'],
         ['As at 30 September 2026'],
         [],
-        ['Account', 'Account Code', 'Account Type', 'Debit', 'Credit', 'YTD Debit', 'YTD Credit'],
+        [
+          'Account',
+          'Account Code',
+          'Account Type',
+          'Debit',
+          'Credit',
+          'YTD Debit',
+          'YTD Credit',
+        ],
         ['Assets'],
         ['Business Bank (090)', '', 'Bank', 900, null, 900, null],
         ['Revenue'],
@@ -261,7 +441,14 @@ describe('Xero and Zoho Books', () => {
       'xero',
     );
     expect(r.kind).toBe('trial_balance');
-    expect(r.lines.map((l) => [l.values.number ?? null, l.name ?? l.key, l.values.ytdDebit ?? null, l.values.ytdCredit ?? null])).toEqual([
+    expect(
+      r.lines.map((l) => [
+        l.values.number ?? null,
+        l.name ?? l.key,
+        l.values.ytdDebit ?? null,
+        l.values.ytdCredit ?? null,
+      ]),
+    ).toEqual([
       ['090', 'Business Bank', '900', null],
       ['200', 'Sales', null, '900'],
     ]);
@@ -287,30 +474,93 @@ describe('Xero and Zoho Books', () => {
 
   it('Zoho Books: customers and vendors exported separately are each their own list, not a duplicate', () => {
     const head = ['Display Name', 'Company Name', 'EmailID', 'Phone'];
-    const customers = parse(sheet('Customers', [head, ['Ali Traders', 'Ali Traders', '', ''], ['Quiet Customer', '', '', '']]), 'zoho_books');
-    const vendors = parse(sheet('Vendors', [head, ['Karachi Mills', '', '', '']]), 'zoho_books');
-    expect([customers.kind, vendors.kind]).toEqual(['customer_list', 'vendor_list']);
-    const out = buildCanonical([customers, vendors], ZOHO_BOOKS_PROFILE, { openingDate: '2026-09-30', accepted: () => false, existingAccounts: [] });
-    expect(out.issues.map((i) => i.code)).not.toContain('SOURCE_REPORT_DUPLICATE');
-    expect(out.grids.find((g) => g.name.startsWith('Customers'))!.rows.slice(1).map((r) => r.cells[1])).toEqual(['Ali Traders', 'Quiet Customer']);
-    expect(out.grids.find((g) => g.name.startsWith('Vendors'))!.rows.slice(1).map((r) => r.cells[1])).toEqual(['Karachi Mills']);
+    const customers = parse(
+      sheet('Customers', [
+        head,
+        ['Ali Traders', 'Ali Traders', '', ''],
+        ['Quiet Customer', '', '', ''],
+      ]),
+      'zoho_books',
+    );
+    const vendors = parse(
+      sheet('Vendors', [head, ['Karachi Mills', '', '', '']]),
+      'zoho_books',
+    );
+    expect([customers.kind, vendors.kind]).toEqual([
+      'customer_list',
+      'vendor_list',
+    ]);
+    const out = buildCanonical([customers, vendors], ZOHO_BOOKS_PROFILE, {
+      openingDate: '2026-09-30',
+      accepted: () => false,
+      existingAccounts: [],
+    });
+    expect(out.issues.map((i) => i.code)).not.toContain(
+      'SOURCE_REPORT_DUPLICATE',
+    );
+    expect(
+      out.grids
+        .find((g) => g.name.startsWith('Customers'))!
+        .rows.slice(1)
+        .map((r) => r.cells[1]),
+    ).toEqual(['Ali Traders', 'Quiet Customer']);
+    expect(
+      out.grids
+        .find((g) => g.name.startsWith('Vendors'))!
+        .rows.slice(1)
+        .map((r) => r.cells[1]),
+    ).toEqual(['Karachi Mills']);
   });
 
   it('Xero: a contact with nothing open, on a list that does not say customer or supplier, is named, not guessed', () => {
-    const contacts = parse(sheet('Contacts', [['*ContactName', 'EmailAddress', 'AccountNumber'], ['Ali Traders', '', ''], ['Hamza Brothers', '', '']]), 'xero');
+    const contacts = parse(
+      sheet('Contacts', [
+        ['*ContactName', 'EmailAddress', 'AccountNumber'],
+        ['Ali Traders', '', ''],
+        ['Hamza Brothers', '', ''],
+      ]),
+      'xero',
+    );
     const ar = parse(sheet('Aged Receivables Detail', xeroAgedRows()), 'xero');
-    const out = buildCanonical([contacts, ar], XERO_PROFILE, { openingDate: '2026-09-30', accepted: () => false, existingAccounts: [] });
-    const customers = out.grids.find((g) => g.name.startsWith('Customers'))!.rows.slice(1).map((r) => r.cells[1]);
-    expect(customers).toEqual(expect.arrayContaining(['Ali Traders', 'Bismillah Store']));
+    const out = buildCanonical([contacts, ar], XERO_PROFILE, {
+      openingDate: '2026-09-30',
+      accepted: () => false,
+      existingAccounts: [],
+    });
+    const customers = out.grids
+      .find((g) => g.name.startsWith('Customers'))!
+      .rows.slice(1)
+      .map((r) => r.cells[1]);
+    expect(customers).toEqual(
+      expect.arrayContaining(['Ali Traders', 'Bismillah Store']),
+    );
     expect(customers).not.toContain('Hamza Brothers');
     expect(out.warnings.join(' ')).toMatch(/Hamza Brothers/);
   });
 
-  it('Zoho Books: the backup\'s invoice list is recognised and skipped, never read as open invoices', () => {
+  it("Zoho Books: the backup's invoice list is recognised and skipped, never read as open invoices", () => {
     const r = recogniseReport(
       sheet('Invoice', [
-        ['Invoice Date', 'Invoice ID', 'Invoice Number', 'Invoice Status', 'Customer Name', 'Due Date', 'Total', 'Balance'],
-        ['2026-09-01', '4600', 'INV-1', 'Paid', 'Ali Traders', '2026-10-01', 500, 0],
+        [
+          'Invoice Date',
+          'Invoice ID',
+          'Invoice Number',
+          'Invoice Status',
+          'Customer Name',
+          'Due Date',
+          'Total',
+          'Balance',
+        ],
+        [
+          '2026-09-01',
+          '4600',
+          'INV-1',
+          'Paid',
+          'Ali Traders',
+          '2026-10-01',
+          500,
+          0,
+        ],
       ]),
       [ZOHO_BOOKS_PROFILE],
       'zoho_books',
@@ -319,9 +569,31 @@ describe('Xero and Zoho Books', () => {
   });
 
   it('only a sheet laid out as a starter sheet counts as one — sharing three titles is not enough', () => {
-    const starter = sheet('Open Invoices', [['Customer code or name', 'Invoice number', 'Invoice date', 'Due date', 'Original amount', 'Amount due']]);
+    const starter = sheet('Open Invoices', [
+      [
+        'Customer code or name',
+        'Invoice number',
+        'Invoice date',
+        'Due date',
+        'Original amount',
+        'Amount due',
+      ],
+    ]);
     expect(isStarterSheet(starter)).toBe(true);
-    const xero = sheet('Aged', [['Invoice Date', 'Invoice Number', 'Invoice Reference', 'Due Date', 'Current', '< 1 Month', '1 Month', '2 Months', 'Older', 'Total']]);
+    const xero = sheet('Aged', [
+      [
+        'Invoice Date',
+        'Invoice Number',
+        'Invoice Reference',
+        'Due Date',
+        'Current',
+        '< 1 Month',
+        '1 Month',
+        '2 Months',
+        'Older',
+        'Total',
+      ],
+    ]);
     expect(isStarterSheet(xero)).toBe(false);
   });
 });
@@ -330,18 +602,28 @@ describe('a password-protected ZIP', () => {
   /** A real ZIP with every entry marked encrypted, as Zoho Books' backups are. */
   const locked = () => {
     const zip = new AdmZip();
-    zip.addFile('Chart_of_Accounts.csv', Buffer.from('Account Name,Account Code,Account Type\nCash,1000,Cash\n'));
+    zip.addFile(
+      'Chart_of_Accounts.csv',
+      Buffer.from('Account Name,Account Code,Account Type\nCash,1000,Cash\n'),
+    );
     const buf = zip.toBuffer();
     for (let i = 0; i < buf.length - 4; i++) {
       const sig = buf.readUInt32LE(i);
-      if (sig === 0x04034b50) buf.writeUInt16LE(buf.readUInt16LE(i + 6) | 1, i + 6);
-      if (sig === 0x02014b50) buf.writeUInt16LE(buf.readUInt16LE(i + 8) | 1, i + 8);
+      if (sig === 0x04034b50)
+        buf.writeUInt16LE(buf.readUInt16LE(i + 6) | 1, i + 6);
+      if (sig === 0x02014b50)
+        buf.writeUInt16LE(buf.readUInt16LE(i + 8) | 1, i + 8);
     }
     return buf;
   };
 
   it('is refused in plain words when uploaded directly', async () => {
-    await expect(readUpload(locked(), 'backup.zip', { maxBytes: 25_000_000, maxRows: 1000 })).rejects.toThrow(/password-protected.*upload the files inside/);
+    await expect(
+      readUpload(locked(), 'backup.zip', {
+        maxBytes: 25_000_000,
+        maxRows: 1000,
+      }),
+    ).rejects.toThrow(/password-protected.*upload the files inside/);
   });
 
   it('is refused in plain words on the large-file route', async () => {
@@ -349,7 +631,13 @@ describe('a password-protected ZIP', () => {
     const path = join(dir, 'backup.zip');
     writeFileSync(path, locked());
     try {
-      await expect(readExport(path, 'backup.zip', { maxRows: 1000, inMemoryBytes: 25_000_000, maxXmlBytes: 1e8 })).rejects.toThrow(/password-protected.*upload the files inside/);
+      await expect(
+        readExport(path, 'backup.zip', {
+          maxRows: 1000,
+          inMemoryBytes: 25_000_000,
+          maxXmlBytes: 1e8,
+        }),
+      ).rejects.toThrow(/password-protected.*upload the files inside/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -358,19 +646,35 @@ describe('a password-protected ZIP', () => {
 
 describe('reading text exports', () => {
   it('decodes UTF-16 and Windows-1252, and refuses binary', () => {
-    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Name,Balance\nAli,100\n', 'utf16le')]);
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('Name,Balance\nAli,100\n', 'utf16le'),
+    ]);
     expect(decodeText(utf16)).toBe('Name,Balance\nAli,100\n');
     expect(decodeText(Buffer.from([0x43, 0x61, 0x66, 0xe9]))).toBe('Café');
     expect(decodeText(Buffer.from([0x00, 0x01, 0x02]))).toBeNull();
   });
 
   it('finds the delimiter even below one-cell title lines', () => {
-    expect(sniffDelimiter('Company\nTrial Balance\nAccount\tDebit\tCredit\nCash\t1\t\n')).toBe('\t');
+    expect(
+      sniffDelimiter(
+        'Company\nTrial Balance\nAccount\tDebit\tCredit\nCash\t1\t\n',
+      ),
+    ).toBe('\t');
     expect(sniffDelimiter('a;b;c\n1;2;3\n')).toBe(';');
   });
 
   it('reads IIF lists as one sheet each, skipping transactions', () => {
-    const iif = ['!HDR\tPROD', 'HDR\tQuickBooks', '!ACCNT\tNAME\tACCNTTYPE\tACCNUM', 'ACCNT\tChecking\tBANK\t1000', '!TRNS\tDATE', 'TRNS\t9/1/2026', '!CUST\tNAME', 'CUST\tAli'].join('\r\n');
+    const iif = [
+      '!HDR\tPROD',
+      'HDR\tQuickBooks',
+      '!ACCNT\tNAME\tACCNTTYPE\tACCNUM',
+      'ACCNT\tChecking\tBANK\t1000',
+      '!TRNS\tDATE',
+      'TRNS\t9/1/2026',
+      '!CUST\tNAME',
+      'CUST\tAli',
+    ].join('\r\n');
     const sheets = parseIif(iif, 1000, 'lists.iif');
     expect(sheets.map((s) => [s.name, s.rows.length])).toEqual([
       ['ACCNT', 2],
@@ -380,8 +684,13 @@ describe('reading text exports', () => {
 
   it('a UTF-16, tab-separated export goes through readUpload', async () => {
     const text = 'Company\nTrial Balance\n\tDebit\tCredit\nChecking\t100\t\n';
-    const out = await readUpload(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]), 'Trial Balance.txt');
-    expect(out.sheets[0].rows.find((r) => r.cells[0] === 'Checking')?.cells).toEqual(['Checking', '100', '']);
+    const out = await readUpload(
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]),
+      'Trial Balance.txt',
+    );
+    expect(
+      out.sheets[0].rows.find((r) => r.cells[0] === 'Checking')?.cells,
+    ).toEqual(['Checking', '100', '']);
   });
 });
 

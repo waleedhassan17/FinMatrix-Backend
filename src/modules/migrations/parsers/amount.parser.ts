@@ -64,7 +64,10 @@ export function parseAmount(input: unknown): AmountResult {
   text = text
     .replace(/(rs\.?|pkr|rupees?|₨|rps\.?)/gi, '')
     .replace(/[$£€¥]/g, '')
-    .replace(/\b(usd|gbp|eur|aed|sar|inr|cad|aud|nzd|cny|jpy|chf|qar|omr|kwd|bdt|lkr)\b\.?/gi, '')
+    .replace(
+      /\b(usd|gbp|eur|aed|sar|inr|cad|aud|nzd|cny|jpy|chf|qar|omr|kwd|bdt|lkr)\b\.?/gi,
+      '',
+    )
     .replace(/\/-$/, '')
     .replace(/\s+/g, '');
   let negative = false;

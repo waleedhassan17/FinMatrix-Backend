@@ -18,9 +18,18 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { readXlsxLean } from './xlsx-lean';
 import { detectSheet } from '../mapping/sheet-detector';
-import { readUpload, SourceGrid, sniffDelimiter, ZIP_LOCKED } from '../readers/read-upload';
+import {
+  readUpload,
+  SourceGrid,
+  sniffDelimiter,
+  ZIP_LOCKED,
+} from '../readers/read-upload';
 import { REPORT_PROFILES } from '../sources/reports/profiles';
-import { isStarterSheet, recogniseReport, SKIPPED_KINDS } from '../sources/reports/report-engine';
+import {
+  isStarterSheet,
+  recogniseReport,
+  SKIPPED_KINDS,
+} from '../sources/reports/report-engine';
 import { BtrieveError } from '../sources/peachtree/btrieve';
 import { forEachEntry, PTB_ZIP_LIMITS } from '../sources/peachtree/zip';
 
@@ -50,23 +59,38 @@ const HEAD_ROWS = 40;
 const HEARTBEAT_ROWS = 50_000;
 const READABLE = /\.(xlsx|csv|tsv|txt|iif|xml)$/i;
 
-const fail = (message: string) => new BtrieveError('MIGRATION_PTB_UNREADABLE', message);
+const fail = (message: string) =>
+  new BtrieveError('MIGRATION_PTB_UNREADABLE', message);
 
 /** Whether a sheet whose first rows are these is worth keeping, and why not if not. */
-export function judgeSheet(grid: SourceGrid, preferredSource?: string): { keep: boolean; reason: string } {
+export function judgeSheet(
+  grid: SourceGrid,
+  preferredSource?: string,
+): { keep: boolean; reason: string } {
   const r = recogniseReport(grid, REPORT_PROFILES, preferredSource);
   if (r) {
-    if (SKIPPED_KINDS.includes(r.spec.kind)) return { keep: false, reason: `${r.profile.label} ${r.spec.kind.replace(/_/g, ' ')} — not needed` };
+    if (SKIPPED_KINDS.includes(r.spec.kind))
+      return {
+        keep: false,
+        reason: `${r.profile.label} ${r.spec.kind.replace(/_/g, ' ')} — not needed`,
+      };
     return { keep: true, reason: '' };
   }
   if (isStarterSheet(grid)) return { keep: true, reason: '' };
   const d = detectSheet(grid.name, grid.rows);
   if (d.target) return { keep: true, reason: '' };
-  return { keep: false, reason: 'not recognised as anything a migration needs' };
+  return {
+    keep: false,
+    reason: 'not recognised as anything a migration needs',
+  };
 }
 
 /** A streaming CSV/TSV parser: fields with quotes, any line ending. */
-function* csvRows(text: string, delimiter: string, state: { field: string; row: string[]; quoted: boolean; pendingCr: boolean }): Generator<string[]> {
+function* csvRows(
+  text: string,
+  delimiter: string,
+  state: { field: string; row: string[]; quoted: boolean; pendingCr: boolean },
+): Generator<string[]> {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (state.pendingCr) {
@@ -99,7 +123,12 @@ function* csvRows(text: string, delimiter: string, state: { field: string; row: 
 }
 
 /** A big delimited text (CSV, TSV, TXT, IIF): one sheet, judged on its first rows. */
-async function readLargeText(stream: NodeJS.ReadableStream, name: string, opts: ExportReadOptions, out: SourceExtract): Promise<void> {
+async function readLargeText(
+  stream: NodeJS.ReadableStream,
+  name: string,
+  opts: ExportReadOptions,
+  out: SourceExtract,
+): Promise<void> {
   const decoderFor = (head: Buffer) =>
     head[0] === 0xff && head[1] === 0xfe
       ? new TextDecoder('utf-16le')
@@ -109,20 +138,35 @@ async function readLargeText(stream: NodeJS.ReadableStream, name: string, opts: 
   let decoder: TextDecoder | null = null;
   let delimiter: string | null = null;
   let buffered = '';
-  const state = { field: '', row: [] as string[], quoted: false, pendingCr: false };
-  const grid: SourceGrid = { name: name.replace(/\.[A-Za-z0-9]{1,5}$/, '').split('/').pop()!, rows: [] };
+  const state = {
+    field: '',
+    row: [] as string[],
+    quoted: false,
+    pendingCr: false,
+  };
+  const grid: SourceGrid = {
+    name: name
+      .replace(/\.[A-Za-z0-9]{1,5}$/, '')
+      .split('/')
+      .pop()!,
+    rows: [],
+  };
   let rowNumber = 0;
   let decided: boolean | null = null;
   const take = (cells: string[]) => {
     rowNumber++;
-    if (rowNumber % HEARTBEAT_ROWS === 0) opts.onProgress?.(`${name}: ${rowNumber.toLocaleString()} rows`);
+    if (rowNumber % HEARTBEAT_ROWS === 0)
+      opts.onProgress?.(`${name}: ${rowNumber.toLocaleString()} rows`);
     if (cells.every((c) => c.trim() === '')) return;
     grid.rows.push({ rowNumber, cells });
     if (grid.rows.length > opts.maxRows && decided !== false) {
       // Opening balances never run this long: a ledger or a history.
       decided = false;
       grid.rows = [];
-      out.skipped.push({ entry: name, reason: `over ${opts.maxRows.toLocaleString()} rows — a ledger or history, not opening balances; not read` });
+      out.skipped.push({
+        entry: name,
+        reason: `over ${opts.maxRows.toLocaleString()} rows — a ledger or history, not opening balances; not read`,
+      });
     }
   };
   const decide = () => {
@@ -133,13 +177,22 @@ async function readLargeText(stream: NodeJS.ReadableStream, name: string, opts: 
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     if (!decoder) {
       decoder = decoderFor(chunk);
-      const skip = chunk[0] === 0xff || chunk[0] === 0xfe ? 2 : chunk[0] === 0xef && chunk[1] === 0xbb ? 3 : 0;
+      const skip =
+        chunk[0] === 0xff || chunk[0] === 0xfe
+          ? 2
+          : chunk[0] === 0xef && chunk[1] === 0xbb
+            ? 3
+            : 0;
       buffered += decoder.decode(chunk.subarray(skip), { stream: true });
     } else {
       buffered += decoder.decode(chunk, { stream: true });
     }
     if (!delimiter) {
-      if (buffered.length < 64 * 1024 && buffered.split('\n').length < HEAD_ROWS) continue;
+      if (
+        buffered.length < 64 * 1024 &&
+        buffered.split('\n').length < HEAD_ROWS
+      )
+        continue;
       delimiter = /\.iif$/i.test(name) ? '\t' : sniffDelimiter(buffered);
     }
     for (const row of csvRows(buffered, delimiter, state)) {
@@ -152,8 +205,10 @@ async function readLargeText(stream: NodeJS.ReadableStream, name: string, opts: 
     }
     buffered = '';
   }
-  if (!delimiter) delimiter = /\.iif$/i.test(name) ? '\t' : sniffDelimiter(buffered);
-  if (buffered) for (const row of csvRows(buffered, delimiter, state)) take(row);
+  if (!delimiter)
+    delimiter = /\.iif$/i.test(name) ? '\t' : sniffDelimiter(buffered);
+  if (buffered)
+    for (const row of csvRows(buffered, delimiter, state)) take(row);
   if (state.field !== '' || state.row.length) take([...state.row, state.field]);
   if (decided === null) decide();
   if (decided) out.sheets.push(grid);
@@ -165,25 +220,41 @@ async function toBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return Buffer.concat(parts);
 }
 
-async function readEntry(name: string, size: number, open: () => Promise<NodeJS.ReadableStream>, opts: ExportReadOptions, out: SourceExtract) {
+async function readEntry(
+  name: string,
+  size: number,
+  open: () => Promise<NodeJS.ReadableStream>,
+  opts: ExportReadOptions,
+  out: SourceExtract,
+) {
   const lower = name.toLowerCase();
   opts.onProgress?.(name.split('/').pop()!);
   if (lower.endsWith('.xml')) {
     if (size > opts.maxXmlBytes) {
-      out.skipped.push({ entry: name, reason: `an XML file of ${(size / 1_048_576).toFixed(0)} MB — larger than a Tally master, balance or outstanding export; not read` });
+      out.skipped.push({
+        entry: name,
+        reason: `an XML file of ${(size / 1_048_576).toFixed(0)} MB — larger than a Tally master, balance or outstanding export; not read`,
+      });
       ((await open()) as Readable).destroy();
       return;
     }
-    const text = (await toBuffer(await open())).toString('utf8').replace(/^﻿/, '');
-    if (/<!DOCTYPE|<!ENTITY/i.test(text)) throw fail(`${name} contains a DOCTYPE, which a Tally export never has.`);
+    const text = (await toBuffer(await open()))
+      .toString('utf8')
+      .replace(/^﻿/, '');
+    if (/<!DOCTYPE|<!ENTITY/i.test(text))
+      throw fail(`${name} contains a DOCTYPE, which a Tally export never has.`);
     out.xml.push(text);
     return;
   }
   if (size <= opts.inMemoryBytes) {
-    const contents = await readUpload(await toBuffer(await open()), name.split('/').pop()!, {
-      maxBytes: opts.inMemoryBytes,
-      maxRows: opts.maxRows,
-    });
+    const contents = await readUpload(
+      await toBuffer(await open()),
+      name.split('/').pop()!,
+      {
+        maxBytes: opts.inMemoryBytes,
+        maxRows: opts.maxRows,
+      },
+    );
     for (const g of contents.sheets) {
       const j = judgeSheet(g, opts.preferredSource);
       if (j.keep) out.sheets.push(g);
@@ -192,7 +263,8 @@ async function readEntry(name: string, size: number, open: () => Promise<NodeJS.
     out.xml.push(...(contents.xml ?? []));
     return;
   }
-  if (lower.endsWith('.xlsx')) return readLargeXlsxFile(await toDisk(await open()), name, opts, out, true);
+  if (lower.endsWith('.xlsx'))
+    return readLargeXlsxFile(await toDisk(await open()), name, opts, out, true);
   return readLargeText(await open(), name, opts, out);
 }
 
@@ -204,33 +276,62 @@ async function toDisk(stream: NodeJS.ReadableStream): Promise<string> {
   return path;
 }
 
-async function readLargeXlsxFile(path: string, name: string, opts: ExportReadOptions, out: SourceExtract, temporary: boolean) {
+async function readLargeXlsxFile(
+  path: string,
+  name: string,
+  opts: ExportReadOptions,
+  out: SourceExtract,
+  temporary: boolean,
+) {
   try {
-    const r = await readXlsxLean(path, name.replace(/\.xlsx$/i, '').split('/').pop()!, {
-      headRows: HEAD_ROWS,
-      maxRows: opts.maxRows,
-      judge: (g) => judgeSheet(g, opts.preferredSource),
-      onProgress: opts.onProgress,
-    });
+    const r = await readXlsxLean(
+      path,
+      name
+        .replace(/\.xlsx$/i, '')
+        .split('/')
+        .pop()!,
+      {
+        headRows: HEAD_ROWS,
+        maxRows: opts.maxRows,
+        judge: (g) => judgeSheet(g, opts.preferredSource),
+        onProgress: opts.onProgress,
+      },
+    );
     out.sheets.push(...r.sheets);
     out.skipped.push(...r.skipped);
   } catch (err) {
-    throw fail(`${name} could not be read as an Excel workbook (${(err as Error).message}).`);
+    throw fail(
+      `${name} could not be read as an Excel workbook (${(err as Error).message}).`,
+    );
   } finally {
     if (temporary) await rm(join(path, '..'), { recursive: true, force: true });
   }
 }
 
 /** Read the export at `path` (its original name says what it is). */
-export async function readExport(path: string, originalName: string, opts: ExportReadOptions): Promise<SourceExtract> {
-  const out: SourceExtract = { format: 'finmatrix-source-extract', version: 1, name: originalName, sheets: [], xml: [], skipped: [] };
+export async function readExport(
+  path: string,
+  originalName: string,
+  opts: ExportReadOptions,
+): Promise<SourceExtract> {
+  const out: SourceExtract = {
+    format: 'finmatrix-source-extract',
+    version: 1,
+    name: originalName,
+    sheets: [],
+    xml: [],
+    skipped: [],
+  };
   const { size } = await stat(path);
   if (/\.zip$/i.test(originalName)) {
     await forEachEntry(
       path,
       async (e, open) => {
         if (!READABLE.test(e.name)) {
-          out.skipped.push({ entry: e.name, reason: 'not a spreadsheet, text or XML file' });
+          out.skipped.push({
+            entry: e.name,
+            reason: 'not a spreadsheet, text or XML file',
+          });
           return;
         }
         await readEntry(e.name, e.size, open, opts, out);
@@ -240,12 +341,29 @@ export async function readExport(path: string, originalName: string, opts: Expor
   } else if (/\.xlsx$/i.test(originalName) && size > opts.inMemoryBytes) {
     await readLargeXlsxFile(path, originalName, opts, out, false);
   } else if (READABLE.test(originalName)) {
-    await readEntry(originalName, size, async () => createReadStream(path), opts, out);
+    await readEntry(
+      originalName,
+      size,
+      async () => createReadStream(path),
+      opts,
+      out,
+    );
   } else {
-    throw fail(`${originalName} is not a ZIP, spreadsheet, text, IIF or XML file.`);
+    throw fail(
+      `${originalName} is not a ZIP, spreadsheet, text, IIF or XML file.`,
+    );
   }
   if (!out.sheets.length && !out.xml.length) {
-    throw fail(`Nothing in ${originalName} is a report or list a migration uses${out.skipped.length ? ` (${out.skipped.slice(0, 5).map((s) => `${s.entry}: ${s.reason}`).join('; ')})` : ''}.`);
+    throw fail(
+      `Nothing in ${originalName} is a report or list a migration uses${
+        out.skipped.length
+          ? ` (${out.skipped
+              .slice(0, 5)
+              .map((s) => `${s.entry}: ${s.reason}`)
+              .join('; ')})`
+          : ''
+      }.`,
+    );
   }
   return out;
 }

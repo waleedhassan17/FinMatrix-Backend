@@ -10,7 +10,11 @@
  * types agree and the names, the control role or a distinctive kind agree
  * too; anything else is a clash, asked about, never merged silently.
  */
-import { ACCT_AP, ACCT_AR, ACCT_INVENTORY } from '../../accounts/accounts.constants';
+import {
+  ACCT_AP,
+  ACCT_AR,
+  ACCT_INVENTORY,
+} from '../../accounts/accounts.constants';
 import { normalizeKey } from '../parsers/text-normalize';
 import { CONTROL_ACCOUNT_HINTS } from '../targets';
 
@@ -29,7 +33,20 @@ export interface ChartAccountInfo {
 }
 
 /** Words that say nothing about which account it is. */
-const FILLER = new Set(['account', 'accounts', 'ac', 'expense', 'expenses', 'revenue', 'income', 'the', 'and', 'of', 'control', 'total']);
+const FILLER = new Set([
+  'account',
+  'accounts',
+  'ac',
+  'expense',
+  'expenses',
+  'revenue',
+  'income',
+  'the',
+  'and',
+  'of',
+  'control',
+  'total',
+]);
 
 const words = (s: string | null | undefined): string[] =>
   String(s ?? '')
@@ -39,7 +56,10 @@ const words = (s: string | null | undefined): string[] =>
     .filter((w) => w.length > 1 && !FILLER.has(w));
 
 /** "Rent" and "Rent Expense", "Sales" and "Sales Revenue" agree; "Sales" and "Sales Returns" do not. */
-export function namesAgree(a: string | null | undefined, b: string | null | undefined): boolean {
+export function namesAgree(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
   if (normalizeKey(a) && normalizeKey(a) === normalizeKey(b)) return true;
   const x = new Set(words(a));
   const y = new Set(words(b));
@@ -47,7 +67,10 @@ export function namesAgree(a: string | null | undefined, b: string | null | unde
 }
 
 /** The names share a meaningful word ("Cash in Hand" and "Cash"). */
-export function namesOverlap(a: string | null | undefined, b: string | null | undefined): boolean {
+export function namesOverlap(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
   const y = new Set(words(b));
   return words(a).some((w) => y.has(w));
 }
@@ -55,25 +78,51 @@ export function namesOverlap(a: string | null | undefined, b: string | null | un
 type Control = 'ar' | 'ap' | 'inventory';
 
 /** The control role a source account's name or kind gives it ("Debtors Control Account" → receivables). */
-export function controlByName(src: Pick<SourceAccountInfo, 'name' | 'kind'>): Control | null {
+export function controlByName(
+  src: Pick<SourceAccountInfo, 'name' | 'kind'>,
+): Control | null {
   const candidates = new Set(
-    [normalizeKey(src.name), normalizeKey(src.kind), normalizeKey(words(src.name).join(' '))].filter(Boolean),
+    [
+      normalizeKey(src.name),
+      normalizeKey(src.kind),
+      normalizeKey(words(src.name).join(' ')),
+    ].filter(Boolean),
   );
   for (const role of ['ar', 'ap', 'inventory'] as const) {
-    if (CONTROL_ACCOUNT_HINTS[role].some((h) => candidates.has(normalizeKey(h)))) return role;
+    if (
+      CONTROL_ACCOUNT_HINTS[role].some((h) => candidates.has(normalizeKey(h)))
+    )
+      return role;
   }
   return null;
 }
 
 const controlAt = (number: string): Control | null =>
-  number === ACCT_AR ? 'ar' : number === ACCT_AP ? 'ap' : number === ACCT_INVENTORY ? 'inventory' : null;
+  number === ACCT_AR
+    ? 'ar'
+    : number === ACCT_AP
+      ? 'ap'
+      : number === ACCT_INVENTORY
+        ? 'inventory'
+        : null;
 
 /** Kinds a chart has one of: two accounts of the same such kind are the same account. */
 const DISTINCTIVE = new Set(
-  ['Cash', 'Accounts Receivable', 'Accounts Payable', 'Tax Payable', 'Owner Equity', 'Retained Earnings', 'Opening Balance Equity'].map(normalizeKey),
+  [
+    'Cash',
+    'Accounts Receivable',
+    'Accounts Payable',
+    'Tax Payable',
+    'Owner Equity',
+    'Retained Earnings',
+    'Opening Balance Equity',
+  ].map(normalizeKey),
 );
 
-export function sameAccount(src: SourceAccountInfo, acct: ChartAccountInfo): boolean {
+export function sameAccount(
+  src: SourceAccountInfo,
+  acct: ChartAccountInfo,
+): boolean {
   if (!typesAgree(src, acct)) return false;
   // A bare number with no name: nothing says it is a different account.
   if (!normalizeKey(src.name)) return true;
@@ -84,8 +133,14 @@ export function sameAccount(src: SourceAccountInfo, acct: ChartAccountInfo): boo
   return !!kind && DISTINCTIVE.has(kind) && kind === normalizeKey(acct.subType);
 }
 
-export function typesAgree(src: Pick<SourceAccountInfo, 'type'>, acct: Pick<ChartAccountInfo, 'type'>): boolean {
-  return !normalizeKey(src.type) || normalizeKey(src.type) === normalizeKey(acct.type);
+export function typesAgree(
+  src: Pick<SourceAccountInfo, 'type'>,
+  acct: Pick<ChartAccountInfo, 'type'>,
+): boolean {
+  return (
+    !normalizeKey(src.type) ||
+    normalizeKey(src.type) === normalizeKey(acct.type)
+  );
 }
 
 /**
@@ -96,7 +151,9 @@ export function typesAgree(src: Pick<SourceAccountInfo, 'type'>, acct: Pick<Char
 export function freeNumber(number: string, taken: Set<string>): string {
   const m = /^(.*?)(\d+)$/.exec(number);
   for (let i = 1; i < 10_000; i++) {
-    const candidate = m ? `${m[1]}${String(Number(m[2]) + i).padStart(m[2].length, '0')}` : `${number}-${i}`;
+    const candidate = m
+      ? `${m[1]}${String(Number(m[2]) + i).padStart(m[2].length, '0')}`
+      : `${number}-${i}`;
     const key = normalizeKey(candidate);
     if (!taken.has(key)) {
       taken.add(key);

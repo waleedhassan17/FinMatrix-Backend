@@ -312,7 +312,9 @@ export class MigrationBatchService {
       assertTransition(live.status, 'uploaded');
       const other =
         kind === 'ptb'
-          ? await em.findOne(MigrationFile, { where: { batchId, companyId, kind: 'ptb' } })
+          ? await em.findOne(MigrationFile, {
+              where: { batchId, companyId, kind: 'ptb' },
+            })
           : null;
       if (other) {
         throw new ConflictException({
@@ -496,7 +498,14 @@ export class MigrationBatchService {
     });
     const byNumber = new Map<
       string,
-      { number: string; name: string | null; type: string | null; balance: Decimal; createAs: string | null; tbNames: Set<string> }
+      {
+        number: string;
+        name: string | null;
+        type: string | null;
+        balance: Decimal;
+        createAs: string | null;
+        tbNames: Set<string>;
+      }
     >();
     const amount = (v: unknown) => {
       try {
@@ -509,7 +518,14 @@ export class MigrationBatchService {
       const v = r.normalized ?? {};
       const number = String(v.sourceNumber ?? v.accountNumber ?? '').trim();
       if (!number) continue;
-      const a = byNumber.get(number) ?? { number, name: null, type: null, balance: new Decimal(0), createAs: null, tbNames: new Set<string>() };
+      const a = byNumber.get(number) ?? {
+        number,
+        name: null,
+        type: null,
+        balance: new Decimal(0),
+        createAs: null,
+        tbNames: new Set<string>(),
+      };
       if (r.entityType === 'accounts') {
         a.name = (v.accountName as string | null) ?? a.name;
         a.type = (v.type as string | null) ?? a.type;
@@ -632,7 +648,8 @@ export class MigrationBatchService {
       if (!offered || !/^\d{4}-\d{2}-\d{2}$/.test(to))
         throw new BadRequestException({
           code: 'VALIDATION_FAILED',
-          message: 'That answer does not resolve this issue. Choose one of the offered options.',
+          message:
+            'That answer does not resolve this issue. Choose one of the offered options.',
         });
       if (to > businessToday())
         throw new BadRequestException({
@@ -649,7 +666,11 @@ export class MigrationBatchService {
         { cutoverDate: to, signedOffAt: null, signedOffBy: null },
         { editableOnly: true },
       );
-      await this.log(companyId, user.id, 'migration_cutover_changed', id, { from, to, issue: issue.code });
+      await this.log(companyId, user.id, 'migration_cutover_changed', id, {
+        from,
+        to,
+        issue: issue.code,
+      });
       return this.reanalyse(companyId, id);
     }
     const targets = dto.applyToAll
@@ -873,7 +894,9 @@ export class MigrationBatchService {
       case 'SOURCE_REPORT_DATE':
       case 'SOURCE_NET_CREDIT':
         if (value === 'accept' && field.startsWith('report::'))
-          return [{ kind: 'value', sheet: '', source: field, target: 'accept' }];
+          return [
+            { kind: 'value', sheet: '', source: field, target: 'accept' },
+          ];
         throw new BadRequestException({
           code: issue.code,
           message:

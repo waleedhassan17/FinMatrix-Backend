@@ -33,7 +33,12 @@ import { IssueDraft, issueKey, MIGRATION_CODES } from '../issues';
 import { mapColumns, missingFields } from '../mapping/column-mapper';
 import { normalizeRows, NormalizedRow } from '../mapping/normalize-rows';
 import { detectSheet } from '../mapping/sheet-detector';
-import { freeNumber, namesOverlap, sameAccount, typesAgree } from '../mapping/account-clash';
+import {
+  freeNumber,
+  namesOverlap,
+  sameAccount,
+  typesAgree,
+} from '../mapping/account-clash';
 import { enumOptions, mapEnumValue } from '../mapping/value-mapper';
 import { matchMasters, nearestMasters } from '../matching/master-matcher';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
@@ -204,7 +209,14 @@ export class MigrationAnalysisService {
       // are the backup's proof instead (below).
       const reportPass = hasBackup
         ? null
-        : await this.sourceReportGrids(em, batch, files, ctx, addIssue, proofStaging);
+        : await this.sourceReportGrids(
+            em,
+            batch,
+            files,
+            ctx,
+            addIssue,
+            proofStaging,
+          );
       const ordered = [
         ...files.filter((f) => f.kind !== 'ptb'),
         ...files.filter((f) => f.kind === 'ptb'),
@@ -807,7 +819,9 @@ export class MigrationAnalysisService {
         tbNames.set(nk, names);
       }
       const tbAccountName = (nk: string, name: unknown) =>
-        (tbNames.get(nk)?.size ?? 0) > 1 ? null : ((name as string | null) ?? null);
+        (tbNames.get(nk)?.size ?? 0) > 1
+          ? null
+          : ((name as string | null) ?? null);
       {
         const judged = new Set<string>();
         const fromAccounts = new Set(accountRows.map(({ row }) => row));
@@ -885,7 +899,10 @@ export class MigrationAnalysisService {
           const decided = ctx.accounts.get(nk);
           const asNew = decided
             ? decided.startsWith('NEW')
-            : !(typesAgree(src, existingAcct) && namesOverlap(src.name, existingAcct.name));
+            : !(
+                typesAgree(src, existingAcct) &&
+                namesOverlap(src.name, existingAcct.name)
+              );
           if (asNew) {
             const to = renumber(nk, number);
             row.normalized.sourceNumber = number;
@@ -950,7 +967,10 @@ export class MigrationAnalysisService {
         let confidence = 0;
         let reason = '';
         if (byNumber && clash) {
-          if (typesAgree(src, byNumber) && namesOverlap(src.name, byNumber.name)) {
+          if (
+            typesAgree(src, byNumber) &&
+            namesOverlap(src.name, byNumber.name)
+          ) {
             target = byNumber.accountNumber;
             confidence = 0.6;
             reason = `same number as ${byNumber.accountNumber} ${byNumber.name}, though the names differ — or create yours as ${clash}`;
@@ -1368,9 +1388,15 @@ export class MigrationAnalysisService {
    * large export the background reader has already read — from the stored
    * extract of the sheets it kept.
    */
-  private async readContents(file: MigrationFile, buffer: Buffer): Promise<Awaited<ReturnType<typeof readUpload>>> {
+  private async readContents(
+    file: MigrationFile,
+    buffer: Buffer,
+  ): Promise<Awaited<ReturnType<typeof readUpload>>> {
     if (file.kind !== 'extract') {
-      return readUpload(buffer, file.originalName, { maxBytes: this.maxBytes, maxRows: 100_000 });
+      return readUpload(buffer, file.originalName, {
+        maxBytes: this.maxBytes,
+        maxRows: 100_000,
+      });
     }
     let x: SourceExtract;
     try {
@@ -1384,7 +1410,11 @@ export class MigrationAnalysisService {
         message: `${file.originalName} could not be read back. Remove it and upload it again.`,
       });
     }
-    return { kind: 'zip', sheets: x.sheets, ...(x.xml?.length ? { xml: x.xml } : {}) };
+    return {
+      kind: 'zip',
+      sheets: x.sheets,
+      ...(x.xml?.length ? { xml: x.xml } : {}),
+    };
   }
 
   /**
@@ -1453,7 +1483,8 @@ export class MigrationAnalysisService {
       profile,
       {
         openingDate: openingDateOf(batch.cutoverDate),
-        accepted: (key) => ctx.value.get(`report::${normalizeKey(key)}`) === 'accept',
+        accepted: (key) =>
+          ctx.value.get(`report::${normalizeKey(key)}`) === 'accept',
         existingAccounts: chart.map((a) => a.account_number),
       },
     );
@@ -1466,7 +1497,12 @@ export class MigrationAnalysisService {
         field: `report::warning::${createHash('sha256').update(w).digest('hex').slice(0, 24)}`,
         message: w,
       });
-    if (batch.sourceSystem !== profile.source && !['generic_spreadsheet', 'finmatrix_template'].includes(batch.sourceSystem))
+    if (
+      batch.sourceSystem !== profile.source &&
+      !['generic_spreadsheet', 'finmatrix_template'].includes(
+        batch.sourceSystem,
+      )
+    )
       addIssue({
         code: MIGRATION_CODES.MIGRATION_UNKNOWN_SHEET,
         severity: 'warning',
@@ -1477,14 +1513,23 @@ export class MigrationAnalysisService {
     const first = parsed[0].fileId;
     byFile.set(first, built.grids);
     built.proof.forEach((p, i) => {
-      const values = { report: p.report, key: p.key, name: p.name, measure: p.measure, backup: p.backup, printed: p.printed };
+      const values = {
+        report: p.report,
+        key: p.key,
+        name: p.name,
+        measure: p.measure,
+        backup: p.backup,
+        printed: p.printed,
+      };
       proof.push({
         companyId: batch.companyId,
         batchId: batch.id,
         fileId: first,
         sheet: 'Report totals (proof)',
         rowNumber: i + 1,
-        rowHash: createHash('sha256').update(JSON.stringify(values)).digest('hex'),
+        rowHash: createHash('sha256')
+          .update(JSON.stringify(values))
+          .digest('hex'),
         entityType: 'peachtree_proof',
         raw: values,
         normalized: { ...values, source: p.kind },
@@ -1501,11 +1546,15 @@ export class MigrationAnalysisService {
   ): Promise<{ byFile: Map<string, SourceGrid[]>; warnings: string[] }> {
     const docs: Array<{ xml: string; fileIndex: number }> = [];
     for (const [i, file] of files.entries()) {
-      if (file.kind !== 'xml' && file.kind !== 'zip' && file.kind !== 'extract') continue;
+      if (file.kind !== 'xml' && file.kind !== 'zip' && file.kind !== 'extract')
+        continue;
       const stored = await this.storage.read(file.storageKey);
       if (!stored) continue;
       try {
-        const contents = await this.readContents(file, await streamToBuffer(stored.stream));
+        const contents = await this.readContents(
+          file,
+          await streamToBuffer(stored.stream),
+        );
         for (const xml of contents.xml ?? []) docs.push({ xml, fileIndex: i });
       } catch {
         // Reported by the main pass.

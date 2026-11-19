@@ -65,7 +65,10 @@ const ZOHO_TYPES: ReportProfile['accountTypes'] = {
   'other expense': { type: 'Expense', kind: 'Other Expense' },
 };
 
-const xeroAged = (kind: 'aged_receivables' | 'aged_payables', titles: string[]): ReportSpec => ({
+const xeroAged = (
+  kind: 'aged_receivables' | 'aged_payables',
+  titles: string[],
+): ReportSpec => ({
   kind,
   title: titles,
   sections: true,
@@ -73,7 +76,13 @@ const xeroAged = (kind: 'aged_receivables' | 'aged_payables', titles: string[]):
   need: ['doc', 'amount'],
   columns: {
     date: ['invoice date', 'date'],
-    doc: ['invoice number', 'number', 'invoice reference', 'reference', 'transaction'],
+    doc: [
+      'invoice number',
+      'number',
+      'invoice reference',
+      'reference',
+      'transaction',
+    ],
     due: ['due date'],
     amount: ['total', 'amount due', 'balance due', 'due'],
   },
@@ -101,12 +110,19 @@ export const XERO_PROFILE: ReportProfile = {
         ytdCredit: ['ytd credit', 'credit year to date'],
       },
     },
-    xeroAged('aged_receivables', ['aged receivables detail', 'aged receivables']),
+    xeroAged('aged_receivables', [
+      'aged receivables detail',
+      'aged receivables',
+    ]),
     xeroAged('aged_payables', ['aged payables detail', 'aged payables']),
     {
       kind: 'chart_of_accounts',
       need: ['key', 'name', 'type'],
-      columns: { key: ['code', 'account code'], name: ['name', 'account name'], type: ['type', 'account type'] },
+      columns: {
+        key: ['code', 'account code'],
+        name: ['name', 'account name'],
+        type: ['type', 'account type'],
+      },
     },
     {
       kind: 'contact_list',
@@ -135,13 +151,29 @@ export const XERO_PROFILE: ReportProfile = {
       kind: 'inventory_valuation',
       // The Inventory Item List gives quantity and value on hand; the
       // Inventory Item Summary is read when it shows the closing figures.
-      title: ['inventory item list', 'inventory item summary', 'inventory summary'],
+      title: [
+        'inventory item list',
+        'inventory item summary',
+        'inventory summary',
+      ],
       need: ['key', 'qty', 'value'],
       columns: {
         key: ['item code', 'code', 'item'],
         name: ['item name', 'description'],
-        qty: ['quantity on hand', 'closing quantity', 'closing qty', 'quantity', 'qty'],
-        value: ['value on hand', 'closing value', 'total value', 'asset value', 'value'],
+        qty: [
+          'quantity on hand',
+          'closing quantity',
+          'closing qty',
+          'quantity',
+          'qty',
+        ],
+        value: [
+          'value on hand',
+          'closing value',
+          'total value',
+          'asset value',
+          'value',
+        ],
         cost: ['average cost', 'avg cost', 'cost'],
       },
     },
@@ -173,7 +205,12 @@ export const ZOHO_BOOKS_PROFILE: ReportProfile = {
       need: ['doc', 'party', 'amount'],
       columns: {
         date: ['date'],
-        doc: ['transaction', 'transaction no', 'transaction number', 'invoice number'],
+        doc: [
+          'transaction',
+          'transaction no',
+          'transaction number',
+          'invoice number',
+        ],
         type: ['type'],
         party: ['customer name', 'customer'],
         original: ['amount', 'total'],
@@ -187,7 +224,12 @@ export const ZOHO_BOOKS_PROFILE: ReportProfile = {
       need: ['doc', 'party', 'amount'],
       columns: {
         date: ['date'],
-        doc: ['transaction', 'transaction no', 'transaction number', 'bill number'],
+        doc: [
+          'transaction',
+          'transaction no',
+          'transaction number',
+          'bill number',
+        ],
         type: ['type'],
         party: ['vendor name', 'vendor', 'supplier name'],
         original: ['amount', 'total'],
@@ -197,7 +239,11 @@ export const ZOHO_BOOKS_PROFILE: ReportProfile = {
     {
       kind: 'chart_of_accounts',
       need: ['key', 'name', 'type'],
-      columns: { key: ['account code', 'code'], name: ['account name', 'name'], type: ['account type', 'type'] },
+      columns: {
+        key: ['account code', 'code'],
+        name: ['account name', 'name'],
+        type: ['account type', 'type'],
+      },
     },
     // Contacts from the data backup carry a Contact Type; the Customers and
     // Vendors pages export each list on its own, named for its page.
@@ -212,7 +258,12 @@ export const ZOHO_BOOKS_PROFILE: ReportProfile = {
         city: ['billing city', 'city'],
         terms: ['payment terms', 'payment terms label'],
         creditLimit: ['credit limit'],
-        taxId: ['tax registration number', 'trn', 'ntn', 'gst identification number gstin'],
+        taxId: [
+          'tax registration number',
+          'trn',
+          'ntn',
+          'gst identification number gstin',
+        ],
       },
     },
     {
@@ -239,7 +290,15 @@ export const ZOHO_BOOKS_PROFILE: ReportProfile = {
     },
     // The backup's Invoice.csv and Bill.csv list every document line, paid
     // or not: the aging reports carry what is open.
-    { kind: 'transactions', need: ['doc', 'status'], columns: { doc: ['invoice number'], status: ['invoice status'] } },
-    { kind: 'transactions', need: ['doc', 'status'], columns: { doc: ['bill number'], status: ['bill status'] } },
+    {
+      kind: 'transactions',
+      need: ['doc', 'status'],
+      columns: { doc: ['invoice number'], status: ['invoice status'] },
+    },
+    {
+      kind: 'transactions',
+      need: ['doc', 'status'],
+      columns: { doc: ['bill number'], status: ['bill status'] },
+    },
   ],
 };

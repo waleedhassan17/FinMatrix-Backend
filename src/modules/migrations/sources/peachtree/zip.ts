@@ -109,7 +109,8 @@ async function scan(
         reject(
           new BtrieveError(
             'MIGRATION_PTB_UNSUPPORTED',
-            limits.lockedMessage ?? 'The backup is password-protected. Make the backup again without a password.',
+            limits.lockedMessage ??
+              'The backup is password-protected. Make the backup again without a password.',
           ),
         );
         return;
@@ -117,7 +118,9 @@ async function scan(
       total += e.uncompressedSize;
       if (total > limits.maxUncompressed) {
         reject(
-          unreadable(`The ZIP unpacks to more than ${Math.round(limits.maxUncompressed / 1024 ** 3)} GB, more than FinMatrix will read.`),
+          unreadable(
+            `The ZIP unpacks to more than ${Math.round(limits.maxUncompressed / 1024 ** 3)} GB, more than FinMatrix will read.`,
+          ),
         );
         return;
       }
@@ -250,12 +253,20 @@ export async function forEachEntry(
     const entries = await scan(zip, limits);
     for (const e of entries) {
       if (e.fileName.endsWith('/') || e.fileName.includes('..')) continue;
-      await visit({ name: e.fileName, size: e.uncompressedSize }, () =>
-        new Promise<NodeJS.ReadableStream>((resolve, reject) =>
-          zip.openReadStream(e, (err, s) =>
-            err || !s ? reject(unreadable(`${e.fileName} could not be read (${err?.message}).`)) : resolve(s),
+      await visit(
+        { name: e.fileName, size: e.uncompressedSize },
+        () =>
+          new Promise<NodeJS.ReadableStream>((resolve, reject) =>
+            zip.openReadStream(e, (err, s) =>
+              err || !s
+                ? reject(
+                    unreadable(
+                      `${e.fileName} could not be read (${err?.message}).`,
+                    ),
+                  )
+                : resolve(s),
+            ),
           ),
-        ),
       );
     }
   } finally {
