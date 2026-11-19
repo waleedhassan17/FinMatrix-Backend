@@ -9,6 +9,8 @@ import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
  */
 export type MigrationEntityType =
   | 'peachtree_proof'
+  /** A FinMatrix account the migration renumbers or renames (mapping/chart-plan); never imported as a row. */
+  | 'chart_change'
   | 'accounts'
   | 'customers'
   | 'vendors'
@@ -41,7 +43,7 @@ export interface StagingMatch {
   /** Existing FinMatrix record the row maps to, when any. */
   recordId?: string;
   /** How it was matched. */
-  by?: 'code' | 'name' | 'number' | 'user';
+  by?: 'code' | 'name' | 'number' | 'role' | 'user';
   /** Another staging row this one was merged into (duplicates in the files). */
   mergedIntoRowId?: string;
 }

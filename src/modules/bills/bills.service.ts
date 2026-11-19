@@ -38,12 +38,7 @@ import {
 import { PostingService } from '../journal-entries/posting.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AccountsService } from '../accounts/accounts.service';
-import {
-  ACCT_AP,
-  ACCT_COGS,
-  ACCT_GRNI,
-  ACCT_INPUT_TAX,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
 import { PurchaseOrderLine } from '../purchase-orders/entities/purchase-order-line.entity';
 import { BillStatus } from '../../types';
@@ -330,7 +325,7 @@ export class BillsService {
     if (!hasReceivedInventory) return;
 
     const grni = await this.accounts
-      .getByNumberOrFail(companyId, ACCT_GRNI, manager)
+      .getSystemAccount(companyId, SYS.GRNI, manager)
       .catch(() => null);
     if (!grni) return;
 
@@ -397,7 +392,7 @@ export class BillsService {
 
     // Resolve missing accountId on lines → fallback to COGS account.
     const cogsAccount = await this.accounts
-      .getByNumberOrFail(companyId, ACCT_COGS, manager)
+      .getSystemAccount(companyId, SYS.COGS, manager)
       .catch(() => null);
     const resolvedLines = dto.lines.map((l) => ({
       ...l,
@@ -492,7 +487,7 @@ export class BillsService {
 
       if (dto.lines) {
         const cogsAcct = await this.accounts
-          .getByNumberOrFail(companyId, ACCT_COGS, manager)
+          .getSystemAccount(companyId, SYS.COGS, manager)
           .catch(() => null);
         const resolvedUpdateLines = dto.lines.map((l) => ({
           ...l,
@@ -697,11 +692,7 @@ export class BillsService {
     await manager.save(vendor);
 
     // Journal entry: DR AP, CR Bank
-    const ap = await this.accounts.getByNumberOrFail(
-      companyId,
-      ACCT_AP,
-      manager,
-    );
+    const ap = await this.accounts.getSystemAccount(companyId, SYS.AP, manager);
     const entry = await this.posting.createEntry(manager, {
       companyId,
       createdBy: userId,
@@ -1325,9 +1316,9 @@ export class BillsService {
     bill: Bill,
     userId: string,
   ): Promise<void> {
-    const ap = await this.accounts.getByNumberOrFail(
+    const ap = await this.accounts.getSystemAccount(
       bill.companyId,
-      ACCT_AP,
+      SYS.AP,
       manager,
     );
 
@@ -1384,9 +1375,9 @@ export class BillsService {
       }
     }
     if (!variance.isZero()) {
-      const cogs = await this.accounts.getByNumberOrFail(
+      const cogs = await this.accounts.getSystemAccount(
         bill.companyId,
-        ACCT_COGS,
+        SYS.COGS,
         manager,
       );
       jLines.push({
@@ -1402,7 +1393,7 @@ export class BillsService {
       const inputTaxAcct = await this.accounts.getOrCreateSystemAccount(
         manager,
         bill.companyId,
-        ACCT_INPUT_TAX,
+        SYS.INPUT_TAX,
       );
       jLines.push({
         accountId: inputTaxAcct.id,

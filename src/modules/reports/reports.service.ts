@@ -1,3 +1,4 @@
+import { SYS } from '../accounts/accounts.constants';
 import {
   BadRequestException,
   Injectable,
@@ -524,6 +525,8 @@ export class ReportsService {
       accountName: string;
       type: string;
       subType: string;
+      /** What automatic posting uses it for (accounts.constants SYS), or null. */
+      systemRole?: string | null;
       dr: string;
       cr: string;
       isActive?: boolean;
@@ -532,6 +535,7 @@ export class ReportsService {
     return this.dataSource.query(
       `SELECT a.account_number AS "accountNumber", a.name AS "accountName",
               a.type AS "type", a.sub_type AS "subType", a.is_active AS "isActive",
+              a.system_role AS "systemRole",
               COALESCE(SUM(g.debit::numeric), 0) AS dr,
               COALESCE(SUM(g.credit::numeric), 0) AS cr
        FROM accounts a
@@ -539,14 +543,18 @@ export class ReportsService {
          ON g.account_id = a.id AND g.company_id = $1
          AND g.date >= $2 AND g.date <= $3
        WHERE a.company_id = $1
-       GROUP BY a.id, a.account_number, a.name, a.type, a.sub_type, a.is_active
+       GROUP BY a.id, a.account_number, a.name, a.type, a.sub_type, a.is_active, a.system_role
        ORDER BY a.account_number`,
       [companyId, startDate, endDate],
     );
   }
 
   /** Cost of goods sold — the shared rule in statement-groups.ts. */
-  private isCogs(row: { accountNumber: string; subType: string }): boolean {
+  private isCogs(row: {
+    accountNumber: string;
+    subType: string;
+    systemRole?: string | null;
+  }): boolean {
     return isCogsAccount(row);
   }
 
@@ -562,6 +570,7 @@ export class ReportsService {
     accountNumber: string;
     subType: string;
     type?: string;
+    systemRole?: string | null;
   }): boolean {
     return isNonOperatingAccount(row);
   }
@@ -833,9 +842,9 @@ export class ReportsService {
     const currentYear = this.earningsOf(currentRows);
     // The chart's Retained Earnings account, if it has one: the lowest-numbered
     // account of that subtype (rows arrive ordered by account number).
-    const reAccount = rows.find(
-      (r) => r.type === 'equity' && r.subType === 'Retained Earnings',
-    );
+    const reAccount =
+      rows.find((r) => r.systemRole === SYS.RETAINED_EARNINGS) ??
+      rows.find((r) => r.type === 'equity' && r.subType === 'Retained Earnings');
 
     for (const row of rows) {
       const dr = num(row.dr);
@@ -844,6 +853,7 @@ export class ReportsService {
         row.type,
         row.subType,
         row.accountNumber,
+        row.systemRole,
       );
       const line = (amount: number) => ({
         accountCode: row.accountNumber,
@@ -2156,7 +2166,7 @@ export class ReportsService {
 
     const accounts = await this.dataSource.query(
       `SELECT a.id, a.account_number AS "accountCode", a.name AS "accountName",
-              a.type AS "accountType", a.sub_type AS "subType"
+              a.type AS "accountType", a.sub_type AS "subType", a.system_role AS "systemRole"
          FROM accounts a
         WHERE a.company_id = $1 AND a.account_number = $2
         LIMIT 1`,
@@ -2242,7 +2252,7 @@ export class ReportsService {
   private async accountByCode(companyId: string, accountCode: string) {
     const accounts = await this.dataSource.query(
       `SELECT a.id, a.account_number AS "accountCode", a.name AS "accountName",
-              a.type AS "accountType", a.sub_type AS "subType"
+              a.type AS "accountType", a.sub_type AS "subType", a.system_role AS "systemRole"
          FROM accounts a
         WHERE a.company_id = $1 AND a.account_number = $2
         LIMIT 1`,
@@ -2407,12 +2417,12 @@ export class ReportsService {
       this.glByAccount(companyId, fyStart, asOf),
       this.dataSource.query(
         `SELECT EXTRACT(YEAR FROM (g.date - make_interval(months => $3::int - 1)))::int AS fy,
-                a.account_number AS "accountNumber", a.type, a.sub_type AS "subType",
+                a.account_number AS "accountNumber", a.type, a.sub_type AS "subType", a.system_role AS "systemRole",
                 COALESCE(SUM(g.debit::numeric), 0) AS dr,
                 COALESCE(SUM(g.credit::numeric), 0) AS cr
            FROM general_ledger g JOIN accounts a ON a.id = g.account_id
           WHERE g.company_id = $1 AND g.date <= $2 AND a.type IN ('revenue', 'expense')
-          GROUP BY fy, a.account_number, a.type, a.sub_type`,
+          GROUP BY fy, a.account_number, a.type, a.sub_type, a.system_role`,
         [companyId, priorEnd, startMonth],
       ),
     ]);
@@ -2767,7 +2777,7 @@ export class ReportsService {
               COALESCE(SUM(g.debit::numeric - g.credit::numeric), 0) AS net
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
-        WHERE g.company_id = $1 AND a.account_number = '1200'
+        WHERE g.company_id = $1 AND a.system_role = '${SYS.INVENTORY}'
           ${cutAtAnchor ? 'AND g.date <= $2' : ''}
         GROUP BY period
         ORDER BY period`,
@@ -2827,7 +2837,7 @@ export class ReportsService {
       `SELECT COALESCE(SUM(g.debit::numeric - g.credit::numeric), 0) AS v
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
-        WHERE g.company_id = $1 AND a.account_number = '1200' AND g.date <= $2`,
+        WHERE g.company_id = $1 AND a.system_role = '${SYS.INVENTORY}' AND g.date <= $2`,
       [companyId, asOf],
     );
 
@@ -3724,13 +3734,13 @@ export class ReportsService {
     // What the ledger says, so the gap can be named rather than discovered.
     const [gl] = await this.dataSource.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN a.account_number = '4000'
+         COALESCE(SUM(CASE WHEN a.system_role = '${SYS.SALES_REVENUE}'
                            THEN g.credit - g.debit ELSE 0 END), 0)::numeric(18,4) AS revenue,
-         COALESCE(SUM(CASE WHEN a.account_number = '5000'
+         COALESCE(SUM(CASE WHEN a.system_role = '${SYS.COGS}'
                            THEN g.debit - g.credit ELSE 0 END), 0)::numeric(18,4) AS cogs
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
-        WHERE g.company_id = $1 AND a.account_number IN ('4000', '5000')
+        WHERE g.company_id = $1 AND a.system_role IN ('${SYS.SALES_REVENUE}', '${SYS.COGS}')
           AND g.date >= $2 AND g.date <= $3`,
       [companyId, s, e],
     );
@@ -3747,7 +3757,7 @@ export class ReportsService {
       `SELECT COALESCE(SUM(g.debit - g.credit), 0)::numeric(18,4) AS value
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
-        WHERE g.company_id = $1 AND a.account_number = '1200'`,
+        WHERE g.company_id = $1 AND a.system_role = '${SYS.INVENTORY}'`,
       [companyId],
     );
 
@@ -3760,14 +3770,14 @@ export class ReportsService {
     // lines, which is the residual — so the block always foots exactly rather
     // than nearly.
     const srcRows = await this.dataSource.query(
-      `SELECT a.account_number AS acct, g.source_type AS src,
-              SUM(CASE WHEN a.account_number = '4000'
+      `SELECT a.system_role AS acct, g.source_type AS src,
+              SUM(CASE WHEN a.system_role = '${SYS.SALES_REVENUE}'
                        THEN g.credit - g.debit ELSE g.debit - g.credit END)::numeric(18,4) AS net
          FROM general_ledger g
          JOIN accounts a ON a.id = g.account_id AND a.company_id = g.company_id
-        WHERE g.company_id = $1 AND a.account_number IN ('4000', '5000')
+        WHERE g.company_id = $1 AND a.system_role IN ('${SYS.SALES_REVENUE}', '${SYS.COGS}')
           AND g.date >= $2 AND g.date <= $3
-        GROUP BY a.account_number, g.source_type`,
+        GROUP BY a.system_role, g.source_type`,
       [companyId, s, e],
     );
 
@@ -3778,16 +3788,19 @@ export class ReportsService {
           .reduce((t: number, r: any) => t + num(r.net), 0),
       );
 
-    const manualRevenue = netOf('4000', ['journal_entry', 'opening_balance']);
-    const supplierReturns = netOf('5000', [
+    const manualRevenue = netOf(SYS.SALES_REVENUE, [
+      'journal_entry',
+      'opening_balance',
+    ]);
+    const supplierReturns = netOf(SYS.COGS, [
       'vendor_credit',
       'vendor_credit_void',
     ]);
     // A migrated trial balance carries the old books' sales and cost of sales
     // up to the cutover. No item sold in FinMatrix earned them.
     const migrated = ['migration', 'migration_rollback'];
-    const migratedRevenue = netOf('4000', migrated);
-    const migratedCogs = netOf('5000', migrated);
+    const migratedRevenue = netOf(SYS.SALES_REVENUE, migrated);
+    const migratedCogs = netOf(SYS.COGS, migrated);
 
     const unallocatedRevenue = r2(glRevenue - revenue);
     const unallocatedCogs = r2(glCogs - cogs);
@@ -4826,13 +4839,13 @@ export class ReportsService {
   async pnlByMonth(companyId: string, s: string, e: string) {
     const rows = await this.dataSource.query(
       `SELECT to_char(g.date, 'YYYY-MM') AS period,
-              a.account_number AS "accountNumber", a.type, a.sub_type AS "subType",
+              a.account_number AS "accountNumber", a.type, a.sub_type AS "subType", a.system_role AS "systemRole",
               COALESCE(SUM(g.debit::numeric), 0) AS dr,
               COALESCE(SUM(g.credit::numeric), 0) AS cr
          FROM general_ledger g JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id = $1 AND g.date >= $2 AND g.date <= $3
           AND a.type IN ('revenue', 'expense')
-        GROUP BY period, a.account_number, a.type, a.sub_type`,
+        GROUP BY period, a.account_number, a.type, a.sub_type, a.system_role`,
       [companyId, s, e],
     );
     const byPeriod = new Map<string, any[]>();
@@ -4885,7 +4898,7 @@ export class ReportsService {
        SELECT g.id, g.reference, g.date::text AS date,
               g.source_type AS "sourceType", g.source_id AS "sourceId",
               a.account_number AS "accountCode", a.name AS "accountName",
-              a.type, a.sub_type AS "subType",
+              a.type, a.sub_type AS "subType", a.system_role AS "systemRole",
               (g.debit::numeric - g.credit::numeric) AS amount
          FROM general_ledger g
          JOIN cash_refs r ON r.reference = g.reference
@@ -4960,7 +4973,7 @@ export class ReportsService {
     const rows = await this.dataSource.query(
       `SELECT bpa.id AS "applicationId", bpa.bill_payment_id AS "paymentId",
               bpa.amount::numeric AS applied,
-              a.account_number AS "accountCode", a.type, a.sub_type AS "subType",
+              a.account_number AS "accountCode", a.type, a.sub_type AS "subType", a.system_role AS "systemRole",
               COALESCE(SUM(g.debit::numeric), 0) AS debit
          FROM bill_payment_applications bpa
          LEFT JOIN general_ledger g
@@ -4968,7 +4981,7 @@ export class ReportsService {
                AND g.source_id = bpa.bill_id AND g.debit::numeric > 0
          LEFT JOIN accounts a ON a.id = g.account_id
         WHERE bpa.bill_payment_id = ANY($2::uuid[])
-        GROUP BY bpa.id, bpa.bill_payment_id, bpa.amount, a.account_number, a.type, a.sub_type`,
+        GROUP BY bpa.id, bpa.bill_payment_id, bpa.amount, a.account_number, a.type, a.sub_type, a.system_role`,
       [companyId, paymentIds],
     );
     // Total debits per application, to turn each line into a share of it.
@@ -5150,7 +5163,12 @@ export class ReportsService {
           r.type === 'asset' || r.type === 'expense' ? dr - cr : cr - dr;
         return [
           r.accountNumber,
-          { type: r.type, subType: r.subType, moved },
+          {
+            type: r.type,
+            subType: r.subType,
+            systemRole: r.systemRole ?? null,
+            moved,
+          },
         ] as const;
       }),
     );
@@ -5160,7 +5178,10 @@ export class ReportsService {
 
     /** A balance's change over the period, less what moved it without cash. */
     const delta = (
-      pick: (code: string, meta: { type: string; subType: string }) => boolean,
+      pick: (
+        code: string,
+        meta: { type: string; subType: string; systemRole: string | null },
+      ) => boolean,
     ): number => {
       let d = 0;
       for (const [code, meta] of movement) {
@@ -5176,28 +5197,31 @@ export class ReportsService {
 
     const isCashLike = (m: { subType: string }) =>
       m.subType === 'Cash' || m.subType === 'Bank';
-    const inRange = (code: string, lo: number, hi: number) => {
-      const n = parseInt(code, 10);
-      return Number.isFinite(n) && n >= lo && n <= hi;
-    };
-    const groupOf = (code: string, m: { type: string; subType: string }) =>
-      classifyForStatement(m.type, m.subType, code);
+    const groupOf = (
+      code: string,
+      m: { type: string; subType: string; systemRole?: string | null },
+    ) => classifyForStatement(m.type, m.subType, code, m.systemRole);
+    const isInventory = (
+      code: string,
+      m: { type: string; subType: string; systemRole?: string | null },
+    ) => m.type === 'asset' && groupOf(code, m) === 'inventory';
 
-    // 1250 sits INSIDE 1200–1299, so Inventory excludes it explicitly —
-    // counting Goods in Transit in both would double the adjustment. Same for
-    // GRNI 2050, excluded from other liabilities.
+    // Lines follow the balance sheet's own grouping (by kind) and the
+    // accounts' roles, never their numbers: a company that came from another
+    // system keeps that system's numbers. Goods in Transit is an inventory
+    // account with a line of its own, so Inventory leaves it out — counting
+    // it in both would double the adjustment. Same for GRNI among the other
+    // liabilities.
     const dAR = delta(
       (_c, m) => m.type === 'asset' && m.subType === 'Accounts Receivable',
     );
     const dInventory = delta(
-      (c, m) => m.type === 'asset' && inRange(c, 1200, 1299) && c !== '1250',
+      (c, m) => isInventory(c, m) && m.systemRole !== SYS.GOODS_IN_TRANSIT,
     );
-    const dGit = delta((c) => c === '1250');
+    const dGit = delta((_c, m) => m.systemRole === SYS.GOODS_IN_TRANSIT);
     const dPrepaid = delta(
       (c, m) =>
-        m.type === 'asset' &&
-        m.subType === 'Prepaid' &&
-        !inRange(c, 1200, 1299),
+        m.type === 'asset' && m.subType === 'Prepaid' && !isInventory(c, m),
     );
     // Fixed assets are investing, not working capital.
     const dOtherAssets = delta(
@@ -5206,19 +5230,19 @@ export class ReportsService {
         !isCashLike(m) &&
         m.subType !== 'Accounts Receivable' &&
         m.subType !== 'Prepaid' &&
-        !inRange(c, 1200, 1299) &&
+        !isInventory(c, m) &&
         groupOf(c, m) !== 'fixedAssets',
     );
     const dAP = delta(
       (_c, m) => m.type === 'liability' && m.subType === 'Accounts Payable',
     );
-    const dGrni = delta((c) => c === '2050');
+    const dGrni = delta((_c, m) => m.systemRole === SYS.GRNI);
     // Long-term loans are financing, not working capital.
     const dOtherLiabs = delta(
       (c, m) =>
         m.type === 'liability' &&
         m.subType !== 'Accounts Payable' &&
-        c !== '2050' &&
+        m.systemRole !== SYS.GRNI &&
         groupOf(c, m) !== 'longTermLiabilities',
     );
     const depreciation = delta(
@@ -5312,7 +5336,7 @@ export class ReportsService {
        SELECT g.id, g.reference, g.date::text AS date,
               g.source_type AS "sourceType", g.source_id AS "sourceId",
               a.account_number AS "accountCode", a.name AS "accountName",
-              a.type, a.sub_type AS "subType",
+              a.type, a.sub_type AS "subType", a.system_role AS "systemRole",
               (g.debit::numeric - g.credit::numeric) AS amount
          FROM general_ledger g
          JOIN candidates c ON c.reference = g.reference

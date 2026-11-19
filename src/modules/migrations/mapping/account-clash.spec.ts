@@ -5,7 +5,8 @@ const fm = (
   name: string,
   type: string,
   subType: string | null = null,
-) => ({ accountNumber, name, type, subType });
+  systemRole: string | null = null,
+) => ({ accountNumber, name, type, subType, systemRole });
 const src = (
   number: string,
   name: string | null,
@@ -30,13 +31,25 @@ describe('a source account and the FinMatrix account with its number', () => {
     expect(
       sameAccount(
         src('1100', 'Debtors Control Account', 'Asset'),
-        fm('1100', 'Accounts Receivable', 'asset', 'Accounts Receivable'),
+        fm(
+          '1100',
+          'Accounts Receivable',
+          'asset',
+          'Accounts Receivable',
+          'accounts_receivable',
+        ),
       ),
     ).toBe(true);
     expect(
       sameAccount(
         src('2000', 'Trade Creditors', 'Liability'),
-        fm('2000', 'Accounts Payable', 'liability', 'Accounts Payable'),
+        fm(
+          '2000',
+          'Accounts Payable',
+          'liability',
+          'Accounts Payable',
+          'accounts_payable',
+        ),
       ),
     ).toBe(true);
   });

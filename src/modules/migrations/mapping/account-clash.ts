@@ -10,11 +10,8 @@
  * types agree and the names, the control role or a distinctive kind agree
  * too; anything else is a clash, asked about, never merged silently.
  */
-import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_INVENTORY,
-} from '../../accounts/accounts.constants';
+import { freeNumber as nextFreeNumber } from '../../accounts/account-number.util';
+import { SYS } from '../../accounts/accounts.constants';
 import { normalizeKey } from '../parsers/text-normalize';
 import { CONTROL_ACCOUNT_HINTS } from '../targets';
 
@@ -30,6 +27,8 @@ export interface ChartAccountInfo {
   name: string;
   type: string;
   subType?: string | null;
+  /** Its system role (accounts.constants SYS), if any. */
+  systemRole?: string | null;
 }
 
 /** Words that say nothing about which account it is. */
@@ -97,12 +96,13 @@ export function controlByName(
   return null;
 }
 
-const controlAt = (number: string): Control | null =>
-  number === ACCT_AR
+/** The control role a FinMatrix account holds, by its system role. */
+const controlOf = (role: string | null | undefined): Control | null =>
+  role === SYS.AR
     ? 'ar'
-    : number === ACCT_AP
+    : role === SYS.AP
       ? 'ap'
-      : number === ACCT_INVENTORY
+      : role === SYS.INVENTORY
         ? 'inventory'
         : null;
 
@@ -128,7 +128,7 @@ export function sameAccount(
   if (!normalizeKey(src.name)) return true;
   if (namesAgree(src.name, acct.name)) return true;
   const mine = controlByName(src);
-  if (mine && mine === controlAt(acct.accountNumber)) return true;
+  if (mine && mine === controlOf(acct.systemRole)) return true;
   const kind = normalizeKey(src.kind);
   return !!kind && DISTINCTIVE.has(kind) && kind === normalizeKey(acct.subType);
 }
@@ -143,22 +143,7 @@ export function typesAgree(
   );
 }
 
-/**
- * The next number nobody uses, near the clashing one: 1200 → 1201, "090" →
- * "091", "ALI-7" → "ALI-8", "CASH" → "CASH-1". `taken` holds every number
- * in FinMatrix and in the source (normalised), and gains the one returned.
- */
+/** The next free number near a clashing one (see accounts/account-number.util). */
 export function freeNumber(number: string, taken: Set<string>): string {
-  const m = /^(.*?)(\d+)$/.exec(number);
-  for (let i = 1; i < 10_000; i++) {
-    const candidate = m
-      ? `${m[1]}${String(Number(m[2]) + i).padStart(m[2].length, '0')}`
-      : `${number}-${i}`;
-    const key = normalizeKey(candidate);
-    if (!taken.has(key)) {
-      taken.add(key);
-      return candidate;
-    }
-  }
-  throw new Error(`No free account number near ${number}`);
+  return nextFreeNumber(number, taken, normalizeKey);
 }

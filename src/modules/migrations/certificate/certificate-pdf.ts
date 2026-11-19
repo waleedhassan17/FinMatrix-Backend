@@ -33,6 +33,7 @@ const ENTITY_LABELS: Record<string, string> = {
   open_bills: 'Open bills',
   stock: 'Stock lines',
   peachtree_proof: "Lines compared with Peachtree's reports",
+  chart_change: 'FinMatrix accounts fitted to your chart',
 };
 
 /**
@@ -142,6 +143,26 @@ export function renderCertificatePdf(input: {
           String(r.pending),
         ]),
       },
+      ...(preview.chartChanges?.length
+        ? [
+            {
+              heading: 'Your chart in FinMatrix',
+              columns: [
+                { header: 'FinMatrix account', width: 0.36 },
+                { header: 'Now', width: 0.4 },
+                { header: 'Why', width: 0.24 },
+              ],
+              rows: preview.chartChanges.map((c) => [
+                `${c.fromNumber} ${c.fromName}`,
+                `${c.toNumber} ${c.toName}`,
+                c.change === 'adopt'
+                  ? 'Takes your number and name'
+                  : 'Your chart uses its number',
+              ]),
+              note: "Your accounts keep their numbers and names. FinMatrix's own accounts took them over (automatic posting finds them by what they are for, not by number), or moved to a free number. This stays so after an undo.",
+            },
+          ]
+        : []),
       {
         heading: `Rejected rows (${preview.rejectedTotal})`,
         columns: [
@@ -173,7 +194,7 @@ export function renderCertificatePdf(input: {
           String(p.lines),
           p.total,
         ]),
-        note: `All postings are dated ${pdfDate(openingDate)}, the close of business before the cutover day, and net through Migration Clearing (3950), which ends at zero. The books are closed through that day.`,
+        note: `All postings are dated ${pdfDate(openingDate)}, the close of business before the cutover day, and net through the Migration Clearing account, which ends at zero. The books are closed through that day.`,
       },
       ...(preview.spotChecks.length
         ? [

@@ -38,11 +38,7 @@ import { BillsService } from '../../modules/bills/bills.service';
 import { seedPaymentVoucher } from './payment-voucher';
 import { PaymentsService } from '../../modules/payments/payments.service';
 import { PurchaseOrdersService } from '../../modules/purchase-orders/purchase-orders.service';
-import {
-  ACCT_CASH,
-  ACCT_BANK,
-  ACCT_OPENING_BALANCE_EQUITY,
-} from '../../modules/accounts/accounts.constants';
+import { SYS } from '../../modules/accounts/accounts.constants';
 
 loadEnv();
 
@@ -284,11 +280,11 @@ async function run() {
   const acctRepo = ds.getRepository(Account);
   const cashAcct = await acctRepo.findOneByOrFail({
     companyId: cid,
-    accountNumber: ACCT_CASH,
+    systemRole: SYS.CASH,
   });
   const bankAcct = await acctRepo.findOneBy({
     companyId: cid,
-    accountNumber: ACCT_BANK,
+    systemRole: SYS.BANK,
   });
   const cashId = cashAcct.id;
   // Route both collections and payments through one cash account so the demo
@@ -310,7 +306,7 @@ async function run() {
   // while every report still derives from the ledger.
   const obeAcct = await acctRepo.findOneBy({
     companyId: cid,
-    accountNumber: ACCT_OPENING_BALANCE_EQUITY,
+    systemRole: SYS.OPENING_BALANCE_EQUITY,
   });
   if (obeAcct) {
     const openDate = ymd(

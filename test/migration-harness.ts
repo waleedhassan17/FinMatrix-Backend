@@ -92,6 +92,7 @@ export async function freshCompany(
         name: a.name,
         type: a.type,
         subType: a.subType,
+        systemRole: a.systemRole ?? null,
         parentId: null,
         description: null,
         openingBalance: '0',

@@ -214,13 +214,19 @@ export function nonOperatingLineFor(row: {
   type: string;
   subType: string | null;
   accountCode: string;
+  systemRole?: string | null;
 }): CashFlowLineKey | null {
   if (row.type === 'equity') {
     return row.subType === 'Owner Draws' || row.subType === 'Retained Earnings'
       ? 'fin.owner_drawings'
       : 'fin.owner_contributions';
   }
-  const group = classifyForStatement(row.type, row.subType, row.accountCode);
+  const group = classifyForStatement(
+    row.type,
+    row.subType,
+    row.accountCode,
+    row.systemRole,
+  );
   if (group === 'fixedAssets') return 'inv.fixed_assets';
   if (group === 'longTermLiabilities') return 'fin.loans';
   return null;

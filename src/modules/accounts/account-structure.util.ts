@@ -11,9 +11,10 @@
  * So the line is drawn where it actually matters. An account nothing refers
  * to yet can be retyped and renumbered freely; once anything does — a
  * posting, a draft's line, a payment, a budget, a reconciliation, a vendor's
- * default — both are fixed, and the way forward is a new account. System
- * accounts are fixed from the start: automatic posting finds them by number
- * and expects their type and kind.
+ * default — both are fixed, and the way forward is a new account. A system
+ * account's type and kind are fixed from the start: automatic posting finds
+ * it by its role and expects them. Its number follows the same rule as any
+ * account's (posting no longer finds it by number), and its name is free.
  */
 export interface AccountUsage {
   /** Rows in the general ledger. */
@@ -68,37 +69,39 @@ export function describeUsage(u: AccountUsage): string {
 }
 
 export interface AccountStructure {
-  /** Whether the type and the number may change. */
+  /** Whether the type and the number may both change (older clients read this). */
   editable: boolean;
-  /** Why not, in a sentence — null when they may. */
+  /** Whether the number may change. */
+  numberEditable: boolean;
+  /** Whether the type (and kind) may change. */
+  typeEditable: boolean;
+  /** Why not, in a sentence — null when everything may. */
   reason: string | null;
 }
 
 /** Whether this account's type and number may change, and if not, why. */
 export function structureOf(
-  isSystemAccount: boolean,
+  systemRole: string | null,
   usage: AccountUsage,
 ): AccountStructure {
-  if (isSystemAccount) {
-    return {
-      editable: false,
-      reason:
-        'A system account — automatic posting finds it by its number and type, so both are fixed.',
-    };
+  const used = usageTotal(usage) > 0;
+  const numberEditable = !used;
+  const typeEditable = !systemRole && !used && usage.children === 0;
+  let reason: string | null = null;
+  if (used) {
+    reason = `Already in use (${describeUsage(usage)}), so its type and number are fixed.`;
+  } else if (systemRole) {
+    reason =
+      'A system account — automatic posting relies on its type and kind, so those are fixed. Its number and name can change.';
+  } else if (usage.children > 0) {
+    reason = `It has ${plural(usage.children, 'sub-account')}. Move ${usage.children === 1 ? 'it' : 'them'} first to change its type.`;
   }
-  if (usageTotal(usage) > 0) {
-    return {
-      editable: false,
-      reason: `Already in use (${describeUsage(usage)}), so its type and number are fixed.`,
-    };
-  }
-  if (usage.children > 0) {
-    return {
-      editable: false,
-      reason: `It has ${plural(usage.children, 'sub-account')}. Move ${usage.children === 1 ? 'it' : 'them'} first to change its type.`,
-    };
-  }
-  return { editable: true, reason: null };
+  return {
+    editable: numberEditable && typeEditable,
+    numberEditable,
+    typeEditable,
+    reason,
+  };
 }
 
 /**

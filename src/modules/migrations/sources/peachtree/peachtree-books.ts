@@ -42,7 +42,7 @@ import Decimal from 'decimal.js';
 import { readFile } from 'fs/promises';
 import { SYSTEM_ACCOUNT_DEFS } from '../../../accounts/accounts.constants';
 import { normalizeKey } from '../../parsers/text-normalize';
-import { CONTROL_ACCOUNT_HINTS, TARGET_SHEETS } from '../../targets';
+import { TARGET_SHEETS } from '../../targets';
 import { BtrieveFile } from './btrieve';
 import { readDictionary, TableDef } from './ddf';
 import { decodeField, FieldValue } from './field-types';
@@ -202,14 +202,14 @@ export interface PeachtreeExtract {
 export interface ReadOptions {
   cutoverDate: string;
   openingDate: string;
-  /** Account numbers already in the company's chart: never reused for another account. */
+  /** Account numbers already in the company's chart: a number FinMatrix makes up avoids them. */
   existingAccounts: ReadonlyArray<{ accountNumber: string; name: string }>;
-  /** FinMatrix control numbers. */
+  /**
+   * Where FinMatrix keeps customer credits (its Customer Advances account).
+   * Peachtree's own accounts — its controls included — keep their IDs: the
+   * analysis moves FinMatrix's accounts to them, not the other way round.
+   */
   numbers: {
-    receivables: string;
-    payables: string;
-    inventory: string;
-    retainedEarnings: string;
     customerAdvances: string;
   };
   onProgress?: (stage: string, done: number) => void;
@@ -909,21 +909,17 @@ export async function readPeachtreeBooks(
   const ap = net(bills);
 
   // ── Account numbers ────────────────────────────────────────────────
-  const taken = new Set(
-    opts.existingAccounts.map((a) => a.accountNumber.toUpperCase()),
+  // Every Peachtree account keeps its ID and name: the owner's chart is kept
+  // exactly, and FinMatrix's own accounts take Peachtree's numbers (see
+  // mapping/chart-plan). Only an ID FinMatrix cannot hold (too short or too
+  // long) gets a number made up here, avoiding every number in use.
+  const peachtreeIds = new Set(
+    [...accounts.values()].map((a) => a.id.toUpperCase()),
   );
-  const reserved = new Set(
-    Object.values(opts.numbers).map((n) => n.toUpperCase()),
-  );
-  // A name the analysis would read as a control account gets the Peachtree
-  // number appended, so only the real controls are routed to 1100/2000/1200.
-  const hints = new Set(
-    [
-      ...CONTROL_ACCOUNT_HINTS.ar,
-      ...CONTROL_ACCOUNT_HINTS.ap,
-      ...CONTROL_ACCOUNT_HINTS.inventory,
-    ].map((h) => normalizeKey(h)),
-  );
+  const taken = new Set([
+    ...opts.existingAccounts.map((a) => a.accountNumber.toUpperCase()),
+    ...peachtreeIds,
+  ]);
   const nextNumber: Record<string, number> = {
     asset: 18001,
     liability: 28001,
@@ -934,7 +930,7 @@ export async function readPeachtreeBooks(
   const fresh = (type: string) => {
     for (;;) {
       const n = String(nextNumber[type]++);
-      if (!taken.has(n) && !reserved.has(n)) {
+      if (!taken.has(n)) {
         taken.add(n);
         return n;
       }
@@ -992,41 +988,41 @@ export async function readPeachtreeBooks(
   };
   const numberOf = new Map<number, string>();
   const accountRows: Array<Array<string | null>> = [];
-  const controlNumber = (a: Account): string | null =>
+  // Peachtree's control accounts are named by their kind, so FinMatrix's
+  // Receivables, Payables, Inventory and Retained Earnings take them over.
+  const controlKind = (a: Account): string | null =>
     a.record === arControl
-      ? opts.numbers.receivables
+      ? 'Accounts Receivable'
       : a.record === apControl
-        ? opts.numbers.payables
+        ? 'Accounts Payable'
         : inventoryControl && a.record === inventoryControl.record
-          ? opts.numbers.inventory
+          ? 'Inventory'
           : a.record === reAccount.record
-            ? opts.numbers.retainedEarnings
+            ? 'Retained Earnings'
             : null;
+  const used = new Set<string>();
   for (const a of [...accounts.values()].sort((x, y) =>
     x.id.localeCompare(y.id),
   )) {
-    const control = controlNumber(a);
-    if (control) {
-      numberOf.set(a.record, control);
-      continue;
-    }
+    const control = controlKind(a);
     const bal = money(closing.get(a.record) ?? new Decimal(0));
-    if (a.inactive && bal.isZero()) continue;
+    if (!control && a.inactive && bal.isZero()) continue;
     const m = meaning(a);
     const own = a.id.toUpperCase();
-    const keep =
-      a.id.length >= 2 &&
-      a.id.length <= 20 &&
-      !taken.has(own) &&
-      !reserved.has(own);
+    const keep = a.id.length >= 2 && a.id.length <= 20 && !used.has(own);
     const number = keep ? a.id : fresh(m.type);
-    if (keep) taken.add(own);
-    const name =
-      !keep || hints.has(normalizeKey(a.name))
-        ? `${a.name || a.id} (Peachtree ${a.id})`
-        : a.name || a.id;
+    used.add(number.toUpperCase());
+    const name = keep
+      ? a.name || a.id
+      : `${a.name || a.id} (Peachtree ${a.id})`;
     numberOf.set(a.record, number);
-    accountRows.push([number, name.slice(0, 150), cap(m.type), m.kind, null]);
+    accountRows.push([
+      number,
+      name.slice(0, 150),
+      cap(m.type),
+      control ?? m.kind,
+      null,
+    ]);
   }
 
   // ── Trial balance lines ────────────────────────────────────────────
@@ -1046,6 +1042,7 @@ export async function readPeachtreeBooks(
     accountRows.push([number, name.slice(0, 150), cap(type), kind, null]);
     return number;
   };
+  let advancesNumber: string | undefined;
   const sumOpen = (docs: OpenDoc[]) =>
     docs.reduce((t, d) => t.plus(d.open), new Decimal(0));
   for (const a of [...accounts.values()].sort((x, y) =>
@@ -1068,22 +1065,21 @@ export async function readPeachtreeBooks(
       );
       tbLine(number, a.name || 'Accounts Receivable', detail);
       if (!credits.isZero()) {
-        if (
-          !opts.existingAccounts.some(
-            (x) => x.accountNumber === opts.numbers.customerAdvances,
-          )
-        ) {
-          const def = SYSTEM_ACCOUNT_DEFS[opts.numbers.customerAdvances];
-          accountRows.push([
-            opts.numbers.customerAdvances,
-            def?.name ?? 'Customer Advances',
-            cap(def?.type ?? 'liability'),
-            def?.subType ?? 'Other Liability',
-            null,
-          ]);
-        }
+        // FinMatrix's Customer Advances account, at its own number unless a
+        // Peachtree account already holds that number.
+        const def = SYSTEM_ACCOUNT_DEFS.customer_advances;
+        advancesNumber ??= used.has(opts.numbers.customerAdvances.toUpperCase())
+          ? fresh('liability')
+          : opts.numbers.customerAdvances;
+        accountRows.push([
+          advancesNumber,
+          def.name,
+          cap(def.type),
+          def.subType,
+          null,
+        ]);
         tbLine(
-          opts.numbers.customerAdvances,
+          advancesNumber,
           'Customer credits (from Peachtree)',
           credits.negated(),
         );
@@ -1095,7 +1091,7 @@ export async function readPeachtreeBooks(
           key: 'customer-credits',
           severity: 'blocking',
           acceptable: true,
-          message: `In Peachtree ${ar.residual.size} customer${ar.residual.size === 1 ? ' is' : 's are'} owed money by you (${who}). FinMatrix will hold the Rs ${fmt(credits)} on ${opts.numbers.customerAdvances} Customer Advances, not on the customer, so apply it by hand when they next buy. Accept, or settle the credits in Peachtree and upload a new backup.`,
+          message: `In Peachtree ${ar.residual.size} customer${ar.residual.size === 1 ? ' is' : 's are'} owed money by you (${who}). FinMatrix will hold the Rs ${fmt(credits)} on ${advancesNumber} Customer Advances, not on the customer, so apply it by hand when they next buy. Accept, or settle the credits in Peachtree and upload a new backup.`,
         });
       }
       const diff = bal.minus(detail).plus(credits);
@@ -1400,7 +1396,9 @@ export async function readPeachtreeBooks(
       })),
     },
     stock: {
-      inventoryAccount: opts.numbers.inventory,
+      inventoryAccount: inventoryControl
+        ? (numberOf.get(inventoryControl.record) ?? '')
+        : '',
       peachtreeAccount: inventoryControl?.id ?? null,
       ledgerBalance: fmt(
         inventoryControl

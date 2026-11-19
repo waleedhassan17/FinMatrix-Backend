@@ -36,8 +36,8 @@ const NEW_ACCOUNT_BASE: Record<string, number> = {
   Revenue: 48001,
   Expense: 68001,
 };
-/** FinMatrix's own control accounts. */
-const CONTROL_NUMBER: Record<string, string> = {
+/** FinMatrix's own control accounts, where a fresh company has them. */
+const DEFAULT_CONTROL_NUMBER: Record<string, string> = {
   'Accounts Receivable': '1100',
   Inventory: '1200',
   'Accounts Payable': '2000',
@@ -107,6 +107,13 @@ export interface CanonicalOptions {
   accepted: (key: string) => boolean;
   /** Account numbers already in the company's chart. */
   existingAccounts: string[];
+  /**
+   * Where this company keeps its control accounts now, by kind ('Accounts
+   * Receivable', 'Inventory', 'Accounts Payable', 'Retained Earnings'). A
+   * source without numbers lands on them; a company that already moved them
+   * (an earlier migration, a renumber) keeps them where they are.
+   */
+  controlNumbers?: Partial<Record<string, string>>;
 }
 
 const D = (v: Decimal.Value) => new Decimal(v);
@@ -644,6 +651,14 @@ export function buildCanonical(
   // Accounts without numbers get FinMatrix numbers: control accounts its
   // own, the rest by type. TB rows follow their account.
   const numbering = new Map<string, string>();
+  const CONTROL_NUMBER: Record<string, string> = {
+    ...DEFAULT_CONTROL_NUMBER,
+    ...Object.fromEntries(
+      Object.entries(opts.controlNumbers ?? {}).filter(
+        (e): e is [string, string] => !!e[1],
+      ),
+    ),
+  };
   const unnumbered = accountRows.filter((r) => !isNumber(String(r[0])));
   if (unnumbered.length) {
     const byControl = new Map<string, string[]>();

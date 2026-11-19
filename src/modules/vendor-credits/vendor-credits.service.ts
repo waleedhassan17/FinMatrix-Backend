@@ -25,12 +25,7 @@ import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { BillsService } from '../bills/bills.service';
-import {
-  ACCT_AP,
-  ACCT_COGS,
-  ACCT_INPUT_TAX,
-  ACCT_INVENTORY,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { assertSufficientStock } from '../../common/utils/stock.util';
 import { recordInventoryMovement } from '../../common/utils/inventory-movement.util';
@@ -129,14 +124,14 @@ export class VendorCreditsService {
           message: 'Vendor not found',
         });
 
-      const cogs = await this.accounts.getByNumberOrFail(
+      const cogs = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_COGS,
+        SYS.COGS,
         manager,
       );
-      const inventoryAcct = await this.accounts.getByNumberOrFail(
+      const inventoryAcct = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_INVENTORY,
+        SYS.INVENTORY,
         manager,
       );
 
@@ -212,9 +207,9 @@ export class VendorCreditsService {
       // the gross the vendor no longer owes us; CR the expense/inventory
       // account(s) for the net; CR Sales Tax Recoverable (1300) for the input
       // tax originally claimed on the bill, which is no longer recoverable.
-      const ap = await this.accounts.getByNumberOrFail(
+      const ap = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_AP,
+        SYS.AP,
         manager,
       );
       const jeLines = [
@@ -237,7 +232,7 @@ export class VendorCreditsService {
         const inputTax = await this.accounts.getOrCreateSystemAccount(
           manager,
           companyId,
-          ACCT_INPUT_TAX,
+          SYS.INPUT_TAX,
         );
         jeLines.push({
           accountId: inputTax.id,
@@ -319,9 +314,9 @@ export class VendorCreditsService {
       if (vc.journalEntryId) {
         // Exact mirror of create(), including the input-tax leg, so the void
         // cancels the original entry to the cent.
-        const ap = await this.accounts.getByNumberOrFail(
+        const ap = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_AP,
+          SYS.AP,
           manager,
         );
         const jeLines = [
@@ -337,7 +332,7 @@ export class VendorCreditsService {
           const inputTax = await this.accounts.getOrCreateSystemAccount(
             manager,
             companyId,
-            ACCT_INPUT_TAX,
+            SYS.INPUT_TAX,
           );
           jeLines.push({
             accountId: inputTax.id,

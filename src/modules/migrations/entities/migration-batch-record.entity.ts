@@ -15,7 +15,13 @@ export type BatchRecordType =
   | 'vendor_touched'
   | 'item_touched'
   /** The company's period lock before commit; meta holds the prior lock. */
-  | 'company_touched';
+  | 'company_touched'
+  /**
+   * A FinMatrix account the batch renumbered or renamed to fit the owner's
+   * chart (mapping/chart-plan); meta holds the prior number and name. Undo
+   * leaves the chart as the owner's: this is the audit trail.
+   */
+  | 'account_touched';
 
 /**
  * Every row a committed batch created or changed. Rollback walks this list

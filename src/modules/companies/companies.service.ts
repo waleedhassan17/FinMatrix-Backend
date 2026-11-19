@@ -740,6 +740,7 @@ export class CompaniesService {
         companyId,
         accountNumber: a.accountNumber,
         name: a.name,
+        systemRole: a.systemRole ?? null,
         type: a.type,
         subType: a.subType,
         parentId: null,

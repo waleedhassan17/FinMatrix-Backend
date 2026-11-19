@@ -2,12 +2,8 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { EntityManager } from 'typeorm';
 import { Account } from '../../accounts/entities/account.entity';
-import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_INVENTORY,
-  ACCT_MIGRATION_CLEARING,
-} from '../../accounts/accounts.constants';
+import { SYS, SystemRole } from '../../accounts/accounts.constants';
+
 import {
   exportColumns,
   EXPORT_ENTITIES,
@@ -368,6 +364,19 @@ export class MigrationChecksService {
     return r;
   }
 
+  /** A role's account number now — after the owner's chart was applied. */
+  private async roleNumber(
+    em: EntityManager,
+    batch: MigrationBatch,
+    role: SystemRole,
+  ): Promise<string> {
+    const a = await em.findOne(Account, {
+      where: { companyId: batch.companyId, systemRole: role },
+      select: { accountNumber: true },
+    });
+    return a?.accountNumber ?? '';
+  }
+
   // 4 ──────────────────────────────────────────────────────────────────
   private async clearingZero(
     em: EntityManager,
@@ -376,13 +385,13 @@ export class MigrationChecksService {
     const acct = await em.findOne(Account, {
       where: {
         companyId: batch.companyId,
-        accountNumber: ACCT_MIGRATION_CLEARING,
+        systemRole: SYS.MIGRATION_CLEARING,
       },
     });
     const actual = acct ? d(acct.balance) : new Decimal(0);
     return this.result('CLEARING_ZERO', new Decimal(0), actual, [
       {
-        account: ACCT_MIGRATION_CLEARING,
+        account: acct?.accountNumber ?? SYS.MIGRATION_CLEARING,
         balance: s(actual),
         note: actual.isZero()
           ? 'Clearing nets to zero.'
@@ -413,7 +422,7 @@ export class MigrationChecksService {
         em,
         batch.id,
         batch.companyId,
-        isAr ? ACCT_AR : ACCT_AP,
+        await this.roleNumber(em, batch, isAr ? SYS.AR : SYS.AP),
       ),
     );
     const controlNet = isAr ? control : control.negated(); // AP is a credit balance
@@ -498,7 +507,12 @@ export class MigrationChecksService {
       await expectedStockTotal(em, batch.id, batch.companyId),
     );
     const control = d(
-      await expectedControlNet(em, batch.id, batch.companyId, ACCT_INVENTORY),
+      await expectedControlNet(
+        em,
+        batch.id,
+        batch.companyId,
+        await this.roleNumber(em, batch, SYS.INVENTORY),
+      ),
     );
     const details: Array<Record<string, unknown>> = [];
     let failures = 0;
@@ -535,7 +549,7 @@ export class MigrationChecksService {
     );
     const movementValue = d(mv.value);
     const inventoryAcct = await em.findOne(Account, {
-      where: { companyId: batch.companyId, accountNumber: ACCT_INVENTORY },
+      where: { companyId: batch.companyId, systemRole: SYS.INVENTORY },
     });
     const ledgerValue = inventoryAcct
       ? d(inventoryAcct.balance)

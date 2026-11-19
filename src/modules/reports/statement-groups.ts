@@ -113,17 +113,25 @@ const numberOf = (accountNumber: string | null | undefined): number | null => {
 /**
  * The balance-sheet section an account belongs to, or null for revenue and
  * expense accounts (which reach the balance sheet only through earnings).
+ *
+ * A system account (`systemRole` set — Input Tax, GRNI…) is placed by its
+ * kind alone: its number may be another system's (a company that moved from
+ * Peachtree keeps Peachtree's), so FinMatrix's number ranges say nothing
+ * about it. The ranges remain the fallback for ordinary accounts.
  */
 export function classifyForStatement(
   type: string,
   subType: string | null | undefined,
   accountNumber: string | null | undefined,
+  systemRole?: string | null,
 ): StatementGroupKey | null {
   const st = (subType ?? '').trim();
   const n = numberOf(accountNumber);
 
   if (type === 'asset') {
     if (ASSET_BY_SUBTYPE[st]) return ASSET_BY_SUBTYPE[st];
+    // Every system asset FinMatrix keeps under an unspecific kind is current.
+    if (systemRole) return 'otherCurrentAssets';
     if (st === 'Other Asset') {
       return n !== null && n >= 1500 ? 'fixedAssets' : 'otherCurrentAssets';
     }
@@ -138,6 +146,7 @@ export function classifyForStatement(
 
   if (type === 'liability') {
     if (LIABILITY_BY_SUBTYPE[st]) return LIABILITY_BY_SUBTYPE[st];
+    if (systemRole) return 'currentLiabilities';
     return n !== null && n >= 2700
       ? 'longTermLiabilities'
       : 'currentLiabilities';
@@ -154,7 +163,10 @@ export function classifyForStatement(
 export function isCogsAccount(row: {
   accountNumber: string;
   subType: string | null;
+  /** A system account is judged by its kind alone (its number may be another system's). */
+  systemRole?: string | null;
 }): boolean {
+  if (row.systemRole) return row.subType === 'Cost of Goods';
   return (
     row.subType === 'Cost of Goods' || (row.accountNumber ?? '').startsWith('5')
   );
@@ -176,9 +188,14 @@ export function isNonOperatingAccount(row: {
   accountNumber: string;
   subType: string | null;
   type?: string;
+  /**
+   * A system account is judged by its kind alone: Salary Expense that took a
+   * Sage chart's "7000 Gross Wages" is still operating.
+   */
+  systemRole?: string | null;
 }): boolean {
   const n = row.accountNumber ?? '';
-  if (n.startsWith('7') || n.startsWith('8')) return true;
+  if (!row.systemRole && (n.startsWith('7') || n.startsWith('8'))) return true;
   const st = row.subType ?? '';
   if (st === 'Other Income') return true;
   if (row.type === undefined) {
@@ -197,6 +214,7 @@ export function pnlGroupFor(row: {
   accountNumber: string;
   subType: string | null;
   type: string;
+  systemRole?: string | null;
 }): PnlGroupKey | null {
   if (row.type === 'revenue')
     return isNonOperatingAccount(row) ? 'otherIncome' : 'income';
@@ -212,10 +230,15 @@ export function accountGroupFor(row: {
   accountNumber: string;
   subType: string | null;
   type: string;
+  systemRole?: string | null;
 }): AccountGroupKey | null {
   return (
-    classifyForStatement(row.type, row.subType, row.accountNumber) ??
-    pnlGroupFor(row)
+    classifyForStatement(
+      row.type,
+      row.subType,
+      row.accountNumber,
+      row.systemRole,
+    ) ?? pnlGroupFor(row)
   );
 }
 

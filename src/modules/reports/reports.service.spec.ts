@@ -6,6 +6,7 @@ import { firstValueFrom, of } from 'rxjs';
 import { DataSource } from 'typeorm';
 import { ResponseEnvelopeInterceptor } from '../../common/interceptors/response-envelope.interceptor';
 import { REPORT_RANGE_DEFAULTS, ReportsService } from './reports.service';
+import { ROLE_AT_DEFAULT_NUMBER } from '../accounts/accounts.constants';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Bill } from '../bills/entities/bill.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
@@ -36,6 +37,8 @@ type GlRow = {
   accountName: string;
   type: string;
   subType: string;
+  /** The default chart's role at this number, as the backfill gives it. */
+  systemRole: string | null;
   dr: string;
   cr: string;
 };
@@ -52,6 +55,7 @@ const gl = (
   accountName,
   type,
   subType,
+  systemRole: ROLE_AT_DEFAULT_NUMBER.get(accountNumber) ?? null,
   dr: String(dr),
   cr: String(cr),
 });
@@ -361,7 +365,7 @@ describe('ReportsService — cashFlow indirect operating', () => {
     expect(r.operatingIndirect!.total).toBe(r.operating.total);
   });
 
-  it('counts Goods in Transit once — never also inside the 1200-1299 inventory range', async () => {
+  it('counts Goods in Transit once — on its own line, never also inside Inventory', async () => {
     const query = makeQuery({
       beginningCash: 0,
       sources: [],
@@ -385,6 +389,34 @@ describe('ReportsService — cashFlow indirect operating', () => {
         (a) => a.label === 'Goods in Transit',
       ),
     ).toEqual({ label: 'Goods in Transit', amount: -500 });
+  });
+
+  it('classifies by kind and role, not number: Peachtree numbering lands on the same lines', async () => {
+    const own = (n: string, name: string, type: string, sub: string, role: string | null, dr: number, cr: number): GlRow => ({
+      ...gl(n, name, type, sub, dr, cr),
+      systemRole: role,
+    });
+    const query = makeQuery({
+      beginningCash: 0,
+      sources: [],
+      dayBefore: DAY_BEFORE,
+      start: START,
+      end: END,
+      opening: [],
+      closing: [],
+      period: [
+        own('12000', 'Inventory', 'asset', 'Inventory', 'inventory', 300, 0),
+        own('12500', 'Goods in Transit', 'asset', 'Inventory', 'goods_in_transit', 200, 0),
+        own('20760', 'Received Not Billed', 'liability', 'Other Liability', 'grni', 0, 150),
+      ],
+    });
+    const svc = await makeService(query);
+    const r = await svc.cashFlow('c1', START, END);
+    const amount = (label: string) =>
+      r.operatingIndirect!.adjustments.find((a) => a.label === label)?.amount;
+    expect(amount('Inventory')).toBe(-300);
+    expect(amount('Goods in Transit')).toBe(-200);
+    expect(amount('Goods Received Not Invoiced')).toBe(150);
   });
 
   it('leaves the direct-method sections untouched', async () => {
@@ -2755,7 +2787,7 @@ describe('ReportsService — item explorer', () => {
           ],
         ],
         [/AS "lastSold"/, [{ itemId: 'i1', lastSold: '2026-03-14' }]],
-        [/account_number = '1200'/, [{ value: '245.5' }]],
+        [/system_role = 'inventory'/, [{ value: '245.5' }]],
       ]);
       const svc = await makeItemService(query);
       const r: any = await svc.inventoryPerformance(

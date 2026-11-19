@@ -156,7 +156,19 @@ function pairs(
 
 export function parseTallyDocuments(
   docs: Array<{ xml: string; fileIndex: number }>,
+  /**
+   * Where this company keeps cash, its controls and retained earnings now
+   * (they may have moved from the defaults). Tally has no account numbers, so
+   * its ledgers land on FinMatrix's own.
+   */
+  numbers: Partial<Record<keyof typeof RESERVED_NUMBERS, string>> = {},
 ): TallyBundle {
+  const RESERVED = {
+    ...RESERVED_NUMBERS,
+    ...Object.fromEntries(
+      Object.entries(numbers).filter((e): e is [string, string] => !!e[1]),
+    ),
+  } as Record<keyof typeof RESERVED_NUMBERS, string>;
   const warnings: string[] = [];
   const found = {
     masters: false,
@@ -244,12 +256,12 @@ export function parseTallyDocuments(
         reserved:
           reservedName === 'profit & loss a/c' ||
           lc(name) === 'profit & loss a/c'
-            ? RESERVED_NUMBERS.profitAndLoss
+            ? RESERVED.profitAndLoss
             : meaning?.role === 'cash' &&
                 (reservedName === 'cash' || lc(name) === 'cash')
-              ? RESERVED_NUMBERS.cash
+              ? RESERVED.cash
               : meaning?.role === 'stock'
-                ? RESERVED_NUMBERS.inventory
+                ? RESERVED.inventory
                 : null,
         phone: text(l.LEDGERMOBILE) ?? text(l.LEDGERPHONE),
         email: text(l.EMAIL),
@@ -362,10 +374,10 @@ export function parseTallyDocuments(
     a.name.localeCompare(b.name),
   )) {
     // Profit & Loss A/c is a primary ledger with no group: earlier years' profit.
-    if (l.reserved === RESERVED_NUMBERS.profitAndLoss) {
-      numberOf.set(lc(l.name), RESERVED_NUMBERS.profitAndLoss);
+    if (l.reserved === RESERVED.profitAndLoss) {
+      numberOf.set(lc(l.name), RESERVED.profitAndLoss);
       accounts.push([
-        RESERVED_NUMBERS.profitAndLoss,
+        RESERVED.profitAndLoss,
         l.name,
         'Equity',
         'Retained Earnings',
@@ -380,11 +392,11 @@ export function parseTallyDocuments(
       continue;
     }
     if (l.meaning.role === 'customer') {
-      numberOf.set(lc(l.name), RESERVED_NUMBERS.receivables);
+      numberOf.set(lc(l.name), RESERVED.receivables);
       continue;
     }
     if (l.meaning.role === 'vendor') {
-      numberOf.set(lc(l.name), RESERVED_NUMBERS.payables);
+      numberOf.set(lc(l.name), RESERVED.payables);
       continue;
     }
     const number = l.reserved ?? String(next[l.meaning.type]++);
@@ -393,7 +405,7 @@ export function parseTallyDocuments(
   }
   // The stock ledger often appears in reports as "Closing Stock" with no master.
   if (!numberOf.has('closing stock'))
-    numberOf.set('closing stock', RESERVED_NUMBERS.inventory);
+    numberOf.set('closing stock', RESERVED.inventory);
 
   const header = (key: string) =>
     TARGET_SHEETS.find((t) => t.key === key)!.fields.map((f) => f.header);

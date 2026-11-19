@@ -9,10 +9,7 @@ import Decimal from 'decimal.js';
 import { PostingService } from '../../modules/journal-entries/posting.service';
 import { AccountsService } from '../../modules/accounts/accounts.service';
 import { Payment } from '../../modules/payments/entities/payment.entity';
-import {
-  ACCT_AR,
-  ACCT_CUSTOMER_ADVANCES,
-} from '../../modules/accounts/accounts.constants';
+import { SYS } from '../../modules/accounts/accounts.constants';
 
 export const TOLERANCE = new Decimal('0.0001');
 
@@ -25,8 +22,8 @@ export async function subledgerCheck(
 ) {
   const [row] = await ds.query(
     `SELECT
-       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND account_number = $2) AS ar_control,
-       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND account_number = $3) AS advances,
+       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND system_role = $2) AS ar_control,
+       (SELECT COALESCE(balance, 0) FROM accounts WHERE company_id = $1 AND system_role = $3) AS advances,
        (SELECT COALESCE(SUM(balance), 0) FROM invoices
          WHERE company_id = $1 AND status NOT IN ('draft', 'void')) AS open_invoices,
        (SELECT COALESCE(SUM(balance), 0) FROM credit_memos
@@ -37,7 +34,7 @@ export async function subledgerCheck(
                        FROM payment_applications GROUP BY payment_id) a ON a.payment_id = p.id
          WHERE p.company_id = $1 AND p.advance_posted = false
            AND p.amount - COALESCE(a.applied, 0) > 0) AS legacy_unapplied`,
-    [companyId, ACCT_AR, ACCT_CUSTOMER_ADVANCES],
+    [companyId, SYS.AR, SYS.CUSTOMER_ADVANCES],
   );
   const expected = new Decimal(row.open_invoices)
     .minus(row.open_credit_memos)
@@ -125,15 +122,15 @@ export async function reclassifyLegacyReceipt(
     );
     const unapplied = new Decimal(payment.amount).minus(applied);
     if (unapplied.greaterThan(TOLERANCE)) {
-      const ar = await accounts.getByNumberOrFail(
+      const ar = await accounts.getSystemAccount(
         opts.companyId,
-        ACCT_AR,
+        SYS.AR,
         manager,
       );
       const advances = await accounts.getOrCreateSystemAccount(
         manager,
         opts.companyId,
-        ACCT_CUSTOMER_ADVANCES,
+        SYS.CUSTOMER_ADVANCES,
       );
       const amount = unapplied.toFixed(4);
       await posting.createEntry(manager, {
