@@ -14,29 +14,12 @@ import {
   UpdateAccountDto,
 } from './dto/account.dto';
 import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_BANK,
-  ACCT_CASH,
-  ACCT_COGS,
-  ACCT_GOODS_IN_TRANSIT,
-  ACCT_GRNI,
-  ACCT_INVENTORY,
-  ACCT_INPUT_TAX,
-  ACCT_INVENTORY_ADJUSTMENT,
-  ACCT_INVENTORY_COUNT_VARIANCE,
-  ACCT_OPENING_BALANCE_EQUITY,
-  ACCT_SALARY_EXPENSE,
-  ACCT_SALES_REVENUE,
-  ACCT_SHRINKAGE_DAMAGE,
-  ACCT_SHRINKAGE_OBSOLESCENCE,
-  ACCT_SHRINKAGE_THEFT,
-  ACCT_TAX_PAYABLE,
   isValidSubType,
+  SYS,
   SYSTEM_ACCOUNT_DEFS,
-  ACCT_CUSTOMER_ADVANCES,
-  ACCT_PAYROLL_LIABILITIES,
+  SystemRole,
 } from './accounts.constants';
+import { freeNumber } from './account-number.util';
 import { AccountType } from '../../types';
 
 // Canonical accounts that auto-posting (invoices, payments, bills, tax,
@@ -47,37 +30,38 @@ import { AccountType } from '../../types';
 // leave every cash payment, PAID delivery approval, credit-memo refund, tax
 // payment and payroll run failing with "Account 1000 is not active" — an error
 // naming an account the user was never thinking about.
-const SYSTEM_ACCOUNT_NUMBERS: ReadonlySet<string> = new Set([
-  ACCT_CASH,
-  ACCT_BANK,
-  ACCT_AR,
-  ACCT_INVENTORY,
-  ACCT_GOODS_IN_TRANSIT,
-  ACCT_GRNI,
-  ACCT_AP,
-  ACCT_TAX_PAYABLE,
-  ACCT_OPENING_BALANCE_EQUITY,
-  ACCT_SALES_REVENUE,
-  ACCT_COGS,
-  ACCT_INVENTORY_ADJUSTMENT,
-  ACCT_INPUT_TAX,
-  ACCT_SALARY_EXPENSE,
-  ACCT_CUSTOMER_ADVANCES,
+const PROTECTED_ROLES: ReadonlySet<SystemRole> = new Set<SystemRole>([
+  SYS.CASH,
+  SYS.BANK,
+  SYS.AR,
+  SYS.INVENTORY,
+  SYS.GOODS_IN_TRANSIT,
+  SYS.GRNI,
+  SYS.AP,
+  SYS.TAX_PAYABLE,
+  SYS.SALES_REVENUE,
+  SYS.COGS,
+  SYS.INVENTORY_ADJUSTMENT,
+  SYS.INPUT_TAX,
+  SYS.SALARY_EXPENSE,
+  SYS.CUSTOMER_ADVANCES,
   // Payroll withholding posts here; switching it off would fail every payroll
   // run that has a deduction.
-  ACCT_PAYROLL_LIABILITIES,
+  SYS.PAYROLL_LIABILITIES,
   // Every inventory adjustment offsets against one of these, chosen by the
   // reason the user picked — switching one off would fail the adjustment with
   // an error naming an account they never chose directly.
-  ACCT_SHRINKAGE_DAMAGE,
-  ACCT_SHRINKAGE_THEFT,
-  ACCT_SHRINKAGE_OBSOLESCENCE,
-  ACCT_INVENTORY_COUNT_VARIANCE,
+  SYS.SHRINKAGE_DAMAGE,
+  SYS.SHRINKAGE_THEFT,
+  SYS.SHRINKAGE_OBSOLESCENCE,
+  SYS.INVENTORY_COUNT_VARIANCE,
 ]);
 
-/** Shared by delete() and the deactivation guard. */
-export const isSystemAccountNumber = (accountNumber: string): boolean =>
-  SYSTEM_ACCOUNT_NUMBERS.has(accountNumber);
+/** Shared by delete() and the deactivation guard: automatic posting cannot do without it. */
+export const isProtectedSystemAccount = (account: {
+  systemRole?: string | null;
+}): boolean =>
+  !!account.systemRole && PROTECTED_ROLES.has(account.systemRole as SystemRole);
 import { PaginationParams } from '../../common/pipes/parse-pagination.pipe';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertMoneyAccount } from '../../common/utils/money-account.util';
@@ -147,10 +131,13 @@ export class AccountsService {
     return account;
   }
 
-  private withSystemFlag<T extends { accountNumber: string }>(account: T) {
+  private withSystemFlag<
+    T extends { accountNumber: string; systemRole?: string | null },
+  >(account: T) {
     return {
       ...account,
-      isSystemAccount: SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber),
+      isSystemAccount: isProtectedSystemAccount(account),
+      systemRole: account.systemRole ?? null,
     };
   }
 
@@ -167,10 +154,7 @@ export class AccountsService {
       recentEntries,
       // Whether the edit form may unlock Type and Number, and why not.
       usage,
-      structure: structureOf(
-        SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber),
-        usage,
-      ),
+      structure: structureOf(account.systemRole ?? null, usage),
     };
   }
 
@@ -196,10 +180,10 @@ export class AccountsService {
     manager: EntityManager,
     companyId: string,
     accountId: string | null | undefined,
-    fallbackNumber: string,
+    fallbackRole: SystemRole,
   ): Promise<Account> {
     if (!accountId) {
-      return this.getByNumberOrFail(companyId, fallbackNumber, manager);
+      return this.getSystemAccount(companyId, fallbackRole, manager);
     }
     const found = await manager.findOne(Account, {
       where: { id: accountId, companyId },
@@ -261,17 +245,14 @@ export class AccountsService {
       await manager.save(account);
 
       // Per §3.12: a non-zero opening balance MUST post an offsetting entry
-      // to Opening Balance Equity (3900) in the same transaction. Without
-      // this the books are unbalanced. The OBE account itself is exempt
-      // (it would offset to itself) and is seeded with no opening balance.
-      if (
-        !opening.isZero() &&
-        dto.accountNumber !== ACCT_OPENING_BALANCE_EQUITY
-      ) {
+      // to Opening Balance Equity in the same transaction. Without this the
+      // books are unbalanced. An account created here never holds a system
+      // role, so it is never Opening Balance Equity itself.
+      if (!opening.isZero()) {
         const obe = await this.getOrCreateSystemAccount(
           manager,
           companyId,
-          ACCT_OPENING_BALANCE_EQUITY,
+          SYS.OPENING_BALANCE_EQUITY,
         );
 
         // Debit-normal accounts (asset/expense) increase with a debit; a
@@ -308,18 +289,20 @@ export class AccountsService {
   }
 
   /**
-   * Resolve a system account by number, creating it (active) if a company's
-   * chart predates it. Used for Opening Balance Equity / GRNI which auto-
-   * posting depends on but older companies may not have.
+   * Resolve a system account by role, creating it (active) if a company's
+   * chart predates it — at its default number, or the next free one when that
+   * number is already another account's (a chart that came from another
+   * system). Used for Opening Balance Equity, GRNI and the other accounts
+   * auto-posting depends on but older companies may not have.
    */
   async getOrCreateSystemAccount(
     manager: EntityManager,
     companyId: string,
-    accountNumber: string,
+    role: SystemRole,
   ): Promise<Account> {
     const repo = manager.getRepository(Account);
     const existing = await repo.findOne({
-      where: { companyId, accountNumber },
+      where: { companyId, systemRole: role },
     });
     if (existing) {
       if (!existing.isActive) {
@@ -328,13 +311,23 @@ export class AccountsService {
       }
       return existing;
     }
-    const def = SYSTEM_ACCOUNT_DEFS[accountNumber];
+    const def = SYSTEM_ACCOUNT_DEFS[role];
     if (!def) {
       throw new NotFoundException({
         code: 'ACCOUNT_NOT_FOUND',
-        message: `System account ${accountNumber} is not defined`,
+        message: `System account ${role} is not defined`,
       });
     }
+    const numbers = await repo.find({
+      where: { companyId },
+      select: { accountNumber: true },
+    });
+    const taken = new Set(
+      numbers.map((a) => a.accountNumber.trim().toLowerCase()),
+    );
+    const accountNumber = taken.has(def.defaultNumber.toLowerCase())
+      ? freeNumber(def.defaultNumber, taken)
+      : def.defaultNumber;
     const created = repo.create({
       companyId,
       accountNumber,
@@ -346,6 +339,7 @@ export class AccountsService {
       openingBalance: '0',
       balance: '0',
       isActive: true,
+      systemRole: role,
     });
     return repo.save(created);
   }
@@ -391,14 +385,16 @@ export class AccountsService {
       const typeChanges = nextType !== account.type;
       const numberChanges = nextNumber !== account.accountNumber;
 
-      if (isSystemAccountNumber(account.accountNumber)) {
-        // Renaming is fine; what automatic posting relies on is not.
-        if (typeChanges || numberChanges || nextSubType !== account.subType) {
+      if (account.systemRole) {
+        // Renaming and renumbering are fine (posting finds it by role); its
+        // type and kind are what automatic posting relies on.
+        if (typeChanges || nextSubType !== account.subType) {
           throw new BadRequestException({
             code: 'SYSTEM_ACCOUNT_FIXED',
             message:
               `${label} is a system account — invoices, payments and bills post to it ` +
-              'automatically by its number and kind, so those are fixed. You can rename it.',
+              'automatically and rely on its type and kind, so those are fixed. You can rename it, ' +
+              'and renumber it while nothing refers to it.',
           });
         }
       }
@@ -503,7 +499,7 @@ export class AccountsService {
    * unrelated screen days later. Re-ACTIVATING is always allowed.
    */
   private assertCanDeactivate(account: Account): void {
-    if (SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber)) {
+    if (isProtectedSystemAccount(account)) {
       throw new BadRequestException({
         code: 'SYSTEM_ACCOUNT_REQUIRED',
         message:
@@ -554,7 +550,36 @@ export class AccountsService {
   }
 
   /**
-   * Load active account by (companyId, accountNumber) — used by auto journal entries.
+   * The active account holding a system role — what every automatic posting
+   * uses. Found by role, so it is the right account whatever its number or
+   * name has become.
+   */
+  async getSystemAccount(
+    companyId: string,
+    role: SystemRole,
+    manager?: EntityManager,
+  ): Promise<Account> {
+    const repo = manager ? manager.getRepository(Account) : this.repo;
+    const acc = await repo.findOne({ where: { companyId, systemRole: role } });
+    const label = SYSTEM_ACCOUNT_DEFS[role]?.name ?? role;
+    if (!acc) {
+      throw new NotFoundException({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `The ${label} account is missing from the chart of accounts`,
+      });
+    }
+    if (!acc.isActive) {
+      throw new BadRequestException({
+        code: 'ACCOUNT_INACTIVE',
+        message: `Account ${acc.accountNumber} (${acc.name}) is not active`,
+      });
+    }
+    return acc;
+  }
+
+  /**
+   * Load an active account by the number someone chose (not a system role:
+   * those go through getSystemAccount).
    */
   async getByNumberOrFail(
     companyId: string,
@@ -582,7 +607,7 @@ export class AccountsService {
     const account = await this.getById(companyId, id);
 
     // 1. System accounts underpin every auto-posting path — never deletable.
-    if (SYSTEM_ACCOUNT_NUMBERS.has(account.accountNumber)) {
+    if (isProtectedSystemAccount(account)) {
       throw new BadRequestException({
         code: 'SYSTEM_ACCOUNT_PROTECTED',
         message: `Account ${account.accountNumber} (${account.name}) is a system account required by automatic posting and cannot be deleted. Deactivate it instead if it is unused.`,

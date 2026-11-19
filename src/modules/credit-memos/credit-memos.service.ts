@@ -34,14 +34,7 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { Invoice } from '../invoices/entities/invoice.entity';
-import {
-  ACCT_AR,
-  ACCT_CASH,
-  ACCT_COGS,
-  ACCT_INVENTORY,
-  ACCT_SALES_REVENUE,
-  ACCT_TAX_PAYABLE,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { businessToday } from '../../common/utils/business-date.util';
 import {
   pagedResponse,
@@ -121,7 +114,7 @@ export class CreditMemosService {
       this.dataSource.manager,
       companyId,
       accountId,
-      ACCT_CASH,
+      SYS.CASH,
     );
     return `${account.accountNumber} · ${account.name}`;
   }
@@ -338,14 +331,14 @@ export class CreditMemosService {
       await manager.save(cm.lines);
 
       // JE: DR Sales Revenue + DR Tax Payable, CR Accounts Receivable.
-      const ar = await this.accounts.getByNumberOrFail(
+      const ar = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_AR,
+        SYS.AR,
         manager,
       );
-      const rev = await this.accounts.getByNumberOrFail(
+      const rev = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_SALES_REVENUE,
+        SYS.SALES_REVENUE,
         manager,
       );
       const lines = [
@@ -358,9 +351,9 @@ export class CreditMemosService {
         },
       ];
       if (toDecimal(totals.taxAmount).greaterThan(0)) {
-        const tax = await this.accounts.getByNumberOrFail(
+        const tax = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_TAX_PAYABLE,
+          SYS.TAX_PAYABLE,
           manager,
         );
         lines.push({
@@ -388,14 +381,14 @@ export class CreditMemosService {
         false,
       );
       if (returnCost.greaterThan(0)) {
-        const inventory = await this.accounts.getByNumberOrFail(
+        const inventory = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_INVENTORY,
+          SYS.INVENTORY,
           manager,
         );
-        const cogs = await this.accounts.getByNumberOrFail(
+        const cogs = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_COGS,
+          SYS.COGS,
           manager,
         );
         lines.push({
@@ -566,16 +559,16 @@ export class CreditMemosService {
           message: 'No remaining balance to refund',
         });
       }
-      const ar = await this.accounts.getByNumberOrFail(
+      const ar = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_AR,
+        SYS.AR,
         manager,
       );
       const cash = await this.accounts.resolveMoneyAccount(
         manager,
         companyId,
         bankAccountId,
-        ACCT_CASH,
+        SYS.CASH,
       );
       await this.posting.createEntry(manager, {
         companyId,
@@ -655,14 +648,14 @@ export class CreditMemosService {
         });
       }
       if (cm.journalEntryId) {
-        const ar = await this.accounts.getByNumberOrFail(
+        const ar = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_AR,
+          SYS.AR,
           manager,
         );
-        const rev = await this.accounts.getByNumberOrFail(
+        const rev = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_SALES_REVENUE,
+          SYS.SALES_REVENUE,
           manager,
         );
         const lines = [
@@ -670,9 +663,9 @@ export class CreditMemosService {
           { accountId: rev.id, debit: '0', credit: cm.subtotal, lineOrder: 1 },
         ];
         if (toDecimal(cm.taxAmount).greaterThan(0)) {
-          const tax = await this.accounts.getByNumberOrFail(
+          const tax = await this.accounts.getSystemAccount(
             companyId,
-            ACCT_TAX_PAYABLE,
+            SYS.TAX_PAYABLE,
             manager,
           );
           lines.push({
@@ -691,14 +684,14 @@ export class CreditMemosService {
           true,
         );
         if (returnCost.greaterThan(0)) {
-          const cogs = await this.accounts.getByNumberOrFail(
+          const cogs = await this.accounts.getSystemAccount(
             companyId,
-            ACCT_COGS,
+            SYS.COGS,
             manager,
           );
-          const inventory = await this.accounts.getByNumberOrFail(
+          const inventory = await this.accounts.getSystemAccount(
             companyId,
-            ACCT_INVENTORY,
+            SYS.INVENTORY,
             manager,
           );
           lines.push({

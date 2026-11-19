@@ -7,12 +7,7 @@ import { mkdtemp, rm, statfs } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { DataSource } from 'typeorm';
-import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_CUSTOMER_ADVANCES,
-  ACCT_INVENTORY,
-} from '../../accounts/accounts.constants';
+
 import { MigrationBatch } from '../entities/migration-batch.entity';
 import {
   MigrationUpload,
@@ -33,9 +28,8 @@ import {
 import { readExport, SourceExtract } from './export-reader';
 import { StorageService } from '../../../common/storage/storage.service';
 import { ABANDONED_AFTER_HOURS } from './migration-uploads.service';
+import { SYS, SYSTEM_ACCOUNT_DEFS } from '../../accounts/accounts.constants';
 
-/** Retained-earnings target, as in the Tally reader (RESERVED_NUMBERS.profitAndLoss). */
-const ACCT_RETAINED_EARNINGS = '3100';
 /** A read that has not finished in this long died with its process. */
 const STUCK_AFTER_MINUTES = 30;
 const MAX_ATTEMPTS = 3;
@@ -251,11 +245,19 @@ export class MigrationReadWorker {
           where: { id: upload.batchId, companyId: upload.companyId },
         },
       );
-      const chart: Array<{ accountNumber: string; name: string }> =
-        await this.dataSource.query(
-          `SELECT account_number AS "accountNumber", name FROM accounts WHERE company_id = $1`,
-          [upload.companyId],
-        );
+      const chart: Array<{
+        accountNumber: string;
+        name: string;
+        systemRole: string | null;
+      }> = await this.dataSource.query(
+        `SELECT account_number AS "accountNumber", name, system_role AS "systemRole" FROM accounts WHERE company_id = $1`,
+        [upload.companyId],
+      );
+      // Where this company keeps customer credits now (its number may have moved).
+      const advances =
+        chart.find((a) => a.systemRole === SYS.CUSTOMER_ADVANCES)
+          ?.accountNumber ??
+        SYSTEM_ACCOUNT_DEFS.customer_advances.defaultNumber;
       let last = 0;
       let extract;
       try {
@@ -263,13 +265,7 @@ export class MigrationReadWorker {
           cutoverDate: batch.cutoverDate,
           openingDate: openingDateOf(batch.cutoverDate),
           existingAccounts: chart,
-          numbers: {
-            receivables: ACCT_AR,
-            payables: ACCT_AP,
-            inventory: ACCT_INVENTORY,
-            retainedEarnings: ACCT_RETAINED_EARNINGS,
-            customerAdvances: ACCT_CUSTOMER_ADVANCES,
-          },
+          numbers: { customerAdvances: advances },
           onProgress: (table, done) => {
             if (Date.now() - last < 2_000) return;
             last = Date.now();

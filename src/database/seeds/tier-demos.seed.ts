@@ -56,10 +56,7 @@ import { DeliveriesService } from '../../modules/deliveries/deliveries.service';
 import { InventoryApprovalsService } from '../../modules/inventory-approvals/inventory-approvals.service';
 import { ReportsService } from '../../modules/reports/reports.service';
 import { getPlanConfig, PlanKey } from '../../modules/billing/plan-config';
-import {
-  ACCT_CASH,
-  ACCT_OPENING_BALANCE_EQUITY,
-} from '../../modules/accounts/accounts.constants';
+import { SYS } from '../../modules/accounts/accounts.constants';
 
 loadEnv();
 
@@ -315,11 +312,11 @@ async function run() {
     const acctRepo = ds.getRepository(Account);
     const cash = await acctRepo.findOneByOrFail({
       companyId: cid,
-      accountNumber: ACCT_CASH,
+      systemRole: SYS.CASH,
     });
     const obe = await acctRepo.findOneByOrFail({
       companyId: cid,
-      accountNumber: ACCT_OPENING_BALANCE_EQUITY,
+      systemRole: SYS.OPENING_BALANCE_EQUITY,
     });
     const openDate = ymd(
       new Date(TODAY.getFullYear(), TODAY.getMonth() - 7, 1),

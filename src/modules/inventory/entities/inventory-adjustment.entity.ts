@@ -58,7 +58,7 @@ export class InventoryAdjustment extends BaseCompanyEntity {
    * strand value in two accounts if the mapping ever changes), and rows
    * written before the map existed genuinely went to 6400 whatever their
    * reason says. Null only on rows the backfill missed; readers fall back to
-   * ACCT_INVENTORY_ADJUSTMENT.
+   * the legacy adjustment account (SYS.INVENTORY_ADJUSTMENT).
    */
   @Column({
     type: 'varchar',

@@ -479,12 +479,26 @@ export class MigrationBatchService {
         })),
       })),
       chartOfAccounts: accounts.map((a) => ({
+        id: a.id,
         number: a.accountNumber,
         name: a.name,
         type: a.type,
+        systemRole: a.systemRole ?? null,
       })),
       sourceAccounts,
+      // How FinMatrix's own chart changes to fit the owner's (mapping/chart-plan).
+      chartChanges: await this.chartChanges(id),
     };
+  }
+
+  /** The FinMatrix accounts this batch renumbers or renames, as planned. */
+  private async chartChanges(batchId: string) {
+    const rows = await this.dataSource.manager.find(MigrationStagingRow, {
+      where: { batchId, entityType: 'chart_change' },
+      select: { normalized: true, rowNumber: true },
+      order: { rowNumber: 'ASC' },
+    });
+    return rows.map((r) => r.normalized as Record<string, unknown>);
   }
 
   /**
@@ -757,6 +771,11 @@ export class MigrationBatchService {
                   target: value,
                 },
               ]
+            : [];
+        // Which of the owner's accounts a FinMatrix role becomes, or 'keep'.
+        if (field.startsWith('chart::'))
+          return value
+            ? [{ kind: 'value', sheet: '', source: field, target: value }]
             : [];
         if (dto.action === 'skip') return skipSheet();
         return sheet && value

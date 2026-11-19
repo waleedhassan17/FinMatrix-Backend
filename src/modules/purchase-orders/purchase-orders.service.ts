@@ -29,11 +29,7 @@ import {
   PostingLineInput,
 } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import {
-  ACCT_COGS,
-  ACCT_GRNI,
-  ACCT_INVENTORY,
-} from '../accounts/accounts.constants';
+import { SYS, SystemRole } from '../accounts/accounts.constants';
 import { Account } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
@@ -433,8 +429,8 @@ export class PurchaseOrdersService {
       const lineMap = new Map(po.lines.map((l) => [l.id, l]));
 
       // Net movement per account; one line per account in the entry.
-      const net = new Map<string, Decimal>();
-      const bump = (account: string, amount: Decimal) =>
+      const net = new Map<SystemRole, Decimal>();
+      const bump = (account: SystemRole, amount: Decimal) =>
         net.set(account, (net.get(account) ?? new Decimal(0)).plus(amount));
 
       for (const rl of dto.lines) {
@@ -515,8 +511,8 @@ export class PurchaseOrdersService {
           line.grniAccrued = toDecimal(line.grniAccrued)
             .plus(landed)
             .toFixed(4);
-          bump(ACCT_INVENTORY, landed);
-          bump(ACCT_GRNI, landed.negated());
+          bump(SYS.INVENTORY, landed);
+          bump(SYS.GRNI, landed.negated());
           inventoryImpact = landed;
         } else {
           // A receipt correction: the goods go back out at the item's CURRENT
@@ -534,9 +530,9 @@ export class PurchaseOrdersService {
           line.grniAccrued = toDecimal(line.grniAccrued)
             .minus(grniReversal)
             .toFixed(4);
-          bump(ACCT_INVENTORY, stockValue.negated());
-          bump(ACCT_GRNI, grniReversal);
-          bump(ACCT_COGS, stockValue.minus(grniReversal));
+          bump(SYS.INVENTORY, stockValue.negated());
+          bump(SYS.GRNI, grniReversal);
+          bump(SYS.COGS, stockValue.minus(grniReversal));
           inventoryImpact = stockValue.negated();
         }
         await itemRepo.save(item);
@@ -548,7 +544,7 @@ export class PurchaseOrdersService {
         // re-averages the pile, so `delta x item.unitCost` (post-average) and
         // `delta x line.unitCost` (pre-tax) are both different figures from the
         // one the ledger actually moved by. `inventoryImpact` IS the
-        // `bump(ACCT_INVENTORY, …)` argument from the branch above, which is
+        // `bump(SYS.INVENTORY, …)` argument from the branch above, which is
         // the whole point: the movement and the journal entry cannot disagree
         // because they are the same value.
         await recordInventoryMovement(manager, {
@@ -567,28 +563,25 @@ export class PurchaseOrdersService {
       }
 
       const entryLines: PostingLineInput[] = [];
-      const descriptions: Record<string, string> = {
-        [ACCT_INVENTORY]: `Goods received — ${po.poNumber}`,
-        [ACCT_GRNI]: `Received, not yet billed — ${po.poNumber}`,
-        [ACCT_COGS]: `Receipt correction cost difference — ${po.poNumber}`,
+      const descriptions: Partial<Record<SystemRole, string>> = {
+        [SYS.INVENTORY]: `Goods received — ${po.poNumber}`,
+        [SYS.GRNI]: `Received, not yet billed — ${po.poNumber}`,
+        [SYS.COGS]: `Receipt correction cost difference — ${po.poNumber}`,
       };
-      for (const [accountNumber, amount] of net) {
+      for (const [role, amount] of net) {
         if (amount.abs().lessThan(MONEY_TOLERANCE)) continue;
+        // GRNI reaches companies whose chart predates it on first use.
         const account =
-          accountNumber === ACCT_GRNI
+          role === SYS.GRNI
             ? await this.accounts.getOrCreateSystemAccount(
                 manager,
                 companyId,
-                ACCT_GRNI,
+                SYS.GRNI,
               )
-            : await this.accounts.getByNumberOrFail(
-                companyId,
-                accountNumber,
-                manager,
-              );
+            : await this.accounts.getSystemAccount(companyId, role, manager);
         entryLines.push({
           accountId: account.id,
-          description: descriptions[accountNumber],
+          description: descriptions[role] ?? '',
           debit: amount.greaterThan(0) ? amount.toFixed(4) : '0',
           credit: amount.lessThan(0) ? amount.negated().toFixed(4) : '0',
           lineOrder: entryLines.length,
@@ -649,7 +642,7 @@ export class PurchaseOrdersService {
       const grni = await this.accounts.getOrCreateSystemAccount(
         manager,
         companyId,
-        ACCT_GRNI,
+        SYS.GRNI,
       );
       const billLines: Array<{
         accountId: string;

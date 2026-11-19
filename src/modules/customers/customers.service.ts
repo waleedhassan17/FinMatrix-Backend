@@ -1,3 +1,4 @@
+import { SYS } from '../accounts/accounts.constants';
 import { applyWhatsappContactFields } from '../../common/utils/whatsapp-contact.util';
 import {
   BadRequestException,
@@ -476,7 +477,7 @@ export class CustomersService {
            JOIN accounts a ON a.id = g.account_id
            JOIN credit_memos m ON m.id = g.source_id
           WHERE g.company_id = $1 AND m.customer_id = $2
-            AND g.source_type = 'credit_memo_refund' AND a.account_number = '1100'
+            AND g.source_type = 'credit_memo_refund' AND a.system_role = '${SYS.AR}'
             AND g.debit > 0 AND m.status NOT IN ('draft', 'void')
           ORDER BY g.date ASC`,
       [companyId, id],

@@ -16,10 +16,8 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { Account } from '../accounts/entities/account.entity';
 import {
-  ACCT_CASH,
-  ACCT_TAX_PAYABLE,
-  ACCT_INPUT_TAX,
   OPENING_POSITION_SOURCE_TYPES,
+  SYS,
 } from '../accounts/accounts.constants';
 import { toDecimal } from '../../common/utils/money.util';
 import { assertNotReconciled } from '../reconciliations/reconciliations.util';
@@ -150,7 +148,7 @@ export class TaxService {
         em,
         companyId,
         dto.bankAccountId,
-        ACCT_CASH,
+        SYS.CASH,
       );
       const payRepo = em.getRepository(TaxPayment);
       const payment = payRepo.create({
@@ -162,9 +160,9 @@ export class TaxService {
 
       const amount = toDecimal(dto.amount);
       if (amount.greaterThan(0)) {
-        const taxPayable = await this.accounts.getByNumberOrFail(
+        const taxPayable = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_TAX_PAYABLE,
+          SYS.TAX_PAYABLE,
           em,
         );
         const amt = amount.toFixed(4);
@@ -215,9 +213,9 @@ export class TaxService {
 
       if (payment.journalEntryId) {
         const amount = toDecimal(payment.amount);
-        const taxPayable = await this.accounts.getByNumberOrFail(
+        const taxPayable = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_TAX_PAYABLE,
+          SYS.TAX_PAYABLE,
           em,
         );
         // Back into the account it was paid from. A payment recorded before
@@ -226,7 +224,7 @@ export class TaxService {
           ? await em.findOne(Account, {
               where: { id: payment.bankAccountId, companyId },
             })
-          : await this.accounts.getByNumberOrFail(companyId, ACCT_CASH, em);
+          : await this.accounts.getSystemAccount(companyId, SYS.CASH, em);
         if (!cash) {
           throw new NotFoundException({
             code: 'ACCOUNT_NOT_FOUND',
@@ -284,28 +282,28 @@ export class TaxService {
     const end = endDate || businessToday();
     const opening = [...OPENING_POSITION_SOURCE_TYPES];
 
-    // Output tax (Sales Tax Payable 2300): credits = collected, debits = remitted.
+    // Output tax (Sales Tax Payable, by role): credits = collected, debits = remitted.
     const [out] = await this.dataSource.query(
       `SELECT COALESCE(SUM(g.credit::numeric) FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS collected,
               COALESCE(SUM(g.debit::numeric)  FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS remitted,
               COALESCE(SUM(g.credit::numeric - g.debit::numeric)
                          FILTER (WHERE g.source_type = ANY($5::text[])), 0) AS brought_forward
          FROM general_ledger g JOIN accounts a ON a.id = g.account_id
-        WHERE g.company_id = $1 AND a.account_number = $2
+        WHERE g.company_id = $1 AND a.system_role = $2
           AND g.date >= $3 AND g.date <= $4`,
-      [companyId, ACCT_TAX_PAYABLE, start, end, opening],
+      [companyId, SYS.TAX_PAYABLE, start, end, opening],
     );
 
-    // Input tax recoverable (1300): net debit = recoverable (registered only).
+    // Input tax recoverable (by role): net debit = recoverable (registered only).
     const [inp] = await this.dataSource.query(
       `SELECT COALESCE(SUM(g.debit::numeric - g.credit::numeric)
                          FILTER (WHERE g.source_type <> ALL($5::text[])), 0) AS recoverable,
               COALESCE(SUM(g.debit::numeric - g.credit::numeric)
                          FILTER (WHERE g.source_type = ANY($5::text[])), 0) AS brought_forward
          FROM general_ledger g JOIN accounts a ON a.id = g.account_id
-        WHERE g.company_id = $1 AND a.account_number = $2
+        WHERE g.company_id = $1 AND a.system_role = $2
           AND g.date >= $3 AND g.date <= $4`,
-      [companyId, ACCT_INPUT_TAX, start, end, opening],
+      [companyId, SYS.INPUT_TAX, start, end, opening],
     );
 
     const outputCollected = r2(out?.collected);

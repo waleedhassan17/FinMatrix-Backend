@@ -49,9 +49,11 @@ export interface DefaultAccountSeed {
   name: string;
   type: AccountType;
   subType: string;
+  /** What automatic posting uses this account for; null for an ordinary account. */
+  systemRole?: SystemRole | null;
 }
 
-export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
+const CHART_SEED: DefaultAccountSeed[] = [
   { accountNumber: '1000', name: 'Cash', type: 'asset', subType: 'Cash' },
   {
     accountNumber: '1010',
@@ -212,29 +214,218 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
 ];
 
 /**
- * Canonical account numbers referenced by auto-journal entries.
+ * What automatic posting needs an account for. An account keeps its role
+ * whatever its number or name becomes: a company that moved from Peachtree
+ * keeps Receivables at 11000 under Peachtree's name, and invoices still post
+ * there. Everything that posts by itself finds its account by role
+ * (AccountsService.getSystemAccount), never by number.
  */
-export const ACCT_CASH = '1000';
-export const ACCT_BANK = '1010';
-export const ACCT_AR = '1100';
-export const ACCT_INVENTORY = '1200';
-export const ACCT_GOODS_IN_TRANSIT = '1250';
-export const ACCT_INPUT_TAX = '1300';
-export const ACCT_SALARY_EXPENSE = '6200';
-export const ACCT_GRNI = '2050';
-export const ACCT_AP = '2000';
-export const ACCT_TAX_PAYABLE = '2300';
+export const SYS = {
+  CASH: 'cash',
+  BANK: 'bank',
+  AR: 'accounts_receivable',
+  INVENTORY: 'inventory',
+  GOODS_IN_TRANSIT: 'goods_in_transit',
+  INPUT_TAX: 'input_tax',
+  AP: 'accounts_payable',
+  GRNI: 'grni',
+  TAX_PAYABLE: 'sales_tax_payable',
+  /**
+   * Amounts withheld from employees' pay and owed onward (income tax, EOBI,
+   * loans). Deliberately not Sales Tax Payable: the tax liability report reads
+   * every credit to that account as output sales tax.
+   */
+  PAYROLL_LIABILITIES: 'payroll_liabilities',
+  CUSTOMER_ADVANCES: 'customer_advances',
+  OWNER_EQUITY: 'owner_equity',
+  RETAINED_EARNINGS: 'retained_earnings',
+  OPENING_BALANCE_EQUITY: 'opening_balance_equity',
+  /** Migration Center clearing account; nets to zero after a committed batch. */
+  MIGRATION_CLEARING: 'migration_clearing',
+  SALES_REVENUE: 'sales_revenue',
+  COGS: 'cogs',
+  SALARY_EXPENSE: 'salary_expense',
+  SHRINKAGE_DAMAGE: 'shrinkage_damage',
+  SHRINKAGE_THEFT: 'shrinkage_theft',
+  SHRINKAGE_OBSOLESCENCE: 'shrinkage_obsolescence',
+  INVENTORY_COUNT_VARIANCE: 'inventory_count_variance',
+  /**
+   * Legacy. Every adjustment posted here before the reason drove the account,
+   * and it stays in the chart — as an OPERATING expense — so historical
+   * entries keep reporting where they were posted. New adjustments use the
+   * shrinkage and count-variance accounts.
+   */
+  INVENTORY_ADJUSTMENT: 'inventory_adjustment',
+} as const;
+
+export type SystemRole = (typeof SYS)[keyof typeof SYS];
+
+export interface SystemAccountDef {
+  /** Where a new company's chart puts it; it may move later. */
+  defaultNumber: string;
+  name: string;
+  type: AccountType;
+  subType: string;
+}
+
 /**
- * Amounts withheld from employees' pay and owed onward (income tax, EOBI,
- * loans). Deliberately NOT 2300: that account is Sales Tax Payable, and the
- * tax liability report reads every credit to it as output sales tax — so
- * payroll withholding posted there inflated the sales-tax owed.
+ * Every system account: where it starts, and what it must stay (type and
+ * kind never change). New companies get these from DEFAULT_CHART_OF_ACCOUNTS;
+ * an older company missing one gets it lazily
+ * (AccountsService.getOrCreateSystemAccount). The two must agree.
  */
-export const ACCT_PAYROLL_LIABILITIES = '2310';
-export const ACCT_CUSTOMER_ADVANCES = '2400';
-export const ACCT_OPENING_BALANCE_EQUITY = '3900';
-/** Migration Center clearing account; nets to zero after a committed batch. */
-export const ACCT_MIGRATION_CLEARING = '3950';
+export const SYSTEM_ACCOUNT_DEFS: Record<SystemRole, SystemAccountDef> = {
+  cash: { defaultNumber: '1000', name: 'Cash', type: 'asset', subType: 'Cash' },
+  bank: {
+    defaultNumber: '1010',
+    name: 'Business Checking',
+    type: 'asset',
+    subType: 'Bank',
+  },
+  accounts_receivable: {
+    defaultNumber: '1100',
+    name: 'Accounts Receivable',
+    type: 'asset',
+    subType: 'Accounts Receivable',
+  },
+  inventory: {
+    defaultNumber: '1200',
+    name: 'Inventory',
+    type: 'asset',
+    subType: 'Inventory',
+  },
+  goods_in_transit: {
+    defaultNumber: '1250',
+    name: 'Goods in Transit',
+    type: 'asset',
+    subType: 'Inventory',
+  },
+  input_tax: {
+    defaultNumber: '1300',
+    name: 'Sales Tax Recoverable (Input Tax)',
+    type: 'asset',
+    subType: 'Other Asset',
+  },
+  accounts_payable: {
+    defaultNumber: '2000',
+    name: 'Accounts Payable',
+    type: 'liability',
+    subType: 'Accounts Payable',
+  },
+  grni: {
+    defaultNumber: '2050',
+    name: 'Inventory Received Not Billed (GRNI)',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+  sales_tax_payable: {
+    defaultNumber: '2300',
+    name: 'Sales Tax Payable',
+    type: 'liability',
+    subType: 'Tax Payable',
+  },
+  payroll_liabilities: {
+    defaultNumber: '2310',
+    name: 'Payroll Liabilities',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+  // Cash taken before the goods are handed over is not income yet: it is a
+  // contract liability until control transfers on delivery (IFRS 15 / ASC 606).
+  customer_advances: {
+    defaultNumber: '2400',
+    name: 'Customer Advances (Unearned Revenue)',
+    type: 'liability',
+    subType: 'Other Liability',
+  },
+  owner_equity: {
+    defaultNumber: '3000',
+    name: 'Owner Equity',
+    type: 'equity',
+    subType: 'Owner Equity',
+  },
+  retained_earnings: {
+    defaultNumber: '3100',
+    name: 'Retained Earnings',
+    type: 'equity',
+    subType: 'Retained Earnings',
+  },
+  opening_balance_equity: {
+    defaultNumber: '3900',
+    name: 'Opening Balance Equity',
+    type: 'equity',
+    subType: 'Opening Balance Equity',
+  },
+  migration_clearing: {
+    defaultNumber: '3950',
+    name: 'Migration Clearing',
+    type: 'equity',
+    subType: 'Other Equity',
+  },
+  sales_revenue: {
+    defaultNumber: '4000',
+    name: 'Sales Revenue',
+    type: 'revenue',
+    subType: 'Sales',
+  },
+  cogs: {
+    defaultNumber: '5000',
+    name: 'Cost of Goods Sold',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  shrinkage_damage: {
+    defaultNumber: '5400',
+    name: 'Inventory Shrinkage – Damage',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  shrinkage_theft: {
+    defaultNumber: '5410',
+    name: 'Inventory Shrinkage – Theft',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  shrinkage_obsolescence: {
+    defaultNumber: '5420',
+    name: 'Inventory Shrinkage – Obsolescence',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  inventory_count_variance: {
+    defaultNumber: '5430',
+    name: 'Inventory Count Variance',
+    type: 'expense',
+    subType: 'Cost of Goods',
+  },
+  salary_expense: {
+    defaultNumber: '6200',
+    name: 'Salary Expense',
+    type: 'expense',
+    subType: 'Payroll',
+  },
+  inventory_adjustment: {
+    defaultNumber: '6400',
+    name: 'Inventory Adjustment / Shrinkage',
+    type: 'expense',
+    subType: 'Operating',
+  },
+};
+
+export const SYSTEM_ROLES = Object.keys(SYSTEM_ACCOUNT_DEFS) as SystemRole[];
+
+/** The role a default-chart number starts with (used to seed and to backfill). */
+export const ROLE_AT_DEFAULT_NUMBER: ReadonlyMap<string, SystemRole> = new Map(
+  SYSTEM_ROLES.map((r) => [SYSTEM_ACCOUNT_DEFS[r].defaultNumber, r]),
+);
+
+/** Default chart of accounts seeded on company creation, each system account with its role. */
+export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = CHART_SEED.map(
+  (a) => ({
+    ...a,
+    systemRole: ROLE_AT_DEFAULT_NUMBER.get(a.accountNumber) ?? null,
+  }),
+);
 
 /**
  * Postings that bring in a position held BEFORE the books started — not
@@ -249,20 +440,6 @@ export const OPENING_POSITION_SOURCE_TYPES: readonly string[] = [
   'migration',
   'migration_rollback',
 ];
-export const ACCT_SALES_REVENUE = '4000';
-export const ACCT_COGS = '5000';
-export const ACCT_SHRINKAGE_DAMAGE = '5400';
-export const ACCT_SHRINKAGE_THEFT = '5410';
-export const ACCT_SHRINKAGE_OBSOLESCENCE = '5420';
-export const ACCT_INVENTORY_COUNT_VARIANCE = '5430';
-/**
- * Legacy. Every adjustment posted here before the reason drove the account,
- * and it stays in the chart — as an OPERATING expense — so historical entries
- * keep reporting where they were posted. New adjustments use the 54xx
- * accounts above. Also the fallback for reversing an adjustment written
- * before offset_account_number existed.
- */
-export const ACCT_INVENTORY_ADJUSTMENT = '6400';
 
 /**
  * Which account an inventory adjustment offsets against, by reason.
@@ -270,8 +447,8 @@ export const ACCT_INVENTORY_ADJUSTMENT = '6400';
  * The reason used to be decorative — it reached the journal memo and nothing
  * else, so damage, theft and obsolescence were indistinguishable in the P&L.
  * This map is the single source of truth; postInventoryAdjustmentJe() reads
- * it, and the chosen account is persisted on the adjustment row so a reversal
- * can mirror it exactly.
+ * it, and the chosen account's number is persisted on the adjustment row so a
+ * reversal can mirror it exactly (a used account's number no longer changes).
  *
  * 'reversal' never selects from here: reverseAdjustment() reads the ORIGINAL
  * adjustment's offset_account_number. It is mapped only to keep the Record
@@ -279,94 +456,15 @@ export const ACCT_INVENTORY_ADJUSTMENT = '6400';
  */
 export const ADJUSTMENT_REASON_ACCOUNTS: Record<
   InventoryAdjustmentReason,
-  string
+  SystemRole
 > = {
-  damage: ACCT_SHRINKAGE_DAMAGE,
-  theft: ACCT_SHRINKAGE_THEFT,
-  obsolescence: ACCT_SHRINKAGE_OBSOLESCENCE,
+  damage: SYS.SHRINKAGE_DAMAGE,
+  theft: SYS.SHRINKAGE_THEFT,
+  obsolescence: SYS.SHRINKAGE_OBSOLESCENCE,
   // A count variance and a data-entry correction are the same event
   // accounting-wise: the books said one thing, the shelf said another.
-  physical_count: ACCT_INVENTORY_COUNT_VARIANCE,
-  correction: ACCT_INVENTORY_COUNT_VARIANCE,
-  other: ACCT_INVENTORY_COUNT_VARIANCE,
-  reversal: ACCT_INVENTORY_ADJUSTMENT,
-};
-
-/**
- * System accounts that auto-posting depends on. Resolved by number and
- * lazily created for companies whose chart predates these additions
- * (see AccountsService.getOrCreateSystemAccount).
- */
-export const SYSTEM_ACCOUNT_DEFS: Record<
-  string,
-  { name: string; type: AccountType; subType: string }
-> = {
-  [ACCT_OPENING_BALANCE_EQUITY]: {
-    name: 'Opening Balance Equity',
-    type: 'equity',
-    subType: 'Opening Balance Equity',
-  },
-  [ACCT_MIGRATION_CLEARING]: {
-    name: 'Migration Clearing',
-    type: 'equity',
-    subType: 'Other Equity',
-  },
-  [ACCT_GRNI]: {
-    name: 'Inventory Received Not Billed (GRNI)',
-    type: 'liability',
-    subType: 'Other Liability',
-  },
-  [ACCT_INVENTORY_ADJUSTMENT]: {
-    name: 'Inventory Adjustment / Shrinkage',
-    type: 'expense',
-    subType: 'Operating',
-  },
-  // Must mirror DEFAULT_CHART_OF_ACCOUNTS exactly: that list seeds new
-  // companies, this one lazily creates the account for companies whose chart
-  // predates it. Divergence would give two different subTypes for the same
-  // number across tenants, and the P&L would classify them differently.
-  [ACCT_SHRINKAGE_DAMAGE]: {
-    name: 'Inventory Shrinkage – Damage',
-    type: 'expense',
-    subType: 'Cost of Goods',
-  },
-  [ACCT_SHRINKAGE_THEFT]: {
-    name: 'Inventory Shrinkage – Theft',
-    type: 'expense',
-    subType: 'Cost of Goods',
-  },
-  [ACCT_SHRINKAGE_OBSOLESCENCE]: {
-    name: 'Inventory Shrinkage – Obsolescence',
-    type: 'expense',
-    subType: 'Cost of Goods',
-  },
-  [ACCT_INVENTORY_COUNT_VARIANCE]: {
-    name: 'Inventory Count Variance',
-    type: 'expense',
-    subType: 'Cost of Goods',
-  },
-  [ACCT_INPUT_TAX]: {
-    name: 'Sales Tax Recoverable (Input Tax)',
-    type: 'asset',
-    subType: 'Other Asset',
-  },
-  [ACCT_GOODS_IN_TRANSIT]: {
-    name: 'Goods in Transit',
-    type: 'asset',
-    subType: 'Inventory',
-  },
-  // Cash taken before the goods are handed over is not income yet: it is a
-  // contract liability until control transfers on delivery (IFRS 15 / ASC 606).
-  [ACCT_CUSTOMER_ADVANCES]: {
-    name: 'Customer Advances (Unearned Revenue)',
-    type: 'liability',
-    subType: 'Other Liability',
-  },
-  // Payroll withholding. Companies created before this account existed get it
-  // on their first processed payroll run.
-  [ACCT_PAYROLL_LIABILITIES]: {
-    name: 'Payroll Liabilities',
-    type: 'liability',
-    subType: 'Other Liability',
-  },
+  physical_count: SYS.INVENTORY_COUNT_VARIANCE,
+  correction: SYS.INVENTORY_COUNT_VARIANCE,
+  other: SYS.INVENTORY_COUNT_VARIANCE,
+  reversal: SYS.INVENTORY_ADJUSTMENT,
 };
