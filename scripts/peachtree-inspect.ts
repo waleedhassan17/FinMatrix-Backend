@@ -21,11 +21,8 @@ import {
 } from '../src/modules/migrations/sources/peachtree/zip';
 import { readPeachtreeBooks } from '../src/modules/migrations/sources/peachtree/peachtree-books';
 import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_CUSTOMER_ADVANCES,
-  ACCT_INVENTORY,
   DEFAULT_CHART_OF_ACCOUNTS,
+  SYSTEM_ACCOUNT_DEFS,
 } from '../src/modules/accounts/accounts.constants';
 import { addDaysIso } from '../src/common/utils/business-date.util';
 
@@ -113,11 +110,8 @@ async function main() {
             openingDate: '2999-12-30',
             existingAccounts: DEFAULT_CHART_OF_ACCOUNTS,
             numbers: {
-              receivables: ACCT_AR,
-              payables: ACCT_AP,
-              inventory: ACCT_INVENTORY,
-              retainedEarnings: '3100',
-              customerAdvances: ACCT_CUSTOMER_ADVANCES,
+              customerAdvances:
+                SYSTEM_ACCOUNT_DEFS.customer_advances.defaultNumber,
             },
           });
       const cutover = last ?? addDaysIso(probe!.source.lastEntryDate!, 1);
@@ -126,11 +120,7 @@ async function main() {
         openingDate: addDaysIso(cutover, -1),
         existingAccounts: DEFAULT_CHART_OF_ACCOUNTS,
         numbers: {
-          receivables: ACCT_AR,
-          payables: ACCT_AP,
-          inventory: ACCT_INVENTORY,
-          retainedEarnings: '3100',
-          customerAdvances: ACCT_CUSTOMER_ADVANCES,
+          customerAdvances: SYSTEM_ACCOUNT_DEFS.customer_advances.defaultNumber,
         },
       });
       console.log(

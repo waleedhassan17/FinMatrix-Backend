@@ -501,12 +501,13 @@ async function main() {
       dr: tb.totalDebits,
       cr: tb.totalCredits,
     });
-    const bal = async (n: string) =>
+    /** A system account's balance, found by its role (its number is Peachtree's). */
+    const balOf = async (role: string) =>
       new Decimal(
         (
           await h.ds.query(
-            `SELECT balance::text AS b FROM accounts WHERE company_id = $1 AND account_number = $2`,
-            [companyId, n],
+            `SELECT balance::text AS b FROM accounts WHERE company_id = $1 AND system_role = $2`,
+            [companyId, role],
           )
         )[0]?.b ?? 0,
       );
@@ -521,7 +522,9 @@ async function main() {
     );
     ok(
       'open invoices + customer credits = what customers owe in Peachtree',
-      new Decimal(ar.b).minus(credit ? await bal('2400') : 0).equals(custTotal),
+      new Decimal(ar.b)
+        .minus(credit ? await balOf('customer_advances') : 0)
+        .equals(custTotal),
       { invoices: ar.b, customers: custTotal.toFixed(2) },
     );
     const parties = await ledger.parties(companyId, 'customer');
@@ -558,9 +561,16 @@ async function main() {
       ),
       { stock: stock.v, ledger: extract.stock.ledgerBalance },
     );
-    const re = extract.peachtree.accounts.find((a) => a.number === '3100');
+    // Retained earnings keeps Peachtree's own account ID now.
+    const [reAcct] = await h.ds.query(
+      `SELECT account_number AS number FROM accounts WHERE company_id = $1 AND system_role = 'retained_earnings'`,
+      [companyId],
+    );
+    const re = extract.peachtree.accounts.find(
+      (a) => a.number === reAcct?.number,
+    );
     const bs = await h.reports.balanceSheet(companyId, batch.cutoverDate);
-    const reLine = bs.equity.find((l: any) => l.accountCode === '3100');
+    const reLine = bs.equity.find((l: any) => l.accountCode === reAcct?.number);
     ok(
       "retained earnings = Peachtree's (earlier years closed into it)",
       !!re &&

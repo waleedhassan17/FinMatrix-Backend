@@ -6,10 +6,11 @@ import { StorageService } from '../../../common/storage/storage.service';
 import { companyFeatures } from '../../../common/features/company-features.util';
 import { Account } from '../../accounts/entities/account.entity';
 import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_INVENTORY,
+  SYS,
+  SYSTEM_ACCOUNT_DEFS,
+  type SystemRole,
 } from '../../accounts/accounts.constants';
+
 import { Customer } from '../../customers/entities/customer.entity';
 import { InventoryItem } from '../../inventory/entities/inventory-item.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
@@ -33,12 +34,7 @@ import { IssueDraft, issueKey, MIGRATION_CODES } from '../issues';
 import { mapColumns, missingFields } from '../mapping/column-mapper';
 import { normalizeRows, NormalizedRow } from '../mapping/normalize-rows';
 import { detectSheet } from '../mapping/sheet-detector';
-import {
-  freeNumber,
-  namesOverlap,
-  sameAccount,
-  typesAgree,
-} from '../mapping/account-clash';
+import { planChart, roleLabel } from '../mapping/chart-plan';
 import { enumOptions, mapEnumValue } from '../mapping/value-mapper';
 import { matchMasters, nearestMasters } from '../matching/master-matcher';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
@@ -68,12 +64,7 @@ import {
 import { clampMonth } from '../../reports/fiscal-year';
 import { Company } from '../../companies/entities/company.entity';
 import { ConfigService } from '@nestjs/config';
-import {
-  CONTROL_ACCOUNT_HINTS,
-  TARGET_SHEETS,
-  targetSheet,
-  TargetSheet,
-} from '../targets';
+import { TARGET_SHEETS, targetSheet, TargetSheet } from '../targets';
 import { MappingContext } from './mapping-context';
 import type { SourceExtract } from '../uploads/export-reader';
 import { openingDateOf } from '../opening-date';
@@ -95,6 +86,7 @@ interface ExistingMasters {
     name: string;
     type: string;
     subType: string | null;
+    systemRole: string | null;
     isActive: boolean;
   }>;
 }
@@ -105,9 +97,6 @@ interface SheetWork {
   target: TargetSheet;
   rows: NormalizedRow[];
 }
-
-/** Accounts whose number, name or kind marks them as a control account. */
-type ControlKind = 'ar' | 'ap' | 'inventory' | null;
 
 /**
  * From uploaded files to staging rows, mappings and issues — recomputed in
@@ -185,7 +174,10 @@ export class MigrationAnalysisService {
       // ── 1. Read every file and decide what each sheet is ──────────────
       // Tally exports are read together first: the masters give the trial
       // balance, the bills and the stock summary their meaning.
-      const tally = await this.tallyGrids(files);
+      // Where this company keeps its system accounts now: a source without
+      // account numbers lands on them.
+      const roleNumbers = await this.roleNumbers(em, companyId);
+      const tally = await this.tallyGrids(files, roleNumbers);
       for (const w of tally.warnings) {
         addIssue({
           code: MIGRATION_CODES.MIGRATION_UNKNOWN_SHEET,
@@ -216,6 +208,7 @@ export class MigrationAnalysisService {
             ctx,
             addIssue,
             proofStaging,
+            roleNumbers,
           );
       const ordered = [
         ...files.filter((f) => f.kind !== 'ptb'),
@@ -786,32 +779,16 @@ export class MigrationAnalysisService {
         });
       }
 
-      // Accounts sheet + account mapping.
+      // Accounts: the owner's chart wins (mapping/chart-plan). Every owner
+      // account keeps its number and name; FinMatrix's own accounts adopt them
+      // or step aside.
       const accountRows = rowsOf('accounts');
-      // A source account whose number FinMatrix already uses for a different
-      // account is created under the next free number (see account-clash).
-      const takenNumbers = new Set<string>([
-        ...existing.accounts.map((a) => normalizeKey(a.accountNumber)),
-        ...[...accountRows, ...rowsOf('trial_balance')].map(({ row }) =>
-          normalizeKey(String(row.normalized.accountNumber ?? '')),
-        ),
-      ]);
-      const renumbered = new Map<string, string>();
-      const renumber = (nk: string, number: string) => {
-        let to = renumbered.get(nk);
-        if (!to) {
-          to = freeNumber(number, takenNumbers);
-          renumbered.set(nk, to);
-        }
-        return to;
-      };
-      // Free numbers are given out once, in file order and before any
-      // decision, so the number the owner is shown is the number they get.
+      const tbRows = rowsOf('trial_balance');
       // Several trial balance lines under one number with different names
       // (Tally's party ledgers under 1100 / 2000) name parties, not the
       // account: the number alone identifies it.
       const tbNames = new Map<string, Set<string>>();
-      for (const { row } of rowsOf('trial_balance')) {
+      for (const { row } of tbRows) {
         const nk = normalizeKey(String(row.normalized.accountNumber ?? ''));
         if (!nk) continue;
         const names = tbNames.get(nk) ?? new Set<string>();
@@ -822,28 +799,6 @@ export class MigrationAnalysisService {
         (tbNames.get(nk)?.size ?? 0) > 1
           ? null
           : ((name as string | null) ?? null);
-      {
-        const judged = new Set<string>();
-        const fromAccounts = new Set(accountRows.map(({ row }) => row));
-        for (const { row } of [...accountRows, ...rowsOf('trial_balance')]) {
-          const number = String(row.normalized.accountNumber ?? '');
-          const nk = normalizeKey(number);
-          if (!nk || judged.has(nk)) continue;
-          judged.add(nk);
-          const acct = existing.accounts.find(
-            (a) => normalizeKey(a.accountNumber) === nk,
-          );
-          const info = {
-            number,
-            name: fromAccounts.has(row)
-              ? ((row.normalized.accountName as string | null) ?? null)
-              : tbAccountName(nk, row.normalized.accountName),
-            type: (row.normalized.type as string | null) ?? null,
-            kind: (row.normalized.kind as string | null) ?? null,
-          };
-          if (acct && !sameAccount(info, acct)) renumber(nk, number);
-        }
-      }
       const sourceAccounts = new Map<
         string,
         {
@@ -853,6 +808,11 @@ export class MigrationAnalysisService {
           kind: string | null;
         }
       >();
+      const accountsToStage: Array<{
+        w: SheetWork;
+        row: NormalizedRow;
+        nk: string;
+      }> = [];
       for (const { w, row } of accountRows) {
         const skipReason = ctx.skips.get(
           `${normalizeKey(w.grid.name)}::${row.rowNumber}`,
@@ -883,55 +843,14 @@ export class MigrationAnalysisService {
           staging.push(this.stagingRow(batch, w, row, 'pending', null, null));
           continue;
         }
-        const src = {
+        sourceAccounts.set(nk, {
           number,
-          name: row.normalized.accountName as string | null,
-          type: row.normalized.type as string | null,
-          kind: row.normalized.kind as string | null,
-        };
-        sourceAccounts.set(nk, src);
-        const existingAcct = existing.accounts.find(
-          (a) => normalizeKey(a.accountNumber) === nk,
-        );
-        if (existingAcct && !sameAccount(src, existingAcct)) {
-          // Created under a free number unless the owner maps it to an
-          // existing account (or, undecided, the names suggest it is one).
-          const decided = ctx.accounts.get(nk);
-          const asNew = decided
-            ? decided.startsWith('NEW')
-            : !(
-                typesAgree(src, existingAcct) &&
-                namesOverlap(src.name, existingAcct.name)
-              );
-          if (asNew) {
-            const to = renumber(nk, number);
-            row.normalized.sourceNumber = number;
-            row.normalized.accountNumber = to;
-            staging.push(
-              this.stagingRow(
-                batch,
-                w,
-                row,
-                'imported',
-                `FinMatrix's ${existingAcct.accountNumber} is ${existingAcct.name}; created as ${to}`,
-                null,
-              ),
-            );
-            continue;
-          }
-        }
-        staging.push(
-          this.stagingRow(
-            batch,
-            w,
-            row,
-            existingAcct ? 'merged' : 'imported',
-            existingAcct ? 'Already in the chart (same number)' : null,
-            existingAcct ? { recordId: existingAcct.id, by: 'number' } : null,
-          ),
-        );
+          name: (row.normalized.accountName as string | null) ?? null,
+          type: (row.normalized.type as string | null) ?? null,
+          kind: (row.normalized.kind as string | null) ?? null,
+        });
+        accountsToStage.push({ w, row, nk });
       }
-      const tbRows = rowsOf('trial_balance');
       for (const { row } of tbRows) {
         const number = row.normalized.accountNumber
           ? String(row.normalized.accountNumber)
@@ -945,83 +864,175 @@ export class MigrationAnalysisService {
             kind: null,
           });
       }
-      const accountTargets = new Map<string, string>(); // norm source number → FinMatrix number | 'NEW' | 'NEW:<type>'
-      for (const [nk, src] of sourceAccounts) {
-        const byNumber = existing.accounts.find(
-          (a) => normalizeKey(a.accountNumber) === nk,
+
+      const plan = planChart(
+        existing.accounts.map((a) => ({
+          id: a.id,
+          accountNumber: a.accountNumber,
+          name: a.name,
+          type: a.type,
+          subType: a.subType,
+          systemRole: a.systemRole,
+        })),
+        [...sourceAccounts.values()],
+        {
+          roleDecision: (role) =>
+            ctx.value.get(`chart::${normalizeKey(role)}`) || undefined,
+          accountDecision: (k) => ctx.accounts.get(k) || undefined,
+        },
+      );
+      const fmById = new Map(existing.accounts.map((a) => [a.id, a]));
+      const fmByNumber = new Map(
+        existing.accounts.map((a) => [normalizeKey(a.accountNumber), a]),
+      );
+      // A FinMatrix account's number once the plan is applied.
+      const finalOf = (number: string) => {
+        const a = fmByNumber.get(normalizeKey(number));
+        return a ? (plan.finalNumber.get(a.id) ?? a.accountNumber) : number;
+      };
+      const what = (a: {
+        accountNumber: string;
+        name: string;
+        systemRole: string | null;
+      }) =>
+        a.systemRole
+          ? `FinMatrix's ${roleLabel(a.systemRole as SystemRole)} account (${a.accountNumber} ${a.name})`
+          : `FinMatrix's ${a.accountNumber} ${a.name}`;
+
+      for (const { w, row, nk } of accountsToStage) {
+        const into = plan.mergedInto.get(nk);
+        const fm = into ? fmById.get(into) : undefined;
+        staging.push(
+          fm
+            ? this.stagingRow(
+                batch,
+                w,
+                row,
+                'merged',
+                `${what(fm)} becomes ${String(row.normalized.accountNumber)} ${String(row.normalized.accountName ?? '')}`.trim(),
+                { recordId: fm.id, by: fm.systemRole ? 'role' : 'number' },
+              )
+            : this.stagingRow(
+                batch,
+                w,
+                Object.assign(row, {
+                  normalized: {
+                    ...row.normalized,
+                    // A system role this company has no account for yet.
+                    ...(plan.newRoles.has(nk)
+                      ? { systemRole: plan.newRoles.get(nk) }
+                      : {}),
+                  },
+                }),
+                'imported',
+                null,
+                null,
+              ),
         );
-        // FinMatrix uses this number for a different account: whatever is
-        // decided, a new account gets the free number.
-        const clash =
-          byNumber && !sameAccount(src, byNumber)
-            ? renumber(nk, src.number)
-            : null;
+      }
+      // The chart as it will be: each FinMatrix account that changes, applied
+      // by the commit before anything posts (never imported as a row).
+      plan.changes.forEach((c, i) => {
+        const values = { ...c } as Record<string, unknown>;
+        staging.push({
+          companyId: batch.companyId,
+          batchId: batch.id,
+          fileId: null,
+          sheet: 'Your chart in FinMatrix',
+          rowNumber: i + 1,
+          rowHash: createHash('sha256')
+            .update(JSON.stringify(values))
+            .digest('hex'),
+          entityType: 'chart_change',
+          raw: values,
+          normalized: values,
+          outcome: 'merged',
+          reason:
+            c.change === 'adopt'
+              ? `Takes your number and name: ${c.fromNumber} ${c.fromName} → ${c.toNumber} ${c.toName}`
+              : `Steps aside for your ${c.fromNumber}: ${c.fromNumber} ${c.fromName} → ${c.toNumber}`,
+          match: { recordId: c.accountId, by: 'number' },
+        });
+      });
+      // A control role two of the owner's accounts fit equally well: asked.
+      for (const r of plan.roles.filter((x) => x.unsure)) {
+        const fm = fmById.get(r.accountId)!;
+        addIssue({
+          code: MIGRATION_CODES.MAPPING_UNCONFIRMED,
+          severity: 'warning',
+          sheet: 'Accounts',
+          field: `chart::${r.role}`,
+          message: `Which of your accounts is your ${roleLabel(r.role)}? ${r.candidates.length} fit equally well; we chose ${r.chosen}. ${what(fm)} takes its number and name. Confirm or choose another.`,
+          options: [
+            ...r.candidates.map((n) => ({
+              value: n,
+              label:
+                `${n} ${sourceAccounts.get(normalizeKey(n))?.name ?? ''}`.trim(),
+            })),
+            {
+              value: 'keep',
+              label: `None of them: keep FinMatrix's own ${roleLabel(r.role)}`,
+            },
+          ],
+        });
+      }
+
+      const accountTargets = new Map<string, string>(); // norm source number → final FinMatrix number | 'NEW' | 'NEW:<type>'
+      for (const [nk, src] of sourceAccounts) {
+        const into = plan.mergedInto.get(nk);
         const decided = ctx.accounts.get(nk);
-        if (decided) {
-          accountTargets.set(nk, decided);
-          continue;
-        }
         const aiAcct = ai.account.get(nk);
-        const control = this.controlKind(src);
         let target: string | null = null;
         let confidence = 0;
         let reason = '';
-        if (byNumber && clash) {
-          if (
-            typesAgree(src, byNumber) &&
-            namesOverlap(src.name, byNumber.name)
-          ) {
-            target = byNumber.accountNumber;
-            confidence = 0.6;
-            reason = `same number as ${byNumber.accountNumber} ${byNumber.name}, though the names differ — or create yours as ${clash}`;
-          } else if (src.type) {
-            target = 'NEW';
-            confidence = 0.6;
-            reason = `FinMatrix's ${byNumber.accountNumber} is ${byNumber.name} (${byNumber.type}), a different account, so yours is created as ${clash}`;
-          }
-        } else if (byNumber) {
-          target = byNumber.accountNumber;
-          confidence = 1;
-          reason = `same number as ${byNumber.accountNumber} ${byNumber.name}`;
-        } else if (control) {
-          target =
-            control === 'ar'
-              ? ACCT_AR
-              : control === 'ap'
-                ? ACCT_AP
-                : ACCT_INVENTORY;
-          confidence = 0.95;
-          reason = `${src.name ?? src.number} is the ${control === 'ar' ? 'receivables' : control === 'ap' ? 'payables' : 'inventory'} control account`;
-        } else {
-          const byName = src.name
-            ? existing.accounts.find(
-                (a) => normalizeKey(a.name) === normalizeKey(src.name),
-              )
-            : undefined;
-          if (byName) {
-            target = byName.accountNumber;
-            confidence = 0.85;
-            reason = `same name as ${byName.accountNumber} ${byName.name}`;
-          } else if (src.type) {
-            target = 'NEW';
-            confidence = 1;
-            reason = 'a new account from the Accounts sheet';
-          }
+        let origin: 'rule' | 'ai' = 'rule';
+        if (into) {
+          const fm = fmById.get(into)!;
+          target = plan.finalNumber.get(into) ?? src.number;
+          const role = plan.roles.find((r) => r.accountId === into);
+          confidence = decided ? 1 : role?.unsure ? 0.6 : 1;
+          reason =
+            target === src.number
+              ? `${what(fm)} takes your number and name`
+              : `goes into ${what(fm)}`;
+          // The proposal names the FinMatrix account by its number today.
+          accountTargets.set(nk, target);
+          if (!decided)
+            addProposal({
+              kind: 'account',
+              sheet: '',
+              source: src.number,
+              target: fm.accountNumber,
+              confidence: String(confidence),
+              origin: 'rule',
+              reason,
+            });
+          continue;
         }
-        let accountOrigin: 'rule' | 'ai' = 'rule';
+        if (decided) {
+          accountTargets.set(
+            nk,
+            decided.startsWith('NEW') ? decided : finalOf(decided),
+          );
+          continue;
+        }
         if (
           aiAcct?.target &&
-          aiAcct.confidence > confidence &&
-          validAccountTarget(aiAcct.target, existing)
+          validAccountTarget(aiAcct.target, existing) &&
+          aiAcct.confidence >= MAPPING_CONFIDENT
         ) {
-          target = aiAcct.target;
+          target = finalOf(aiAcct.target);
           confidence = aiAcct.confidence;
           reason = `AI: ${aiAcct.reason}`;
-          accountOrigin = 'ai';
+          origin = 'ai';
+        } else if (src.type) {
+          target = 'NEW';
+          confidence = 1;
+          reason = 'a new account, with your number and name';
         }
         if (target) {
           accountTargets.set(nk, target);
-          if (accountOrigin === 'rule')
+          if (origin === 'rule')
             addProposal({
               kind: 'account',
               sheet: '',
@@ -1031,52 +1042,23 @@ export class MigrationAnalysisService {
               origin: 'rule',
               reason,
             });
-          if (confidence < MAPPING_CONFIDENT) {
-            addIssue({
-              code: MIGRATION_CODES.MAPPING_UNCONFIRMED,
-              severity: 'warning',
-              sheet: 'Accounts',
-              field: `account::${src.number}`,
-              message: `Account ${src.number} ${src.name ?? ''}: we propose ${target === 'NEW' ? (clash ? `creating it as ${clash}` : 'creating it') : `mapping it to ${target}`} (${reason}). Confirm or choose another account.`,
-              options: [
-                ...(src.type
-                  ? [
-                      {
-                        value: 'NEW',
-                        label: clash
-                          ? `Create ${src.number} ${src.name ?? ''} as ${clash} (FinMatrix keeps ${src.number} for ${byNumber?.name ?? 'its own account'})`
-                          : `Create ${src.number} ${src.name ?? ''} as a new account`,
-                      },
-                    ]
-                  : []),
-                ...existing.accounts
-                  .filter((a) => a.isActive)
-                  .map((a) => ({
-                    value: a.accountNumber,
-                    label: `${a.accountNumber} ${a.name}`,
-                  })),
-              ],
-            });
-          }
         } else {
           addIssue({
             code: MIGRATION_CODES.UNKNOWN_ACCOUNT,
             severity: 'blocking',
             sheet: 'Trial Balance',
             field: `account::${src.number}`,
-            message: clash
-              ? `Account ${src.number}${src.name ? ` (${src.name})` : ''}: FinMatrix's ${src.number} is ${byNumber!.name}, a different account. Create yours as ${clash} (choose its type), or map it to an existing account.`
-              : `Account ${src.number}${src.name ? ` (${src.name})` : ''} is in the trial balance but not on the Accounts sheet or in FinMatrix. Map it to an existing account, or create it as a new account of the right type.`,
+            message: `Account ${src.number}${src.name ? ` (${src.name})` : ''} is in the trial balance but not on the Accounts sheet or in FinMatrix. Create it (it keeps your number) as an account of the right type, or put its balance into an existing account.`,
             options: [
               ...NEW_ACCOUNT_OPTIONS.map((t) => ({
                 value: `NEW:${t}`,
-                label: `Create ${src.number}${src.name ? ` ${src.name}` : ''} as ${clash ? `${clash}, ` : ''}a new ${t} account`,
+                label: `Create ${src.number}${src.name ? ` ${src.name}` : ''} as a new ${t} account`,
               })),
               ...existing.accounts
                 .filter((a) => a.isActive)
                 .map((a) => ({
                   value: a.accountNumber,
-                  label: `${a.accountNumber} ${a.name}`,
+                  label: `${finalOf(a.accountNumber)} ${a.name}`,
                 })),
             ],
           });
@@ -1099,20 +1081,20 @@ export class MigrationAnalysisService {
         }
         const nk = normalizeKey(String(row.normalized.accountNumber));
         let target = accountTargets.get(nk);
-        // A clashing number: the account lives under its free number.
-        const movedTo = renumbered.get(nk);
         // 'NEW:<type>': the account is created from the trial balance line itself.
         if (target?.startsWith('NEW:')) {
+          const role = plan.newRoles.get(nk);
           row.normalized.newAccount = {
             type: target.slice(4),
             name:
               row.normalized.accountName ??
               String(row.normalized.accountNumber),
-            ...(movedTo ? { number: movedTo } : {}),
+            // A role it clearly is, when the type chosen is the role's.
+            ...(role && SYSTEM_ACCOUNT_DEFS[role].type === target.slice(4)
+              ? { systemRole: role }
+              : {}),
           };
-          target = movedTo ?? 'NEW';
-        } else if (target === 'NEW' && movedTo) {
-          target = movedTo;
+          target = 'NEW';
         }
         row.normalized.targetAccount = target ?? null;
         staging.push(
@@ -1429,6 +1411,7 @@ export class MigrationAnalysisService {
     ctx: MappingContext,
     addIssue: (i: IssueDraft) => void,
     proof: Array<Partial<MigrationStagingRow>>,
+    roleNumbers: Map<string, string>,
   ): Promise<{
     contents: Map<string, Awaited<ReturnType<typeof readUpload>>>;
     recognised: Map<string, Map<string, string>>;
@@ -1486,6 +1469,12 @@ export class MigrationAnalysisService {
         accepted: (key) =>
           ctx.value.get(`report::${normalizeKey(key)}`) === 'accept',
         existingAccounts: chart.map((a) => a.account_number),
+        controlNumbers: {
+          'Accounts Receivable': roleNumbers.get(SYS.AR),
+          Inventory: roleNumbers.get(SYS.INVENTORY),
+          'Accounts Payable': roleNumbers.get(SYS.AP),
+          'Retained Earnings': roleNumbers.get(SYS.RETAINED_EARNINGS),
+        },
       },
     );
     for (const i of built.issues) addIssue(i);
@@ -1541,8 +1530,21 @@ export class MigrationAnalysisService {
     return { contents, recognised, byFile };
   }
 
+  /** Each system role's account number in this company today. */
+  private async roleNumbers(
+    em: EntityManager,
+    companyId: string,
+  ): Promise<Map<string, string>> {
+    const rows: Array<{ role: string; number: string }> = await em.query(
+      `SELECT system_role AS role, account_number AS number FROM accounts WHERE company_id = $1 AND system_role IS NOT NULL`,
+      [companyId],
+    );
+    return new Map(rows.map((r) => [r.role, r.number]));
+  }
+
   private async tallyGrids(
     files: MigrationFile[],
+    roleNumbers: Map<string, string>,
   ): Promise<{ byFile: Map<string, SourceGrid[]>; warnings: string[] }> {
     const docs: Array<{ xml: string; fileIndex: number }> = [];
     for (const [i, file] of files.entries()) {
@@ -1562,7 +1564,13 @@ export class MigrationAnalysisService {
     }
     const byFile = new Map<string, SourceGrid[]>();
     if (docs.length === 0) return { byFile, warnings: [] };
-    const bundle = parseTallyDocuments(docs);
+    const bundle = parseTallyDocuments(docs, {
+      cash: roleNumbers.get(SYS.CASH),
+      receivables: roleNumbers.get(SYS.AR),
+      inventory: roleNumbers.get(SYS.INVENTORY),
+      payables: roleNumbers.get(SYS.AP),
+      profitAndLoss: roleNumbers.get(SYS.RETAINED_EARNINGS),
+    });
     for (const g of bundle.grids) {
       const id = files[g.fileIndex].id;
       byFile.set(id, [
@@ -1760,25 +1768,6 @@ export class MigrationAnalysisService {
     return { reject: null, errors };
   }
 
-  private controlKind(src: {
-    number: string;
-    name: string | null;
-    kind: string | null;
-  }): ControlKind {
-    if (src.number === ACCT_AR) return 'ar';
-    if (src.number === ACCT_AP) return 'ap';
-    if (src.number === ACCT_INVENTORY) return 'inventory';
-    const candidates = [normalizeKey(src.name), normalizeKey(src.kind)].filter(
-      Boolean,
-    );
-    const hit = (list: readonly string[]) =>
-      list.some((h) => candidates.includes(normalizeKey(h)));
-    if (hit(CONTROL_ACCOUNT_HINTS.ar)) return 'ar';
-    if (hit(CONTROL_ACCOUNT_HINTS.ap)) return 'ap';
-    if (hit(CONTROL_ACCOUNT_HINTS.inventory)) return 'inventory';
-    return null;
-  }
-
   private parseCell(
     kind: string,
     text: string,
@@ -1957,6 +1946,7 @@ export class MigrationAnalysisService {
         name: true,
         type: true,
         subType: true,
+        systemRole: true,
         isActive: true,
       },
     });
@@ -1997,6 +1987,7 @@ export class MigrationAnalysisService {
         name: a.name,
         type: a.type,
         subType: a.subType ?? null,
+        systemRole: a.systemRole ?? null,
         isActive: a.isActive,
       })),
     };

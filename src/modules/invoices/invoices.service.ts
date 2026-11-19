@@ -33,13 +33,7 @@ import { applyTextSearch } from '../../common/utils/search-query.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { AccountsService } from '../accounts/accounts.service';
-import {
-  ACCT_AR,
-  ACCT_COGS,
-  ACCT_INVENTORY,
-  ACCT_SALES_REVENUE,
-  ACCT_TAX_PAYABLE,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { InvoiceStatus } from '../../types';
 import { businessToday } from '../../common/utils/business-date.util';
 import {
@@ -648,19 +642,19 @@ export class InvoicesService {
 
       if (invoice.journalEntryId) {
         // Create reversing entry
-        const ar = await this.accounts.getByNumberOrFail(
+        const ar = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_AR,
+          SYS.AR,
           manager,
         );
-        const rev = await this.accounts.getByNumberOrFail(
+        const rev = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_SALES_REVENUE,
+          SYS.SALES_REVENUE,
           manager,
         );
-        const tax = await this.accounts.getByNumberOrFail(
+        const tax = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_TAX_PAYABLE,
+          SYS.TAX_PAYABLE,
           manager,
         );
         const lines: {
@@ -696,14 +690,14 @@ export class InvoicesService {
           true,
         );
         if (cogsTotal.greaterThan(0)) {
-          const cogs = await this.accounts.getByNumberOrFail(
+          const cogs = await this.accounts.getSystemAccount(
             companyId,
-            ACCT_COGS,
+            SYS.COGS,
             manager,
           );
-          const inventory = await this.accounts.getByNumberOrFail(
+          const inventory = await this.accounts.getSystemAccount(
             companyId,
-            ACCT_INVENTORY,
+            SYS.INVENTORY,
             manager,
           );
           lines.push({
@@ -979,19 +973,19 @@ export class InvoicesService {
       });
     }
 
-    const ar = await this.accounts.getByNumberOrFail(
+    const ar = await this.accounts.getSystemAccount(
       invoice.companyId,
-      ACCT_AR,
+      SYS.AR,
       manager,
     );
-    const revenue = await this.accounts.getByNumberOrFail(
+    const revenue = await this.accounts.getSystemAccount(
       invoice.companyId,
-      ACCT_SALES_REVENUE,
+      SYS.SALES_REVENUE,
       manager,
     );
-    const tax = await this.accounts.getByNumberOrFail(
+    const tax = await this.accounts.getSystemAccount(
       invoice.companyId,
-      ACCT_TAX_PAYABLE,
+      SYS.TAX_PAYABLE,
       manager,
     );
     const revenueNet = toDecimal(invoice.subtotal).minus(
@@ -1035,14 +1029,14 @@ export class InvoicesService {
       false,
     );
     if (cogsTotal.greaterThan(0)) {
-      const cogs = await this.accounts.getByNumberOrFail(
+      const cogs = await this.accounts.getSystemAccount(
         invoice.companyId,
-        ACCT_COGS,
+        SYS.COGS,
         manager,
       );
-      const inventory = await this.accounts.getByNumberOrFail(
+      const inventory = await this.accounts.getSystemAccount(
         invoice.companyId,
-        ACCT_INVENTORY,
+        SYS.INVENTORY,
         manager,
       );
       lines.push({

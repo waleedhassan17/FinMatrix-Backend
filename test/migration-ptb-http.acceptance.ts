@@ -26,7 +26,8 @@ const API_PID = process.env.API_PID;
 const RUN = Date.now().toString(36);
 /** A Peachtree backup, or any other large export (then checked as an extract). */
 const IS_PTB = /\.ptb$/i.test(SAMPLE);
-const SOURCE = process.env.SAMPLE_SOURCE || (IS_PTB ? 'peachtree' : 'quickbooks_online');
+const SOURCE =
+  process.env.SAMPLE_SOURCE || (IS_PTB ? 'peachtree' : 'quickbooks_online');
 const PASSWORD = 'Migrate#2026';
 
 let pass = 0;
@@ -163,7 +164,10 @@ async function main() {
     const b = await req(
       'POST',
       '/migrations',
-      { sourceSystem: SOURCE, cutoverDate: process.env.SAMPLE_CUTOVER || '2026-10-06' },
+      {
+        sourceSystem: SOURCE,
+        cutoverDate: process.env.SAMPLE_CUTOVER || '2026-10-06',
+      },
       token,
     );
     const batchId = b.data.id as string;

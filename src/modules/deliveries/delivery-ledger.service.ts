@@ -18,13 +18,7 @@ import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
 import { CreditMemosService } from '../credit-memos/credit-memos.service';
-import {
-  ACCT_COGS,
-  ACCT_GOODS_IN_TRANSIT,
-  ACCT_INVENTORY,
-  ACCT_CUSTOMER_ADVANCES,
-  ACCT_AR,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import {
   toDecimal,
   MONEY_TOLERANCE,
@@ -362,11 +356,11 @@ export class DeliveryLedgerService {
       const git = await this.accounts.getOrCreateSystemAccount(
         em,
         companyId,
-        ACCT_GOODS_IN_TRANSIT,
+        SYS.GOODS_IN_TRANSIT,
       );
-      const inventory = await this.accounts.getByNumberOrFail(
+      const inventory = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_INVENTORY,
+        SYS.INVENTORY,
         em,
       );
       const value = totalCost.toFixed(4);
@@ -660,13 +654,9 @@ export class DeliveryLedgerService {
         const advances = await this.accounts.getOrCreateSystemAccount(
           em,
           companyId,
-          ACCT_CUSTOMER_ADVANCES,
+          SYS.CUSTOMER_ADVANCES,
         );
-        const ar = await this.accounts.getByNumberOrFail(
-          companyId,
-          ACCT_AR,
-          em,
-        );
+        const ar = await this.accounts.getSystemAccount(companyId, SYS.AR, em);
         const settled = total.toFixed(4);
         await this.posting.createEntry(em, {
           companyId,
@@ -780,13 +770,13 @@ export class DeliveryLedgerService {
       const git = await this.accounts.getOrCreateSystemAccount(
         em,
         companyId,
-        ACCT_GOODS_IN_TRANSIT,
+        SYS.GOODS_IN_TRANSIT,
       );
       const lines = [];
       if (cogsCost.abs().greaterThan(MONEY_TOLERANCE)) {
-        const cogs = await this.accounts.getByNumberOrFail(
+        const cogs = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_COGS,
+          SYS.COGS,
           em,
         );
         lines.push({
@@ -798,9 +788,9 @@ export class DeliveryLedgerService {
         });
       }
       if (restockCost.abs().greaterThan(MONEY_TOLERANCE)) {
-        const inventory = await this.accounts.getByNumberOrFail(
+        const inventory = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_INVENTORY,
+          SYS.INVENTORY,
           em,
         );
         lines.push({
@@ -977,11 +967,11 @@ export class DeliveryLedgerService {
       const git = await this.accounts.getOrCreateSystemAccount(
         em,
         companyId,
-        ACCT_GOODS_IN_TRANSIT,
+        SYS.GOODS_IN_TRANSIT,
       );
-      const inventory = await this.accounts.getByNumberOrFail(
+      const inventory = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_INVENTORY,
+        SYS.INVENTORY,
         em,
       );
       const value = totalCost.toFixed(4);

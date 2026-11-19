@@ -281,7 +281,8 @@ export function ledgerQuery(
     }
 
     if (
-      sql.includes("a.account_number = '1200'") &&
+      // The Inventory account, found by its role (the fixture keeps it at 1200).
+      sql.includes("a.system_role = 'inventory'") &&
       sql.includes('GROUP BY period')
     ) {
       const anchor = params[1];

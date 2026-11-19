@@ -30,12 +30,7 @@ import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { CreditMemosService } from '../credit-memos/credit-memos.service';
-import {
-  ACCT_AR,
-  ACCT_BANK,
-  ACCT_CASH,
-  ACCT_CUSTOMER_ADVANCES,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Delivery } from '../deliveries/entities/delivery.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
@@ -364,7 +359,7 @@ export class PaymentsService {
       manager,
       companyId,
       dto.bankAccountId,
-      dto.paymentMethod === 'cash' ? ACCT_CASH : ACCT_BANK,
+      dto.paymentMethod === 'cash' ? SYS.CASH : SYS.BANK,
     );
 
     const paymentNumber = await nextDocumentNumber(
@@ -440,9 +435,9 @@ export class PaymentsService {
       },
     ];
     if (applied.greaterThan(MONEY_TOLERANCE)) {
-      const ar = await this.accounts.getByNumberOrFail(
+      const ar = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_AR,
+        SYS.AR,
         manager,
       );
       lines.push({
@@ -457,7 +452,7 @@ export class PaymentsService {
       const advances = await this.accounts.getOrCreateSystemAccount(
         manager,
         companyId,
-        ACCT_CUSTOMER_ADVANCES,
+        SYS.CUSTOMER_ADVANCES,
       );
       lines.push({
         accountId: advances.id,
@@ -632,11 +627,11 @@ export class PaymentsService {
         const advances = await this.accounts.getOrCreateSystemAccount(
           manager,
           companyId,
-          ACCT_CUSTOMER_ADVANCES,
+          SYS.CUSTOMER_ADVANCES,
         );
-        const ar = await this.accounts.getByNumberOrFail(
+        const ar = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_AR,
+          SYS.AR,
           manager,
         );
         const total = requested.toFixed(4);

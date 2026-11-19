@@ -411,11 +411,16 @@ async function main() {
   const sysNumber = await req('PATCH', `/accounts/${checking.id}`, {
     accountNumber: await freeNumber(1010, 1099),
   });
+  // Type and kind are what automatic posting relies on: always fixed. The
+  // number is found by role now, so it follows the rule every account
+  // follows — and this one is in use, so it is fixed too.
   ok(
-    'C9 1010 Business Checking: type, kind and number are fixed (SYSTEM_ACCOUNT_FIXED)',
-    [sysType, sysKind, sysNumber].every(
+    'C9 1010 Business Checking: type and kind are fixed (SYSTEM_ACCOUNT_FIXED); its number, in use, too (ACCOUNT_IN_USE)',
+    [sysType, sysKind].every(
       (r) => r.status === 400 && codeOf(r) === 'SYSTEM_ACCOUNT_FIXED',
-    ),
+    ) &&
+      sysNumber.status === 400 &&
+      codeOf(sysNumber) === 'ACCOUNT_IN_USE',
     [sysType.body, sysKind.body, sysNumber.body],
   );
   const sysRename = await req('PATCH', `/accounts/${checking.id}`, {

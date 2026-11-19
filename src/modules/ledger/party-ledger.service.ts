@@ -1,11 +1,8 @@
+import { SYS } from '../accounts/accounts.constants';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { businessToday } from '../../common/utils/business-date.util';
-import {
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_CUSTOMER_ADVANCES,
-} from '../accounts/accounts.constants';
+
 import {
   LedgerPartyType,
   partyOpeningSql,
@@ -17,8 +14,8 @@ const num = (v: unknown) => parseFloat(String(v ?? '0')) || 0;
 
 /** The control accounts a party's postings sit on. */
 const CONTROL_ACCOUNTS: Record<LedgerPartyType, string[]> = {
-  customer: [ACCT_AR, ACCT_CUSTOMER_ADVANCES],
-  vendor: [ACCT_AP],
+  customer: [SYS.AR, SYS.CUSTOMER_ADVANCES],
+  vendor: [SYS.AP],
 };
 
 /** What each kind of posting is called on a ledger line. */
@@ -105,7 +102,7 @@ export class PartyLedgerService {
     const rows: Array<{ id: string; code: string; name: string }> =
       await this.dataSource.query(
         `SELECT id, account_number AS code, name FROM accounts
-        WHERE company_id = $1 AND account_number = ANY($2::text[])
+        WHERE company_id = $1 AND system_role = ANY($2::text[])
         ORDER BY account_number`,
         [companyId, CONTROL_ACCOUNTS[type]],
       );

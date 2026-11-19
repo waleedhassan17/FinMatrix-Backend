@@ -170,6 +170,7 @@ async function run() {
             companyId: company!.id,
             accountNumber: a.accountNumber,
             name: a.name,
+            systemRole: a.systemRole ?? null,
             type: a.type,
             subType: a.subType,
             parentId: null,

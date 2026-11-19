@@ -27,6 +27,7 @@ interface Row {
   description: string | null;
   balance: string;
   isActive: boolean;
+  systemRole?: string | null;
 }
 
 const COMPANY = 'company-1';
@@ -93,6 +94,7 @@ const account = (over: Partial<Row>): Row => ({
   description: null,
   balance: '0',
   isActive: true,
+  systemRole: null,
   ...over,
 });
 
@@ -103,6 +105,7 @@ const CHART: Row[] = [
     name: 'Cash',
     type: 'asset',
     subType: 'Cash',
+    systemRole: 'cash',
   }),
   account({
     id: 'a-bank',
@@ -110,6 +113,7 @@ const CHART: Row[] = [
     name: 'Business Checking',
     type: 'asset',
     subType: 'Bank',
+    systemRole: 'bank',
   }),
   account({
     id: 'a-rent',
@@ -136,6 +140,29 @@ const codeOf = async (p: Promise<unknown>) => {
     return err.getResponse?.().code ?? String(e);
   }
 };
+
+describe('AccountsService.update — a system account keeps its role, not its number', () => {
+  it('renumbers and renames Cash while nothing refers to it', async () => {
+    const { service } = makeService(CHART.map((a) => ({ ...a })));
+    const saved = await service.update(COMPANY, 'a-cash', {
+      accountNumber: '10100',
+      name: 'Cash on Hand',
+    });
+    expect(saved).toMatchObject({
+      accountNumber: '10100',
+      name: 'Cash on Hand',
+      systemRole: 'cash',
+      isSystemAccount: true,
+    });
+  });
+
+  it('never changes its type or kind', async () => {
+    const { service } = makeService(CHART.map((a) => ({ ...a })));
+    expect(
+      await codeOf(service.update(COMPANY, 'a-cash', { subType: 'Bank' })),
+    ).toBe('SYSTEM_ACCOUNT_FIXED');
+  });
+});
 
 describe('AccountsService.update — a mis-filed account can be put right', () => {
   it('turns an unused expense into a bank account with a new number', async () => {
@@ -194,8 +221,8 @@ describe('AccountsService.update — a mis-filed account can be put right', () =
     ).toBe('ACCOUNT_IN_USE');
   });
 
-  it('fixes a system account’s type, kind and number but lets it be renamed', async () => {
-    const { service } = makeService(CHART);
+  it('fixes a system account’s type and kind; its number (while unused) and name may change', async () => {
+    const { service } = makeService(CHART.map((a) => ({ ...a })));
     expect(
       await codeOf(
         service.update(COMPANY, 'a-bank', {
@@ -209,11 +236,10 @@ describe('AccountsService.update — a mis-filed account can be put right', () =
         service.update(COMPANY, 'a-bank', { subType: 'Other Asset' }),
       ),
     ).toBe('SYSTEM_ACCOUNT_FIXED');
-    expect(
-      await codeOf(
-        service.update(COMPANY, 'a-bank', { accountNumber: '1011' }),
-      ),
-    ).toBe('SYSTEM_ACCOUNT_FIXED');
+    // Automatic posting finds it by its role, so a new number is safe.
+    await expect(
+      service.update(COMPANY, 'a-bank', { accountNumber: '1011' }),
+    ).resolves.toMatchObject({ accountNumber: '1011', systemRole: 'bank' });
     await expect(
       service.update(COMPANY, 'a-bank', {
         name: 'HBL Current Account',
@@ -301,12 +327,12 @@ describe('AccountsService.resolveMoneyAccount — what a payment may move money 
   it('falls back to the account it always used when none is chosen', async () => {
     const { service, manager } = makeService(CHART);
     const spy = jest
-      .spyOn(service, 'getByNumberOrFail')
+      .spyOn(service, 'getSystemAccount')
       .mockResolvedValue(CHART[0] as never);
     await expect(
-      service.resolveMoneyAccount(manager as never, COMPANY, undefined, '1000'),
+      service.resolveMoneyAccount(manager as never, COMPANY, undefined, 'cash'),
     ).resolves.toMatchObject({ accountNumber: '1000' });
-    expect(spy).toHaveBeenCalledWith(COMPANY, '1000', manager);
+    expect(spy).toHaveBeenCalledWith(COMPANY, 'cash', manager);
   });
 
   it('accepts any of the company’s active cash or bank accounts', async () => {
@@ -319,7 +345,7 @@ describe('AccountsService.resolveMoneyAccount — what a payment may move money 
     });
     const { service, manager } = makeService([...CHART, mcb]);
     await expect(
-      service.resolveMoneyAccount(manager as never, COMPANY, 'a-mcb', '1000'),
+      service.resolveMoneyAccount(manager as never, COMPANY, 'a-mcb', 'cash'),
     ).resolves.toMatchObject({ name: 'MCB' });
   });
 
@@ -346,7 +372,7 @@ describe('AccountsService.resolveMoneyAccount — what a payment may move money 
       foreign,
     ]);
     const resolve = (id: string) =>
-      service.resolveMoneyAccount(manager as never, COMPANY, id, '1000');
+      service.resolveMoneyAccount(manager as never, COMPANY, id, 'cash');
 
     await expect(resolve(meezan.id)).rejects.toBeInstanceOf(
       BadRequestException,
@@ -359,18 +385,33 @@ describe('AccountsService.resolveMoneyAccount — what a payment may move money 
 
 describe('structureOf — what the edit form may unlock', () => {
   it('unlocks an account nothing refers to', () => {
-    expect(structureOf(false, EMPTY_USAGE)).toEqual({
+    expect(structureOf(null, EMPTY_USAGE)).toEqual({
       editable: true,
+      numberEditable: true,
+      typeEditable: true,
       reason: null,
     });
   });
 
+  it('lets a system account be renumbered while unused, never retyped', () => {
+    expect(structureOf('accounts_receivable', EMPTY_USAGE)).toMatchObject({
+      editable: false,
+      numberEditable: true,
+      typeEditable: false,
+    });
+    expect(structureOf('accounts_receivable', EMPTY_USAGE).reason).toMatch(
+      /system account.*number and name can change/,
+    );
+    expect(
+      structureOf('accounts_receivable', { ...EMPTY_USAGE, postings: 2 }),
+    ).toMatchObject({ numberEditable: false, typeEditable: false });
+  });
+
   it('says why it is fixed', () => {
-    expect(structureOf(true, EMPTY_USAGE).reason).toMatch(/system account/);
-    expect(structureOf(false, { ...EMPTY_USAGE, postings: 3 }).reason).toBe(
+    expect(structureOf(null, { ...EMPTY_USAGE, postings: 3 }).reason).toBe(
       'Already in use (3 postings), so its type and number are fixed.',
     );
-    expect(structureOf(false, { ...EMPTY_USAGE, children: 1 }).reason).toMatch(
+    expect(structureOf(null, { ...EMPTY_USAGE, children: 1 }).reason).toMatch(
       /1 sub-account\. Move it first/,
     );
   });

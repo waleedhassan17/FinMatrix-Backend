@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import Decimal from 'decimal.js';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, In } from 'typeorm';
 import { addDaysIso } from '../../../common/utils/business-date.util';
 import {
   isUniqueViolation,
@@ -20,11 +20,11 @@ import {
 } from '../../../common/utils/inventory-movement.util';
 import {
   ACCOUNT_SUB_TYPES,
-  ACCT_AP,
-  ACCT_AR,
-  ACCT_INVENTORY,
-  ACCT_MIGRATION_CLEARING,
+  SYS,
+  SYSTEM_ACCOUNT_DEFS,
+  SystemRole,
 } from '../../accounts/accounts.constants';
+import type { ChartChange } from '../mapping/chart-plan';
 import { AccountsService } from '../../accounts/accounts.service';
 import { Account } from '../../accounts/entities/account.entity';
 import { Bill } from '../../bills/entities/bill.entity';
@@ -68,7 +68,8 @@ import {
 
 /** Lines per open-item journal entry; each chunk balances on its own. */
 const OPEN_ITEM_CHUNK = 1000;
-const CONTROL_ACCOUNTS = new Set([ACCT_AR, ACCT_AP, ACCT_INVENTORY]);
+/** The control roles whose balances come from open items and stock, not the trial balance. */
+const CONTROL_ROLES: SystemRole[] = [SYS.AR, SYS.AP, SYS.INVENTORY];
 
 export interface SpotCheck {
   kind: 'customer' | 'vendor';
@@ -107,6 +108,19 @@ export interface CertificatePreview {
   asTyped?: AsTypedFigures;
   /** The Peachtree backup the books came from, as uploaded; null otherwise. */
   backup?: { name: string; sizeBytes: number; sha256: string } | null;
+  /**
+   * FinMatrix's own accounts the migration renumbered or renamed to fit the
+   * owner's chart (mapping/chart-plan): adopted the owner's number and name,
+   * or stepped aside from a number the owner uses.
+   */
+  chartChanges?: Array<{
+    change: 'adopt' | 'step_aside';
+    role: string | null;
+    fromNumber: string;
+    fromName: string;
+    toNumber: string;
+    toName: string;
+  }>;
   postings: Array<{
     reference: string;
     memo: string;
@@ -160,15 +174,21 @@ const d = (v: unknown) =>
  * entry that carries its line, so invariant I7 (every posted document has a
  * journal entry) still holds.
  *
- *   Trial balance  → one entry; AR/AP/Inventory lines land on 3950 instead
- *   Open invoices  → Dr 1100 per invoice / Cr 3950, chunked; invoice rows.
- *                    Each 1100 line's ledger row names its invoice, so the
- *                    customer's ledger and statement carry it.
- *   Open bills     → Dr 3950 / Cr 2000 per bill, chunked; bill rows, each
- *                    2000 line naming its bill
- *   Stock          → InventoryService.postOpeningStockBatchJe crediting 3950,
- *                    plus one `migration` movement per item at its cost
- *   → 3950 nets to zero exactly when the detail agrees with the trial balance.
+ *   Chart          → FinMatrix's own accounts take the owner's numbers and
+ *                    names, or step aside (mapping/chart-plan), first
+ *   Trial balance  → one entry; the Receivables / Payables / Inventory lines
+ *                    land on Migration Clearing instead
+ *   Open invoices  → Dr Receivables per invoice / Cr Clearing, chunked;
+ *                    invoice rows. Each receivable line's ledger row names
+ *                    its invoice, so the customer's ledger and statement
+ *                    carry it.
+ *   Open bills     → Dr Clearing / Cr Payables per bill, chunked; bill rows,
+ *                    each payable line naming its bill
+ *   Stock          → InventoryService.postOpeningStockBatchJe crediting
+ *                    Clearing, plus one `migration` movement per item at cost
+ *   → Clearing nets to zero exactly when the detail agrees with the trial
+ *     balance. Every one of these accounts is found by its role, whatever
+ *     number it carries.
  */
 @Injectable()
 export class MigrationCommitService {
@@ -394,37 +414,109 @@ export class MigrationCommitService {
     const n = (r: MigrationStagingRow) =>
       r.normalized as Record<string, unknown>;
 
-    // 3950 exists for every company (migration MigrationFoundation, default chart);
-    // a company that somehow lacks it gets it here, recorded so rollback knows.
+    // The owner's chart wins (mapping/chart-plan): FinMatrix's own accounts
+    // take the owner's numbers and names, or step aside, before anything is
+    // created or posted. Two steps, so swaps never meet on the unique number
+    // index. Undo keeps them: the chart stays the owner's, and importing
+    // again lands in the same accounts.
+    const changes = staging
+      .filter((r) => r.entityType === 'chart_change')
+      .map((r) => n(r) as unknown as ChartChange);
+    if (changes.length) {
+      const now = await em.find(Account, {
+        where: { companyId, id: In(changes.map((c) => c.accountId)) },
+      });
+      const current = new Map(now.map((a) => [a.id, a]));
+      for (const c of changes) {
+        const a = current.get(c.accountId);
+        if (!a || a.accountNumber !== c.fromNumber)
+          throw new BadRequestException({
+            code: 'MIGRATION_CHART_CHANGED',
+            message:
+              'The chart of accounts changed after your files were checked. Check the files again (re-upload one, or change any answer) so the plan matches the chart.',
+          });
+      }
+      for (const c of changes)
+        await em.update(
+          Account,
+          { id: c.accountId, companyId },
+          { accountNumber: `~${c.accountId.replace(/-/g, '').slice(0, 18)}` },
+        );
+      for (const c of changes) {
+        await em.update(
+          Account,
+          { id: c.accountId, companyId },
+          { accountNumber: c.toNumber, name: c.toName },
+        );
+        state.records.push({
+          recordType: 'account_touched',
+          recordId: c.accountId,
+          meta: {
+            change: c.change,
+            number: c.fromNumber,
+            name: c.fromName,
+            toNumber: c.toNumber,
+            toName: c.toName,
+          },
+        });
+      }
+    }
+
+    // Migration Clearing exists for every company (MigrationFoundation,
+    // default chart); a company that somehow lacks it gets it here, recorded
+    // so rollback knows.
     const hadClearing = await em.findOne(Account, {
-      where: { companyId, accountNumber: ACCT_MIGRATION_CLEARING },
+      where: { companyId, systemRole: SYS.MIGRATION_CLEARING },
     });
     const clearing = await this.accounts.getOrCreateSystemAccount(
       em,
       companyId,
-      ACCT_MIGRATION_CLEARING,
+      SYS.MIGRATION_CLEARING,
     );
     if (!hadClearing)
       state.records.push({ recordType: 'account', recordId: clearing.id });
 
-    // Accounts from the Accounts sheet that are new to the chart.
+    // Accounts from the Accounts sheet that are new to the chart. One that
+    // is a system role this company has no account for yet (the plan says
+    // which) is created with it — and with the type and kind the role needs.
     const accountRows = imported('accounts');
     const createdAccounts = new Map<string, Account>();
+    const held = new Set(
+      (
+        await em.find(Account, {
+          where: { companyId },
+          select: { systemRole: true },
+        })
+      )
+        .map((a) => a.systemRole)
+        .filter(Boolean),
+    );
+    const roleFor = (role: unknown, type: string): SystemRole | null => {
+      const r = typeof role === 'string' ? (role as SystemRole) : null;
+      if (!r || held.has(r) || SYSTEM_ACCOUNT_DEFS[r]?.type !== type)
+        return null;
+      held.add(r);
+      return r;
+    };
     for (const r of accountRows) {
       const v = n(r);
       const type = v.type as AccountType;
       const number = String(v.accountNumber);
+      const role = roleFor(v.systemRole, type);
       const acct = em.create(Account, {
         companyId,
         accountNumber: number,
         name: String(v.accountName ?? number).slice(0, 255),
         type,
-        subType: subTypeFor(type, v.kind as string | null),
+        subType: role
+          ? SYSTEM_ACCOUNT_DEFS[role].subType
+          : subTypeFor(type, v.kind as string | null),
         parentId: null,
         description: `Migrated from ${batch.sourceSystem}`,
         openingBalance: '0',
         balance: '0',
         isActive: true,
+        systemRole: role,
       });
       await em.save(acct);
       createdAccounts.set(normalizeKey(number), acct);
@@ -447,11 +539,10 @@ export class MigrationCommitService {
     for (const r of imported('trial_balance')) {
       const v = n(r);
       const spec = v.newAccount as
-        | { type?: string; name?: string; number?: string }
+        | { type?: string; name?: string; number?: string; systemRole?: string }
         | undefined;
       if (!spec?.type) continue;
-      // Under its own number, or (when FinMatrix uses that number for a
-      // different account) under the free number analysis gave it.
+      // Under the owner's own number.
       const number = String(spec.number ?? v.accountNumber);
       if (v.targetAccount !== 'NEW' && v.targetAccount !== number) continue;
       if (createdAccounts.has(normalizeKey(number))) continue;
@@ -462,12 +553,16 @@ export class MigrationCommitService {
       )
         continue;
       const type = spec.type as AccountType;
+      const role = roleFor(spec.systemRole, type);
       const acct = em.create(Account, {
         companyId,
         accountNumber: number,
         name: String(spec.name ?? number).slice(0, 255),
         type,
-        subType: subTypeFor(type, null),
+        systemRole: role,
+        subType: role
+          ? SYSTEM_ACCOUNT_DEFS[role].subType
+          : subTypeFor(type, null),
         parentId: null,
         description: `Migrated from ${batch.sourceSystem}`,
         openingBalance: '0',
@@ -484,6 +579,20 @@ export class MigrationCommitService {
     // rolled-back migration added and then deactivated. The posting engine
     // refuses inactive accounts, so it is reactivated and recorded; undoing
     // this migration deactivates it again.
+    // Where Receivables, Payables and Inventory live once the plan is applied.
+    const roleAccounts = await em.find(Account, {
+      where: { companyId, systemRole: In(CONTROL_ROLES) },
+    });
+    const roleAccount = (role: SystemRole) => {
+      const a = roleAccounts.find((x) => x.systemRole === role);
+      if (!a)
+        throw new BadRequestException({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `The ${SYSTEM_ACCOUNT_DEFS[role].name} account is missing from the chart of accounts.`,
+        });
+      return a;
+    };
+    const controlNumbers = new Set(roleAccounts.map((a) => a.accountNumber));
     const needed = new Set<string>();
     for (const r of imported('trial_balance')) {
       const v = n(r);
@@ -493,12 +602,15 @@ export class MigrationCommitService {
           : String(v.targetAccount ?? '');
       if (target)
         needed.add(
-          CONTROL_ACCOUNTS.has(target) ? ACCT_MIGRATION_CLEARING : target,
+          controlNumbers.has(target) ? clearing.accountNumber : target,
         );
     }
-    if (imported('open_invoices').length) needed.add(ACCT_AR);
-    if (imported('open_bills').length) needed.add(ACCT_AP);
-    if (imported('stock').length) needed.add(ACCT_INVENTORY);
+    if (imported('open_invoices').length)
+      needed.add(roleAccount(SYS.AR).accountNumber);
+    if (imported('open_bills').length)
+      needed.add(roleAccount(SYS.AP).accountNumber);
+    if (imported('stock').length)
+      needed.add(roleAccount(SYS.INVENTORY).accountNumber);
     for (const r of merged('accounts')) needed.add(String(n(r).accountNumber));
     const inactive = await em.find(Account, {
       where: { companyId, isActive: false },
@@ -540,7 +652,7 @@ export class MigrationCommitService {
       const debit = d(v.debit);
       const credit = d(v.credit);
       if (debit.isZero() && credit.isZero()) continue;
-      const viaClearing = CONTROL_ACCOUNTS.has(target);
+      const viaClearing = controlNumbers.has(target);
       const net = debit.minus(credit);
       // decimal.js calls zero positive; compare explicitly, and a row whose
       // debit and credit cancel carries nothing to post.
@@ -605,8 +717,8 @@ export class MigrationCommitService {
     }
 
     // ── Open invoices ─────────────────────────────────────────────────
-    const ar = idOf(ACCT_AR);
-    const ap = idOf(ACCT_AP);
+    const ar = roleAccount(SYS.AR).id;
+    const ap = roleAccount(SYS.AP).id;
     const invoiceRows = imported('open_invoices');
     for (let i = 0; i < invoiceRows.length; i += OPEN_ITEM_CHUNK) {
       const chunk = invoiceRows.slice(i, i + OPEN_ITEM_CHUNK);
@@ -746,7 +858,7 @@ export class MigrationCommitService {
         openingDateOf(batch.cutoverDate),
         `Migration: opening stock, ${entries.length} item${entries.length === 1 ? '' : 's'} from ${batch.sourceSystem}`,
         {
-          creditAccountNumber: ACCT_MIGRATION_CLEARING,
+          creditRole: SYS.MIGRATION_CLEARING,
           creditDescription: 'Migration Clearing',
           sourceType: 'migration',
           sourceId: batch.id,
@@ -1354,6 +1466,19 @@ export class MigrationCommitService {
             sha256: backup.sha256,
           }
         : null,
+      chartChanges: staging
+        .filter((r) => r.entityType === 'chart_change')
+        .map((r) => {
+          const c = r.normalized as Record<string, string | null>;
+          return {
+            change: c.change === 'step_aside' ? 'step_aside' : 'adopt',
+            role: c.role ?? null,
+            fromNumber: String(c.fromNumber ?? ''),
+            fromName: String(c.fromName ?? ''),
+            toNumber: String(c.toNumber ?? ''),
+            toName: String(c.toName ?? ''),
+          } as const;
+        }),
       postings: state.postings,
       created: state.created,
     };

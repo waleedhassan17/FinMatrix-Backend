@@ -75,6 +75,8 @@ function readme(b: SampleBooks, f: Folder): string {
     '',
     cutoverNote(b),
     '',
+    "> **Your chart is kept.** Every account keeps its number and name; FinMatrix's own accounts (Receivables, Sales Tax, Inventory…) take them over, or move to a free number. The Match step shows each change under *Your chart in FinMatrix*, and so does the certificate.",
+    '',
     '## Sign in',
     '',
     `- Web: ${WEB}`,
@@ -152,12 +154,11 @@ async function main() {
       title: 'TallyPrime / Tally ERP 9 (XML)',
       source: 'TallyPrime',
       status: 'ready',
-      steps: ['Upload the five XML files together, or `tally-export.zip` (the same five in one ZIP).', 'Match step: confirm the two account proposals listed below.'],
-      files: { ...tally, 'tally-export.zip': tallyZip.toBuffer() },
-      confirm: [
-        'Account "Sales Tax Payable" → FinMatrix 2300 Sales Tax Payable (same name). Confirm.',
-        'Account "Cost of Goods Sold" → FinMatrix 5000 Cost of Goods Sold (same name). Confirm.',
+      steps: [
+        'Upload the five XML files together, or `tally-export.zip` (the same five in one ZIP).',
+        "Match step: nothing to confirm. FinMatrix's own accounts take your ledgers' names (Sales Tax Payable, Cost of Goods Sold…) — see Your chart in FinMatrix.",
       ],
+      files: { ...tally, 'tally-export.zip': tallyZip.toBuffer() },
       expect: [
         ...expectedLines(b).slice(0, 6),
         'Account numbers differ from the other formats: Tally has none, so FinMatrix numbers new ledgers by type (18001…, 28001…, 48001…, 68001…). Totals are identical.',
@@ -171,13 +172,9 @@ async function main() {
       status: 'ready',
       steps: [
         'Upload all six files: the "Export data" ZIP (trial balance, customer and vendor lists — its general ledger, journal, P&L and balance sheet are recognised and skipped) and the five reports beside it.',
-        'Match step: confirm the two account proposals listed below.',
+        "Match step: nothing to confirm. FinMatrix's own accounts take QuickBooks' account names — see Your chart in FinMatrix.",
       ],
       files: await quickbooksOnline(b),
-      confirm: [
-        'Account "Sales Tax Payable" → FinMatrix 2300 Sales Tax Payable (same name). Confirm.',
-        'Account "Cost of Goods Sold" → FinMatrix 5000 Cost of Goods Sold (same name). Confirm.',
-      ],
       expect: [
         ...expectedLines(b).slice(0, 7),
         'QuickBooks Online numbers no accounts by default: FinMatrix numbers them — receivables 1100, inventory 1200, payables 2000, retained earnings 3100, the rest by type (18001…, 28001…, 38001…, 48001…, 68001…). Totals are identical.',
@@ -236,7 +233,7 @@ async function main() {
       status: 'ready',
       steps: [
         'Upload `Indus Valley Distributors - Books.xlsx`.',
-        'Match step: confirm the six proposals listed below.',
+        'Match step: confirm the four proposals listed below.',
       ],
       files: { 'Indus Valley Distributors - Books.xlsx': await genericWorkbook(b) },
       confirm: [
@@ -244,8 +241,6 @@ async function main() {
         'Sheet "Party Balances" → Open invoices. Confirm.',
         'Sheet "Creditors O-S" → Open bills. Confirm.',
         'Column "Account Title" → Account name. Confirm.',
-        'Account 1000 Cash in Hand → 1000 Cash (same number, the names differ). Confirm.',
-        "Account 3000 Owner's Capital → 3000 Owner Equity (same number, the names differ). Confirm.",
       ],
     },
   ];
@@ -300,7 +295,7 @@ async function main() {
         'Upload `QuickBooks Online - Export data (large).zip` (~420 MB). It goes up in 8 MB pieces with a progress bar, and resumes if the connection drops; then the server reads it in the background.',
         'Its general ledger and journal (millions of lines) are recognised and skipped without being loaded; its trial balance and customer and vendor lists are kept.',
         'Then upload the five reports beside it (the Account List, both aging details, the Product/Service List and the Inventory Valuation Summary).',
-        'Match step: confirm the two account proposals (Sales Tax Payable → 2300, Cost of Goods Sold → 5000).',
+        "Match step: nothing to confirm. FinMatrix's own accounts take QuickBooks' account names.",
       ],
       files: {},
     };

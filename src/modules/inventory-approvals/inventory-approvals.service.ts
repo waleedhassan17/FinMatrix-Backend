@@ -25,7 +25,7 @@ import { UserCompany } from '../companies/entities/user-company.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
-import { ACCT_COGS, ACCT_INVENTORY } from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { JournalEntry } from '../journal-entries/entities/journal-entry.entity';
 import { JournalEntryLine } from '../journal-entries/entities/journal-entry-line.entity';
 import { StorageService } from '../../common/storage/storage.service';
@@ -791,14 +791,14 @@ export class InventoryApprovalsService {
     // quantity change, so both commit or neither does.
     let journalEntryId: string | null = null;
     if (netCost.abs().greaterThan(MONEY_TOLERANCE)) {
-      const inventoryAcct = await this.accounts.getByNumberOrFail(
+      const inventoryAcct = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_INVENTORY,
+        SYS.INVENTORY,
         em,
       );
-      const cogsAcct = await this.accounts.getByNumberOrFail(
+      const cogsAcct = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_COGS,
+        SYS.COGS,
         em,
       );
       const value = netCost.abs().toFixed(4);

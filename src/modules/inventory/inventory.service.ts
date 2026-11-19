@@ -35,12 +35,12 @@ import { assertNotFutureDate, todayIso } from '../../common/utils/date.util';
 import { PostingService } from '../journal-entries/posting.service';
 import { AccountsService } from '../accounts/accounts.service';
 import {
-  ACCT_INVENTORY,
-  ACCT_INVENTORY_ADJUSTMENT,
-  ACCT_INVENTORY_COUNT_VARIANCE,
-  ACCT_OPENING_BALANCE_EQUITY,
   ADJUSTMENT_REASON_ACCOUNTS,
+  ROLE_AT_DEFAULT_NUMBER,
+  SYS,
+  SystemRole,
 } from '../accounts/accounts.constants';
+import { Account } from '../accounts/entities/account.entity';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 
 @Injectable()
@@ -383,7 +383,14 @@ export class InventoryService {
 
       // The reason picks the offsetting account, so damage, theft and
       // obsolescence are separable in the P&L rather than pooled in one line.
-      const offsetAccountNumber = ADJUSTMENT_REASON_ACCOUNTS[dto.reason];
+      // The account's own number is kept on the row, so a reversal mirrors
+      // exactly the account this used (a used account's number never changes).
+      const offsetAccount = await this.accounts.getOrCreateSystemAccount(
+        em,
+        companyId,
+        ADJUSTMENT_REASON_ACCOUNTS[dto.reason],
+      );
+      const offsetAccountNumber = offsetAccount.accountNumber;
 
       const adj = adjRepo.create({
         companyId,
@@ -424,7 +431,7 @@ export class InventoryService {
         `Inventory adjustment ${item.sku} (${dto.reason})`,
         'inventory_adjustment',
         adj.id,
-        offsetAccountNumber,
+        offsetAccount,
       );
       if (je) {
         adj.journalEntryId = je;
@@ -498,9 +505,14 @@ export class InventoryService {
 
       const today = todayIso();
       // Mirror the account the ORIGINAL used, not whatever today's reason map
-      // would pick. Rows written before that column existed all went to 6400.
-      const offsetAccountNumber =
-        adj.offsetAccountNumber ?? ACCT_INVENTORY_ADJUSTMENT;
+      // would pick. Rows written before that column existed all went to the
+      // legacy adjustment account (6400).
+      const adjustmentAcct = await this.offsetAccountFor(
+        em,
+        companyId,
+        adj.offsetAccountNumber,
+      );
+      const offsetAccountNumber = adjustmentAcct.accountNumber;
 
       const reversal = await adjRepo.save(
         adjRepo.create({
@@ -540,15 +552,10 @@ export class InventoryService {
       });
 
       if (originalValue.greaterThan(0)) {
-        const inventoryAcct = await this.accounts.getByNumberOrFail(
+        const inventoryAcct = await this.accounts.getSystemAccount(
           companyId,
-          ACCT_INVENTORY,
+          SYS.INVENTORY,
           em,
-        );
-        const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
-          em,
-          companyId,
-          offsetAccountNumber,
         );
         const amount = originalValue.toFixed(4);
         // Mirror of postInventoryAdjustmentJe: the original write-down debited
@@ -702,6 +709,12 @@ export class InventoryService {
       });
       await countRepo.save(count);
 
+      // Every variance on the count offsets against Inventory Count Variance.
+      const varianceAcct = await this.accounts.getOrCreateSystemAccount(
+        em,
+        companyId,
+        SYS.INVENTORY_COUNT_VARIANCE,
+      );
       const lines = [];
       for (const l of dto.lines) {
         const item = await itemRepo.findOne({
@@ -735,7 +748,7 @@ export class InventoryService {
               variance: variance.toFixed(4),
               reason: 'physical_count',
               notes: `Physical count ${dto.countDate}`,
-              offsetAccountNumber: ACCT_INVENTORY_COUNT_VARIANCE,
+              offsetAccountNumber: varianceAcct.accountNumber,
               createdBy: userId,
             }),
           );
@@ -761,7 +774,7 @@ export class InventoryService {
             `Physical count ${item.sku}`,
             'physical_count',
             count.id,
-            ACCT_INVENTORY_COUNT_VARIANCE,
+            varianceAcct,
           );
           if (je) {
             adj.journalEntryId = je;
@@ -803,16 +816,16 @@ export class InventoryService {
     const value = quantity.times(toDecimal(item.unitCost));
     if (value.lessThanOrEqualTo(0)) return null;
 
-    const inventoryAcct = await this.accounts.getByNumberOrFail(
+    const inventoryAcct = await this.accounts.getSystemAccount(
       companyId,
-      ACCT_INVENTORY,
+      SYS.INVENTORY,
       em,
     );
     // 3900 is lazily created — a company that never opened a balance has no row yet.
     const obe = await this.accounts.getOrCreateSystemAccount(
       em,
       companyId,
-      ACCT_OPENING_BALANCE_EQUITY,
+      SYS.OPENING_BALANCE_EQUITY,
     );
     const amount = value.toFixed(4);
 
@@ -877,11 +890,11 @@ export class InventoryService {
     /**
      * Where the credit lands and how the entry is stamped. Defaults are the
      * import's: Opening Balance Equity, `opening_stock`. The Migration Center
-     * credits Migration Clearing (3950) and stamps `migration` + the batch,
+     * credits Migration Clearing and stamps `migration` + the batch,
      * so the same per-item value logic serves both and cannot drift apart.
      */
     opts: {
-      creditAccountNumber?: string;
+      creditRole?: SystemRole;
       creditDescription?: string;
       sourceType?: string;
       sourceId?: string;
@@ -896,15 +909,15 @@ export class InventoryService {
       .filter((l) => toDecimal(l.amount).greaterThan(0));
     if (lines.length === 0) return null;
 
-    const inventoryAcct = await this.accounts.getByNumberOrFail(
+    const inventoryAcct = await this.accounts.getSystemAccount(
       companyId,
-      ACCT_INVENTORY,
+      SYS.INVENTORY,
       em,
     );
     const obe = await this.accounts.getOrCreateSystemAccount(
       em,
       companyId,
-      opts.creditAccountNumber ?? ACCT_OPENING_BALANCE_EQUITY,
+      opts.creditRole ?? SYS.OPENING_BALANCE_EQUITY,
     );
     const total = lines
       .reduce((sum, l) => sum.plus(l.amount), new Decimal(0))
@@ -939,13 +952,42 @@ export class InventoryService {
   }
 
   /**
+   * The account an adjustment row offset against, from the number it stored —
+   * or, for rows written before that column existed, the legacy adjustment
+   * account. A missing account is recreated by the role its number started
+   * as (the 54xx accounts reach older companies on first use).
+   */
+  private async offsetAccountFor(
+    em: import('typeorm').EntityManager,
+    companyId: string,
+    storedNumber: string | null,
+  ): Promise<Account> {
+    if (storedNumber) {
+      const found = await em.findOne(Account, {
+        where: { companyId, accountNumber: storedNumber },
+      });
+      if (found) {
+        if (!found.isActive) {
+          found.isActive = true;
+          await em.save(found);
+        }
+        return found;
+      }
+    }
+    const role =
+      (storedNumber && ROLE_AT_DEFAULT_NUMBER.get(storedNumber)) ||
+      SYS.INVENTORY_ADJUSTMENT;
+    return this.accounts.getOrCreateSystemAccount(em, companyId, role);
+  }
+
+  /**
    * Post the balanced inventory-adjustment journal entry for a quantity
    * variance valued at the item's unit cost. Returns the entry id (or null
    * when the value is zero). Shared by adjust() and physical count.
    *
-   * `offsetAccountNumber` is the account 1200 is offset against — chosen from
-   * the reason by ADJUSTMENT_REASON_ACCOUNTS, or 5430 for a physical count.
-   * It used to be hardcoded to 6400 for every reason.
+   * `adjustmentAcct` is the account Inventory is offset against — chosen from
+   * the reason by ADJUSTMENT_REASON_ACCOUNTS, or Inventory Count Variance for
+   * a physical count. It used to be hardcoded to 6400 for every reason.
    *   decrease (variance < 0): DR shrinkage account / CR Inventory 1200
    *   increase (variance > 0): DR Inventory 1200 / CR shrinkage account
    */
@@ -959,23 +1001,14 @@ export class InventoryService {
     memo: string,
     sourceType: string,
     sourceId: string,
-    offsetAccountNumber: string,
+    adjustmentAcct: Account,
   ): Promise<string | null> {
     const value = variance.abs().times(toDecimal(item.unitCost));
     if (value.lessThanOrEqualTo(0)) return null;
-    const inventoryAcct = await this.accounts.getByNumberOrFail(
+    const inventoryAcct = await this.accounts.getSystemAccount(
       companyId,
-      ACCT_INVENTORY,
+      SYS.INVENTORY,
       em,
-    );
-    // getOrCreate, not getByNumberOrFail: the 54xx accounts are new, and a
-    // company whose chart predates them gets the account created on first use
-    // — the same way 6400, GRNI and Goods in Transit already reach older
-    // tenants. That is why no backfill migration is needed.
-    const adjustmentAcct = await this.accounts.getOrCreateSystemAccount(
-      em,
-      companyId,
-      offsetAccountNumber,
     );
     const amount = value.toFixed(4);
     const increase = variance.greaterThan(0);

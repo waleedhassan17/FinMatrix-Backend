@@ -23,11 +23,7 @@ import { AccountsService } from '../accounts/accounts.service';
 // Import the canonical numbers rather than re-declaring them: a local copy
 // drifts silently from the set that protects these accounts from deletion
 // and deactivation.
-import {
-  ACCT_CASH,
-  ACCT_PAYROLL_LIABILITIES,
-  ACCT_SALARY_EXPENSE,
-} from '../accounts/accounts.constants';
+import { SYS } from '../accounts/accounts.constants';
 import { pagedResponse } from '../../common/utils/paged-response.util';
 const num = (v: any) => parseFloat(v ?? '0') || 0;
 
@@ -386,9 +382,9 @@ export class PayrollService {
           message: 'This payroll run already posted a journal entry.',
         });
 
-      const expense = await this.accounts.getByNumberOrFail(
+      const expense = await this.accounts.getSystemAccount(
         companyId,
-        ACCT_SALARY_EXPENSE,
+        SYS.SALARY_EXPENSE,
         manager,
       );
       // Net pay leaves from the account chosen — a bank transfer from MCB, or
@@ -397,7 +393,7 @@ export class PayrollService {
         manager,
         companyId,
         bankAccountId,
-        ACCT_CASH,
+        SYS.CASH,
       );
       const lines = [
         {
@@ -422,7 +418,7 @@ export class PayrollService {
         const liabilities = await this.accounts.getOrCreateSystemAccount(
           manager,
           companyId,
-          ACCT_PAYROLL_LIABILITIES,
+          SYS.PAYROLL_LIABILITIES,
         );
         lines.push({
           accountId: liabilities.id,
