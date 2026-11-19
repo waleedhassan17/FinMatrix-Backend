@@ -12,6 +12,7 @@
  *      7-day trend ends on today's figure.
  *   D. Staff see only what they prepared. An invoice an owner approves for a
  *      staff member is credited to that staff member, not the owner.
+ *   F. The Day Book pages, totals across pages, searches (literally) and sorts.
  *   E. The digest schedule: owner-only, validated, and the hourly job sends
  *      one notification per day (a morning digest covers the day before).
  *
@@ -510,6 +511,86 @@ async function main() {
       spoof?.scope,
     );
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // F. The Day Book at 50 or 100 a day: pages, totals, search, sort
+  // ═══════════════════════════════════════════════════════════════
+  console.log('\n— F. Day Book paging, search and sort');
+  const p1 = await entries(`?type=invoice&limit=2&page=1`);
+  const p2 = await entries(`?type=invoice&limit=2&page=2`);
+  const ids1 = [...ids(p1)];
+  ok(
+    'F1 pages hold different rows, with the same total and page count',
+    (p1?.items ?? []).length === 2 &&
+      (p2?.items ?? []).every((i: any) => !ids1.includes(i.id)) &&
+      p1?.total === p2?.total &&
+      p1?.pages === Math.ceil(n(p1?.total) / 2),
+    { total: p1?.total, pages: p1?.pages, page2: p2?.items?.length },
+  );
+  const sF = await summary();
+  ok(
+    'F2 the counted total covers every page and equals the day’s sales',
+    near(n(p1?.countedTotal), n(sF?.headline?.sales?.total)),
+    { countedTotal: p1?.countedTotal, sales: sF?.headline?.sales?.total },
+  );
+  const beyond = await entries(`?type=invoice&limit=2&page=9999`);
+  ok(
+    'F3 a page past the end is empty but still knows the total',
+    (beyond?.items ?? []).length === 0 && beyond?.total === p1?.total,
+    { total: beyond?.total },
+  );
+  const found = await entries(`?q=${encodeURIComponent(sale.invoiceNumber)}`);
+  ok(
+    'F4 search finds a document by its number',
+    ids(found).has(sale.id) &&
+      (found?.items ?? []).every(
+        (i: any) =>
+          String(i.number ?? '').includes(sale.invoiceNumber) ||
+          String(i.partyName ?? '')
+            .toLowerCase()
+            .includes(String(sale.invoiceNumber).toLowerCase()),
+      ),
+    { q: sale.invoiceNumber, total: found?.total },
+  );
+  const byParty = await entries(`?q=${encodeURIComponent(`Buyer ${RUN}`)}`);
+  ok(
+    'F5 …and by the customer’s name, case-insensitively',
+    ids(byParty).has(sale.id) && ids(byParty).has(order.id),
+    { total: byParty?.total },
+  );
+  const wild = await entries(`?q=${encodeURIComponent('%')}`);
+  ok(
+    'F6 a % is searched for literally, not as "anything"',
+    n(wild?.total) === 0,
+    wild?.total,
+  );
+  const big = await entries(`?sort=amount_desc&limit=1000`);
+  const amounts = (big?.items ?? []).map((i: any) => n(i.amount));
+  ok(
+    'F7 sorting by amount, largest first',
+    amounts.length > 1 &&
+      amounts.every((a: number, k: number) => k === 0 || amounts[k - 1] >= a),
+    amounts.slice(0, 5),
+  );
+  const old = await entries(`?sort=oldest&limit=1000`);
+  ok(
+    'F8 …and by entry time, oldest first',
+    (old?.items ?? []).every(
+      (i: any, k: number, arr: any[]) =>
+        k === 0 || arr[k - 1].createdAt <= i.createdAt,
+    ),
+    old?.items?.slice(0, 3)?.map((i: any) => i.createdAt),
+  );
+  const badSort = await req('GET', '/reports/day-summary/entries?sort=random');
+  const longQ = await req(
+    'GET',
+    `/reports/day-summary/entries?q=${'x'.repeat(101)}`,
+  );
+  ok(
+    'F9 an unknown sort and an over-long search are coded 400s',
+    codeOf(badSort) === 'INVALID_SORT' && codeOf(longQ) === 'INVALID_SEARCH',
+    { sort: codeOf(badSort), q: codeOf(longQ) },
+  );
 
   // ═══════════════════════════════════════════════════════════════
   // E. The digest

@@ -224,8 +224,13 @@ One day of business. `date` defaults to the company's business day (company time
 - Owner only: **`team[]`** (per person; `userId: null` = not recorded, e.g. purchase orders), **`members[]`**, **`profit`** (that day's `profit-loss`), **`attention.voided`** (voids and deletions from the audit trail).
 - **`attention`**: `backdated` (entered on the day, dated earlier), `drafts`, `cancelledOrders`. **`isEmpty`** when nothing at all happened.
 
-### `GET /reports/day-summary/entries?date&type&createdBy&page&limit`
-The Day Book: `{ items[], total, page, limit }`, newest first. `type` is a kind or `all` (default), `backdated`, `drafts`, `voided` (owner only; from the audit trail, `deleted: true` when gone), `cancelled`. `limit` 1–1000 (default 50). Each item: `kind, id, number, date, createdAt, partyId, partyName, amount, status, createdBy, backdated, counted, deleted`.
+### `GET /reports/day-summary/entries?date&type&createdBy&q&sort&page&limit`
+The Day Book, paged by the server: `{ items[], total, pages, page, limit, countedTotal, excludedTotal, q, sort }`.
+- `type` is a kind or `all` (default), `backdated`, `drafts`, `voided` (owner only; from the audit trail, `deleted: true` when gone), `cancelled`.
+- `q` (≤ 100 characters) matches the document number or the party name, case-insensitively and literally (`%` and `_` are not wildcards).
+- `sort`: `newest` (default, by entry time), `oldest`, `amount_desc`, `amount_asc`; ties break on a unique key, so a row never shifts between pages.
+- `limit` 1–1000 (default 50). `total`, `pages`, `countedTotal` (amounts the day's totals count) and `excludedTotal` (drafts, voids, cancelled) cover every matching row, not just the page; a page past the end returns no items with the totals intact.
+- Each item: `kind, id, number, date, createdAt, partyId, partyName, amount, status, createdBy, backdated, counted, deleted`.
 
 ### `GET` / `PUT /reports/day-summary/schedule` (owner)
 `{ enabled, hour (0–23), email, timezone, lastSent }`. An hourly job (`DAY_SUMMARY_WORKER_ENABLED`) sends each enabled company's digest once its local clock passes `hour`: an in-app notification (`type: 'day_summary'`, `data.date`) to every owner, and an email when `email`. From 12:00 it covers that day; before noon, the day before. A day is claimed atomically, so it is sent once.
@@ -352,3 +357,5 @@ How cash is classified: by the other lines of the same posting.
 | `INVALID_CREATED_BY` | day-summary `createdBy` is not a member of this company |
 | `INVALID_TYPE` | day-summary entries `type` is not a kind or filter |
 | `INVALID_PAGING` | day-summary entries `page` or `limit` out of range |
+| `INVALID_SORT` | day-summary entries `sort` is not newest, oldest, amount_desc or amount_asc |
+| `INVALID_SEARCH` | day-summary entries `q` is longer than 100 characters |

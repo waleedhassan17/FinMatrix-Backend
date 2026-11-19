@@ -34,6 +34,15 @@ export const DAY_ENTRY_FILTERS = [
 ] as const;
 export type DayEntryFilter = (typeof DAY_ENTRY_FILTERS)[number] | DayDocKind;
 
+/** How the Day Book is ordered. `newest` (by entry time) is the default. */
+export const DAY_ENTRY_SORTS = [
+  'newest',
+  'oldest',
+  'amount_desc',
+  'amount_asc',
+] as const;
+export type DayEntrySort = (typeof DAY_ENTRY_SORTS)[number];
+
 export interface DayFigure {
   count: number;
   total: number;
@@ -198,10 +207,21 @@ export interface DayEntry {
 export interface DayEntriesResponse {
   date: string;
   filter: DayEntryFilter;
+  /** The search applied (number or party), or null. */
+  q: string | null;
+  sort: DayEntrySort;
+  /** This page's rows. */
   items: DayEntry[];
+  /** Rows matching the filter and search, across every page. */
   total: number;
+  /** Their amounts the day's totals count, across every page. */
+  countedTotal: number;
+  /** Their amounts the totals leave out (drafts, voids, cancelled). */
+  excludedTotal: number;
   page: number;
   limit: number;
+  /** ceil(total / limit); 0 when nothing matches. */
+  pages: number;
 }
 
 export interface DaySummarySchedule {

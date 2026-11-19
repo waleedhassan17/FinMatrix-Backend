@@ -13,6 +13,7 @@ import {
   DayEntriesResponse,
   DayEntry,
   DayEntryFilter,
+  DayEntrySort,
   DayFigure,
   DayHourRow,
   DayKpi,
@@ -215,6 +216,19 @@ const AUDIT_KINDS: Record<string, DayDocKind> = {
   bill_payment: 'vendor_payment',
   credit_memo: 'credit_memo',
   vendor_credit: 'vendor_credit',
+};
+
+/**
+ * ORDER BY for each Day Book sort, ending on a unique key so a row never
+ * moves between pages when two share a time or an amount.
+ */
+const ENTRY_ORDER: Record<DayEntrySort, (t: string, key?: string) => string> = {
+  newest: (t, key = 'id') => `${t}.created_at DESC, ${t}.${key}`,
+  oldest: (t, key = 'id') => `${t}.created_at ASC, ${t}.${key}`,
+  amount_desc: (t, key = 'id') =>
+    `${t}.amount DESC, ${t}.created_at DESC, ${t}.${key}`,
+  amount_asc: (t, key = 'id') =>
+    `${t}.amount ASC, ${t}.created_at DESC, ${t}.${key}`,
 };
 
 /** A positional-parameter list: add() returns the placeholder to splice in. */
@@ -857,6 +871,12 @@ export class DaySummaryService {
 
   // ── Day Book ─────────────────────────────────────────────────────────────
 
+  /**
+   * One page of the day's documents. Filtered by type or flag, searched by
+   * document number or party name, sorted by entry time or amount. The
+   * count and the two totals are over every matching row, not the page, so a
+   * pager can say "26–50 of 143" and the footer what all 143 come to.
+   */
   async entries(
     companyId: string,
     viewer: DaySummaryViewer,
@@ -866,28 +886,27 @@ export class DaySummaryService {
       createdBy?: string | null;
       page?: number;
       limit?: number;
+      q?: string | null;
+      sort?: DayEntrySort;
     } = {},
   ): Promise<DayEntriesResponse> {
     const ctx = await this.context(companyId);
     const date = opts.date || businessToday(ctx.timezone);
     const filter: DayEntryFilter = opts.filter ?? 'all';
+    const sort: DayEntrySort = opts.sort ?? 'newest';
+    const q = (opts.q ?? '').trim() || null;
     const scope = await this.scope(companyId, viewer, opts.createdBy);
     const creatorId = scope.creator?.id ?? null;
     const page = Math.max(1, Math.floor(opts.page ?? 1));
     const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 50)));
     const offset = (page - 1) * limit;
     const bounds = localDayBounds(date, ctx.timezone);
+    const paging = { date, filter, q, sort, page, limit, offset };
 
     if (filter === 'voided') {
       // Staff are not shown other people's voids and deletions.
-      if (scope.ownOnly) {
-        return { date, filter, items: [], total: 0, page, limit };
-      }
-      return this.voidedEntries(companyId, date, bounds, creatorId, {
-        page,
-        limit,
-        offset,
-      });
+      if (scope.ownOnly) return this.emptyPage(paging);
+      return this.voidedEntries(companyId, bounds, creatorId, paging);
     }
 
     const p = new Params();
@@ -913,25 +932,38 @@ export class DaySummaryService {
     }
 
     const docs = this.docs(kinds, p, company, f);
+    const where = `WHERE true ${extra} ${this.creatorClause(p, creatorId)}
+                   ${this.searchClause(p, q, 'd.number', 'd.party_name')}`;
+    const from = `FROM (${docs}) d`;
+    // The totals bind exactly the filter's parameters. Anything only the page
+    // query reads (the zone, the limit, the offset) is added after this copy:
+    // Postgres refuses a statement handed a parameter it never references.
+    const baseValues = [...p.values];
     const tz = p.add(ctx.timezone);
-    const creator = this.creatorClause(p, creatorId);
-    const lim = p.add(limit);
-    const off = p.add(offset);
-    const rows: Array<Record<string, unknown>> = await this.dataSource.query(
-      `SELECT d.*, u.display_name AS creator_name,
-              ((d.created_at AT TIME ZONE ${tz})::date > d.doc_date::date) AS backdated,
-              count(*) OVER () AS total_count
-         FROM (${docs}) d
-         LEFT JOIN users u ON u.id = d.creator_id
-        WHERE true ${extra} ${creator}
-        ORDER BY d.created_at DESC, d.id
-        LIMIT ${lim} OFFSET ${off}`,
-      p.values,
-    );
-    return {
-      date,
-      filter,
-      items: rows.map(
+    const order = ENTRY_ORDER[sort]('d');
+    const [rows, totals] = await Promise.all([
+      this.dataSource.query(
+        `SELECT d.*, u.display_name AS creator_name,
+                ((d.created_at AT TIME ZONE ${tz})::date > d.doc_date::date) AS backdated
+           ${from}
+           LEFT JOIN users u ON u.id = d.creator_id
+          ${where}
+          ORDER BY ${order}
+          LIMIT ${p.add(limit)} OFFSET ${p.add(offset)}`,
+        p.values,
+      ) as Promise<Array<Record<string, unknown>>>,
+      this.dataSource.query(
+        `SELECT count(*)::int AS n,
+                COALESCE(sum(d.amount) FILTER (WHERE d.counted), 0) AS counted,
+                COALESCE(sum(d.amount) FILTER (WHERE NOT d.counted), 0) AS excluded
+           ${from} ${where}`,
+        baseValues,
+      ) as Promise<Array<Record<string, unknown>>>,
+    ]);
+    return this.page(
+      paging,
+      totals[0],
+      rows.map(
         (r): DayEntry => ({
           kind: r.kind as DayDocKind,
           id: String(r.id),
@@ -953,37 +985,105 @@ export class DaySummaryService {
           deleted: false,
         }),
       ),
-      total: num(rows[0]?.total_count),
-      page,
-      limit,
+    );
+  }
+
+  /**
+   * `AND (number ILIKE … OR party ILIKE …)`, or nothing. The search is taken
+   * literally: `%` and `_` are escaped, so "50%" finds "50%", not everything.
+   */
+  private searchClause(
+    p: Params,
+    q: string | null,
+    numberCol: string,
+    partyCol: string,
+  ): string {
+    if (!q) return '';
+    const like = p.add(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    return `AND (${numberCol} ILIKE ${like} ESCAPE '\\' OR ${partyCol} ILIKE ${like} ESCAPE '\\')`;
+  }
+
+  private page(
+    paging: {
+      date: string;
+      filter: DayEntryFilter;
+      q: string | null;
+      sort: DayEntrySort;
+      page: number;
+      limit: number;
+    },
+    totals: Record<string, unknown> | undefined,
+    items: DayEntry[],
+  ): DayEntriesResponse {
+    const total = num(totals?.n);
+    return {
+      date: paging.date,
+      filter: paging.filter,
+      q: paging.q,
+      sort: paging.sort,
+      items,
+      total,
+      countedTotal: r2(num(totals?.counted)),
+      excludedTotal: r2(num(totals?.excluded)),
+      page: paging.page,
+      limit: paging.limit,
+      pages: Math.ceil(total / paging.limit),
     };
+  }
+
+  private emptyPage(paging: {
+    date: string;
+    filter: DayEntryFilter;
+    q: string | null;
+    sort: DayEntrySort;
+    page: number;
+    limit: number;
+  }): DayEntriesResponse {
+    return this.page(paging, undefined, []);
   }
 
   private async voidedEntries(
     companyId: string,
-    date: string,
     bounds: { start: Date; end: Date },
     userId: string | null,
-    paging: { page: number; limit: number; offset: number },
+    paging: {
+      date: string;
+      filter: DayEntryFilter;
+      q: string | null;
+      sort: DayEntrySort;
+      page: number;
+      limit: number;
+      offset: number;
+    },
   ): Promise<DayEntriesResponse> {
     const p = new Params();
     const company = p.add(companyId);
     const inner = this.voidedSql(p, company, bounds, userId);
-    const rows: Array<Record<string, unknown>> = await this.dataSource.query(
-      `SELECT v.*, count(*) OVER () AS total_count FROM (${inner}) v
-        ORDER BY v.created_at DESC
-        LIMIT ${p.add(paging.limit)} OFFSET ${p.add(paging.offset)}`,
-      p.values,
-    );
-    return {
-      date,
-      filter: 'voided',
-      items: rows.map(
+    const where = `WHERE true ${this.searchClause(p, paging.q, 'v.number', 'v.party_name')}`;
+    const baseValues = [...p.values];
+    const [rows, totals] = await Promise.all([
+      this.dataSource.query(
+        `SELECT v.* FROM (${inner}) v ${where}
+          ORDER BY ${ENTRY_ORDER[paging.sort]('v', 'resource_id')}
+          LIMIT ${p.add(paging.limit)} OFFSET ${p.add(paging.offset)}`,
+        p.values,
+      ) as Promise<Array<Record<string, unknown>>>,
+      this.dataSource.query(
+        `SELECT count(*)::int AS n, 0 AS counted,
+                COALESCE(sum(v.amount), 0) AS excluded
+           FROM (${inner}) v ${where}`,
+        baseValues,
+      ) as Promise<Array<Record<string, unknown>>>,
+    ]);
+    return this.page(
+      paging,
+      totals[0],
+      rows.map(
         (r): DayEntry => ({
           kind: AUDIT_KINDS[String(r.resource_type)] ?? 'invoice',
           id: String(r.resource_id),
           number: (r.number as string | null) ?? null,
-          date: r.doc_date ? String(r.doc_date).slice(0, 10) : date,
+          date: r.doc_date ? String(r.doc_date).slice(0, 10) : paging.date,
           createdAt: new Date(r.created_at as string).toISOString(),
           partyId: (r.party_id as string | null) ?? null,
           partyName: (r.party_name as string | null) ?? null,
@@ -1000,10 +1100,7 @@ export class DaySummaryService {
           deleted: r.action === 'delete',
         }),
       ),
-      total: num(rows[0]?.total_count),
-      page: paging.page,
-      limit: paging.limit,
-    };
+    );
   }
 
   // ── Digest schedule ──────────────────────────────────────────────────────
