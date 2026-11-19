@@ -11,6 +11,10 @@ import { ReportsKpiService } from './reports-kpi.service';
 import { BudgetsModule } from '../budgets/budgets.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { ReportsController } from './reports.controller';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { DaySummaryService } from './day-summary.service';
+import { DaySummaryController } from './day-summary.controller';
+import { DaySummaryCronService } from './day-summary-cron.service';
 
 @Module({
   imports: [
@@ -25,11 +29,18 @@ import { ReportsController } from './reports.controller';
     BudgetsModule,
     // For MediaUrlSigner: the item explorer shows the item's photo.
     InventoryModule,
+    // The end-of-day digest notifies owners in-app (MailService is global).
+    NotificationsModule,
   ],
   // ReportsKpiService is the one place KPI formulas live; it reads the
   // statements through ReportsService, never the other way round.
-  providers: [ReportsService, ReportsKpiService],
-  controllers: [ReportsController],
-  exports: [ReportsService, ReportsKpiService],
+  providers: [
+    ReportsService,
+    ReportsKpiService,
+    DaySummaryService,
+    DaySummaryCronService,
+  ],
+  controllers: [ReportsController, DaySummaryController],
+  exports: [ReportsService, ReportsKpiService, DaySummaryService],
 })
 export class ReportsModule {}

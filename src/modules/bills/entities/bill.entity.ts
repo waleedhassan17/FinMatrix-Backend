@@ -8,6 +8,7 @@ import { BillLineItem } from './bill-line-item.entity';
 @Index(['companyId', 'status'])
 @Index(['companyId', 'vendorId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_bills_company_bill_date', ['companyId', 'billDate'])
 @Index('IDX_bills_migration_batch', ['migrationBatchId'])
 @Index('IDX_bills_purchase_order_id', ['purchaseOrderId'])
 export class Bill extends BaseCompanyEntity {

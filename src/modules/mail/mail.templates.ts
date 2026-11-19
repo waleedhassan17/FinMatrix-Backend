@@ -68,6 +68,25 @@ export interface RenderedEmail {
   text: string;
 }
 
+/**
+ * The end-of-day digest, already formatted: the reports module decides what
+ * the numbers are, this file only lays them out.
+ */
+export interface DaySummaryEmailInput {
+  companyName: string;
+  /** "Wed 19 Nov 2026". */
+  dayLabel: string;
+  /** Headline figures, e.g. { label: 'Sales', value: 'Rs 245,000', note: '12 invoices · +8% vs yesterday' }. */
+  rows: Array<{ label: string; value: string; note?: string }>;
+  topCustomers: Array<{ name: string; value: string }>;
+  /** Lines worth a look, e.g. "2 entries back-dated". Empty when none. */
+  attention: string[];
+  /** Nothing at all was recorded that day. */
+  quiet: boolean;
+  /** Opens that day's Day Summary. */
+  link: string;
+}
+
 export const emailTemplates = {
   /**
    * One link, over https, to the web app's verify page: it opens in every mail
@@ -316,6 +335,77 @@ export const emailTemplates = {
         `Hi ${displayName},\n\nThe free trial for ${companyName} has ended, so the account is paused.\n\n` +
         `Your data is safe. Sign in, choose a plan and pay by bank transfer — everything switches back on ` +
         `once the transfer is verified.`,
+    };
+  },
+
+  daySummary(input: DaySummaryEmailInput): RenderedEmail {
+    const title = `${input.companyName}: ${input.dayLabel}`;
+    const rowsHtml = input.rows
+      .map(
+        (r) => `<tr>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;color:#4b5563;">${esc(r.label)}${
+            r.note
+              ? `<div style="font-size:12px;color:#6b7280;margin-top:2px;">${esc(r.note)}</div>`
+              : ''
+          }</td>
+          <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600;white-space:nowrap;">${esc(r.value)}</td>
+        </tr>`,
+      )
+      .join('');
+    const customersHtml = input.topCustomers.length
+      ? `<p style="margin:20px 0 6px;font-weight:600;">Top customers</p>
+         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;">${input.topCustomers
+           .map(
+             (c) => `<tr>
+               <td style="padding:6px 0;color:#4b5563;">${esc(c.name)}</td>
+               <td style="padding:6px 0;text-align:right;white-space:nowrap;">${esc(c.value)}</td>
+             </tr>`,
+           )
+           .join('')}</table>`
+      : '';
+    const attentionHtml = input.attention.length
+      ? `<div style="margin:20px 0 0;padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:14px;">
+           <strong>Worth a look</strong>
+           <ul style="margin:6px 0 0;padding-left:18px;">${input.attention
+             .map((a) => `<li>${esc(a)}</li>`)
+             .join('')}</ul>
+         </div>`
+      : '';
+    const body = input.quiet
+      ? `<p>Nothing was recorded in FinMatrix on ${esc(input.dayLabel)}: no invoices, orders, receipts or bills.</p>
+         <p>If the shop was open, entries may still be waiting to be made.</p>`
+      : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;">${rowsHtml}</table>
+         ${customersHtml}
+         ${attentionHtml}`;
+    const textRows = input.quiet
+      ? [`Nothing was recorded on ${input.dayLabel}.`]
+      : [
+          ...input.rows.map(
+            (r) => `${r.label}: ${r.value}${r.note ? ` (${r.note})` : ''}`,
+          ),
+          ...(input.topCustomers.length
+            ? [
+                '',
+                'Top customers:',
+                ...input.topCustomers.map((c) => `- ${c.name}: ${c.value}`),
+              ]
+            : []),
+          ...(input.attention.length
+            ? ['', 'Worth a look:', ...input.attention.map((a) => `- ${a}`)]
+            : []),
+        ];
+    return {
+      subject: `Day summary — ${input.companyName}, ${input.dayLabel}`,
+      html: layout(
+        title,
+        `${body}
+         <p style="margin:24px 0 0;">${button(input.link, 'Open the day summary')}</p>
+         <p style="font-size:12px;color:#6b7280;margin:16px 0 0;">You get this because the daily summary is on for ${esc(input.companyName)}. An owner can turn it off on the Day Summary page.</p>`,
+      ),
+      text:
+        `${title}\n\n${textRows.join('\n')}\n\nOpen the day summary: ${input.link}\n\n` +
+        `You get this because the daily summary is on for ${input.companyName}. ` +
+        `An owner can turn it off on the Day Summary page.`,
     };
   },
 };

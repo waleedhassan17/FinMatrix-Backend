@@ -61,6 +61,25 @@ export class CompanySettings {
   @Column({ type: 'jsonb', nullable: true, name: 'report_preferences' })
   reportPreferences!: Record<string, unknown> | null;
 
+  /**
+   * The end-of-day digest (reports/day-summary): off until the owner turns it
+   * on; then at `daySummaryHour` company time an in-app notification goes to
+   * every owner, and an email too when `daySummaryEmail`. `daySummaryLastSent`
+   * is the last local day sent — the hourly job claims a day by moving it, so
+   * a day is never sent twice.
+   */
+  @Column({ type: 'boolean', default: false, name: 'day_summary_enabled' })
+  daySummaryEnabled!: boolean;
+
+  @Column({ type: 'smallint', default: 21, name: 'day_summary_hour' })
+  daySummaryHour!: number;
+
+  @Column({ type: 'boolean', default: true, name: 'day_summary_email' })
+  daySummaryEmail!: boolean;
+
+  @Column({ type: 'date', nullable: true, name: 'day_summary_last_sent' })
+  daySummaryLastSent!: string | null;
+
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updatedAt!: Date;
 }

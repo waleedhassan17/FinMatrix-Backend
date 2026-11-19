@@ -21,6 +21,7 @@ export type DiscountType = 'percent' | 'amount' | 'none';
 @Index(['companyId', 'status'])
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_invoices_company_invoice_date', ['companyId', 'invoiceDate'])
 @Index('IDX_invoices_migration_batch', ['migrationBatchId'])
 @Index('IDX_invoices_sales_order_id', ['salesOrderId'])
 export class Invoice extends BaseCompanyEntity {
