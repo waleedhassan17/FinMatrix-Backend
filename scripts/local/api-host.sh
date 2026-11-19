@@ -22,6 +22,9 @@ done
 
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/finmatrix-local-api"
 mkdir -p "$RUN_DIR"
+# The app finds its migrations at dist/… relative to where it starts: the
+# build is linked in (and nothing else, so no .env).
+ln -sfn "$REPO/dist" "$RUN_DIR/dist"
 cd "$RUN_DIR"
 exec env -i PATH="$PATH" HOME="$HOME" \
   NODE_ENV=production \
