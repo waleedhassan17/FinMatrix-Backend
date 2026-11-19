@@ -28,8 +28,13 @@ import { DaySummaryService } from './day-summary.service';
 import {
   DAY_DOC_KINDS,
   DAY_ENTRY_FILTERS,
+  DAY_ENTRY_SORTS,
   DayEntryFilter,
+  DayEntrySort,
 } from './day-summary.types';
+
+/** The longest search the Day Book accepts — a number or a name, not prose. */
+const MAX_SEARCH = 100;
 import { isIsoDate } from './day-summary.util';
 
 export class DaySummaryScheduleDto {
@@ -95,7 +100,9 @@ export class DaySummaryController {
 
   @Get('entries')
   @Roles('admin', 'staff')
-  @ApiOperation({ summary: "The day's documents, newest first (Day Book)" })
+  @ApiOperation({
+    summary: "The day's documents (Day Book): paged, searched and sorted",
+  })
   @ApiQuery({ name: 'date', required: false })
   @ApiQuery({
     name: 'type',
@@ -103,6 +110,16 @@ export class DaySummaryController {
     description: `${[...DAY_ENTRY_FILTERS, ...DAY_DOC_KINDS].join(' | ')}`,
   })
   @ApiQuery({ name: 'createdBy', required: false })
+  @ApiQuery({
+    name: 'q',
+    required: false,
+    description: 'Document number or party name',
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    description: DAY_ENTRY_SORTS.join(' | '),
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({
     name: 'limit',
@@ -117,6 +134,8 @@ export class DaySummaryController {
     @Query('createdBy') createdBy?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
   ) {
     return this.svc.entries(companyId, user, {
       date: this.checkedDate(date),
@@ -124,6 +143,8 @@ export class DaySummaryController {
       createdBy: createdBy || null,
       page: this.checkedInt('page', page, 1, 100000),
       limit: this.checkedInt('limit', limit, 1, 1000),
+      q: this.checkedSearch(q),
+      sort: this.checkedSort(sort),
     });
   }
 
@@ -167,6 +188,29 @@ export class DaySummaryController {
       });
     }
     return v as DayEntryFilter;
+  }
+
+  private checkedSearch(v?: string): string | null {
+    const q = (v ?? '').trim();
+    if (!q) return null;
+    if (q.length > MAX_SEARCH) {
+      throw new BadRequestException({
+        code: 'INVALID_SEARCH',
+        message: `q must be at most ${MAX_SEARCH} characters.`,
+      });
+    }
+    return q;
+  }
+
+  private checkedSort(v?: string): DayEntrySort {
+    if (v === undefined || v === '') return 'newest';
+    if (!(DAY_ENTRY_SORTS as readonly string[]).includes(v)) {
+      throw new BadRequestException({
+        code: 'INVALID_SORT',
+        message: `sort must be one of: ${DAY_ENTRY_SORTS.join(', ')}.`,
+      });
+    }
+    return v as DayEntrySort;
   }
 
   private checkedInt(
