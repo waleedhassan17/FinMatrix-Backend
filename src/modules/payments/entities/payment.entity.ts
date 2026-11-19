@@ -6,6 +6,7 @@ import { PaymentApplication } from './payment-application.entity';
 @Entity('payments')
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_payments_company_payment_date', ['companyId', 'paymentDate'])
 @Index('UQ_payments_company_payment_number', ['companyId', 'paymentNumber'], {
   unique: true,
 })

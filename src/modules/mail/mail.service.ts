@@ -2,7 +2,11 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { promises as dns } from 'dns';
-import { emailTemplates, RenderedEmail } from './mail.templates';
+import {
+  DaySummaryEmailInput,
+  emailTemplates,
+  RenderedEmail,
+} from './mail.templates';
 import {
   deliverabilityWarnings,
   emailDomain,
@@ -275,6 +279,14 @@ export class MailService implements OnModuleInit {
     companyName: string,
   ): Promise<void> {
     await this.send(to, emailTemplates.trialEnded(displayName, companyName));
+  }
+
+  /** The owner's end-of-day digest (reports/day-summary-cron.service.ts). */
+  async sendDaySummaryEmail(
+    to: string,
+    input: DaySummaryEmailInput,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.daySummary(input));
   }
 
   // ── Low-level send ──────────────────────────────────────────────────────

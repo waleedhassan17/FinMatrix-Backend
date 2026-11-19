@@ -63,6 +63,7 @@ services:
       EMAIL_ENABLED: 'false'
       WHATSAPP_ENABLED: 'false'
       MESSAGING_WORKER_ENABLED: 'false'
+      DAY_SUMMARY_WORKER_ENABLED: 'false'
       EXPORT_WORKER_ENABLED: 'true'
       MIGRATION_READ_WORKER_ENABLED: 'true'
       MIGRATION_AI_ENABLED: 'false'

@@ -67,6 +67,7 @@ export type ApprovalStatus =
 @Entity('approval_requests')
 @Index(['companyId', 'status'])
 @Index(['companyId', 'requestedBy'])
+@Index('IDX_approval_requests_company_result', ['companyId', 'resultId'])
 export class ApprovalRequest extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 32 })
   type!: ApprovalType;

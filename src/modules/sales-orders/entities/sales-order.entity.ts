@@ -28,6 +28,7 @@ export type SalesOrderStatus =
 @Index(['companyId', 'status'])
 @Index(['companyId', 'customerId'])
 @Index(['companyId', 'createdAt'])
+@Index('IDX_sales_orders_company_order_date', ['companyId', 'orderDate'])
 export class SalesOrder extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'customer_id' })
   customerId!: string;

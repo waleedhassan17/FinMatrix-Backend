@@ -156,6 +156,11 @@ export const envValidationSchema = Joi.object({
     .optional(),
   MESSAGING_WORKER_ENABLED: Joi.boolean().default(true),
 
+  // ── Day Summary digest (modules/reports/day-summary-cron.service.ts) ──
+  // false stops this process from sending owners' end-of-day digests (the
+  // in-app notification and email). Mirrors MESSAGING_WORKER_ENABLED.
+  DAY_SUMMARY_WORKER_ENABLED: Joi.boolean().default(true),
+
   // ── Company backup (modules/data-portability) ──
   // Signs the download link of a finished backup ZIP (ExportTokenSigner). The
   // link carries its own authorisation — a browser's <a href> and a phone's

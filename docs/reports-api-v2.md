@@ -214,6 +214,22 @@ Returns `InventoryHealth`:
 
 For today, values are qty × average cost exactly as `inventory-valuation` computes them. For a past date they come from the movement record.
 
+### `GET /reports/day-summary?date&createdBy` — Day Summary
+One day of business. `date` defaults to the company's business day (company time zone). A document belongs to the day on its **document date** (`invoice_date`, `payment_date`, …), so the figures agree with the P&L; drafts, voids, cancelled orders and migrated documents are not counted.
+- **Scope**: staff always get their own documents (`scope.ownOnly`); an owner gets everyone's, or one member's with `createdBy=<userId>` (`INVALID_CREATED_BY` otherwise). A document an owner approved is credited to the staff member who asked for it (`approval_requests.requested_by`). Receipts, bills and vendor payments take their creator from their journal entry.
+- **`headline`**: `sales` (invoices), `received` (receipts), `orders` (sales orders; null without the feature), `purchases` (bills). Each `{ count, total, previousDay, sameDayLastWeek, trend[7] }`; `trendDates` names the trend's days.
+- **`documents[]`**: `{ kind, count, total }` for each kind the plan has (`kinds`): invoice, sales_order, estimate, receipt, credit_memo, bill, purchase_order, vendor_payment, vendor_credit.
+- **`sales`** (the day's invoices: subtotal, discount, tax, total, `unpaid` now), **`cash`** (`methods[]` received/paid by payment method, net), **`topCustomers[5]`**, **`topItems[5]`** (pre-tax, after discount).
+- **`hourly[24]`**: `{ hour, sales, salesCount, received, receivedCount }` — the day's counted invoices and receipts by the local hour they were entered; the hours add up to `headline.sales` / `headline.received`.
+- Owner only: **`team[]`** (per person; `userId: null` = not recorded, e.g. purchase orders), **`members[]`**, **`profit`** (that day's `profit-loss`), **`attention.voided`** (voids and deletions from the audit trail).
+- **`attention`**: `backdated` (entered on the day, dated earlier), `drafts`, `cancelledOrders`. **`isEmpty`** when nothing at all happened.
+
+### `GET /reports/day-summary/entries?date&type&createdBy&page&limit`
+The Day Book: `{ items[], total, page, limit }`, newest first. `type` is a kind or `all` (default), `backdated`, `drafts`, `voided` (owner only; from the audit trail, `deleted: true` when gone), `cancelled`. `limit` 1–1000 (default 50). Each item: `kind, id, number, date, createdAt, partyId, partyName, amount, status, createdBy, backdated, counted, deleted`.
+
+### `GET` / `PUT /reports/day-summary/schedule` (owner)
+`{ enabled, hour (0–23), email, timezone, lastSent }`. An hourly job (`DAY_SUMMARY_WORKER_ENABLED`) sends each enabled company's digest once its local clock passes `hour`: an in-app notification (`type: 'day_summary'`, `data.date`) to every owner, and an email when `email`. From 12:00 it covers that day; before noon, the day before. A day is claimed atomically, so it is sent once.
+
 ---
 
 ## KPIs
@@ -333,3 +349,6 @@ How cash is classified: by the other lines of the same posting.
 | `RANGE_TOO_LONG` | analytics range over 60 months |
 | `INVALID_TOP` | analytics `expenseTop` or `customerTop` is not a whole number |
 | `INVALID_FISCAL_YEAR_START` | `PATCH /settings fiscalYearStart` is not a month |
+| `INVALID_CREATED_BY` | day-summary `createdBy` is not a member of this company |
+| `INVALID_TYPE` | day-summary entries `type` is not a kind or filter |
+| `INVALID_PAGING` | day-summary entries `page` or `limit` out of range |
