@@ -22,8 +22,14 @@ export type MigrationSourceSystem =
   | 'tally'
   | 'peachtree'
   | 'quickbooks_online'
+  | 'quickbooks_desktop'
   | 'xero'
-  | 'odoo';
+  | 'zoho_books'
+  | 'odoo'
+  | 'sage_50'
+  | 'sage_accounting'
+  | 'busy'
+  | 'marg';
 
 export const MIGRATION_SOURCE_SYSTEMS: MigrationSourceSystem[] = [
   'finmatrix_template',
@@ -31,11 +37,17 @@ export const MIGRATION_SOURCE_SYSTEMS: MigrationSourceSystem[] = [
   'tally',
   'peachtree',
   'quickbooks_online',
+  'quickbooks_desktop',
   'xero',
+  'zoho_books',
   'odoo',
+  'sage_50',
+  'sage_accounting',
+  'busy',
+  'marg',
 ];
 
-/** One of the ten hard checks, as last computed. Amounts are strings. */
+/** One of the eleven hard checks, as last computed. Amounts are strings. */
 export interface MigrationCheckResult {
   code: string;
   label: string;

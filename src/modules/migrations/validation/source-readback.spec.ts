@@ -43,9 +43,16 @@ const run = (rows: Array<Record<string, unknown>>) =>
   ).sourceReadback(em(rows), batch);
 
 describe('SOURCE_READBACK', () => {
-  it('is the first of the ten checks', () => {
+  it('is the first of the eleven checks', () => {
     expect(CHECK_CODES[0]).toBe('SOURCE_READBACK');
-    expect(CHECK_CODES).toHaveLength(10);
+    expect(CHECK_CODES).toHaveLength(11);
+    // The proof against Peachtree's reports needs no postings.
+    expect(CHECK_CODES.slice(0, 4)).toEqual([
+      'SOURCE_READBACK',
+      'ROWS_ACCOUNTED',
+      'SOURCE_TB_BALANCED',
+      'SOURCE_REPORTS_MATCH',
+    ]);
   });
 
   it('passes when every figure reads the same two ways', async () => {

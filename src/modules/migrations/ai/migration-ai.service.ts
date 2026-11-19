@@ -6,6 +6,7 @@ import { envFlag, envString } from '../../../common/utils/env.util';
 import { Account } from '../../accounts/entities/account.entity';
 import {
   AI_QUESTION_CODE,
+  fitColumn,
   stableIssueId,
 } from '../analysis/migration-analysis.service';
 import { MigrationBatch } from '../entities/migration-batch.entity';
@@ -52,7 +53,7 @@ export interface AssistOutcome {
  * sheet, and returns mappings only. Its proposals are stored with origin
  * `ai` and their confidence; below 0.9 the owner is asked. Every amount and
  * date still comes from the files through the deterministic parsers, and the
- * ten checks still decide whether anything can be imported.
+ * eleven checks still decide whether anything can be imported.
  *
  * Calls are capped per batch (MIGRATION_AI_MAX_CALLS, default 10) and the
  * token usage of each call is added to the batch and logged.
@@ -242,7 +243,7 @@ export class MigrationAiService {
             batchId,
             code: AI_QUESTION_CODE,
             severity: 'warning',
-            sheet: q.sheet,
+            sheet: fitColumn(q.sheet),
             rowNumber: null,
             field: null,
             message: q.question,
@@ -266,6 +267,10 @@ export class MigrationAiService {
     });
     const out: SheetView[] = [];
     for (const f of files) {
+      // A Peachtree backup's sheets are built by rule from its own records,
+      // with nothing to guess, and its data is not sent to the model.
+      // A large export's kept sheets are read by rule too: not sent.
+      if (f.kind === 'ptb' || f.kind === 'extract') continue;
       const stored = await this.storage.read(f.storageKey);
       if (!stored) continue;
       const chunks: Buffer[] = [];
@@ -273,7 +278,12 @@ export class MigrationAiService {
         chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
       let contents;
       try {
-        contents = await readUpload(Buffer.concat(chunks), f.originalName);
+        contents = await readUpload(Buffer.concat(chunks), f.originalName, {
+          maxBytes: Number(
+            this.config.get('MIGRATION_MAX_FILE_BYTES') ?? 26_214_400,
+          ),
+          maxRows: 100_000,
+        });
       } catch {
         continue;
       }

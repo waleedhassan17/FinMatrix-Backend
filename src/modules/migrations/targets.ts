@@ -700,7 +700,7 @@ export const TARGET_SHEETS: readonly TargetSheet[] = [
     ],
     signature: ['accountNumber', 'debit', 'credit'],
     purpose:
-      'Every account’s balance as at the cutover date. Debits must equal credits.',
+      'Every account’s balance at the start of the cutover date (the close of the day before). Debits must equal credits.',
     purposeUr:
       'منتقلی کی تاریخ پر ہر کھاتے کا بیلنس۔ ڈیبٹ اور کریڈٹ برابر ہوں۔',
     fields: [
@@ -795,7 +795,7 @@ export const TARGET_SHEETS: readonly TargetSheet[] = [
     ],
     signature: ['customer', 'invoiceNumber', 'amountDue'],
     purpose:
-      'Every customer invoice not fully paid at the cutover date. Their total must equal the receivables balance in the trial balance.',
+      'Every customer invoice not fully paid at the start of the cutover date, each dated before it. Their total must equal the receivables balance in the trial balance.',
     purposeUr:
       'منتقلی کی تاریخ پر ہر غیر ادا شدہ گاہک انوائس۔ ان کا مجموعہ ٹرائل بیلنس کی وصولیوں کے برابر ہو۔',
     fields: [
@@ -933,7 +933,7 @@ export const TARGET_SHEETS: readonly TargetSheet[] = [
     ],
     signature: ['vendor', 'billNumber', 'amountDue'],
     purpose:
-      'Every vendor bill not fully paid at the cutover date. Their total must equal the payables balance in the trial balance.',
+      'Every vendor bill not fully paid at the start of the cutover date, each dated before it. Their total must equal the payables balance in the trial balance.',
     purposeUr:
       'منتقلی کی تاریخ پر ہر غیر ادا شدہ سپلائر بل۔ ان کا مجموعہ ٹرائل بیلنس کی ادائیگیوں کے برابر ہو۔',
     fields: [
@@ -1065,7 +1065,7 @@ export const TARGET_SHEETS: readonly TargetSheet[] = [
     ],
     signature: ['sku', 'quantityOnHand'],
     purpose:
-      'How much of each item you hold at the cutover date, and what it cost. Quantity × cost must equal the inventory balance in the trial balance.',
+      'How much of each item you hold at the start of the cutover date, and what it cost. Quantity × cost (or the stock value, when given) must equal the inventory balance in the trial balance.',
     purposeUr:
       'منتقلی کی تاریخ پر ہر چیز کی مقدار اور لاگت۔ مقدار × لاگت ٹرائل بیلنس کے اسٹاک کے برابر ہو۔',
     fields: [
@@ -1127,6 +1127,19 @@ export const TARGET_SHEETS: readonly TargetSheet[] = [
         'ضروری۔ فی اکائی لاگت۔',
         '8500',
         { required: true },
+      ),
+      // Optional and exact: what the item is valued at. A system that values
+      // stock at average cost (Peachtree) seldom has a unit cost that, to four
+      // decimals, multiplies back to the value it prints; when this is given
+      // it is what is posted, and the unit cost only has to agree with it.
+      f(
+        'value',
+        'Stock value',
+        'amount',
+        ['stock value', 'item value', 'total value', 'قیمت'],
+        'Optional. Quantity × cost, as your old system values it; when given, it is the amount posted.',
+        'اختیاری۔ مقدار × لاگت، جیسا پرانے سسٹم میں ہے۔',
+        '102000',
       ),
     ],
   },

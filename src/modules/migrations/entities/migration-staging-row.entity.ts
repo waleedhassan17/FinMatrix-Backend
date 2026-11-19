@@ -2,7 +2,13 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 
 /** The target sheets of the starter workbook (§1.5), which every source maps into. */
+/**
+ * The target sheets of the starter workbook, plus `peachtree_proof`: a line
+ * of one of Peachtree's reports set beside the backup's figure for the
+ * eleventh check. A proof row is never imported (outcome 'merged').
+ */
 export type MigrationEntityType =
+  | 'peachtree_proof'
   | 'accounts'
   | 'customers'
   | 'vendors'

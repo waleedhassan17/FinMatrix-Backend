@@ -182,6 +182,16 @@ export const envValidationSchema = Joi.object({
     .min(1_048_576)
     .max(104_857_600)
     .default(26_214_400),
+  // Largest Peachtree backup (.ptb). It arrives in 8 MB pieces, is held in the
+  // database only until read, and is read on disk, never in memory whole.
+  MIGRATION_MAX_UPLOAD_BYTES: Joi.number()
+    .integer()
+    .min(1_048_576)
+    .max(2_147_483_648)
+    .default(2_147_483_648),
+  // The background reader for uploaded backups. Off only in tests that must
+  // not pick up another process's work.
+  MIGRATION_READ_WORKER_ENABLED: Joi.boolean().default(true),
   // Optional AI mapping assistant. Off by default; with it off (or without a
   // key or model) the Migration Center maps with its deterministic rules only.
   // The model is configuration, never code: e.g. MIGRATION_AI_MODEL=claude-opus-5-5.

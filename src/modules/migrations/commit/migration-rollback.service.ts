@@ -31,9 +31,12 @@ export interface RollbackBlocker {
  *
  * The ledger is never edited. Each journal entry the batch posted gets a
  * reversing entry through PostingService.createEntry (debits and credits
- * swapped, reversalOfId set, dated the cutover day) and is marked void — the
- * same thing voiding a manual journal entry does — so the trial balance
- * returns exactly to what it was and the audit trail keeps both.
+ * swapped, reversalOfId set, dated the same day as the entry it reverses, and
+ * each ledger row naming the same document as the row it reverses) and is
+ * marked void — the same thing voiding a manual journal entry does — so the
+ * trial balance returns exactly to what it was in every period, and the audit
+ * trail keeps both. The period lock goes back first: the opening entries sit
+ * on the day the migration closed.
  *
  * What the batch created is then removed: its invoices and bills with their
  * lines, its stock movements, and the customers, vendors and items it added.
@@ -44,8 +47,8 @@ export interface RollbackBlocker {
  * Refused (409 ROLLBACK_BLOCKED, with the list) as soon as anything outside
  * the batch depends on it: a payment or credit applied to a migrated
  * document, a document raised for a migrated party or item, stock moved on a
- * migrated item, a posting on an account the batch created, or a period
- * closed through the cutover day.
+ * migrated item, a posting on an account the batch created (or reactivated)
+ * by anything but a migration, or a period closed through the cutover day.
  */
 @Injectable()
 export class MigrationRollbackService {
@@ -85,29 +88,60 @@ export class MigrationRollbackService {
         });
       }
 
-      // 1. Ledger: reverse every entry the batch posted, then mark it void.
+      // 1. The period lock goes back to what it was. First, because the
+      //    reversals are dated the day the migration closed.
+      const lock = records.find((r) => r.recordType === 'company_touched');
+      await em.update(
+        Company,
+        { id: company.id },
+        {
+          booksLockedUntil:
+            (lock?.meta?.booksLockedUntil as string | null) ?? null,
+          booksLockedAt: lock?.meta?.booksLockedAt
+            ? new Date(String(lock.meta.booksLockedAt))
+            : null,
+        },
+      );
+
+      // 2. Ledger: reverse every entry the batch posted, then mark it void.
       const entries = await em.find(JournalEntry, {
         where: { id: In(ids('journal_entry')), companyId: batch.companyId },
         relations: { lines: true },
       });
+      const lineSourcesOf = new Map(
+        records
+          .filter(
+            (r) =>
+              r.recordType === 'journal_entry' &&
+              Array.isArray(r.meta?.lineSources),
+          )
+          .map((r) => [r.recordId, r.meta!.lineSources as string[]]),
+      );
       for (const entry of entries) {
         if (entry.status !== 'posted') continue;
+        const named = lineSourcesOf.get(entry.id);
         await this.posting.createEntry(em, {
           companyId: batch.companyId,
-          date: batch.cutoverDate,
+          date: entry.date,
           memo: `Undo migration: reverses ${entry.reference}`,
           createdBy: userId,
           status: 'posted',
           lines: entry.lines
             .slice()
             .sort((a, b) => a.lineOrder - b.lineOrder)
-            .map((l, i) => ({
-              accountId: l.accountId,
-              description: l.description,
-              debit: l.credit,
-              credit: l.debit,
-              lineOrder: i,
-            })),
+            .map((l, i) => {
+              const doc = named?.[l.lineOrder];
+              return {
+                accountId: l.accountId,
+                description: l.description,
+                debit: l.credit,
+                credit: l.debit,
+                lineOrder: i,
+                source: doc
+                  ? { sourceType: 'migration_rollback', sourceId: doc }
+                  : null,
+              };
+            }),
           reversalOfId: entry.id,
           sourceType: 'migration_rollback',
           sourceId: batch.id,
@@ -117,7 +151,7 @@ export class MigrationRollbackService {
         await em.save(entry);
       }
 
-      // 2. Documents. Id lists go in chunks: each id is one bind parameter,
+      // 3. Documents. Id lists go in chunks: each id is one bind parameter,
       // and PostgreSQL refuses a statement with more than 65,535.
       const invoiceIds = ids('invoice');
       const billIds = ids('bill');
@@ -135,7 +169,7 @@ export class MigrationRollbackService {
           companyId: batch.companyId,
         });
 
-      // 3. Masters it changed get their prior values back…
+      // 4. Masters it changed get their prior values back…
       for (const r of records.filter(
         (x) =>
           x.recordType === 'customer_touched' ||
@@ -173,7 +207,8 @@ export class MigrationRollbackService {
           companyId: batch.companyId,
         });
 
-      // 4. Accounts it added: deactivated, never deleted (the void entries name them).
+      // 5. Accounts it added (or reactivated): deactivated, never deleted —
+      //    the void entries name them.
       const accountIds = ids('account');
       for (const part of chunked(accountIds))
         await em.update(
@@ -181,20 +216,6 @@ export class MigrationRollbackService {
           { id: In(part), companyId: batch.companyId },
           { isActive: false },
         );
-
-      // 5. The period lock goes back.
-      const lock = records.find((r) => r.recordType === 'company_touched');
-      await em.update(
-        Company,
-        { id: company.id },
-        {
-          booksLockedUntil:
-            (lock?.meta?.booksLockedUntil as string | null) ?? null,
-          booksLockedAt: lock?.meta?.booksLockedAt
-            ? new Date(String(lock.meta.booksLockedAt))
-            : null,
-        },
-      );
 
       await em.update(
         MigrationBatch,
@@ -364,13 +385,19 @@ export class MigrationRollbackService {
       );
     }
     if (createdAccounts.length) {
+      // Any migration's postings are excluded, not just this batch's: an
+      // account this batch REACTIVATED still carries the postings of the
+      // undone migration that first added it (which net to zero), and only
+      // one migration can be live per company. Its own receivable and payable
+      // rows name their documents rather than the batch, so matching on the
+      // batch id alone would also have missed them.
       add(
         await q(
           `SELECT g.id, 'Posting ' || g.reference || ' on account ' || a.account_number AS label
                      FROM general_ledger g JOIN accounts a ON a.id = g.account_id
                     WHERE g.company_id = $1 AND g.account_id = ANY($2::uuid[])
-                      AND NOT (g.source_type IN ('migration', 'migration_rollback') AND g.source_id = $3::uuid)`,
-          [c, createdAccounts, batch.id],
+                      AND g.source_type NOT IN ('migration', 'migration_rollback')`,
+          [c, createdAccounts],
         ),
         'posting_on_new_account',
       );

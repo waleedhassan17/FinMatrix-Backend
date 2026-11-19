@@ -5,6 +5,7 @@ import {
 } from '../../../common/pdf/report-table-pdf.util';
 import { Company } from '../../companies/entities/company.entity';
 import { CertificatePreview } from '../commit/migration-commit.service';
+import { openingDateOf } from '../opening-date';
 
 const SOURCE_LABELS: Record<string, string> = {
   finmatrix_template: 'FinMatrix starter workbook',
@@ -12,8 +13,14 @@ const SOURCE_LABELS: Record<string, string> = {
   tally: 'TallyPrime',
   peachtree: 'Peachtree / Sage 50',
   quickbooks_online: 'QuickBooks Online',
+  quickbooks_desktop: 'QuickBooks Desktop',
   xero: 'Xero',
+  zoho_books: 'Zoho Books',
   odoo: 'Odoo',
+  sage_50: 'Sage 50 Accounts (UK)',
+  sage_accounting: 'Sage Accounting',
+  busy: 'Busy',
+  marg: 'Marg',
 };
 
 const ENTITY_LABELS: Record<string, string> = {
@@ -25,6 +32,7 @@ const ENTITY_LABELS: Record<string, string> = {
   open_invoices: 'Open invoices',
   open_bills: 'Open bills',
   stock: 'Stock lines',
+  peachtree_proof: "Lines compared with Peachtree's reports",
 };
 
 /**
@@ -43,11 +51,13 @@ export function renderCertificatePdf(input: {
   const { company, preview } = input;
   const pc = companyForPdf(company);
   const isPreview = preview.mode !== 'commit' || !input.committedAt;
+  // Derived, not read: a certificate stored before the field existed has none.
+  const openingDate = openingDateOf(preview.cutoverDate);
   const model: ReportPdfModel = {
     title: isPreview
       ? 'Migration Certificate (preview)'
       : 'Migration Certificate',
-    subtitle: `Opening balances as at ${pdfDate(preview.cutoverDate)}`,
+    subtitle: `Opening balances at the close of ${pdfDate(openingDate)}; books start ${pdfDate(preview.cutoverDate)}`,
     company: { name: pc.name, lines: [...pc.addressLines, ...pc.contactLines] },
     meta: [
       {
@@ -58,7 +68,7 @@ export function renderCertificatePdf(input: {
       {
         label: 'Result',
         value: preview.allPassed
-          ? 'All ten checks passed'
+          ? 'All eleven checks passed'
           : 'Checks failing — not importable',
       },
       ...(input.signedOff
@@ -92,6 +102,26 @@ export function renderCertificatePdf(input: {
         ]),
         note: 'Expected values are computed from the source files; actual values are read back from the posted books. The two are calculated independently.',
       },
+      ...(preview.backup
+        ? [
+            {
+              heading: 'Peachtree backup',
+              columns: [
+                { header: 'File', width: 0.34 },
+                { header: 'Size', width: 0.14, align: 'right' as const },
+                { header: 'SHA-256', width: 0.52 },
+              ],
+              rows: [
+                [
+                  preview.backup.name,
+                  `${(preview.backup.sizeBytes / 1_048_576).toFixed(1)} MB`,
+                  preview.backup.sha256,
+                ],
+              ],
+              note: "Read directly from Peachtree's database files. Every account, customer, vendor and item was compared with Peachtree's own Trial Balance, Aged Receivables, Aged Payables and Inventory Valuation (check: Matches Peachtree's own reports).",
+            },
+          ]
+        : []),
       ...asTypedSections(preview),
       {
         heading: 'Source rows',
@@ -143,7 +173,7 @@ export function renderCertificatePdf(input: {
           String(p.lines),
           p.total,
         ]),
-        note: 'All postings are dated the cutover day and net through Migration Clearing (3950), which ends at zero.',
+        note: `All postings are dated ${pdfDate(openingDate)}, the close of business before the cutover day, and net through Migration Clearing (3950), which ends at zero. The books are closed through that day.`,
       },
       ...(preview.spotChecks.length
         ? [

@@ -7,7 +7,7 @@
  * as a starter workbook, migrates it into a fresh company and asserts:
  *
  *   • analysis raises no blocking issue and readiness reaches 100%
- *   • all ten checks pass at zero difference (SOURCE_READBACK among them)
+ *   • all eleven checks pass at zero difference (SOURCE_READBACK among them)
  *   • after commit: the trial balance balances, Assets = Liabilities +
  *     Equity, Migration Clearing is exactly 0, and the period lock is the day
  *     before the cutover

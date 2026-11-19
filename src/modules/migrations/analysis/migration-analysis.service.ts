@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import Decimal from 'decimal.js';
 import { DataSource, EntityManager, In, Not } from 'typeorm';
@@ -33,6 +33,7 @@ import { IssueDraft, issueKey, MIGRATION_CODES } from '../issues';
 import { mapColumns, missingFields } from '../mapping/column-mapper';
 import { normalizeRows, NormalizedRow } from '../mapping/normalize-rows';
 import { detectSheet } from '../mapping/sheet-detector';
+import { freeNumber, namesOverlap, sameAccount, typesAgree } from '../mapping/account-clash';
 import { enumOptions, mapEnumValue } from '../mapping/value-mapper';
 import { matchMasters, nearestMasters } from '../matching/master-matcher';
 import { parseAmount, parseQuantity } from '../parsers/amount.parser';
@@ -43,6 +44,25 @@ import { CHECK_CODES } from '../validation/migration-checks.service';
 import { normalizeKey } from '../parsers/text-normalize';
 import { readUpload, SourceGrid } from '../readers/read-upload';
 import { parseTallyDocuments } from '../sources/tally/tally-xml.parser';
+import { PeachtreeExtract } from '../sources/peachtree/peachtree-books';
+import {
+  detectPeachtreeReport,
+  ParsedReport,
+  parsePeachtreeReport,
+  REPORT_TITLES,
+} from '../sources/peachtree/peachtree-reports';
+import { buildPeachtreeSheets } from '../sources/peachtree/peachtree-sheets';
+import { buildCanonical } from '../sources/reports/canonical';
+import { REPORT_PROFILES } from '../sources/reports/profiles';
+import {
+  isStarterSheet,
+  ParsedSourceReport,
+  parseSourceReport,
+  recogniseReport,
+} from '../sources/reports/report-engine';
+import { clampMonth } from '../../reports/fiscal-year';
+import { Company } from '../../companies/entities/company.entity';
+import { ConfigService } from '@nestjs/config';
 import {
   CONTROL_ACCOUNT_HINTS,
   TARGET_SHEETS,
@@ -50,6 +70,8 @@ import {
   TargetSheet,
 } from '../targets';
 import { MappingContext } from './mapping-context';
+import type { SourceExtract } from '../uploads/export-reader';
+import { openingDateOf } from '../opening-date';
 
 interface ExistingMasters {
   invoiceNumbers: Set<string>;
@@ -67,6 +89,7 @@ interface ExistingMasters {
     accountNumber: string;
     name: string;
     type: string;
+    subType: string | null;
     isActive: boolean;
   }>;
 }
@@ -95,10 +118,18 @@ type ControlKind = 'ar' | 'ap' | 'inventory' | null;
 export class MigrationAnalysisService {
   private readonly logger = new Logger(MigrationAnalysisService.name);
 
+  /** The file limit the upload enforced; every later read applies the same one. */
+  private readonly maxBytes: number;
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly storage: StorageService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.maxBytes = Number(
+      config.get('MIGRATION_MAX_FILE_BYTES') ?? 26_214_400,
+    );
+  }
 
   async analyse(batchId: string, companyId: string): Promise<MigrationBatch> {
     return this.dataSource.transaction(async (em) => {
@@ -160,7 +191,25 @@ export class MigrationAnalysisService {
       }
       const works: SheetWork[] = [];
       const detectedByFile = new Map<string, MigrationFile['detected']>();
-      for (const file of files) {
+      // A Peachtree backup is read last: Peachtree's own reports, in the other
+      // files, are its proof and give its stock values, so they must be read
+      // first. They are recognised only when a backup is present — without
+      // one, Peachtree reports are ordinary spreadsheets, read as before.
+      const hasBackup = files.some((f) => f.kind === 'ptb');
+      const peachtreeReports: ParsedReport[] = [];
+      const proofStaging: Array<Partial<MigrationStagingRow>> = [];
+      // Report exports from any system (trial balance, aged detail,
+      // valuation, lists) are recognised before the generic detector and
+      // turned into the starter sheets. Beside a Peachtree backup its reports
+      // are the backup's proof instead (below).
+      const reportPass = hasBackup
+        ? null
+        : await this.sourceReportGrids(em, batch, files, ctx, addIssue, proofStaging);
+      const ordered = [
+        ...files.filter((f) => f.kind !== 'ptb'),
+        ...files.filter((f) => f.kind === 'ptb'),
+      ];
+      for (const file of ordered) {
         const stored = await this.storage.read(file.storageKey);
         if (!stored) {
           addIssue({
@@ -174,7 +223,16 @@ export class MigrationAnalysisService {
         const buffer = await streamToBuffer(stored.stream);
         let contents;
         try {
-          contents = await readUpload(buffer, file.originalName);
+          contents =
+            file.kind === 'ptb'
+              ? await this.peachtreeContents(em, batch, file, buffer, {
+                  reports: peachtreeReports,
+                  ctx,
+                  addIssue,
+                  proof: proofStaging,
+                })
+              : (reportPass?.contents.get(file.id) ??
+                (await this.readContents(file, buffer)));
         } catch (err) {
           const body = (
             err as { response?: { code?: string; message?: string } }
@@ -190,8 +248,38 @@ export class MigrationAnalysisService {
           continue;
         }
         const detected: NonNullable<MigrationFile['detected']> = [];
+        const asReport = reportPass?.recognised.get(file.id);
         contents.sheets.push(...(tally.byFile.get(file.id) ?? []));
+        contents.sheets.push(...(reportPass?.byFile.get(file.id) ?? []));
         for (const grid of contents.sheets) {
+          const reportTarget = asReport?.get(grid.name);
+          if (reportTarget) {
+            detected.push({
+              sheet: grid.name,
+              target: reportTarget,
+              confidence: 1,
+              rows: grid.rows.length,
+              headers: [],
+            });
+            continue;
+          }
+          if (hasBackup && file.kind !== 'ptb') {
+            const layout = detectPeachtreeReport(grid);
+            if (layout) {
+              peachtreeReports.push(parsePeachtreeReport(grid, layout));
+              detected.push({
+                sheet: grid.name,
+                target: `peachtree:${layout.kind}`,
+                confidence: 1,
+                rows: grid.rows.length,
+                headers:
+                  grid.rows[layout.headerIndex]?.cells.map((c) =>
+                    String(c ?? ''),
+                  ) ?? [],
+              });
+              continue;
+            }
+          }
           const sheetKey = normalizeKey(grid.name);
           const userTarget = ctx.sheet.get(sheetKey);
           const detection = detectSheet(grid.name, grid.rows);
@@ -551,7 +639,7 @@ export class MigrationAnalysisService {
 
       // ── 4. Matching against the company's masters and within the files ──
       const existing = await this.loadExisting(em, companyId);
-      const staging: Array<Partial<MigrationStagingRow>> = [];
+      const staging: Array<Partial<MigrationStagingRow>> = [...proofStaging];
       // A "Total" line is accounted for (rejected, with its reason) and
       // otherwise ignored: it is the file's own arithmetic, not a record.
       for (const w of works) {
@@ -688,6 +776,60 @@ export class MigrationAnalysisService {
 
       // Accounts sheet + account mapping.
       const accountRows = rowsOf('accounts');
+      // A source account whose number FinMatrix already uses for a different
+      // account is created under the next free number (see account-clash).
+      const takenNumbers = new Set<string>([
+        ...existing.accounts.map((a) => normalizeKey(a.accountNumber)),
+        ...[...accountRows, ...rowsOf('trial_balance')].map(({ row }) =>
+          normalizeKey(String(row.normalized.accountNumber ?? '')),
+        ),
+      ]);
+      const renumbered = new Map<string, string>();
+      const renumber = (nk: string, number: string) => {
+        let to = renumbered.get(nk);
+        if (!to) {
+          to = freeNumber(number, takenNumbers);
+          renumbered.set(nk, to);
+        }
+        return to;
+      };
+      // Free numbers are given out once, in file order and before any
+      // decision, so the number the owner is shown is the number they get.
+      // Several trial balance lines under one number with different names
+      // (Tally's party ledgers under 1100 / 2000) name parties, not the
+      // account: the number alone identifies it.
+      const tbNames = new Map<string, Set<string>>();
+      for (const { row } of rowsOf('trial_balance')) {
+        const nk = normalizeKey(String(row.normalized.accountNumber ?? ''));
+        if (!nk) continue;
+        const names = tbNames.get(nk) ?? new Set<string>();
+        names.add(normalizeKey(row.normalized.accountName));
+        tbNames.set(nk, names);
+      }
+      const tbAccountName = (nk: string, name: unknown) =>
+        (tbNames.get(nk)?.size ?? 0) > 1 ? null : ((name as string | null) ?? null);
+      {
+        const judged = new Set<string>();
+        const fromAccounts = new Set(accountRows.map(({ row }) => row));
+        for (const { row } of [...accountRows, ...rowsOf('trial_balance')]) {
+          const number = String(row.normalized.accountNumber ?? '');
+          const nk = normalizeKey(number);
+          if (!nk || judged.has(nk)) continue;
+          judged.add(nk);
+          const acct = existing.accounts.find(
+            (a) => normalizeKey(a.accountNumber) === nk,
+          );
+          const info = {
+            number,
+            name: fromAccounts.has(row)
+              ? ((row.normalized.accountName as string | null) ?? null)
+              : tbAccountName(nk, row.normalized.accountName),
+            type: (row.normalized.type as string | null) ?? null,
+            kind: (row.normalized.kind as string | null) ?? null,
+          };
+          if (acct && !sameAccount(info, acct)) renumber(nk, number);
+        }
+      }
       const sourceAccounts = new Map<
         string,
         {
@@ -727,15 +869,40 @@ export class MigrationAnalysisService {
           staging.push(this.stagingRow(batch, w, row, 'pending', null, null));
           continue;
         }
-        sourceAccounts.set(nk, {
+        const src = {
           number,
           name: row.normalized.accountName as string | null,
           type: row.normalized.type as string | null,
           kind: row.normalized.kind as string | null,
-        });
+        };
+        sourceAccounts.set(nk, src);
         const existingAcct = existing.accounts.find(
           (a) => normalizeKey(a.accountNumber) === nk,
         );
+        if (existingAcct && !sameAccount(src, existingAcct)) {
+          // Created under a free number unless the owner maps it to an
+          // existing account (or, undecided, the names suggest it is one).
+          const decided = ctx.accounts.get(nk);
+          const asNew = decided
+            ? decided.startsWith('NEW')
+            : !(typesAgree(src, existingAcct) && namesOverlap(src.name, existingAcct.name));
+          if (asNew) {
+            const to = renumber(nk, number);
+            row.normalized.sourceNumber = number;
+            row.normalized.accountNumber = to;
+            staging.push(
+              this.stagingRow(
+                batch,
+                w,
+                row,
+                'imported',
+                `FinMatrix's ${existingAcct.accountNumber} is ${existingAcct.name}; created as ${to}`,
+                null,
+              ),
+            );
+            continue;
+          }
+        }
         staging.push(
           this.stagingRow(
             batch,
@@ -756,27 +923,43 @@ export class MigrationAnalysisService {
         if (nk && !sourceAccounts.has(nk))
           sourceAccounts.set(nk, {
             number,
-            name: (row.normalized.accountName as string | null) ?? null,
+            name: tbAccountName(nk, row.normalized.accountName),
             type: null,
             kind: null,
           });
       }
       const accountTargets = new Map<string, string>(); // norm source number → FinMatrix number | 'NEW' | 'NEW:<type>'
       for (const [nk, src] of sourceAccounts) {
+        const byNumber = existing.accounts.find(
+          (a) => normalizeKey(a.accountNumber) === nk,
+        );
+        // FinMatrix uses this number for a different account: whatever is
+        // decided, a new account gets the free number.
+        const clash =
+          byNumber && !sameAccount(src, byNumber)
+            ? renumber(nk, src.number)
+            : null;
         const decided = ctx.accounts.get(nk);
         if (decided) {
           accountTargets.set(nk, decided);
           continue;
         }
         const aiAcct = ai.account.get(nk);
-        const byNumber = existing.accounts.find(
-          (a) => normalizeKey(a.accountNumber) === nk,
-        );
         const control = this.controlKind(src);
         let target: string | null = null;
         let confidence = 0;
         let reason = '';
-        if (byNumber) {
+        if (byNumber && clash) {
+          if (typesAgree(src, byNumber) && namesOverlap(src.name, byNumber.name)) {
+            target = byNumber.accountNumber;
+            confidence = 0.6;
+            reason = `same number as ${byNumber.accountNumber} ${byNumber.name}, though the names differ — or create yours as ${clash}`;
+          } else if (src.type) {
+            target = 'NEW';
+            confidence = 0.6;
+            reason = `FinMatrix's ${byNumber.accountNumber} is ${byNumber.name} (${byNumber.type}), a different account, so yours is created as ${clash}`;
+          }
+        } else if (byNumber) {
           target = byNumber.accountNumber;
           confidence = 1;
           reason = `same number as ${byNumber.accountNumber} ${byNumber.name}`;
@@ -834,13 +1017,15 @@ export class MigrationAnalysisService {
               severity: 'warning',
               sheet: 'Accounts',
               field: `account::${src.number}`,
-              message: `Account ${src.number} ${src.name ?? ''}: we propose ${target === 'NEW' ? 'creating it' : `mapping it to ${target}`} (${reason}). Confirm or choose another account.`,
+              message: `Account ${src.number} ${src.name ?? ''}: we propose ${target === 'NEW' ? (clash ? `creating it as ${clash}` : 'creating it') : `mapping it to ${target}`} (${reason}). Confirm or choose another account.`,
               options: [
                 ...(src.type
                   ? [
                       {
                         value: 'NEW',
-                        label: `Create ${src.number} ${src.name ?? ''} as a new account`,
+                        label: clash
+                          ? `Create ${src.number} ${src.name ?? ''} as ${clash} (FinMatrix keeps ${src.number} for ${byNumber?.name ?? 'its own account'})`
+                          : `Create ${src.number} ${src.name ?? ''} as a new account`,
                       },
                     ]
                   : []),
@@ -859,11 +1044,13 @@ export class MigrationAnalysisService {
             severity: 'blocking',
             sheet: 'Trial Balance',
             field: `account::${src.number}`,
-            message: `Account ${src.number}${src.name ? ` (${src.name})` : ''} is in the trial balance but not on the Accounts sheet or in FinMatrix. Map it to an existing account, or create it as a new account of the right type.`,
+            message: clash
+              ? `Account ${src.number}${src.name ? ` (${src.name})` : ''}: FinMatrix's ${src.number} is ${byNumber!.name}, a different account. Create yours as ${clash} (choose its type), or map it to an existing account.`
+              : `Account ${src.number}${src.name ? ` (${src.name})` : ''} is in the trial balance but not on the Accounts sheet or in FinMatrix. Map it to an existing account, or create it as a new account of the right type.`,
             options: [
               ...NEW_ACCOUNT_OPTIONS.map((t) => ({
                 value: `NEW:${t}`,
-                label: `Create ${src.number}${src.name ? ` ${src.name}` : ''} as a new ${t} account`,
+                label: `Create ${src.number}${src.name ? ` ${src.name}` : ''} as ${clash ? `${clash}, ` : ''}a new ${t} account`,
               })),
               ...existing.accounts
                 .filter((a) => a.isActive)
@@ -892,6 +1079,8 @@ export class MigrationAnalysisService {
         }
         const nk = normalizeKey(String(row.normalized.accountNumber));
         let target = accountTargets.get(nk);
+        // A clashing number: the account lives under its free number.
+        const movedTo = renumbered.get(nk);
         // 'NEW:<type>': the account is created from the trial balance line itself.
         if (target?.startsWith('NEW:')) {
           row.normalized.newAccount = {
@@ -899,8 +1088,11 @@ export class MigrationAnalysisService {
             name:
               row.normalized.accountName ??
               String(row.normalized.accountNumber),
+            ...(movedTo ? { number: movedTo } : {}),
           };
-          target = 'NEW';
+          target = movedTo ?? 'NEW';
+        } else if (target === 'NEW' && movedTo) {
+          target = movedTo;
         }
         row.normalized.targetAccount = target ?? null;
         staging.push(
@@ -1146,9 +1338,9 @@ export class MigrationAnalysisService {
               batchId,
               code: i.code,
               severity: i.severity,
-              sheet: i.sheet ?? null,
+              sheet: fitColumn(i.sheet),
               rowNumber: i.rowNumber ?? null,
-              field: i.field ?? null,
+              field: fitColumn(i.field),
               message: i.message,
               options: i.options ?? null,
               resolution: null,
@@ -1171,19 +1363,149 @@ export class MigrationAnalysisService {
   }
 
   /** Every Tally XML document across the batch's files, parsed as one bundle. */
+  /**
+   * A file's sheets (and XML documents): read from its bytes, or — for a
+   * large export the background reader has already read — from the stored
+   * extract of the sheets it kept.
+   */
+  private async readContents(file: MigrationFile, buffer: Buffer): Promise<Awaited<ReturnType<typeof readUpload>>> {
+    if (file.kind !== 'extract') {
+      return readUpload(buffer, file.originalName, { maxBytes: this.maxBytes, maxRows: 100_000 });
+    }
+    let x: SourceExtract;
+    try {
+      x = JSON.parse(buffer.toString('utf8')) as SourceExtract;
+    } catch {
+      x = {} as SourceExtract;
+    }
+    if (x.format !== 'finmatrix-source-extract' || x.version !== 1) {
+      throw new BadRequestException({
+        code: MIGRATION_CODES.MIGRATION_FILE_UNREADABLE,
+        message: `${file.originalName} could not be read back. Remove it and upload it again.`,
+      });
+    }
+    return { kind: 'zip', sheets: x.sheets, ...(x.xml?.length ? { xml: x.xml } : {}) };
+  }
+
+  /**
+   * Every sheet that is a report some system exports (sources/reports),
+   * parsed and turned into the starter sheets. The files' contents are kept
+   * so the main pass does not read them twice.
+   */
+  private async sourceReportGrids(
+    em: EntityManager,
+    batch: MigrationBatch,
+    files: MigrationFile[],
+    ctx: MappingContext,
+    addIssue: (i: IssueDraft) => void,
+    proof: Array<Partial<MigrationStagingRow>>,
+  ): Promise<{
+    contents: Map<string, Awaited<ReturnType<typeof readUpload>>>;
+    recognised: Map<string, Map<string, string>>;
+    byFile: Map<string, SourceGrid[]>;
+  }> {
+    const contents = new Map<string, Awaited<ReturnType<typeof readUpload>>>();
+    const recognised = new Map<string, Map<string, string>>();
+    const byFile = new Map<string, SourceGrid[]>();
+    const parsed: Array<{ fileId: string; report: ParsedSourceReport }> = [];
+    for (const file of files) {
+      if (file.kind === 'ptb') continue;
+      const stored = await this.storage.read(file.storageKey);
+      if (!stored) continue;
+      let c;
+      try {
+        c = await this.readContents(file, await streamToBuffer(stored.stream));
+      } catch {
+        continue; // reported by the main pass
+      }
+      contents.set(file.id, c);
+      for (const g of c.sheets) {
+        // A sheet laid out as the starter workbook's own is never a report.
+        if (isStarterSheet(g)) continue;
+        const r = recogniseReport(g, REPORT_PROFILES, batch.sourceSystem);
+        if (!r) continue;
+        const report = parseSourceReport(g, r);
+        parsed.push({ fileId: file.id, report });
+        const m = recognised.get(file.id) ?? new Map<string, string>();
+        m.set(g.name, `${report.source}:${report.kind}`);
+        recognised.set(file.id, m);
+      }
+    }
+    if (!parsed.length) return { contents, recognised, byFile };
+    const sources = [...new Set(parsed.map((p) => p.report.source))];
+    if (sources.length > 1) {
+      addIssue({
+        code: MIGRATION_CODES.SOURCE_REPORT_DUPLICATE,
+        severity: 'blocking',
+        sheet: null,
+        field: 'report::mixed',
+        message: `These files are reports from more than one system (${sources.join(', ')}). A migration brings in one system's books: remove the others.`,
+      });
+      return { contents, recognised, byFile };
+    }
+    const profile = REPORT_PROFILES.find((p) => p.source === sources[0])!;
+    const chart: Array<{ account_number: string }> = await em.query(
+      `SELECT account_number FROM accounts WHERE company_id = $1`,
+      [batch.companyId],
+    );
+    const built = buildCanonical(
+      parsed.map((p) => p.report),
+      profile,
+      {
+        openingDate: openingDateOf(batch.cutoverDate),
+        accepted: (key) => ctx.value.get(`report::${normalizeKey(key)}`) === 'accept',
+        existingAccounts: chart.map((a) => a.account_number),
+      },
+    );
+    for (const i of built.issues) addIssue(i);
+    for (const w of built.warnings)
+      addIssue({
+        code: MIGRATION_CODES.MIGRATION_UNKNOWN_SHEET,
+        severity: 'warning',
+        sheet: null,
+        field: `report::warning::${createHash('sha256').update(w).digest('hex').slice(0, 24)}`,
+        message: w,
+      });
+    if (batch.sourceSystem !== profile.source && !['generic_spreadsheet', 'finmatrix_template'].includes(batch.sourceSystem))
+      addIssue({
+        code: MIGRATION_CODES.MIGRATION_UNKNOWN_SHEET,
+        severity: 'warning',
+        sheet: null,
+        field: 'report::source',
+        message: `These are ${profile.label} reports. They are read as such; the migration's source is shown as something else.`,
+      });
+    const first = parsed[0].fileId;
+    byFile.set(first, built.grids);
+    built.proof.forEach((p, i) => {
+      const values = { report: p.report, key: p.key, name: p.name, measure: p.measure, backup: p.backup, printed: p.printed };
+      proof.push({
+        companyId: batch.companyId,
+        batchId: batch.id,
+        fileId: first,
+        sheet: 'Report totals (proof)',
+        rowNumber: i + 1,
+        rowHash: createHash('sha256').update(JSON.stringify(values)).digest('hex'),
+        entityType: 'peachtree_proof',
+        raw: values,
+        normalized: { ...values, source: p.kind },
+        outcome: 'merged',
+        reason: "Compared with the source's own report; not imported.",
+        match: null,
+      });
+    });
+    return { contents, recognised, byFile };
+  }
+
   private async tallyGrids(
     files: MigrationFile[],
   ): Promise<{ byFile: Map<string, SourceGrid[]>; warnings: string[] }> {
     const docs: Array<{ xml: string; fileIndex: number }> = [];
     for (const [i, file] of files.entries()) {
-      if (file.kind !== 'xml' && file.kind !== 'zip') continue;
+      if (file.kind !== 'xml' && file.kind !== 'zip' && file.kind !== 'extract') continue;
       const stored = await this.storage.read(file.storageKey);
       if (!stored) continue;
       try {
-        const contents = await readUpload(
-          await streamToBuffer(stored.stream),
-          file.originalName,
-        );
+        const contents = await this.readContents(file, await streamToBuffer(stored.stream));
         for (const xml of contents.xml ?? []) docs.push({ xml, fileIndex: i });
       } catch {
         // Reported by the main pass.
@@ -1297,11 +1619,15 @@ export class MigrationAnalysisService {
           field: 'originalAmount',
           message: `Original amount ${original.toFixed()} is less than the amount due ${due.toFixed()}.`,
         });
-      if (n[dateField] && String(n[dateField]) > cutover)
+      // The cutover day is FinMatrix's first day: the opening balances are
+      // those at the close of the day before, and a document dated the cutover
+      // day or later is entered in FinMatrix (the trial balance's receivable
+      // or payable cannot include it either).
+      if (n[dateField] && String(n[dateField]) >= cutover)
         errors.push({
           code: 'INVALID_DATE',
           field: dateField,
-          message: `Dated ${String(n[dateField])}, after the cutover date ${cutover}. Open items must exist on the cutover date.`,
+          message: `Dated ${String(n[dateField])}, on or after the cutover date ${cutover}. Open items are what was unpaid at the close of the day before; enter this one in FinMatrix instead.`,
         });
       if (n.dueDate && n[dateField] && String(n.dueDate) < String(n[dateField]))
         errors.push({
@@ -1349,6 +1675,27 @@ export class MigrationAnalysisService {
           message:
             'Unit cost must be more than zero: stock with no cost has no value to post.',
         });
+      if (n.value !== null && n.value !== undefined && n.value !== '') {
+        const value = new Decimal(String(n.value));
+        // The unit cost has four decimals; it must multiply back to the value
+        // to within what that rounding allows.
+        const slack = qty.abs().times('0.00005').plus('0.005');
+        if (value.lessThanOrEqualTo(0))
+          errors.push({
+            code: 'INVALID_AMOUNT',
+            field: 'value',
+            message: `Stock value ${value.toFixed()} must be more than zero.`,
+          });
+        else if (
+          qty.greaterThan(0) &&
+          qty.times(cost).minus(value).abs().greaterThan(slack)
+        )
+          errors.push({
+            code: 'INVALID_AMOUNT',
+            field: 'value',
+            message: `Stock value ${value.toFixed(2)} is not quantity × unit cost (${qty.toFixed()} × ${cost.toFixed()} = ${qty.times(cost).toFixed(2)}).`,
+          });
+      }
       const ref = n.skuRef as { kind: string; id: string } | undefined;
       if (
         ref?.kind === 'existing' &&
@@ -1424,6 +1771,92 @@ export class MigrationAnalysisService {
     }
   }
 
+  /**
+   * A Peachtree backup's sheets: its stored extract, Peachtree's reports and
+   * the owner's acceptances made into the starter workbook's sheets, the
+   * issues to show, and one proof row per line compared with a report.
+   */
+  private async peachtreeContents(
+    em: EntityManager,
+    batch: MigrationBatch,
+    file: MigrationFile,
+    buffer: Buffer,
+    io: {
+      reports: ParsedReport[];
+      ctx: MappingContext;
+      addIssue: (i: IssueDraft) => void;
+      proof: Array<Partial<MigrationStagingRow>>;
+    },
+  ): Promise<{ kind: 'ptb'; sheets: SourceGrid[] }> {
+    let extract: PeachtreeExtract;
+    try {
+      extract = JSON.parse(buffer.toString('utf8')) as PeachtreeExtract;
+    } catch {
+      extract = {} as PeachtreeExtract;
+    }
+    if (
+      extract.format !== 'finmatrix-peachtree-extract' ||
+      extract.version !== 1
+    ) {
+      throw new BadRequestException({
+        code: MIGRATION_CODES.MIGRATION_FILE_UNREADABLE,
+        message: `${file.originalName} could not be read back. Remove it and upload the backup again.`,
+      });
+    }
+    const company = await em.findOne(Company, {
+      where: { id: batch.companyId },
+      select: { id: true, fiscalYearStartMonth: true },
+    });
+    const chart: Array<{ account_number: string }> = await em.query(
+      `SELECT account_number FROM accounts WHERE company_id = $1`,
+      [batch.companyId],
+    );
+    const built = buildPeachtreeSheets(extract, io.reports, {
+      accepted: (key) =>
+        io.ctx.value.get(`peachtree::${normalizeKey(key)}`) === 'accept',
+      fiscalYearStartMonth: clampMonth(company?.fiscalYearStartMonth),
+      existingAccounts: chart.map((a) => a.account_number),
+      fileName: file.originalName,
+    });
+    for (const i of built.issues) io.addIssue(i);
+    for (const w of extract.warnings ?? []) {
+      io.addIssue({
+        code: MIGRATION_CODES.MIGRATION_UNKNOWN_SHEET,
+        severity: 'warning',
+        sheet: file.originalName,
+        field: `peachtree::warning::${createHash('sha256').update(w).digest('hex').slice(0, 24)}`,
+        message: w,
+      });
+    }
+    built.proof.forEach((p, i) => {
+      const values = {
+        report: REPORT_TITLES[p.source],
+        key: p.key,
+        name: p.name,
+        measure: p.measure,
+        backup: p.backup,
+        printed: p.printed,
+      };
+      io.proof.push({
+        companyId: batch.companyId,
+        batchId: batch.id,
+        fileId: file.id,
+        sheet: 'Peachtree reports (proof)',
+        rowNumber: i + 1,
+        rowHash: createHash('sha256')
+          .update(JSON.stringify(values))
+          .digest('hex'),
+        entityType: 'peachtree_proof',
+        raw: values,
+        normalized: { ...values, source: p.source },
+        outcome: 'merged',
+        reason: "Compared with Peachtree's own report; not imported.",
+        match: null,
+      });
+    });
+    return { kind: 'ptb', sheets: built.grids };
+  }
+
   private stagingRow(
     batch: MigrationBatch,
     w: SheetWork,
@@ -1474,6 +1907,7 @@ export class MigrationAnalysisService {
         accountNumber: true,
         name: true,
         type: true,
+        subType: true,
         isActive: true,
       },
     });
@@ -1513,6 +1947,7 @@ export class MigrationAnalysisService {
         accountNumber: a.accountNumber,
         name: a.name,
         type: a.type,
+        subType: a.subType ?? null,
         isActive: a.isActive,
       })),
     };
@@ -1585,6 +2020,21 @@ export function readinessOf(
   den += totalChecks;
   if (den === 0) return 0;
   return Math.floor((num / den) * 100);
+}
+
+/**
+ * An issue's sheet and field are varchar(64). A longer one (a long file name,
+ * a long key) keeps its start and gains a hash of the whole, so it stays
+ * stable and distinct instead of failing the analysis.
+ */
+export function fitColumn(
+  v: string | null | undefined,
+  max = 64,
+): string | null {
+  if (v === null || v === undefined) return null;
+  if (v.length <= max) return v;
+  const h = createHash('sha256').update(v).digest('hex').slice(0, 16);
+  return `${v.slice(0, max - h.length - 1)}~${h}`;
 }
 
 /**

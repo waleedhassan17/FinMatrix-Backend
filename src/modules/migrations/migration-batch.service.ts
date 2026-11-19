@@ -2,10 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomUUID } from 'crypto';
+import Decimal from 'decimal.js';
 import { Readable } from 'stream';
 import { DataSource, EntityManager, In } from 'typeorm';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
@@ -40,6 +43,10 @@ import {
   MigrationStatus,
 } from './entities/migration-batch.entity';
 import { MigrationFile } from './entities/migration-file.entity';
+import {
+  MigrationUpload,
+  MigrationUploadPart,
+} from './entities/migration-upload.entity';
 import { MigrationIssue } from './entities/migration-issue.entity';
 import {
   MappingKind,
@@ -61,6 +68,7 @@ import {
 } from './state-machine';
 import { TARGET_SHEETS } from './targets';
 import { buildStarterWorkbook } from './template/starter-workbook';
+import { openingDateOf } from './opening-date';
 
 export interface UploadedMigrationFile {
   buffer: Buffer;
@@ -75,6 +83,8 @@ const KIND_MIME: Record<MigrationFile['kind'], string> = {
   csv: 'text/csv',
   zip: 'application/zip',
   xml: 'application/xml',
+  ptb: 'application/x-peachtree-backup',
+  extract: 'application/json',
 };
 const CERT_BUCKET = 'migration-certificates';
 
@@ -94,6 +104,7 @@ interface Decision {
 @Injectable()
 export class MigrationBatchService {
   private readonly maxBytes: number;
+  private readonly logger = new Logger(MigrationBatchService.name);
 
   constructor(
     private readonly dataSource: DataSource,
@@ -120,7 +131,7 @@ export class MigrationBatchService {
     if (dto.cutoverDate > today) {
       throw new BadRequestException({
         code: 'VALIDATION_FAILED',
-        message: `The cutover date ${dto.cutoverDate} is in the future. Choose a day that has ended.`,
+        message: `The cutover date ${dto.cutoverDate} is in the future. Choose today or an earlier day: the opening balances are those at the close of the day before it.`,
       });
     }
     await assertBooksEmpty(this.dataSource.manager, companyId);
@@ -197,6 +208,12 @@ export class MigrationBatchService {
     const stored: Array<{ row: Partial<MigrationFile>; key: string }> = [];
     for (const f of files) {
       const name = utf8Name(f.originalname);
+      if (/\.ptb$/i.test(name)) {
+        throw new UnsupportedMediaTypeException({
+          code: 'MIGRATION_USE_LARGE_UPLOAD',
+          message: `${name} is a Peachtree backup. Upload it with "Upload Peachtree backup", which sends it in pieces and reads it in the background.`,
+        });
+      }
       if (f.size > this.maxBytes) {
         throw new BadRequestException({
           code: 'MIGRATION_FILE_TOO_LARGE',
@@ -269,6 +286,98 @@ export class MigrationBatchService {
     return analysed;
   }
 
+  /**
+   * A Peachtree backup has been read (uploads/migration-read.worker): record
+   * it as the batch's file — its name, size and SHA-256 as uploaded, the read
+   * extract as its stored copy — and drop the upload's pieces, in one
+   * transaction under the batch lock; then analyse. One backup per batch.
+   */
+  async addReadBackup(input: {
+    companyId: string;
+    userId: string;
+    batchId: string;
+    uploadId: string;
+    name: string;
+    size: number;
+    sha256: string;
+    storageKey: string;
+    /** 'ptb': a Peachtree backup read; 'extract': another large export read. */
+    kind?: 'ptb' | 'extract';
+  }): Promise<string> {
+    const { companyId, batchId } = input;
+    const kind = input.kind ?? 'ptb';
+    const fileId = randomUUID();
+    await this.dataSource.transaction(async (em) => {
+      const live = await lockEditable(em, companyId, batchId);
+      assertTransition(live.status, 'uploaded');
+      const other =
+        kind === 'ptb'
+          ? await em.findOne(MigrationFile, { where: { batchId, companyId, kind: 'ptb' } })
+          : null;
+      if (other) {
+        throw new ConflictException({
+          code: 'MIGRATION_INVALID_TRANSITION',
+          message: `This migration already has a Peachtree backup (${other.originalName}). Remove it before adding another.`,
+        });
+      }
+      await em.save(
+        em.create(MigrationFile, {
+          id: fileId,
+          companyId,
+          batchId,
+          originalName: input.name.slice(0, 255),
+          mimeType: KIND_MIME[kind],
+          sizeBytes: input.size,
+          storageKey: input.storageKey,
+          sha256: input.sha256,
+          kind,
+          detected: null,
+        }),
+      );
+      // Still `reading` until the analysis below has run: the owner's page
+      // keeps following it, and shows the sheets the moment they exist.
+      await em.update(
+        MigrationUpload,
+        { id: input.uploadId, companyId },
+        {
+          fileId,
+          progress: { stage: 'analysing' },
+          errorCode: null,
+          error: null,
+          sha256: input.sha256,
+        },
+      );
+      await em.delete(MigrationUploadPart, { uploadId: input.uploadId });
+      await this.touch(live, 'uploaded', em);
+    });
+    await this.log(companyId, input.userId, 'migration_backup_added', batchId, {
+      name: input.name,
+      size: input.size,
+      sha256: input.sha256,
+    });
+    await this.finishBackupRead(companyId, batchId, input.uploadId);
+    return fileId;
+  }
+
+  /**
+   * Analyse the batch with its newly recorded backup, then mark the upload
+   * read. Also how the read worker finishes a read whose process died after
+   * the backup was recorded. An analysis that fails records lastError on the
+   * batch; the backup stays.
+   */
+  async finishBackupRead(companyId: string, batchId: string, uploadId: string) {
+    await this.reanalyse(companyId, batchId).catch((err: Error) =>
+      this.logger.error(
+        `Migration ${batchId}: analysis after reading the backup failed: ${err.message}`,
+      ),
+    );
+    await this.dataSource.manager.update(
+      MigrationUpload,
+      { id: uploadId, companyId },
+      { status: 'read', finishedAt: new Date(), progress: { stage: 'done' } },
+    );
+  }
+
   async removeFile(
     companyId: string,
     user: AuthenticatedUser,
@@ -288,6 +397,18 @@ export class MigrationBatchService {
     await this.dataSource.transaction(async (em) => {
       const live = await lockEditable(em, companyId, id);
       await em.delete(MigrationFile, { id: fileId, batchId: id, companyId });
+      // A backup's upload goes with it (its pieces went when it was read).
+      if (file.kind === 'ptb') {
+        const ups = await em.find(MigrationUpload, {
+          where: { fileId, batchId: id, companyId },
+        });
+        if (ups.length) {
+          await em.delete(MigrationUploadPart, {
+            uploadId: In(ups.map((u) => u.id)),
+          });
+          await em.delete(MigrationUpload, { id: In(ups.map((u) => u.id)) });
+        }
+      }
       await this.touch(live, 'uploaded', em);
     });
     await this.storage.remove(file.storageKey);
@@ -312,6 +433,7 @@ export class MigrationBatchService {
       where: { companyId, isActive: true },
       order: { accountNumber: 'ASC' },
     });
+    const sourceAccounts = await this.sourceAccounts(id);
     const view = (m: MigrationMapping) => ({
       id: m.id,
       kind: m.kind,
@@ -359,7 +481,55 @@ export class MigrationBatchService {
         name: a.name,
         type: a.type,
       })),
+      sourceAccounts,
     };
+  }
+
+  /**
+   * Each source account as the owner knows it — name, type, balance — and
+   * the number it is created under when FinMatrix already uses its own.
+   */
+  private async sourceAccounts(batchId: string) {
+    const staged = await this.dataSource.manager.find(MigrationStagingRow, {
+      where: { batchId, entityType: In(['accounts', 'trial_balance']) },
+      select: { entityType: true, normalized: true },
+    });
+    const byNumber = new Map<
+      string,
+      { number: string; name: string | null; type: string | null; balance: Decimal; createAs: string | null; tbNames: Set<string> }
+    >();
+    const amount = (v: unknown) => {
+      try {
+        return new Decimal(String(v ?? 0) || 0);
+      } catch {
+        return new Decimal(0);
+      }
+    };
+    for (const r of staged) {
+      const v = r.normalized ?? {};
+      const number = String(v.sourceNumber ?? v.accountNumber ?? '').trim();
+      if (!number) continue;
+      const a = byNumber.get(number) ?? { number, name: null, type: null, balance: new Decimal(0), createAs: null, tbNames: new Set<string>() };
+      if (r.entityType === 'accounts') {
+        a.name = (v.accountName as string | null) ?? a.name;
+        a.type = (v.type as string | null) ?? a.type;
+        if (v.sourceNumber) a.createAs = String(v.accountNumber);
+      } else {
+        if (v.accountName) a.tbNames.add(String(v.accountName));
+        a.balance = a.balance.plus(amount(v.debit)).minus(amount(v.credit));
+        const fresh = v.newAccount as { number?: string } | undefined;
+        if (fresh?.number) a.createAs = fresh.number;
+      }
+      byNumber.set(number, a);
+    }
+    return [...byNumber.values()].map((a) => ({
+      number: a.number,
+      // Several names under one number are parties (Tally), not the account.
+      name: a.name ?? (a.tbNames.size === 1 ? [...a.tbNames][0] : null),
+      type: a.type,
+      balance: a.balance.toFixed(2),
+      createAs: a.createAs,
+    }));
   }
 
   async patchMappings(
@@ -453,6 +623,34 @@ export class MigrationBatchService {
         message:
           'Say why the row is skipped; the certificate lists every skipped row with its reason.',
       });
+    }
+    // Every report is as of one other date: the owner moves the cutover date
+    // to match (only to the date offered, never into the future).
+    if (dto.value?.startsWith('cutover:')) {
+      const offered = (issue.options ?? []).some((o) => o.value === dto.value);
+      const to = dto.value.slice('cutover:'.length);
+      if (!offered || !/^\d{4}-\d{2}-\d{2}$/.test(to))
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'That answer does not resolve this issue. Choose one of the offered options.',
+        });
+      if (to > businessToday())
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: `The cutover date ${to} is in the future. Choose today or an earlier day.`,
+        });
+      const from = batch.cutoverDate;
+      if (batch.status !== 'mapped') assertTransition(batch.status, 'mapped');
+      // One guarded update: only while the batch is still editable.
+      await transitionAtomically(
+        em,
+        batch,
+        'mapped',
+        { cutoverDate: to, signedOffAt: null, signedOffBy: null },
+        { editableOnly: true },
+      );
+      await this.log(companyId, user.id, 'migration_cutover_changed', id, { from, to, issue: issue.code });
+      return this.reanalyse(companyId, id);
     }
     const targets = dto.applyToAll
       ? await em.find(MigrationIssue, {
@@ -662,6 +860,52 @@ export class MigrationBatchService {
         throw new BadRequestException({
           code: issue.code,
           message: 'Remove this file and upload a readable copy.',
+        });
+      // A Peachtree difference or credit the owner may accept: kept on the
+      // account the message names, shown on the certificate.
+      case 'PEACHTREE_CONTROL_DIFFERENCE':
+      case 'PEACHTREE_NET_CREDIT':
+        return value === 'accept' && field.startsWith('peachtree::')
+          ? [{ kind: 'value', sheet: '', source: field, target: 'accept' }]
+          : [];
+      // A report's date the owner confirms, or credits they accept to hold
+      // on an advances account (sources/reports/canonical).
+      case 'SOURCE_REPORT_DATE':
+      case 'SOURCE_NET_CREDIT':
+        if (value === 'accept' && field.startsWith('report::'))
+          return [{ kind: 'value', sheet: '', source: field, target: 'accept' }];
+        throw new BadRequestException({
+          code: issue.code,
+          message:
+            'Export the report again as the message describes and upload it; the migration checks again then.',
+        });
+      case 'SOURCE_REPORTS_MISSING':
+      case 'SOURCE_REPORT_DUPLICATE':
+      case 'SOURCE_TOTALS_MISMATCH':
+        throw new BadRequestException({
+          code: issue.code,
+          message:
+            'Upload (or remove) the report as the message describes; the migration checks again then. Nothing is imported from a report FinMatrix cannot prove.',
+        });
+      case 'PEACHTREE_CROSSCHECK_FAILED':
+      case 'PEACHTREE_POSTED_AFTER_CUTOVER':
+        throw new BadRequestException({
+          code: issue.code,
+          message:
+            'This is fixed in Peachtree, not here: correct it there, make a new backup, remove this one and upload the new one.',
+        });
+      case 'PEACHTREE_FISCAL_YEAR':
+        throw new BadRequestException({
+          code: issue.code,
+          message:
+            "Change this company's fiscal year start in Settings → Company; the migration checks again when you return.",
+        });
+      case 'PEACHTREE_REPORTS_MISSING':
+      case 'PEACHTREE_REPORT_MISMATCH':
+        throw new BadRequestException({
+          code: issue.code,
+          message:
+            "Upload Peachtree's report as the message describes (or remove the wrong one); the migration checks again then.",
         });
       default:
         // INVALID_AMOUNT, INVALID_DATE, MISSING_REQUIRED_VALUE and other row problems.
@@ -917,6 +1161,7 @@ export class MigrationBatchService {
         companyName: company.name,
         sourceSystem: batch.sourceSystem,
         cutoverDate: batch.cutoverDate,
+        openingDate: openingDateOf(batch.cutoverDate),
         generatedAt: new Date().toISOString(),
         mode: 'commit',
         checks: batch.checks ?? [],
@@ -1124,6 +1369,8 @@ export class MigrationBatchService {
       id: batch.id,
       sourceSystem: batch.sourceSystem,
       cutoverDate: batch.cutoverDate,
+      // The date every posting carries and the books close through.
+      openingDate: openingDateOf(batch.cutoverDate),
       status: batch.status,
       step: stepFor(batch.status, blocking > 0),
       readiness: batch.readiness,
@@ -1143,6 +1390,23 @@ export class MigrationBatchService {
       updatedAt: batch.updatedAt.toISOString(),
       ...(detail
         ? {
+            uploads: (
+              await em.find(MigrationUpload, {
+                where: { batchId: batch.id, companyId: batch.companyId },
+                order: { createdAt: 'DESC' },
+                take: 5,
+              })
+            ).map((u) => ({
+              id: u.id,
+              name: u.originalName,
+              size: u.sizeBytes,
+              status: u.status,
+              progress: u.progress,
+              errorCode: u.errorCode,
+              error: u.error,
+              fileId: u.fileId,
+              updatedAt: u.updatedAt.toISOString(),
+            })),
             files: files.map((f) => ({
               id: f.id,
               originalName: f.originalName,

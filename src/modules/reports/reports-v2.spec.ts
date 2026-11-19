@@ -465,7 +465,9 @@ describe('Reports v2 — P&L non-operating subtypes', () => {
 /**
  * 2.1 — the document joins moved into a shared builder. The drill-down's SQL
  * and output must be exactly what they were: this is the literal the
- * statement-line drill-down ran before the extraction.
+ * statement-line drill-down ran before the extraction — with one deliberate
+ * change since: the invoice and bill joins also take a migration's
+ * receivable and payable rows, which name their open invoice or bill.
  */
 const PRE_EXTRACTION_ENTRIES_SQL = `SELECT g.id, g.date::text AS date, g.reference, g.memo,
               g.debit::numeric AS debit, g.credit::numeric AS credit,
@@ -480,10 +482,10 @@ const PRE_EXTRACTION_ENTRIES_SQL = `SELECT g.id, g.date::text AS date, g.referen
                        dc.name)                                AS "counterpartyName"
          FROM general_ledger g
          LEFT JOIN invoices inv       ON inv.id = g.source_id
-                                     AND g.source_type IN ('invoice','invoice_void')
+                                     AND g.source_type IN ('invoice','invoice_void','migration','migration_rollback')
          LEFT JOIN customers ic       ON ic.id = inv.customer_id
          LEFT JOIN bills bl           ON bl.id = g.source_id
-                                     AND g.source_type IN ('bill','bill_void')
+                                     AND g.source_type IN ('bill','bill_void','migration','migration_rollback')
          LEFT JOIN vendors bv         ON bv.id = bl.vendor_id
          LEFT JOIN credit_memos cm    ON cm.id = g.source_id
                                      AND g.source_type IN ('credit_memo','credit_memo_void','credit_memo_refund')

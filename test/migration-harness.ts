@@ -54,9 +54,11 @@ function assertIsolated(config: ConfigService): void {
     'CLOUDINARY_API_SECRET',
     'CLOUDINARY_URL',
   ].filter((k) => !!config.get<string>(k));
-  const workers = ['EXPORT_WORKER_ENABLED', 'MESSAGING_WORKER_ENABLED'].filter(
-    (k) => String(config.get(k)) !== 'false',
-  );
+  const workers = [
+    'EXPORT_WORKER_ENABLED',
+    'MESSAGING_WORKER_ENABLED',
+    'MIGRATION_READ_WORKER_ENABLED',
+  ].filter((k) => String(config.get(k)) !== 'false');
   if (live.length || workers.length) {
     throw new Error(
       `Migration harness is not isolated: ${[...live, ...workers].join(', ')} still set. ` +

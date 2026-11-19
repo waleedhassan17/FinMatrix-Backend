@@ -11,6 +11,9 @@ import { EntityManager } from 'typeorm';
  * into the books.
  */
 const IMPORTED = `batch_id = $1 AND company_id = $2 AND outcome = 'imported'`;
+/** A stock line's value: its own stock value when it gave one, else quantity × cost. */
+const STOCK_VALUE = `COALESCE(NULLIF(normalized->>'value', '')::numeric,
+  (normalized->>'quantityOnHand')::numeric * (normalized->>'unitCost')::numeric)`;
 
 export interface SourceTrialBalance {
   debits: string;
@@ -123,7 +126,7 @@ export async function expectedStockByItem(
     `SELECT (normalized->'skuRef'->>'kind') || ':' || (normalized->'skuRef'->>'id') AS "refKey",
             MIN(normalized->>'sku') AS sku,
             COALESCE(SUM((normalized->>'quantityOnHand')::numeric), 0)::text AS quantity,
-            COALESCE(SUM((normalized->>'quantityOnHand')::numeric * (normalized->>'unitCost')::numeric), 0)::text AS value
+            COALESCE(SUM(${STOCK_VALUE}), 0)::text AS value
        FROM migration_staging_rows
       WHERE ${IMPORTED} AND entity_type = 'stock'
       GROUP BY 1 ORDER BY 1`,
@@ -137,7 +140,7 @@ export async function expectedStockTotal(
   companyId: string,
 ): Promise<string> {
   const [r] = await em.query(
-    `SELECT COALESCE(SUM((normalized->>'quantityOnHand')::numeric * (normalized->>'unitCost')::numeric), 0)::text AS value
+    `SELECT COALESCE(SUM(${STOCK_VALUE}), 0)::text AS value
        FROM migration_staging_rows WHERE ${IMPORTED} AND entity_type = 'stock'`,
     [batchId, companyId],
   );
@@ -195,6 +198,20 @@ export async function expectedRowsAccounted(
       pending: number;
     }>
   >;
+}
+
+/** A Peachtree backup's figures set beside its reports' (sources/peachtree). */
+export async function expectedProofRows(
+  em: EntityManager,
+  batchId: string,
+  companyId: string,
+): Promise<Array<{ normalized: Record<string, string | null> }>> {
+  return em.query(
+    `SELECT normalized FROM migration_staging_rows
+      WHERE batch_id = $1 AND company_id = $2 AND entity_type = 'peachtree_proof'
+      ORDER BY row_number`,
+    [batchId, companyId],
+  );
 }
 
 /** The staging values a committed record must reproduce (round trip). */

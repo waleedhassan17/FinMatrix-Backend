@@ -67,6 +67,10 @@ export function configureHttpApp(app: INestApplication): {
       'X-Request-Id',
       'X-Company-Id',
       'Idempotency-Key',
+      // Each piece of a large Migration Center upload carries its SHA-256
+      // (migrations/uploads); without it here a browser's preflight refuses
+      // every piece.
+      'X-Part-Sha256',
     ],
     exposedHeaders: ['X-Request-Id', 'X-Total-Count'],
     maxAge: 86400,

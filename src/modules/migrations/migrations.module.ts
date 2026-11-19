@@ -21,6 +21,13 @@ import { MigrationIssue } from './entities/migration-issue.entity';
 import { MigrationMapping } from './entities/migration-mapping.entity';
 import { MigrationProfile } from './entities/migration-profile.entity';
 import { MigrationStagingRow } from './entities/migration-staging-row.entity';
+import {
+  MigrationUpload,
+  MigrationUploadPart,
+} from './entities/migration-upload.entity';
+import { MigrationReadWorker } from './uploads/migration-read.worker';
+import { MigrationUploadsController } from './uploads/migration-uploads.controller';
+import { MigrationUploadsService } from './uploads/migration-uploads.service';
 import { MigrationBatchService } from './migration-batch.service';
 import { MigrationsController } from './migrations.controller';
 import { MigrationChecksService } from './validation/migration-checks.service';
@@ -41,12 +48,14 @@ import { MigrationChecksService } from './validation/migration-checks.service';
       MigrationIssue,
       MigrationProfile,
       MigrationBatchRecord,
+      MigrationUpload,
+      MigrationUploadPart,
     ]),
     AccountsModule,
     InventoryModule,
     JournalEntriesModule,
   ],
-  controllers: [MigrationsController],
+  controllers: [MigrationsController, MigrationUploadsController],
   providers: [
     // The Anthropic client exists only when a key is configured; without one
     // the assistant reports itself disabled and nothing is ever sent out.
@@ -66,6 +75,8 @@ import { MigrationChecksService } from './validation/migration-checks.service';
     MigrationChecksService,
     MigrationCommitService,
     MigrationRollbackService,
+    MigrationUploadsService,
+    MigrationReadWorker,
   ],
   exports: [MigrationBatchService],
 })

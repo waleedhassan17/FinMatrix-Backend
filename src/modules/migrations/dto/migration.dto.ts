@@ -24,7 +24,8 @@ export class CreateMigrationDto {
 
   @ApiProperty({
     example: '2026-06-30',
-    description: 'Every migration posting is dated this day.',
+    description:
+      'The first day the books live in FinMatrix. The opening balances are those at the close of the day before, and every migration posting is dated that day.',
   })
   @IsString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
@@ -139,4 +140,16 @@ export class IssuesQueryDto {
   @IsInt()
   @Min(1)
   limit?: number;
+}
+
+export class StartUploadDto {
+  @ApiProperty({ example: 'Company 05102026.ptb' })
+  @IsString()
+  @MaxLength(255)
+  name!: string;
+
+  @ApiProperty({ example: 253618655, description: 'Bytes.' })
+  @IsInt()
+  @Min(1)
+  size!: number;
 }

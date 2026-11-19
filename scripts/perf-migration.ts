@@ -14,7 +14,7 @@
  *          API_BASE=http://localhost:3000/api/v1 npm run perf:migration
  *
  * Step 2 signs up a fresh owner, then times every step the owner triggers —
- * upload + analysis, validate (practice import, ten checks), sign-off,
+ * upload + analysis, validate (practice import, eleven checks), sign-off,
  * commit, undo — over HTTP. Around each step it resets and reads the API
  * process's peak resident memory (VmHWM in /proc/<pid>/status), so the
  * figures are the server's own, not a test harness's. It also counts the
@@ -310,11 +310,13 @@ async function main() {
       throw new Error(
         `blocking issues after analysis: ${JSON.stringify(up.data.issues)}`,
       );
-    const v = await step('validate (practice import, ten checks)', async () =>
-      must(
-        await call('POST', `/migrations/${id}/validate`, token, {}),
-        'validate',
-      ),
+    const v = await step(
+      'validate (practice import, eleven checks)',
+      async () =>
+        must(
+          await call('POST', `/migrations/${id}/validate`, token, {}),
+          'validate',
+        ),
     );
     if (v.data.status !== 'ready')
       throw new Error(
@@ -329,7 +331,7 @@ async function main() {
         'sign-off',
       ),
     );
-    await step('commit (real import, ten checks)', async () =>
+    await step('commit (real import, eleven checks)', async () =>
       must(await call('POST', `/migrations/${id}/commit`, token, {}), 'commit'),
     );
     const tb = must(

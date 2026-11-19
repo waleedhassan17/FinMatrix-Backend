@@ -149,6 +149,39 @@ describe('classifyPosting — by counterpart', () => {
     );
   });
 
+  it('keeps a migrated trial balance on the opening line, never as trade, loans or capital', () => {
+    // Cash and bank brought in beside receivables-via-clearing, a loan,
+    // capital, retained earnings and a year's income: before, the cash was
+    // matched against those credits and reported as receipts, loans, capital
+    // and drawings.
+    const tb = posting('migration', [
+      CASH(150000),
+      BANK(420500.5),
+      row('3950', 'equity', 'Other Equity', 245000),
+      row('2100', 'liability', 'Notes Payable', -200000),
+      row('3000', 'equity', 'Owner Equity', -300000),
+      row('3100', 'equity', 'Retained Earnings', -124250.5),
+      row('4000', 'revenue', 'Sales', -900000),
+      row('5000', 'expense', 'Cost of Goods Sold', 500000),
+      row('6000', 'expense', 'Operating', 120000),
+      row('2300', 'liability', 'Tax Payable', -40000),
+      row('1300', 'asset', 'Other Asset', 15000),
+      row('1500', 'asset', 'Fixed Asset', 95000),
+      row('3950', 'equity', 'Other Equity', -163250),
+      row('3950', 'equity', 'Other Equity', 182000),
+    ]);
+    const r = classifyPosting(tb);
+    expect(byLine(r)).toEqual({ 'fin.opening_balance': 570500.5 });
+    // Its undo is the same opening position, reversed.
+    const undo = classifyPosting(
+      posting(
+        'migration_rollback',
+        tb.rows.map((x) => ({ ...x, id: `${x.id}u`, amount: -x.amount })),
+      ),
+    );
+    expect(byLine(undo)).toEqual({ 'fin.opening_balance': -570500.5 });
+  });
+
   it('keeps trade cash on the line its document type always used', () => {
     const r = classifyPosting(
       posting('payment', [
@@ -245,6 +278,23 @@ describe('nonCashShares — what the indirect method must leave out', () => {
       row('3900', 'equity', 'Opening Balance Equity', -500),
     ]);
     expect(nonCashShares(p).get(inv.id)).toBe(1);
+  });
+
+  it("takes a migration's receivables, tax and income out of the walk entirely", () => {
+    const ar = row('1100', 'asset', 'Accounts Receivable', 245000);
+    const tax = row('2300', 'liability', 'Tax Payable', -40000);
+    const sales = row('4000', 'revenue', 'Sales', -900000);
+    const p = posting('migration', [
+      CASH(100000),
+      ar,
+      tax,
+      sales,
+      row('3000', 'equity', 'Owner Equity', 595000),
+    ]);
+    const shares = nonCashShares(p);
+    expect(shares.get(ar.id)).toBe(1);
+    expect(shares.get(tax.id)).toBe(1);
+    expect(shares.get(sales.id)).toBe(1);
   });
 
   it('takes the capex part of a credit purchase out of the AP increase', () => {

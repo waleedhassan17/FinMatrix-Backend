@@ -4,7 +4,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import Decimal from 'decimal.js';
 import { DataSource, EntityManager } from 'typeorm';
 import { addDaysIso } from '../../../common/utils/business-date.util';
@@ -14,7 +14,10 @@ import {
   normalizePartyCode,
   PARTY_CODE_PATTERN,
 } from '../../../common/utils/party-code.util';
-import { recordMovementAtAverage } from '../../../common/utils/inventory-movement.util';
+import {
+  recordInventoryMovement,
+  recordMovementAtAverage,
+} from '../../../common/utils/inventory-movement.util';
 import {
   ACCOUNT_SUB_TYPES,
   ACCT_AP,
@@ -36,7 +39,7 @@ import {
   PostingLineInput,
   PostingService,
 } from '../../journal-entries/posting.service';
-import { dayBefore } from '../../reports/fiscal-year';
+import { openingDateOf } from '../opening-date';
 import {
   AsTypedActuals,
   AsTypedFigures,
@@ -60,6 +63,7 @@ import {
   CHECK_LABELS,
   Materialised,
   MigrationChecksService,
+  STAGING_CHECK_CODES,
 } from '../validation/migration-checks.service';
 
 /** Lines per open-item journal entry; each chunk balances on its own. */
@@ -82,6 +86,8 @@ export interface CertificatePreview {
   companyName: string;
   sourceSystem: string;
   cutoverDate: string;
+  /** The date every posting carries: the close of the day before cutover. */
+  openingDate: string;
   generatedAt: string;
   mode: 'dry-run' | 'commit';
   checks: MigrationCheckResult[];
@@ -99,6 +105,8 @@ export interface CertificatePreview {
   spotChecks: SpotCheck[];
   /** Every figure as typed, as read, and as the books now hold it. */
   asTyped?: AsTypedFigures;
+  /** The Peachtree backup the books came from, as uploaded; null otherwise. */
+  backup?: { name: string; sizeBytes: number; sha256: string } | null;
   postings: Array<{
     reference: string;
     memo: string;
@@ -134,11 +142,15 @@ const d = (v: unknown) =>
  * Posts a migration batch (§1.6), and dry-runs it — one code path for both.
  *
  * Everything happens inside ONE transaction. The dry run executes every
- * step exactly as the commit would, runs the ten checks against what it
+ * step exactly as the commit would, runs the eleven checks against what it
  * wrote, and then throws a private signal that rolls the transaction back;
  * the commit runs the same steps and the same checks and commits only when
  * every check passes, so a failing check can never leave half a migration in
  * the books.
+ *
+ * Every posting is dated the close of business on the day before the cutover
+ * (openingDateOf), the moment the source balances describe — see
+ * opening-date.ts for why that date and not the cutover day.
  *
  * Ledger entries go through PostingService.createEntry and nowhere else
  * (period lock, balance checks and account validation included). Documents
@@ -149,8 +161,11 @@ const d = (v: unknown) =>
  * journal entry) still holds.
  *
  *   Trial balance  → one entry; AR/AP/Inventory lines land on 3950 instead
- *   Open invoices  → Dr 1100 per invoice / Cr 3950, chunked; invoice rows
- *   Open bills     → Dr 3950 / Cr 2000 per bill, chunked; bill rows
+ *   Open invoices  → Dr 1100 per invoice / Cr 3950, chunked; invoice rows.
+ *                    Each 1100 line's ledger row names its invoice, so the
+ *                    customer's ledger and statement carry it.
+ *   Open bills     → Dr 3950 / Cr 2000 per bill, chunked; bill rows, each
+ *                    2000 line naming its bill
  *   Stock          → InventoryService.postOpeningStockBatchJe crediting 3950,
  *                    plus one `migration` movement per item at its cost
  *   → 3950 nets to zero exactly when the detail agrees with the trial balance.
@@ -431,9 +446,14 @@ export class MigrationCommitService {
     // new accounts of a given type, with no Accounts-sheet row behind them.
     for (const r of imported('trial_balance')) {
       const v = n(r);
-      const spec = v.newAccount as { type?: string; name?: string } | undefined;
-      if (v.targetAccount !== 'NEW' || !spec?.type) continue;
-      const number = String(v.accountNumber);
+      const spec = v.newAccount as
+        | { type?: string; name?: string; number?: string }
+        | undefined;
+      if (!spec?.type) continue;
+      // Under its own number, or (when FinMatrix uses that number for a
+      // different account) under the free number analysis gave it.
+      const number = String(spec.number ?? v.accountNumber);
+      if (v.targetAccount !== 'NEW' && v.targetAccount !== number) continue;
       if (createdAccounts.has(normalizeKey(number))) continue;
       if (
         await em.findOne(Account, {
@@ -590,11 +610,14 @@ export class MigrationCommitService {
     const invoiceRows = imported('open_invoices');
     for (let i = 0; i < invoiceRows.length; i += OPEN_ITEM_CHUNK) {
       const chunk = invoiceRows.slice(i, i + OPEN_ITEM_CHUNK);
+      // Ids chosen up front: each receivable line's ledger row names the
+      // invoice it carries, and the invoice names the entry.
+      const ids = chunk.map(() => randomUUID());
       const total = chunk.reduce(
         (s, r) => s.plus(d(n(r).amountDue)),
         new Decimal(0),
       );
-      const lines: PostingLineInput[] = chunk.map((r) => ({
+      const lines: PostingLineInput[] = chunk.map((r, k) => ({
         accountId: ar,
         description:
           `Open invoice ${String(n(r).invoiceNumber)} — ${String(n(r).customer)}`.slice(
@@ -603,6 +626,7 @@ export class MigrationCommitService {
           ),
         debit: d(n(r).amountDue).toFixed(4),
         credit: '0',
+        source: { sourceType: 'migration', sourceId: ids[k] },
       }));
       lines.push({
         accountId: clearing.id,
@@ -615,9 +639,9 @@ export class MigrationCommitService {
         `Migration: ${chunk.length} open invoice${chunk.length === 1 ? '' : 's'} from ${batch.sourceSystem}`,
         lines,
       );
-      for (const r of chunk) {
-        const id = await this.createInvoice(state, r, m, entry.id);
-        m.invoiceIds.push(id);
+      for (const [k, r] of chunk.entries()) {
+        await this.createInvoice(state, r, m, entry.id, ids[k]);
+        m.invoiceIds.push(ids[k]);
       }
     }
     state.created.invoices = invoiceRows.length;
@@ -626,6 +650,7 @@ export class MigrationCommitService {
     const billRows = imported('open_bills');
     for (let i = 0; i < billRows.length; i += OPEN_ITEM_CHUNK) {
       const chunk = billRows.slice(i, i + OPEN_ITEM_CHUNK);
+      const ids = chunk.map(() => randomUUID());
       const total = chunk.reduce(
         (s, r) => s.plus(d(n(r).amountDue)),
         new Decimal(0),
@@ -638,7 +663,7 @@ export class MigrationCommitService {
           credit: '0',
         },
       ];
-      for (const r of chunk) {
+      for (const [k, r] of chunk.entries()) {
         lines.push({
           accountId: ap,
           description:
@@ -648,6 +673,7 @@ export class MigrationCommitService {
             ),
           debit: '0',
           credit: d(n(r).amountDue).toFixed(4),
+          source: { sourceType: 'migration', sourceId: ids[k] },
         });
       }
       const entry = await this.postEntry(
@@ -655,9 +681,9 @@ export class MigrationCommitService {
         `Migration: ${chunk.length} open bill${chunk.length === 1 ? '' : 's'} from ${batch.sourceSystem}`,
         lines,
       );
-      for (const r of chunk) {
-        const id = await this.createBill(state, r, m, entry.id, clearing.id);
-        m.billIds.push(id);
+      for (const [k, r] of chunk.entries()) {
+        await this.createBill(state, r, m, entry.id, clearing.id, ids[k]);
+        m.billIds.push(ids[k]);
       }
     }
     state.created.bills = billRows.length;
@@ -665,7 +691,13 @@ export class MigrationCommitService {
     // ── Stock ─────────────────────────────────────────────────────────
     const stockRows = imported('stock');
     if (stockRows.length > 0) {
-      const entries: Array<{ item: InventoryItem; quantity: Decimal }> = [];
+      // `value` is the stock line's own value when it gave one (exact); else
+      // quantity × unit cost, as always.
+      const entries: Array<{
+        item: InventoryItem;
+        quantity: Decimal;
+        value?: Decimal;
+      }> = [];
       for (const r of stockRows) {
         const ref = n(r).skuRef as { kind: string; id: string };
         const itemId = m.items.get(`${ref.kind}:${ref.id}`);
@@ -697,14 +729,21 @@ export class MigrationCommitService {
         item.unitCost = d(n(r).unitCost).toFixed(4);
         item.quantityOnHand = qty.toFixed(4);
         await em.save(item);
-        entries.push({ item, quantity: qty });
+        const given = n(r).value;
+        entries.push({
+          item,
+          quantity: qty,
+          ...(given !== null && given !== undefined && given !== ''
+            ? { value: d(given) }
+            : {}),
+        });
       }
       const journal = await this.inventory.postOpeningStockBatchJe(
         em,
         batch.companyId,
         state.userId,
         entries,
-        batch.cutoverDate,
+        openingDateOf(batch.cutoverDate),
         `Migration: opening stock, ${entries.length} item${entries.length === 1 ? '' : 's'} from ${batch.sourceSystem}`,
         {
           creditAccountNumber: ACCT_MIGRATION_CLEARING,
@@ -719,7 +758,7 @@ export class MigrationCommitService {
           recordId: journal.id,
         });
         const value = entries.reduce(
-          (s, e) => s.plus(e.quantity.times(d(e.item.unitCost))),
+          (s, e) => s.plus(e.value ?? e.quantity.times(d(e.item.unitCost))),
           new Decimal(0),
         );
         state.postings.push({
@@ -729,10 +768,12 @@ export class MigrationCommitService {
           total: value.toFixed(2),
         });
       }
-      for (const { item, quantity } of entries) {
-        const move = await recordMovementAtAverage(em, item, {
-          date: batch.cutoverDate,
-          type: 'adjustment',
+      for (const { item, quantity, value } of entries) {
+        const movement = {
+          // The same day as its journal entry, so stock as at any date agrees
+          // with the inventory account as at that date.
+          date: openingDateOf(batch.cutoverDate),
+          type: 'adjustment' as const,
           quantityChange: quantity,
           balanceAfter: quantity,
           description: `Opening stock (migration from ${batch.sourceSystem})`,
@@ -740,7 +781,17 @@ export class MigrationCommitService {
           sourceType: 'migration',
           sourceId: batch.id,
           createdBy: state.userId,
-        });
+        };
+        // An exact value moves the item's carrying value by exactly what the
+        // journal entry posts, as every other movement does.
+        const move = value
+          ? await recordInventoryMovement(em, {
+              ...movement,
+              companyId: batch.companyId,
+              itemId: item.id,
+              valueChange: value,
+            })
+          : await recordMovementAtAverage(em, item, movement);
         state.records.push({ recordType: 'movement', recordId: move.id });
       }
       state.created.stockItems = entries.length;
@@ -755,7 +806,7 @@ export class MigrationCommitService {
   ) {
     const entry = await this.posting.createEntry(state.em, {
       companyId: state.batch.companyId,
-      date: state.batch.cutoverDate,
+      date: openingDateOf(state.batch.cutoverDate),
       memo,
       createdBy: state.userId,
       status: 'posted',
@@ -763,7 +814,16 @@ export class MigrationCommitService {
       sourceType: 'migration',
       sourceId: state.batch.id,
     });
-    state.records.push({ recordType: 'journal_entry', recordId: entry.id });
+    // The document each line names, by line order, so an undo can reverse
+    // every ledger row against the same document ('' = the batch itself).
+    const named = lines.some((l) => l.source);
+    state.records.push({
+      recordType: 'journal_entry',
+      recordId: entry.id,
+      meta: named
+        ? { lineSources: lines.map((l) => l.source?.sourceId ?? '') }
+        : null,
+    });
     state.postings.push({
       reference: entry.reference,
       memo,
@@ -936,6 +996,7 @@ export class MigrationCommitService {
     r: MigrationStagingRow,
     m: Materialised,
     journalEntryId: string,
+    id: string,
   ): Promise<string> {
     const { em, batch } = state;
     const v = r.normalized as Record<string, unknown>;
@@ -954,6 +1015,7 @@ export class MigrationCommitService {
     const paid = original.minus(due);
     const invoiceDate = String(v.invoiceDate);
     const invoice = em.create(Invoice, {
+      id,
       companyId: batch.companyId,
       customerId,
       invoiceNumber: String(v.invoiceNumber),
@@ -977,7 +1039,10 @@ export class MigrationCommitService {
       migrationBatchId: batch.id,
     });
     try {
-      await em.save(invoice);
+      // insert, not save: the id is already set, and save() would first look
+      // it up to decide between INSERT and UPDATE — one more round trip for
+      // each of 15,000 invoices. The audit trail still records the insert.
+      await em.insert(Invoice, invoice);
     } catch (err) {
       if (isUniqueViolation(err))
         throw new BadRequestException({
@@ -1026,6 +1091,7 @@ export class MigrationCommitService {
     m: Materialised,
     journalEntryId: string,
     clearingId: string,
+    id: string,
   ): Promise<string> {
     const { em, batch } = state;
     const v = r.normalized as Record<string, unknown>;
@@ -1041,6 +1107,7 @@ export class MigrationCommitService {
     const paid = original.minus(due);
     const billDate = String(v.billDate);
     const bill = em.create(Bill, {
+      id,
       companyId: batch.companyId,
       vendorId,
       billNumber: String(v.billNumber),
@@ -1059,7 +1126,7 @@ export class MigrationCommitService {
       legacyRef: String(v.billNumber).slice(0, 64),
       migrationBatchId: batch.id,
     });
-    await em.save(bill);
+    await em.insert(Bill, bill);
     // A bill line names an account; the migrated bill has no expense of its
     // own (it was expensed in the old books), so its line points at clearing.
     await em.save(
@@ -1097,8 +1164,9 @@ export class MigrationCommitService {
     staging: MigrationStagingRow[],
   ) {
     const { em, batch } = state;
-    // Period lock: nothing may be posted before the cutover any more.
-    const lock = dayBefore(batch.cutoverDate);
+    // Period lock: nothing may be posted before the cutover any more — the
+    // opening balances' own day included, so they stand alone on it.
+    const lock = openingDateOf(batch.cutoverDate);
     state.records.push({
       recordType: 'company_touched',
       recordId: company.id,
@@ -1253,11 +1321,18 @@ export class MigrationCommitService {
       counts.set(key, c);
     }
     const rejected = staging.filter((r) => r.outcome === 'rejected');
+    const [backup] = await state.em.query(
+      `SELECT original_name AS name, size_bytes::text AS size, sha256
+         FROM migration_files WHERE batch_id = $1 AND company_id = $2 AND kind = 'ptb'
+        LIMIT 1`,
+      [state.batch.id, state.batch.companyId],
+    );
     return {
       batchId: state.batch.id,
       companyName: company.name,
       sourceSystem: state.batch.sourceSystem,
       cutoverDate: state.batch.cutoverDate,
+      openingDate: openingDateOf(state.batch.cutoverDate),
       generatedAt: new Date().toISOString(),
       mode,
       checks,
@@ -1272,6 +1347,13 @@ export class MigrationCommitService {
       rejectedTotal: rejected.length,
       spotChecks: spot,
       asTyped,
+      backup: backup
+        ? {
+            name: backup.name,
+            sizeBytes: Number(backup.size),
+            sha256: backup.sha256,
+          }
+        : null,
       postings: state.postings,
       created: state.created,
     };
@@ -1310,15 +1392,17 @@ export async function assertBooksEmpty(
 }
 
 function notRun(reason: string): MigrationCheckResult[] {
-  return CHECK_CODES.slice(2).map((code) => ({
-    code,
-    label: CHECK_LABELS[code],
-    expected: '—',
-    actual: '—',
-    difference: '—',
-    passed: false,
-    details: [{ note: reason }],
-  }));
+  return CHECK_CODES.filter((c) => !STAGING_CHECK_CODES.includes(c)).map(
+    (code) => ({
+      code,
+      label: CHECK_LABELS[code],
+      expected: '—',
+      actual: '—',
+      difference: '—',
+      passed: false,
+      details: [{ note: reason }],
+    }),
+  );
 }
 
 /** The kind as a valid subtype for the type, case-insensitively; else the type's catch-all. */

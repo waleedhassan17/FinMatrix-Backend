@@ -94,13 +94,18 @@ export async function readUpload(
     }
     return { kind: 'xml', sheets: [], xml: [text] };
   }
-  if (buffer.subarray(0, 8192).includes(0)) {
+  const text = decodeText(buffer);
+  if (text === null) {
     throw new UnsupportedMediaTypeException({
       code: 'MIGRATION_FILE_UNREADABLE',
-      message: `${originalName} is not a spreadsheet, CSV, XML or ZIP file.`,
+      message: `${originalName} is not a spreadsheet, CSV, text, IIF, XML or ZIP file.`,
     });
   }
-  const grid = parseCsv(buffer.toString('utf8'));
+  // QuickBooks Desktop IIF: tab-separated lists, each after a "!KEYWORD" header.
+  if (/\.iif$/i.test(originalName) || /^!(HDR|ACCNT|CUST|VEND|INVITEM|TRNS)\t/m.test(text.slice(0, 4096))) {
+    return { kind: 'csv', sheets: parseIif(text, limits.maxRows, originalName) };
+  }
+  const grid = parseCsv(text, sniffDelimiter(text));
   if (grid.length > limits.maxRows)
     throw tooManyRows(originalName, limits.maxRows);
   return {
@@ -112,6 +117,85 @@ export async function readUpload(
       },
     ],
   };
+}
+
+/**
+ * Text as the exporting program wrote it: UTF-8 (with or without a BOM),
+ * UTF-16 with a BOM (some Windows exports), or — when the bytes are not
+ * valid UTF-8 — Windows-1252, which older Pakistani and Indian accounting
+ * programs write. Null for binary data.
+ */
+export function decodeText(buffer: Buffer): string | null {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(buffer.subarray(2));
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(buffer.subarray(2));
+  }
+  if (buffer.subarray(0, 8192).includes(0)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true })
+      .decode(buffer)
+      .replace(/^\uFEFF/, '');
+  } catch {
+    return new TextDecoder('windows-1252').decode(buffer);
+  }
+}
+
+/**
+ * The delimiter that splits the most of the first lines into the same
+ * number of cells (exports often start with one-cell title lines, so the
+ * first line alone says nothing).
+ */
+export function sniffDelimiter(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== '')
+    .slice(0, 30);
+  let best = ',';
+  let bestScore = -1;
+  for (const d of [',', '\t', ';', '|']) {
+    const counts = lines.map((l) => l.split(d).length - 1).filter((n) => n > 0);
+    if (!counts.length) continue;
+    const mode = counts.sort((a, b) => counts.filter((x) => x === b).length - counts.filter((x) => x === a).length)[0];
+    const score = counts.filter((n) => n === mode).length * mode;
+    if (score > bestScore) {
+      best = d;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
+ * QuickBooks Desktop IIF (Intuit Interchange Format): one sheet per list,
+ * named after its keyword (ACCNT, CUST, VEND, INVITEM…), with the "!KEYWORD"
+ * line's field names as its header. Transactions (TRNS/SPL) are skipped:
+ * a migration brings in balances, not history.
+ */
+export function parseIif(text: string, maxRows: number, originalName: string): SourceGrid[] {
+  const sheets = new Map<string, SourceGrid>();
+  let header: { keyword: string; fields: string[] } | null = null;
+  let rows = 0;
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    const cells = line.split('\t');
+    if (cells[0].startsWith('!')) {
+      const keyword = cells[0].slice(1).toUpperCase();
+      header = { keyword, fields: cells.slice(1) };
+      if (!['HDR', 'TRNS', 'SPL', 'ENDTRNS'].includes(keyword) && !sheets.has(keyword)) {
+        sheets.set(keyword, { name: keyword, rows: [{ rowNumber: i + 1, cells: cells.slice(1) }] });
+      }
+      return;
+    }
+    const h = header as { keyword: string; fields: string[] } | null;
+    if (!h || cells[0].toUpperCase() !== h.keyword) return;
+    const sheet = sheets.get(h.keyword);
+    if (!sheet) return;
+    if (++rows > maxRows) throw tooManyRows(originalName, maxRows);
+    sheet.rows.push({ rowNumber: i + 1, cells: cells.slice(1) });
+  });
+  return [...sheets.values()];
 }
 
 function stripExt(name: string): string {
@@ -164,6 +248,9 @@ async function readXlsx(
   return { kind: 'xlsx', sheets };
 }
 
+export const ZIP_LOCKED =
+  'This ZIP is password-protected, and FinMatrix cannot open a locked file. Open it on your computer with its password and upload the files inside it, or export again without a password.';
+
 async function readZip(
   buffer: Buffer,
   limits: ReadLimits,
@@ -191,7 +278,9 @@ async function readZip(
   for (const entry of entries) {
     const name = entry.entryName;
     const lower = name.toLowerCase();
-    if (!/\.(xlsx|csv|xml)$/.test(lower)) continue;
+    if (!/\.(xlsx|csv|xml|tsv|txt|iif)$/.test(lower)) continue;
+    // Zoho Books always locks its backups; other systems offer to.
+    if (entry.header.flags & 0x1) throw fail('MIGRATION_FILE_UNREADABLE', ZIP_LOCKED);
     const data = entry.getData();
     if (data.length > limits.maxBytes)
       throw fail(

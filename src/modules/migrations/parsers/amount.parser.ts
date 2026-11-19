@@ -20,6 +20,12 @@ const UPPER_LIMIT = new Decimal('1e13');
  *
  *   1,20,000   120,000   Rs 1,20,000   PKR 120000.50   ₨ 12,500/-   (1,200)
  *   -1200      1200 Dr   1,200 Cr      ۱۲۰۰۰۰ (Urdu digits)   "" → blank
+ *   $1,500.00  £2,000.50  USD 1,200   1.500,00 / 1 500,00 (decimal comma)
+ *
+ * A comma followed by exactly one or two digits at the end is a decimal
+ * comma (1.500,00 and 1 500,00 are 1500.00): no grouping, lakh or
+ * international, ever ends that way, so it cannot be mistaken for one —
+ * where ignoring it would read the amount a hundred times too large.
  *
  * The lakh grouping (1,20,000) is the commonest form in Pakistan and is what
  * breaks every parser written for 1,200,000; both are accepted by ignoring
@@ -57,6 +63,8 @@ export function parseAmount(input: unknown): AmountResult {
   // Currency words and symbols, anywhere.
   text = text
     .replace(/(rs\.?|pkr|rupees?|₨|rps\.?)/gi, '')
+    .replace(/[$£€¥]/g, '')
+    .replace(/\b(usd|gbp|eur|aed|sar|inr|cad|aud|nzd|cny|jpy|chf|qar|omr|kwd|bdt|lkr)\b\.?/gi, '')
     .replace(/\/-$/, '')
     .replace(/\s+/g, '');
   let negative = false;
@@ -73,6 +81,10 @@ export function parseAmount(input: unknown): AmountResult {
   if (text.endsWith('-')) {
     negative = !negative;
     text = text.slice(0, -1);
+  }
+  // Decimal comma: 1.500,00 / 1500,00 / 1500,5 (spaces already removed).
+  if (/^(\d{1,3}(\.\d{3})+|\d+),\d{1,2}$/.test(text)) {
+    text = text.replace(/\./g, '').replace(',', '.');
   }
   if (!/^\d[\d,]*(\.\d+)?$|^\.\d+$/.test(text)) {
     return { ok: false, error: `"${original}" is not an amount.` };

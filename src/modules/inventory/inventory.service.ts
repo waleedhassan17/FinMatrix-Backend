@@ -866,7 +866,12 @@ export class InventoryService {
     em: import('typeorm').EntityManager,
     companyId: string,
     userId: string,
-    entries: Array<{ item: InventoryItem; quantity: Decimal }>,
+    /**
+     * `value`, when given, is what the line is worth exactly (a migrated
+     * valuation whose unit cost cannot carry it to four decimals); otherwise
+     * quantity × the item's unit cost.
+     */
+    entries: Array<{ item: InventoryItem; quantity: Decimal; value?: Decimal }>,
     date: string,
     memo: string,
     /**
@@ -883,10 +888,10 @@ export class InventoryService {
     } = {},
   ): Promise<{ id: string; reference: string } | null> {
     const lines = entries
-      .map(({ item, quantity }) => ({
+      .map(({ item, quantity, value }) => ({
         item,
         quantity,
-        amount: quantity.times(toDecimal(item.unitCost)).toFixed(4),
+        amount: (value ?? quantity.times(toDecimal(item.unitCost))).toFixed(4),
       }))
       .filter((l) => toDecimal(l.amount).greaterThan(0));
     if (lines.length === 0) return null;

@@ -26,6 +26,7 @@ import {
   expectedControlNet,
   expectedOpenItemsByParty,
   expectedOpenItemsTotal,
+  expectedProofRows,
   expectedRoundTripRows,
   expectedRowsAccounted,
   expectedSourceTrialBalance,
@@ -49,6 +50,7 @@ export const CHECK_LABELS: Record<string, string> = {
   SOURCE_READBACK: 'Every figure reads the same two ways',
   ROWS_ACCOUNTED: 'Every source row accounted for',
   SOURCE_TB_BALANCED: 'Source trial balance balances',
+  SOURCE_REPORTS_MATCH: "Matches the source's own reports",
   ACCOUNT_BY_ACCOUNT: 'Each account balance equals its source',
   CLEARING_ZERO: 'Migration Clearing is zero',
   AR_MATCHES: 'Receivables match the open invoices',
@@ -59,13 +61,21 @@ export const CHECK_LABELS: Record<string, string> = {
 };
 
 export const CHECK_CODES = Object.keys(CHECK_LABELS);
+/** Checks that need only the staging rows; the rest need the postings. */
+export const STAGING_CHECK_CODES = [
+  'SOURCE_READBACK',
+  'ROWS_ACCOUNTED',
+  'SOURCE_TB_BALANCED',
+  'SOURCE_REPORTS_MATCH',
+];
 
 const d = (v: unknown) =>
   new Decimal(v === null || v === undefined || v === '' ? 0 : String(v));
 const s = (v: Decimal) => v.toFixed(2);
 
 /**
- * The ten hard checks (§1.7 plus the readback), zero tolerance.
+ * The eleven hard checks (§1.7, the readback, and the proof against the
+ * source system's own reports), zero tolerance.
  *
  * Check 0, SOURCE_READBACK, guards the other nine: their `expected` side is
  * computed from the figures as the first reader understood them, so a
@@ -94,7 +104,84 @@ export class MigrationChecksService {
       await this.sourceReadback(em, batch),
       await this.rowsAccounted(em, batch),
       await this.sourceTbBalanced(em, batch),
+      await this.sourceReportsMatch(em, batch),
     ];
+  }
+
+  // 3 ──────────────────────────────────────────────────────────────────
+  /**
+   * What FinMatrix read against what the source system itself printed.
+   * With a Peachtree backup: each account's balance, each customer's and
+   * vendor's amount due and each item's quantity, the backup's database
+   * files against Peachtree's reports. With report exports from any system:
+   * every total the reports print (party subtotals, report totals, trial
+   * balance debits and credits) against the lines FinMatrix read. Equal to
+   * the paisa. Not applicable to a filled-in starter workbook.
+   */
+  private async sourceReportsMatch(
+    em: EntityManager,
+    batch: MigrationBatch,
+  ): Promise<MigrationCheckResult> {
+    const [{ n }] = await em.query(
+      `SELECT COUNT(*)::int AS n FROM migration_files
+        WHERE batch_id = $1 AND company_id = $2 AND kind = 'ptb'`,
+      [batch.id, batch.companyId],
+    );
+    const rows = await expectedProofRows(em, batch.id, batch.companyId);
+    if (!Number(n) && rows.length === 0) {
+      return {
+        code: 'SOURCE_REPORTS_MATCH',
+        label: CHECK_LABELS.SOURCE_REPORTS_MATCH,
+        expected: '—',
+        actual: '—',
+        difference: '0',
+        passed: true,
+        details: [
+          {
+            note: 'Not applicable: no backup or report exports in this migration.',
+          },
+        ],
+      };
+    }
+    const details: Array<Record<string, unknown>> = [];
+    let differ = 0;
+    let trialBalanceLines = 0;
+    for (const r of rows) {
+      const v = r.normalized;
+      if (v.source === 'trial_balance') trialBalanceLines += 1;
+      const backup =
+        v.backup === null || v.backup === undefined ? null : d(v.backup);
+      const printed =
+        v.printed === null || v.printed === undefined ? null : d(v.printed);
+      const ok =
+        backup !== null && printed !== null
+          ? backup.equals(printed)
+          : (backup ?? printed ?? new Decimal(0)).isZero();
+      if (!ok) {
+        differ += 1;
+        if (details.length < 50)
+          details.push({
+            report: v.report,
+            line: v.key,
+            name: v.name,
+            backup: v.backup,
+            report_figure: v.printed,
+          });
+      }
+    }
+    if (trialBalanceLines === 0)
+      details.unshift({
+        note: "The source's trial balance has not been compared: upload it.",
+      });
+    return {
+      code: 'SOURCE_REPORTS_MATCH',
+      label: CHECK_LABELS.SOURCE_REPORTS_MATCH,
+      expected: `${rows.length} lines`,
+      actual: `${rows.length - differ} equal`,
+      difference: String(differ),
+      passed: differ === 0 && trialBalanceLines > 0,
+      details,
+    };
   }
 
   // 0 ──────────────────────────────────────────────────────────────────

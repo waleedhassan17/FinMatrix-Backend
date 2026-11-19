@@ -45,7 +45,7 @@ describe('readinessOf', () => {
     expect(
       readinessOf(counts({ customers: [4, 4, 0, 0, 0] }, [10, 10]), null),
     ).toBe(Math.floor((14 / (14 + CHECK_CODES.length)) * 100));
-    expect(CHECK_CODES.length).toBe(10);
+    expect(CHECK_CODES.length).toBe(11);
     // Rejected and merged rows are decided rows.
     expect(
       readinessOf(counts({ customers: [4, 1, 2, 1, 0] }, [0, 0]), allPass),
@@ -79,6 +79,7 @@ describe('renderCertificatePdf', () => {
         companyName: 'Al-Noor Traders',
         sourceSystem: 'finmatrix_template',
         cutoverDate: '2026-06-30',
+        openingDate: '2026-06-29',
         generatedAt: '2026-11-13T00:00:00.000Z',
         mode: 'commit',
         checks: CHECK_CODES.map((code) => ({

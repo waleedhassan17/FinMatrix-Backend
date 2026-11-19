@@ -1,7 +1,14 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseCompanyEntity } from '../../../common/base/base-company.entity';
 
-export type MigrationFileKind = 'xlsx' | 'csv' | 'zip' | 'xml';
+/**
+ * 'ptb' is a Peachtree / Sage 50 backup. Its original is not kept: it is read
+ * once (sources/peachtree) and `storageKey` holds what was read from it — a
+ * small JSON extract — while name, size and sha256 describe the backup as
+ * uploaded.
+ */
+/** 'extract': a large export already read by the background reader (its sheets, as JSON). */
+export type MigrationFileKind = 'xlsx' | 'csv' | 'zip' | 'xml' | 'ptb' | 'extract';
 
 export interface DetectedSheet {
   /** Sheet name inside the file (or the file name for a CSV). */
@@ -26,7 +33,14 @@ export class MigrationFile extends BaseCompanyEntity {
   @Column({ type: 'varchar', length: 128, name: 'mime_type' })
   mimeType!: string;
 
-  @Column({ type: 'int', name: 'size_bytes' })
+  @Column({
+    type: 'bigint',
+    name: 'size_bytes',
+    transformer: {
+      to: (v: number) => v,
+      from: (v: string | null) => (v === null ? null : Number(v)),
+    },
+  })
   sizeBytes!: number;
 
   @Column({ type: 'varchar', length: 255, name: 'storage_key' })

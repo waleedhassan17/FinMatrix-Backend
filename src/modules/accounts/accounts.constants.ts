@@ -235,6 +235,20 @@ export const ACCT_CUSTOMER_ADVANCES = '2400';
 export const ACCT_OPENING_BALANCE_EQUITY = '3900';
 /** Migration Center clearing account; nets to zero after a committed batch. */
 export const ACCT_MIGRATION_CLEARING = '3950';
+
+/**
+ * Postings that bring in a position held BEFORE the books started — not
+ * activity of the period they are dated in: a manual opening-balance entry,
+ * opening stock, a Migration Center import and the undo of one. Reports that
+ * describe a period's activity (cash flow, the sales-tax return, the sales
+ * reconciliation) show these apart from that activity.
+ */
+export const OPENING_POSITION_SOURCE_TYPES: readonly string[] = [
+  'opening_balance',
+  'opening_stock',
+  'migration',
+  'migration_rollback',
+];
 export const ACCT_SALES_REVENUE = '4000';
 export const ACCT_COGS = '5000';
 export const ACCT_SHRINKAGE_DAMAGE = '5400';

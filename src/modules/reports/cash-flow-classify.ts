@@ -37,14 +37,16 @@
  *     equity → financing (contributions); Owner Draws and Retained Earnings →
  *     financing (drawings). Anything else is operating, under the line its
  *     source_type has always carried, so trade lines keep their labels.
- *  4. Two exceptions. A posting whose source_type is `opening_balance` is an
- *     opening position, not a period flow, and keeps its own financing line as
- *     it always has. A `bill_payment` debits Accounts Payable, which says
+ *  4. Two exceptions. A posting of an opening position (OPENING_SOURCE_TYPES:
+ *     `opening_balance`, and a Migration Center import or its undo) is not a
+ *     period flow, and keeps its own financing line as `opening_balance`
+ *     always has. A `bill_payment` debits Accounts Payable, which says
  *     nothing about what was bought — so the AP row is looked through to the
  *     bills it paid and their posted debit lines (the D2 rule: proportional).
  *
  * Pure functions only: the SQL lives in ReportsService.
  */
+import { OPENING_POSITION_SOURCE_TYPES } from '../accounts/accounts.constants';
 import { classifyForStatement } from './statement-groups';
 
 export type CashFlowSectionKey = 'operating' | 'investing' | 'financing';
@@ -125,14 +127,20 @@ export const operatingLineFor = (sourceType: string): CashFlowLineKey =>
   OPERATING_LINE_BY_SOURCE[sourceType] ?? 'op.other';
 
 /**
- * Postings that record an opening position rather than activity in the period.
- * Their cash is the opening-balance financing line; their non-cash rows are
- * kept out of the indirect method's working capital entirely.
+ * Postings that record an opening position rather than activity in the period:
+ * a manual opening-balance entry, opening stock, a Migration Center import and
+ * its undo. Their cash is the opening-balance financing line; their non-cash
+ * rows are kept out of the indirect method's working capital entirely.
+ *
+ * A migration is dated the day before its cutover, so a period that starts on
+ * the cutover day never contains it (its cash is that period's beginning
+ * cash). This matters for a period that does contain it: without it, the
+ * opening cash was matched against the trial balance's other lines and shown
+ * as trade receipts, loans, capital and drawings.
  */
-export const OPENING_SOURCE_TYPES: ReadonlySet<string> = new Set([
-  'opening_balance',
-  'opening_stock',
-]);
+export const OPENING_SOURCE_TYPES: ReadonlySet<string> = new Set(
+  OPENING_POSITION_SOURCE_TYPES,
+);
 
 /** Below this a figure is ledger dust: the ledger carries four decimals. */
 export const EPS = 0.00005;
@@ -254,7 +262,7 @@ export function classifyPosting(
   }
 
   const opLine = operatingLineFor(p.sourceType);
-  if (p.sourceType === 'opening_balance') {
+  if (OPENING_SOURCE_TYPES.has(p.sourceType)) {
     return {
       ...base,
       transfer: false,

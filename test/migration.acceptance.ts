@@ -9,7 +9,7 @@
  *   2. Faulty golden files cannot import, each failing the right check:
  *      (b) unbalanced TB, (c) AR detail ≠ control, (d) stock ≠ inventory.
  *   3. (e) duplicates + ambiguous dates raise the right issues, and resolving
- *      them (dd/mm, merge, skip) makes the batch ready with all ten checks.
+ *      them (dd/mm, merge, skip) makes the batch ready with all eleven checks.
  *   4. (f) a messy generic spreadsheet is read, mapped and questioned.
  *   5. (a) the clean starter workbook: validate → dry run → sign-off → commit;
  *      every check Rs 0; TB balances; A = L + E; Migration Clearing = 0.
@@ -37,7 +37,7 @@ const PASSWORD = 'Test1234!';
 const FIX = path.join(__dirname, 'fixtures', 'migration');
 const CUTOVER = '2026-06-30';
 /** The hard checks: SOURCE_READBACK first, then the nine of §1.7. */
-const CHECKS = 10;
+const CHECKS = 11;
 const TODAY = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Karachi',
 }).format(new Date());
@@ -468,7 +468,7 @@ async function main() {
       );
       const v = await req('POST', `/migrations/${b.id}/validate`, {}, A.token);
       ok(
-        '(e) resolved: ready, readiness 100, all ten checks pass',
+        '(e) resolved: ready, readiness 100, all eleven checks pass',
         v.data?.status === 'ready' &&
           v.data?.readiness === 100 &&
           (v.data?.checks ?? []).length === CHECKS &&
@@ -939,7 +939,7 @@ async function main() {
       );
       const vt = await req('POST', `/migrations/${t.id}/validate`, {}, C.token);
       ok(
-        'Tally: ready at 100%, all ten checks pass at zero difference',
+        'Tally: ready at 100%, all eleven checks pass at zero difference',
         vt.data?.status === 'ready' &&
           vt.data?.readiness === 100 &&
           (vt.data?.checks ?? []).every((c: any) => c.passed),
@@ -1065,7 +1065,7 @@ async function main() {
       const v = await req('POST', `/migrations/${b.id}/validate`, {}, G.token);
       const checks = v.data?.checks ?? [];
       ok(
-        '(g): ready at 100% with all ten checks passing, SOURCE_READBACK first',
+        '(g): ready at 100% with all eleven checks passing, SOURCE_READBACK first',
         v.data?.status === 'ready' &&
           v.data?.readiness === 100 &&
           checks.length === CHECKS &&

@@ -296,6 +296,8 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   tax_payment: 'Tax payment',
   opening_balance: 'Opening balance',
   opening_stock: 'Opening stock',
+  migration: 'Migration (opening balances)',
+  migration_rollback: 'Migration undone',
   inventory_adjustment: 'Inventory adjustment',
   delivery_dispatch: 'Delivery dispatch',
   delivery_approval: 'Delivery approval',
@@ -318,6 +320,10 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
  * delivery-approval COGS row falls back to its journal number and names
  * nobody.
  *
+ * A migration's receivable and payable rows name their open invoice or bill
+ * in `source_id` (the rest of the migration names the batch, which matches no
+ * document), so the invoice and bill joins take them too.
+ *
  * One definition, used by the statement-line drill-down, the account register,
  * the cash-flow line drill-down and the account movement analysis, so the
  * same row names the same document everywhere.
@@ -332,10 +338,10 @@ const DOCUMENT_COLUMNS = `COALESCE(inv.invoice_number, bl.bill_number, cm.credit
                        dc.name)                                AS "counterpartyName"`;
 
 const DOCUMENT_JOINS = `LEFT JOIN invoices inv       ON inv.id = g.source_id
-                                     AND g.source_type IN ('invoice','invoice_void')
+                                     AND g.source_type IN ('invoice','invoice_void','migration','migration_rollback')
          LEFT JOIN customers ic       ON ic.id = inv.customer_id
          LEFT JOIN bills bl           ON bl.id = g.source_id
-                                     AND g.source_type IN ('bill','bill_void')
+                                     AND g.source_type IN ('bill','bill_void','migration','migration_rollback')
          LEFT JOIN vendors bv         ON bv.id = bl.vendor_id
          LEFT JOIN credit_memos cm    ON cm.id = g.source_id
                                      AND g.source_type IN ('credit_memo','credit_memo_void','credit_memo_refund')
@@ -488,7 +494,10 @@ export class ReportsService {
     s?: string,
     e?: string,
   ) {
-    let sql = `SELECT COALESCE(SUM(${col}::numeric),0) AS total FROM ${table} WHERE company_id=$1 AND status NOT IN ('void','draft')`;
+    // Sales and purchases raised here: an open item a migration brought in
+    // was sold or bought in the old books, and its income is already in the
+    // migrated trial balance.
+    let sql = `SELECT COALESCE(SUM(${col}::numeric),0) AS total FROM ${table} WHERE company_id=$1 AND status NOT IN ('void','draft') AND source <> 'migration'`;
     const params: any[] = [companyId];
     if (dateCol && s && e) {
       sql += ` AND ${dateCol} BETWEEN $2 AND $3`;
@@ -3774,6 +3783,11 @@ export class ReportsService {
       'vendor_credit',
       'vendor_credit_void',
     ]);
+    // A migrated trial balance carries the old books' sales and cost of sales
+    // up to the cutover. No item sold in FinMatrix earned them.
+    const migrated = ['migration', 'migration_rollback'];
+    const migratedRevenue = netOf('4000', migrated);
+    const migratedCogs = netOf('5000', migrated);
 
     const unallocatedRevenue = r2(glRevenue - revenue);
     const unallocatedCogs = r2(glCogs - cogs);
@@ -3781,7 +3795,7 @@ export class ReportsService {
     const reconcilingItems = [
       {
         label: 'Sales tax and non-stock lines',
-        revenue: r2(unallocatedRevenue - manualRevenue),
+        revenue: r2(unallocatedRevenue - manualRevenue - migratedRevenue),
         cogs: 0,
         reason:
           'Tax is collected, not earned, and a service or delivery charge on an invoice belongs to no item.',
@@ -3793,6 +3807,13 @@ export class ReportsService {
         reason: 'Posted straight to the account with no document behind them.',
       },
       {
+        label: 'Brought forward by a migration',
+        revenue: migratedRevenue,
+        cogs: migratedCogs,
+        reason:
+          "The old books' sales and cost of sales up to the cutover, from the migrated trial balance. No item sold here earned them.",
+      },
+      {
         label: 'Supplier returns',
         revenue: 0,
         cogs: supplierReturns,
@@ -3802,7 +3823,7 @@ export class ReportsService {
       {
         label: 'Costs billed directly',
         revenue: 0,
-        cogs: r2(unallocatedCogs - supplierReturns),
+        cogs: r2(unallocatedCogs - supplierReturns - migratedCogs),
         reason:
           'Bills coded straight to cost of sales. Bill lines carry an account, not an item.',
       },
@@ -3933,13 +3954,15 @@ export class ReportsService {
   // ── Analytics Dashboard ──────────────────────────────────────────
   async analyticsDashboard(companyId: string) {
     const revRows = await this.dataSource.query(
+      // Migrated open items are balances brought forward, not sales or
+      // purchases made in any month shown here (see sum()).
       `SELECT EXTRACT(YEAR FROM invoice_date::date)::int AS yr, EXTRACT(MONTH FROM invoice_date::date)::int AS mo, SUM(total::numeric) AS v
-       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`,
+       FROM invoices WHERE company_id=$1 AND status NOT IN ('void','draft') AND source <> 'migration' GROUP BY yr, mo ORDER BY yr, mo`,
       [companyId],
     );
     const billRows = await this.dataSource.query(
       `SELECT EXTRACT(YEAR FROM bill_date::date)::int AS yr, EXTRACT(MONTH FROM bill_date::date)::int AS mo, SUM(total::numeric) AS v
-       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') GROUP BY yr, mo ORDER BY yr, mo`,
+       FROM bills WHERE company_id=$1 AND status NOT IN ('void','draft') AND source <> 'migration' GROUP BY yr, mo ORDER BY yr, mo`,
       [companyId],
     );
     const revenueTrend = revRows.slice(-12).map((r: any) => ({
@@ -3955,7 +3978,7 @@ export class ReportsService {
 
     const expRows = await this.dataSource.query(
       `SELECT v.company_name AS label, SUM(b.total::numeric) AS value FROM bills b JOIN vendors v ON v.id=b.vendor_id
-       WHERE b.company_id=$1 AND b.status NOT IN ('void','draft') GROUP BY v.company_name ORDER BY value DESC`,
+       WHERE b.company_id=$1 AND b.status NOT IN ('void','draft') AND b.source <> 'migration' GROUP BY v.company_name ORDER BY value DESC`,
       [companyId],
     );
     const expenseCategories = expRows.map((e: any) => ({
@@ -3965,7 +3988,7 @@ export class ReportsService {
 
     const custRows = await this.dataSource.query(
       `SELECT c.name AS label, SUM(i.total::numeric) AS value FROM invoices i JOIN customers c ON c.id=i.customer_id
-       WHERE i.company_id=$1 AND i.status NOT IN ('void','draft') GROUP BY c.name ORDER BY value DESC LIMIT 5`,
+       WHERE i.company_id=$1 AND i.status NOT IN ('void','draft') AND i.source <> 'migration' GROUP BY c.name ORDER BY value DESC LIMIT 5`,
       [companyId],
     );
     const topCustomers = custRows.map((c: any) => ({
@@ -5273,7 +5296,7 @@ export class ReportsService {
            JOIN accounts a ON a.id = g.account_id
           WHERE g.company_id = $1 AND g.date >= $2 AND g.date <= $3
           GROUP BY g.reference
-         HAVING bool_or(g.source_type IN ('opening_balance', 'opening_stock'))
+         HAVING bool_or(g.source_type = ANY($4::text[]))
              OR bool_or(a.type = 'equity')
              OR bool_or(a.type = 'asset' AND (
                   a.sub_type = 'Fixed Asset'
@@ -5295,7 +5318,7 @@ export class ReportsService {
          JOIN candidates c ON c.reference = g.reference
          JOIN accounts a ON a.id = g.account_id
         WHERE g.company_id = $1`,
-      [companyId, s, e],
+      [companyId, s, e, [...OPENING_SOURCE_TYPES]],
     );
     const postings = this.toPostings(rows);
     const flowByRef = new Map(cash.flows.map((f) => [f.reference, f]));
