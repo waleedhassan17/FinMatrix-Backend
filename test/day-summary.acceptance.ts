@@ -13,6 +13,10 @@
  *   D. Staff see only what they prepared. An invoice an owner approves for a
  *      staff member is credited to that staff member, not the owner.
  *   F. The Day Book pages, totals across pages, searches (literally) and sorts.
+ *   G. Item-wise sales: per item sold, free (price 0), returned, net units and
+ *      net sales, cost and profit for the owner only, the tie to the day's
+ *      invoices and returns, Best sellers from the same figures, reorder
+ *      alerts, comparisons, ranges and their coded 400s.
  *   E. The digest schedule: owner-only, validated, and the hourly job sends
  *      one notification per day (a morning digest covers the day before).
  *
@@ -591,6 +595,271 @@ async function main() {
     codeOf(badSort) === 'INVALID_SORT' && codeOf(longQ) === 'INVALID_SEARCH',
     { sort: codeOf(badSort), q: codeOf(longQ) },
   );
+
+  // ═══════════════════════════════════════════════════════════════
+  // G. Item-wise sales: sold, free, returned, net units, net sales
+  // ═══════════════════════════════════════════════════════════════
+  console.log('\n— G. item-wise sales');
+  const sheet = async (q = '', token?: string) =>
+    data(
+      await req('GET', `/reports/day-summary/items${q}`, undefined, token),
+    ) as any;
+  const rowOf = (s: any, itemId: string) =>
+    (s?.rows ?? []).find((r: any) => r.itemId === itemId);
+  const newItem = async (
+    tag: string,
+    name: string,
+    category: string | undefined,
+    price: number,
+    cost: number,
+    reorderPoint: number,
+  ) => {
+    const made = data(
+      await req('POST', '/inventory/items', {
+        sku: `DS-${tag}-${RUN}`,
+        name: `${name} ${RUN}`,
+        ...(category ? { category } : {}),
+        unitOfMeasure: 'tin',
+        unitCost: String(cost),
+        sellingPrice: String(price),
+        reorderPoint: String(reorderPoint),
+        reorderQuantity: '24',
+      }),
+    );
+    const id: string | undefined = made?.id ?? made?.item?.id;
+    if (id) {
+      await req('POST', `/inventory/items/${id}/opening-stock`, {
+        quantity: '20',
+        asOfDate: TODAY,
+      });
+    }
+    return id;
+  };
+  const tinA = await newItem(
+    'A',
+    'Lactogen 1 400G',
+    'NESTLE POWDER',
+    1500,
+    1100,
+    15,
+  );
+  const tinB = await newItem('B', 'Milkpak 1000ML', 'MILK PACK', 360, 300, 0);
+  const tinC = await newItem('C', 'Loose Sundry', undefined, 100, 50, 0);
+  ok('G0 three stock items with opening stock', !!tinA && !!tinB && !!tinC, {
+    tinA,
+    tinB,
+    tinC,
+  });
+
+  const g0 = await sheet('?compare=previous');
+  const sum0 = await summary();
+  const itemLine = (itemId: string, qty: number, price: number) => ({
+    description: `Item ${itemId.slice(0, 6)}`,
+    quantity: String(qty),
+    unitPrice: String(price),
+    taxRate: '0',
+    itemId,
+    lineKind: 'item',
+  });
+  const soldInv = await req('POST', '/invoices', {
+    customerId: customer.id,
+    invoiceDate: TODAY,
+    dueDate: TODAY,
+    status: 'sent',
+    lines: [
+      itemLine(tinA!, 6, 1500),
+      itemLine(tinA!, 1, 0), // one tin free
+      itemLine(tinB!, 10, 360),
+    ],
+  });
+  const discInv = await req('POST', '/invoices', {
+    customerId: customer.id,
+    invoiceDate: TODAY,
+    dueDate: TODAY,
+    status: 'sent',
+    discountType: 'percent',
+    discountValue: '10',
+    lines: [itemLine(tinC!, 4, 100)],
+  });
+  const charge = data(await invoice(250));
+  const ret = await req('POST', '/credit-memos', {
+    customerId: customer.id,
+    date: TODAY,
+    reason: `Day summary return ${RUN}`,
+    lines: [
+      {
+        description: 'Returned tins',
+        quantity: '2',
+        unitPrice: '1500',
+        taxRate: '0',
+        itemId: tinA,
+      },
+    ],
+  });
+  ok(
+    'G1 the sale, the discounted sale, a charge and a return post',
+    soldInv.status < 300 &&
+      discInv.status < 300 &&
+      !!charge?.id &&
+      ret.status < 300,
+    [soldInv.status, discInv.status, ret.status, codeOf(soldInv), codeOf(ret)],
+  );
+
+  const g1 = await sheet('?compare=previous');
+  const a = rowOf(g1, tinA!);
+  ok(
+    'G2 Lactogen: 6 sold, 1 free, 2 returned → 5 net, Rs 6,000 net sales',
+    a?.sold === 6 &&
+      a?.free === 1 &&
+      a?.returned === 2 &&
+      a?.net === 5 &&
+      near(a?.value, 6000) &&
+      near(a?.returnsValue, 3000),
+    a,
+  );
+  ok(
+    'G3 the owner sees its cost (5 tins × 1,100) and profit; group and agency come with it',
+    near(a?.cost, 5500) &&
+      near(a?.profit, 500) &&
+      a?.margin === 8.3 &&
+      a?.category === 'NESTLE POWDER' &&
+      a?.code === `DS-A-${RUN}` &&
+      a?.unit === 'tin' &&
+      g1?.showCost === true,
+    a,
+  );
+  const b = rowOf(g1, tinB!);
+  const c = rowOf(g1, tinC!);
+  ok(
+    'G4 Milkpak: 10 sold for Rs 3,600; the uncategorised item keeps only 90% after the invoice’s 10% discount',
+    b?.sold === 10 &&
+      near(b?.value, 3600) &&
+      b?.category === 'MILK PACK' &&
+      c?.sold === 4 &&
+      near(c?.value, 360) &&
+      c?.category === null,
+    { b, c },
+  );
+  const svc = (g1?.rows ?? []).find(
+    (r: any) => r.kind === 'service' && r.name === `Day summary line ${RUN}`,
+  );
+  ok(
+    'G5 a line with no stock item is a service, named by its wording, with no cost of goods',
+    !!svc &&
+      svc.itemId === null &&
+      n(svc.value) >= 250 &&
+      svc.cost === null &&
+      svc.profit === null,
+    svc,
+  );
+  ok(
+    'G6 the sheet grew by exactly these sales, and shows the Free column',
+    near(
+      n(g1?.totals?.value) - n(g0?.totals?.value),
+      6000 + 3600 + 360 + 250,
+    ) && g1?.hasFree === true,
+    { before: g0?.totals, after: g1?.totals },
+  );
+  ok(
+    'G7 net sales tie to the day’s invoices (before tax, after discounts) less its returns',
+    g1?.reconciliation?.matches === true &&
+      near(n(g1?.reconciliation?.netSales), n(g1?.totals?.value), 0.05),
+    { reconciliation: g1?.reconciliation, total: g1?.totals?.value },
+  );
+  const sum1 = await summary();
+  ok(
+    'G8 the Money figures net the return: returns +3,000 and net = total − returns',
+    near(n(sum1?.sales?.returns) - n(sum0?.sales?.returns), 3000) &&
+      near(
+        n(sum1?.sales?.net),
+        n(sum1?.sales?.total) - n(sum1?.sales?.returns),
+      ),
+    sum1?.sales,
+  );
+  const disagree = (sum1?.topItems ?? []).filter((t: any) => {
+    const r = (g1?.rows ?? []).find(
+      (x: any) =>
+        (t.itemId && x.itemId === t.itemId) ||
+        (!t.itemId && !x.itemId && x.name === t.name),
+    );
+    return (
+      !r || !near(n(r.value), n(t.total)) || !near(n(r.net), n(t.quantity))
+    );
+  });
+  ok(
+    'G9 Best sellers are the sheet’s own lines and figures',
+    (sum1?.topItems ?? []).length > 0 && disagree.length === 0,
+    { top: sum1?.topItems, disagree },
+  );
+  const alert = (g1?.reorder ?? []).find((r: any) => r.itemId === tinA);
+  ok(
+    'G10 Lactogen is at its reorder point (20 − 6 − 1 + 2 = 15 ≤ 15); Milkpak, with none set, is not',
+    !!alert &&
+      alert.onHand === 15 &&
+      alert.reorderPoint === 15 &&
+      alert.reorderQuantity === 24 &&
+      alert.outOfStock === false &&
+      !(g1?.reorder ?? []).some((r: any) => r.itemId === tinB),
+    { alert, reorder: g1?.reorder },
+  );
+  ok(
+    'G11 compared with yesterday: a new item compares with 0, and the period is the day before',
+    g1?.compare === 'previous' &&
+      g1?.compareFrom === YESTERDAY &&
+      g1?.compareTo === YESTERDAY &&
+      a?.compareValue === 0,
+    { compare: g1?.compare, from: g1?.compareFrom, a: a?.compareValue },
+  );
+  const wk = await sheet('?compare=lastWeek');
+  ok(
+    'G12 compared with last week: the same day a week earlier',
+    wk?.compareFrom === addDaysIso(TODAY, -7) &&
+      wk?.compareTo === addDaysIso(TODAY, -7),
+    { from: wk?.compareFrom, to: wk?.compareTo },
+  );
+  const range = await sheet(`?from=${YESTERDAY}&to=${TODAY}`);
+  const yday = await sheet(`?date=${YESTERDAY}`);
+  ok(
+    'G13 a two-day range adds both days',
+    range?.from === YESTERDAY &&
+      range?.to === TODAY &&
+      near(
+        n(range?.totals?.value),
+        n(g1?.totals?.value) + n(yday?.totals?.value),
+      ) &&
+      rowOf(range, tinA!)?.net === 5,
+    { range: range?.totals, today: g1?.totals, yday: yday?.totals },
+  );
+  const [backwards, half, tooLong, badCompare] = await Promise.all([
+    req('GET', `/reports/day-summary/items?from=${TODAY}&to=${YESTERDAY}`),
+    req('GET', `/reports/day-summary/items?from=${TODAY}`),
+    req(
+      'GET',
+      `/reports/day-summary/items?from=${addDaysIso(TODAY, -400)}&to=${TODAY}`,
+    ),
+    req('GET', '/reports/day-summary/items?compare=month'),
+  ]);
+  ok(
+    'G14 a backwards, half or over-long range and an unknown comparison are coded 400s',
+    codeOf(backwards) === 'INVALID_RANGE' &&
+      codeOf(half) === 'INVALID_RANGE' &&
+      codeOf(tooLong) === 'INVALID_RANGE' &&
+      codeOf(badCompare) === 'INVALID_COMPARE',
+    [codeOf(backwards), codeOf(half), codeOf(tooLong), codeOf(badCompare)],
+  );
+  if (ST) {
+    const mine = await sheet('', ST);
+    ok(
+      'G15 staff see only the lines they sold, without cost or profit',
+      mine?.scope?.ownOnly === true &&
+        mine?.showCost === false &&
+        !rowOf(mine, tinA!) &&
+        (mine?.rows ?? []).every(
+          (r: any) => r.cost === null && r.profit === null,
+        ),
+      { scope: mine?.scope, rows: (mine?.rows ?? []).slice(0, 3) },
+    );
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // E. The digest

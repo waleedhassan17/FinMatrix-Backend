@@ -150,6 +150,10 @@ export interface DaySummaryResponse {
     total: number;
     /** Still owed on them now (credit sales not yet collected). */
     unpaid: number;
+    /** Customer returns (credit memos) dated the day, tax included. */
+    returns: number;
+    /** total − returns: what the day's sales came to after returns. */
+    net: number;
   };
   cash: {
     methods: DayMethodRow[];
@@ -222,6 +226,127 @@ export interface DayEntriesResponse {
   limit: number;
   /** ceil(total / limit); 0 when nothing matches. */
   pages: number;
+}
+
+// ── Item-wise sales ─────────────────────────────────────────────────────────
+
+/** What the item sheet compares itself with (the page's Compare control). */
+export const DAY_ITEM_COMPARES = ['previous', 'lastWeek'] as const;
+export type DayItemCompare = (typeof DAY_ITEM_COMPARES)[number];
+
+/**
+ * One line of the item-wise sales sheet: a stock item, or a service or charge
+ * (a line with no stock item, named by its wording).
+ *
+ * Quantities follow the stock: `sold` are priced units sold (invoices and
+ * delivered goods), `free` are units given at price 0, `returned` are units
+ * customers sent back (credit memos), and `net` = sold + free − returned is
+ * what left the shelves. `value` is net sales: before tax, after each
+ * invoice's discount, less returns — the basis the P&L and item reports use.
+ */
+export interface DayItemSheetRow {
+  kind: 'item' | 'service';
+  /** Null for a service or charge. */
+  itemId: string | null;
+  code: string | null;
+  name: string;
+  unit: string | null;
+  /** The item's category, trimmed; null when it has none. */
+  category: string | null;
+  /** The agency (principal) the item comes from, if set. */
+  agency: string | null;
+  sold: number;
+  free: number;
+  returned: number;
+  net: number;
+  value: number;
+  /** Value of the returns alone (a positive figure, inside `value`). */
+  returnsValue: number;
+  /**
+   * Owner only (null for staff), and stock items only (null for a service or
+   * charge, which carries no cost of goods): cost of what left the shelves.
+   */
+  cost: number | null;
+  profit: number | null;
+  /** profit / value as a percentage, 1 dp; null when value is 0. */
+  margin: number | null;
+  /** Some lines carry no recorded cost, so cost and profit are understated. */
+  costMissing: boolean;
+  /** Net sales in the comparison period; null when no comparison is asked. */
+  compareValue: number | null;
+}
+
+/** Sold in the comparison period only — so a group's comparison adds up. */
+export interface DayItemCompareOnly {
+  kind: 'item' | 'service';
+  itemId: string | null;
+  name: string;
+  category: string | null;
+  agency: string | null;
+  compareValue: number;
+}
+
+export interface DayItemSheetTotals {
+  /** Rows on the sheet (stock items and services). */
+  lines: number;
+  sold: number;
+  free: number;
+  returned: number;
+  net: number;
+  value: number;
+  returnsValue: number;
+  cost: number | null;
+  profit: number | null;
+  margin: number | null;
+  compareValue: number | null;
+}
+
+/** An item sold in the period that now needs reordering. */
+export interface DayReorderRow {
+  itemId: string;
+  code: string;
+  name: string;
+  unit: string | null;
+  onHand: number;
+  /** 0 when the item has none set. */
+  reorderPoint: number;
+  /** The quantity the item says to reorder; 0 when none set. */
+  reorderQuantity: number;
+  /** At or below zero. */
+  outOfStock: boolean;
+}
+
+export interface DayItemSheet {
+  from: string;
+  to: string;
+  today: string;
+  currency: string;
+  scope: DaySummaryResponse['scope'];
+  compare: DayItemCompare | null;
+  compareFrom: string | null;
+  compareTo: string | null;
+  /** Stock items first, then services and charges. Sorted by value. */
+  rows: DayItemSheetRow[];
+  compareOnly: DayItemCompareOnly[];
+  totals: DayItemSheetTotals;
+  /** Any units were given free in the period (shows the Free column). */
+  hasFree: boolean;
+  /** The viewer sees cost, profit and margin (owners). */
+  showCost: boolean;
+  /**
+   * How net sales tie to the documents: the period's invoices before tax and
+   * after discounts, less its returns before tax. `matches` is true when the
+   * sheet adds up to exactly that.
+   */
+  reconciliation: {
+    salesBeforeTax: number;
+    returns: number;
+    netSales: number;
+    matches: boolean;
+  };
+  /** Items that need reordering; null when the plan has no inventory. */
+  reorder: DayReorderRow[] | null;
+  generatedAt: string;
 }
 
 export interface DaySummarySchedule {

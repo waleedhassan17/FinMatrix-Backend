@@ -1,11 +1,17 @@
 import {
+  bestSellers,
+  buildItemSheet,
   buildKpi,
+  comparePeriod,
   digestDayDue,
   digestMoney,
   isIsoDate,
+  isoDayCount,
+  ItemFigures,
   localDayBounds,
   localIsoDate,
   longDayLabel,
+  marginOf,
   summaryWindow,
 } from './day-summary.util';
 import { digestContent } from './day-summary-cron.service';
@@ -121,7 +127,15 @@ describe('day-summary digest content', () => {
     },
     trendDates: [],
     documents: [],
-    sales: { subtotal: 0, discount: 0, tax: 0, total: 245000, unpaid: 65000 },
+    sales: {
+      subtotal: 0,
+      discount: 0,
+      tax: 0,
+      total: 245000,
+      unpaid: 65000,
+      returns: 0,
+      net: 245000,
+    },
     cash: { methods: [], received: 180000, paid: 0, net: 180000 },
     topCustomers: [{ id: 'c1', name: 'Ali <Traders>', count: 3, total: 90000 }],
     topItems: [],
@@ -188,5 +202,170 @@ describe('day-summary digest content', () => {
     const email = emailTemplates.daySummary(digestContent(quiet, 'Acme', 'x'));
     expect(email.html).toContain('Nothing was recorded');
     expect(email.text).toContain('Nothing was recorded on Thu 19 Nov 2026.');
+  });
+});
+
+describe('item-wise sales sheet', () => {
+  const fig = (over: Partial<ItemFigures>): ItemFigures => ({
+    kind: 'item',
+    itemId: 'i1',
+    serviceKey: null,
+    name: 'Lactogen 1 400G',
+    code: '001-006',
+    unit: 'tin',
+    category: 'NESTLE POWDER',
+    agency: 'Nestle',
+    sold: 0,
+    free: 0,
+    returned: 0,
+    value: 0,
+    returnsValue: 0,
+    cost: 0,
+    costMissing: false,
+    ...over,
+  });
+
+  it('counts days and compares with the period just before, or a week earlier', () => {
+    expect(isoDayCount('2026-10-25', '2026-10-25')).toBe(1);
+    expect(isoDayCount('2026-10-25', '2026-10-26')).toBe(2);
+    expect(isoDayCount('2024-01-01', '2024-12-31')).toBe(366);
+    expect(comparePeriod('2026-10-26', '2026-10-26', 'previous')).toEqual({
+      from: '2026-10-25',
+      to: '2026-10-25',
+    });
+    expect(comparePeriod('2026-10-25', '2026-10-26', 'previous')).toEqual({
+      from: '2026-10-23',
+      to: '2026-10-24',
+    });
+    expect(comparePeriod('2026-10-25', '2026-10-26', 'lastWeek')).toEqual({
+      from: '2026-10-18',
+      to: '2026-10-19',
+    });
+  });
+
+  it('nets sold + free − returned, and gives the owner cost, profit and margin', () => {
+    const s = buildItemSheet(
+      [
+        fig({
+          sold: 12,
+          free: 1,
+          returned: 2,
+          value: 9000,
+          returnsValue: 1800,
+          cost: 7150,
+        }),
+      ],
+      null,
+      true,
+    );
+    expect(s.rows[0]).toMatchObject({
+      sold: 12,
+      free: 1,
+      returned: 2,
+      net: 11,
+      value: 9000,
+      returnsValue: 1800,
+      cost: 7150,
+      profit: 1850,
+      margin: 20.6,
+      compareValue: null,
+    });
+    expect(s.hasFree).toBe(true);
+    expect(s.totals).toMatchObject({ lines: 1, net: 11, value: 9000 });
+  });
+
+  it('hides cost, profit and margin from staff', () => {
+    const s = buildItemSheet(
+      [fig({ sold: 1, value: 100, cost: 60, costMissing: true })],
+      null,
+      false,
+    );
+    expect(s.rows[0]).toMatchObject({
+      cost: null,
+      profit: null,
+      margin: null,
+      costMissing: false,
+    });
+    expect(s.totals).toMatchObject({ cost: null, profit: null, margin: null });
+  });
+
+  it('puts items before services, largest net sales first', () => {
+    const s = buildItemSheet(
+      [
+        fig({
+          kind: 'service',
+          itemId: null,
+          serviceKey: 'delivery charge',
+          name: 'Delivery charge',
+          value: 5000,
+        }),
+        fig({ itemId: 'a', name: 'Bunyad 900G', sold: 1, value: 700 }),
+        fig({ itemId: 'b', name: 'Nido 3+ 375G', sold: 2, value: 2100 }),
+      ],
+      null,
+      true,
+    );
+    expect(s.rows.map((r) => r.name)).toEqual([
+      'Nido 3+ 375G',
+      'Bunyad 900G',
+      'Delivery charge',
+    ]);
+    expect(s.hasFree).toBe(false);
+    // A charge has no cost of goods: no profit or margin of its own, and the
+    // sheet's profit and margin are the stock items'.
+    expect(s.rows[2]).toMatchObject({ cost: null, profit: null, margin: null });
+    expect(s.totals).toMatchObject({ value: 7800, cost: 0, profit: 2800 });
+    expect(s.totals.margin).toBe(100);
+  });
+
+  it('compares each line, and keeps lines sold only before so group totals add up', () => {
+    const s = buildItemSheet(
+      [fig({ itemId: 'a', sold: 3, value: 300 })],
+      [
+        fig({ itemId: 'a', sold: 2, value: 200 }),
+        fig({ itemId: 'gone', name: 'Cerelac Rice', sold: 1, value: 450 }),
+      ],
+      true,
+    );
+    expect(s.rows[0].compareValue).toBe(200);
+    expect(s.compareOnly).toEqual([
+      expect.objectContaining({
+        itemId: 'gone',
+        compareValue: 450,
+        category: 'NESTLE POWDER',
+      }),
+    ]);
+    expect(s.totals.compareValue).toBe(650);
+  });
+
+  it('a margin needs a value; a line only returned has a negative value', () => {
+    expect(marginOf(10, 0)).toBeNull();
+    expect(marginOf(-50, 200)).toBe(-25);
+    const s = buildItemSheet(
+      [fig({ returned: 1, value: -100, returnsValue: 100, cost: -60 })],
+      null,
+      true,
+    );
+    expect(s.rows[0]).toMatchObject({ net: -1, value: -100, profit: -40 });
+  });
+
+  it('best sellers are the sheet’s top lines, never a line that only came back', () => {
+    const top = bestSellers([
+      fig({ itemId: 'a', name: 'A', sold: 1, value: 100 }),
+      fig({
+        itemId: 'b',
+        name: 'B',
+        sold: 5,
+        free: 1,
+        returned: 1,
+        value: 900,
+      }),
+      fig({ itemId: 'c', name: 'C', returned: 2, value: -200 }),
+      fig({ itemId: 'd', name: 'D', free: 3, value: 0 }),
+    ]);
+    expect(top).toEqual([
+      { itemId: 'b', name: 'B', quantity: 5, total: 900 },
+      { itemId: 'a', name: 'A', quantity: 1, total: 100 },
+    ]);
   });
 });

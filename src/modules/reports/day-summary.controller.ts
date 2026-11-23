@@ -29,13 +29,19 @@ import {
   DAY_DOC_KINDS,
   DAY_ENTRY_FILTERS,
   DAY_ENTRY_SORTS,
+  DAY_ITEM_COMPARES,
   DayEntryFilter,
   DayEntrySort,
+  DayItemCompare,
 } from './day-summary.types';
+import {
+  isIsoDate,
+  isoDayCount,
+  MAX_ITEM_SHEET_DAYS,
+} from './day-summary.util';
 
 /** The longest search the Day Book accepts — a number or a name, not prose. */
 const MAX_SEARCH = 100;
-import { isIsoDate } from './day-summary.util';
 
 export class DaySummaryScheduleDto {
   @ApiPropertyOptional({ description: 'Send the end-of-day digest.' })
@@ -148,6 +154,46 @@ export class DaySummaryController {
     });
   }
 
+  @Get('items')
+  @Roles('admin', 'staff')
+  @ApiOperation({
+    summary:
+      'Item-wise sales for a day or a range: sold, free, returned, net units and net sales per item',
+  })
+  @ApiQuery({
+    name: 'date',
+    required: false,
+    description: 'One day, YYYY-MM-DD; default today',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: false,
+    description: `Start of a range (with to), at most ${MAX_ITEM_SHEET_DAYS} days`,
+  })
+  @ApiQuery({ name: 'to', required: false, description: 'End of the range' })
+  @ApiQuery({ name: 'createdBy', required: false })
+  @ApiQuery({
+    name: 'compare',
+    required: false,
+    description: DAY_ITEM_COMPARES.join(' | '),
+  })
+  items(
+    @CurrentCompany() companyId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('date') date?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('createdBy') createdBy?: string,
+    @Query('compare') compare?: string,
+  ) {
+    const range = this.checkedRange(date, from, to);
+    return this.svc.items(companyId, user, {
+      ...range,
+      createdBy: createdBy || null,
+      compare: this.checkedCompare(compare),
+    });
+  }
+
   @Get('schedule')
   @Roles('admin')
   @ApiOperation({ summary: "The owner's end-of-day digest settings" })
@@ -176,6 +222,53 @@ export class DaySummaryController {
       });
     }
     return v;
+  }
+
+  /**
+   * One day (`date`, or today) or a range (`from` and `to`, both given, in
+   * order, at most a year).
+   */
+  private checkedRange(
+    date?: string,
+    from?: string,
+    to?: string,
+  ): { from?: string; to?: string } {
+    if (!from && !to) {
+      const day = this.checkedDate(date);
+      return { from: day, to: day };
+    }
+    if (!from || !to) {
+      throw new BadRequestException({
+        code: 'INVALID_RANGE',
+        message: 'from and to must be given together.',
+      });
+    }
+    const start = this.checkedDate(from)!;
+    const end = this.checkedDate(to)!;
+    if (start > end) {
+      throw new BadRequestException({
+        code: 'INVALID_RANGE',
+        message: 'from must be on or before to.',
+      });
+    }
+    if (isoDayCount(start, end) > MAX_ITEM_SHEET_DAYS) {
+      throw new BadRequestException({
+        code: 'INVALID_RANGE',
+        message: `A range can cover at most ${MAX_ITEM_SHEET_DAYS} days.`,
+      });
+    }
+    return { from: start, to: end };
+  }
+
+  private checkedCompare(v?: string): DayItemCompare | null {
+    if (v === undefined || v === '') return null;
+    if (!(DAY_ITEM_COMPARES as readonly string[]).includes(v)) {
+      throw new BadRequestException({
+        code: 'INVALID_COMPARE',
+        message: `compare must be one of: ${DAY_ITEM_COMPARES.join(', ')}.`,
+      });
+    }
+    return v as DayItemCompare;
   }
 
   private checkedFilter(v?: string): DayEntryFilter {
