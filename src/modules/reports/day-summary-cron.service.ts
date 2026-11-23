@@ -65,6 +65,20 @@ export function digestContent(
       note: note(plural(h.orders.count, 'sales order'), change(h.orders)),
     });
   }
+  if (h.purchaseOrders) {
+    rows.push({
+      label: 'Purchase orders',
+      value: money(h.purchaseOrders.total),
+      note: note(`${h.purchaseOrders.count} placed`, change(h.purchaseOrders)),
+    });
+  }
+  if (h.goodsReceived && h.goodsReceived.count > 0) {
+    rows.push({
+      label: 'Goods received',
+      value: money(h.goodsReceived.total),
+      note: `at cost, on ${plural(h.goodsReceived.count, 'purchase order')}`,
+    });
+  }
   rows.push({
     label: 'Purchases',
     value: money(h.purchases.total),
@@ -96,7 +110,17 @@ export function digestContent(
     );
   }
   if (a.cancelledOrders > 0) {
-    attention.push(`${plural(a.cancelledOrders, 'sales order')} cancelled`);
+    attention.push(
+      s.purchasing
+        ? `${plural(a.cancelledOrders, 'order')} cancelled or withdrawn`
+        : `${plural(a.cancelledOrders, 'sales order')} cancelled`,
+    );
+  }
+  const overdue = s.purchasing?.position?.overdue;
+  if (overdue && overdue.count > 0) {
+    attention.push(
+      `${plural(overdue.count, 'purchase order')} overdue (${money(overdue.total)} still to arrive)`,
+    );
   }
 
   return {

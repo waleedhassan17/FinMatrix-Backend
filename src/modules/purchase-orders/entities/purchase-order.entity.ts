@@ -7,6 +7,7 @@ import { PurchaseOrderLine } from './purchase-order-line.entity';
 @Index(['companyId', 'poNumber'], { unique: true })
 @Index(['companyId', 'status'])
 @Index(['companyId', 'vendorId'])
+@Index('IDX_purchase_orders_company_order_date', ['companyId', 'orderDate'])
 export class PurchaseOrder extends BaseCompanyEntity {
   @Column({ type: 'uuid', name: 'vendor_id' })
   vendorId!: string;
@@ -40,6 +41,10 @@ export class PurchaseOrder extends BaseCompanyEntity {
 
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
+
+  /** Who raised it. Null on purchase orders from before this was recorded. */
+  @Column({ type: 'uuid', name: 'created_by', nullable: true })
+  createdBy!: string | null;
 
   @OneToMany(() => PurchaseOrderLine, (l) => l.order, { cascade: true })
   lines!: PurchaseOrderLine[];

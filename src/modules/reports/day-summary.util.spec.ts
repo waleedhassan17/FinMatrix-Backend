@@ -124,6 +124,8 @@ describe('day-summary digest content', () => {
       received: kpi(5, 180000),
       orders: null,
       purchases: kpi(1, 40000),
+      purchaseOrders: null,
+      goodsReceived: null,
     },
     trendDates: [],
     documents: [],
@@ -155,6 +157,7 @@ describe('day-summary digest content', () => {
       cancelledOrders: 0,
       voided: { count: 1, total: 5000 },
     },
+    purchasing: null,
     isEmpty: false,
     generatedAt: '',
   });
@@ -194,6 +197,44 @@ describe('day-summary digest content', () => {
     expect(email.html).not.toContain('Ali <Traders>');
     expect(email.text).toContain(
       'Sales: Rs 245,000 (12 invoices · +23% vs yesterday)',
+    );
+  });
+
+  it('adds the buying rows and the overdue warning for a business with purchase orders', () => {
+    const s = base();
+    s.headline.purchaseOrders = kpi(3, 90000, 45000);
+    s.headline.goodsReceived = kpi(2, 74000);
+    s.attention.cancelledOrders = 1;
+    s.purchasing = {
+      placed: { count: 3, total: 90000 },
+      received: { count: 2, total: 74000 },
+      billed: { count: 1, total: 40000 },
+      topVendors: [],
+      position: {
+        open: { count: 4, total: 120000 },
+        overdue: { count: 2, total: 35000, oldest: '2026-11-10' },
+        receivedNotBilled: { count: 1, total: 34000 },
+      },
+    };
+    const c = digestContent(s, 'Acme', 'x');
+    expect(c.rows.map((r) => r.label)).toEqual([
+      'Sales',
+      'Money received',
+      'Purchase orders',
+      'Goods received',
+      'Purchases',
+      'Still unpaid from these sales',
+      'Gross profit',
+    ]);
+    expect(c.rows[2]).toEqual({
+      label: 'Purchase orders',
+      value: 'Rs 90,000',
+      note: '3 placed · +100% vs yesterday',
+    });
+    expect(c.rows[3].note).toBe('at cost, on 2 purchase orders');
+    expect(c.attention).toContain('1 order cancelled or withdrawn');
+    expect(c.attention).toContain(
+      '2 purchase orders overdue (Rs 35,000 still to arrive)',
     );
   });
 

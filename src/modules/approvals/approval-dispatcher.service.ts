@@ -376,6 +376,8 @@ export class ApprovalDispatcher {
         );
         const po = await this.purchaseOrders.create(companyId, payload as any, {
           allowUnclassifiedLines: filedBeforeLineKinds,
+          // Credited to the staff member who asked, not the approving owner.
+          createdBy: opts.requestedBy ?? reviewerId,
         });
         return { id: po.id, journalEntryId: null };
       }

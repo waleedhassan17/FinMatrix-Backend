@@ -17,6 +17,10 @@
  *      net sales, cost and profit for the owner only, the tie to the day's
  *      invoices and returns, Best sellers from the same figures, reorder
  *      alerts, comparisons, ranges and their coded 400s.
+ *   H. Purchasing: POs placed (not drafts, not withdrawn), goods received at
+ *      cost, bills from POs, open, overdue and received-not-billed (the GRNI
+ *      balance), the Day Book's drafts and cancelled filters, the team table,
+ *      and staff credited with the POs an owner approved for them.
  *   E. The digest schedule: owner-only, validated, and the hourly job sends
  *      one notification per day (a morning digest covers the day before).
  *
@@ -859,6 +863,323 @@ async function main() {
         ),
       { scope: mine?.scope, rows: (mine?.rows ?? []).slice(0, 3) },
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // H. Purchasing: placed, received, billed, open, overdue
+  // ═══════════════════════════════════════════════════════════════
+  console.log('\n— H. purchasing');
+  const hS0 = await summary();
+  if (!hS0?.kinds?.includes('purchase_order')) {
+    ok(
+      'H0 a plan without purchase orders has no buying figures',
+      hS0?.purchasing === null && hS0?.headline?.purchaseOrders === null,
+      { purchasing: hS0?.purchasing, headline: hS0?.headline },
+    );
+  } else {
+    const vendor = data(
+      await req('POST', '/vendors', { companyName: `DS Supplier ${RUN}` }),
+    );
+    const stock = await newItem('P', 'Nido 400G', 'NESTLE POWDER', 450, 300, 0);
+    ok('H0 a supplier and a stock item', !!vendor?.id && !!stock, {
+      vendor: vendor?.id,
+      stock,
+    });
+    const po = async (
+      qty: number,
+      extra: Record<string, unknown> = {},
+      token?: string,
+    ) =>
+      data(
+        await req(
+          'POST',
+          '/purchase-orders',
+          {
+            vendorId: vendor.id,
+            orderDate: TODAY,
+            lines: [
+              {
+                description: `Nido ${RUN}`,
+                orderedQty: String(qty),
+                unitCost: '300',
+                taxRate: '0',
+                lineKind: 'item',
+                itemId: stock,
+              },
+            ],
+            ...extra,
+          },
+          token,
+        ),
+      ) as any;
+    const setStatus = (id: string, status: string, token?: string) =>
+      req('PATCH', `/purchase-orders/${id}/status`, { status }, token);
+    const receive = (order: any, qty: number, token?: string) =>
+      req(
+        'POST',
+        `/purchase-orders/${order.id}/receive`,
+        { lines: [{ lineId: order.lines[0].id, receivedQty: String(qty) }] },
+        token,
+      );
+    const purchaseOrdersToday = (s: any) =>
+      (s?.documents ?? []).find((x: any) => x.kind === 'purchase_order');
+    const position = (s: any) => s?.purchasing?.position;
+
+    const ownerTeam0 = (hS0?.team ?? []).reduce(
+      (t: number, r: any) => t + n(r.purchaseOrders?.count),
+      0,
+    );
+    const draftPo = await po(4);
+    const sentPo = await po(10, { expectedDate: addDaysIso(TODAY, 3) });
+    await setStatus(sentPo.id, 'sent');
+    const withdrawnPo = await po(2);
+    await setStatus(withdrawnPo.id, 'sent');
+    const withdrew = await setStatus(withdrawnPo.id, 'closed');
+    const latePo = await po(5, {
+      orderDate: addDaysIso(TODAY, -5),
+      expectedDate: addDaysIso(TODAY, -2),
+    });
+    await setStatus(latePo.id, 'sent');
+    const partPo = await po(10, { expectedDate: addDaysIso(TODAY, 2) });
+    await setStatus(partPo.id, 'sent');
+    const got6 = await receive(partPo, 6);
+    const billedRes = await req(
+      'POST',
+      `/purchase-orders/${partPo.id}/create-bill`,
+      { billDate: TODAY, dueDate: TODAY },
+    );
+    const got8 = await receive(partPo, 8);
+    ok(
+      'H1 the purchase orders are raised, sent, withdrawn, received and billed',
+      !!draftPo?.id &&
+        !!sentPo?.id &&
+        withdrew.status < 300 &&
+        !!latePo?.id &&
+        got6.status < 300 &&
+        billedRes.status < 300 &&
+        got8.status < 300,
+      {
+        withdrew: withdrew.body,
+        got6: got6.body,
+        billed: billedRes.body,
+        got8: got8.body,
+      },
+    );
+    const [creators] = [
+      await sql(
+        `SELECT count(*) FILTER (WHERE created_by IS NOT NULL)::int AS n
+           FROM purchase_orders WHERE id = ANY($1::uuid[])`,
+        [[draftPo.id, sentPo.id, partPo.id]],
+      ),
+    ];
+    ok(
+      'H2 a purchase order records who raised it',
+      n(creators[0]?.n) === 3,
+      creators,
+    );
+
+    const hS1 = await summary();
+    const hd = (path: (s: any) => unknown) => n(path(hS1)) - n(path(hS0));
+    ok(
+      'H3 POs placed +2 / +6,000: not the draft, the withdrawn one or the back-dated one',
+      hd((s) => s.headline.purchaseOrders.count) === 2 &&
+        near(
+          hd((s) => s.headline.purchaseOrders.total),
+          6000,
+        ) &&
+        hd((s) => s.purchasing.placed.count) === 2 &&
+        hd((s) => purchaseOrdersToday(s)?.count) === 2,
+      {
+        headline: [
+          hS0?.headline?.purchaseOrders,
+          hS1?.headline?.purchaseOrders,
+        ],
+      },
+    );
+    ok(
+      'H4 goods received +2,400 at cost on 1 purchase order (6 then 2 more)',
+      hd((s) => s.headline.goodsReceived.count) === 1 &&
+        near(
+          hd((s) => s.headline.goodsReceived.total),
+          2400,
+        ) &&
+        near(
+          hd((s) => s.purchasing.received.total),
+          2400,
+        ),
+      [hS0?.headline?.goodsReceived, hS1?.headline?.goodsReceived],
+    );
+    const moved = await sql(
+      `SELECT COALESCE(sum(value_change), 0)::float8 AS v
+         FROM inventory_movements
+        WHERE company_id = $1 AND type = 'receipt'
+          AND source_type = 'purchase_order' AND date = $2`,
+      [COMPANY, TODAY],
+    );
+    ok(
+      'H5 goods received is the receipts’ stock value',
+      near(n(hS1?.headline?.goodsReceived?.total), n(moved[0]?.v)),
+      { summary: hS1?.headline?.goodsReceived?.total, movements: moved[0]?.v },
+    );
+    ok(
+      'H6 billed from purchase orders +1 / +1,800',
+      hd((s) => s.purchasing.billed.count) === 1 &&
+        near(
+          hd((s) => s.purchasing.billed.total),
+          1800,
+        ),
+      [hS0?.purchasing?.billed, hS1?.purchasing?.billed],
+    );
+    const ourVendor = (hS1?.purchasing?.topVendors ?? []).find(
+      (v: any) => v.id === vendor.id,
+    );
+    ok(
+      'H7 the supplier is among the day’s top vendors (2 orders, 6,000)',
+      !!ourVendor && ourVendor.count === 2 && near(ourVendor.total, 6000),
+      hS1?.purchasing?.topVendors,
+    );
+    ok(
+      'H8 the draft PO is a draft to look at, the withdrawn one a called-off order',
+      hd((s) => s.attention.drafts) === 1 &&
+        hd((s) => s.attention.cancelledOrders) === 1,
+      [hS0?.attention, hS1?.attention],
+    );
+    ok(
+      'H9 the late PO is back-dated, not today’s',
+      hd((s) => s.attention.backdated) === 1,
+      [hS0?.attention?.backdated, hS1?.attention?.backdated],
+    );
+    ok(
+      'H10 open POs +3 / +5,100 still to arrive (sent 3,000 + late 1,500 + 2 left of the part-received 600)',
+      hd((s) => position(s).open.count) === 3 &&
+        near(
+          hd((s) => position(s).open.total),
+          5100,
+        ),
+      [position(hS0)?.open, position(hS1)?.open],
+    );
+    ok(
+      'H11 overdue +1 / +1,500, with the oldest expected date',
+      hd((s) => position(s).overdue.count) === 1 &&
+        near(
+          hd((s) => position(s).overdue.total),
+          1500,
+        ) &&
+        !!position(hS1)?.overdue?.oldest &&
+        position(hS1).overdue.oldest <= addDaysIso(TODAY, -2),
+      [position(hS0)?.overdue, position(hS1)?.overdue],
+    );
+    const grni = await sql(
+      `SELECT COALESCE(sum(l.grni_accrued - l.grni_cleared), 0)::float8 AS v
+         FROM purchase_order_lines l
+         JOIN purchase_orders x ON x.id = l.order_id
+        WHERE x.company_id = $1 AND x.status <> 'draft'`,
+      [COMPANY],
+    );
+    ok(
+      'H12 received not billed +600 (2 units), and it is the GRNI balance',
+      near(
+        hd((s) => position(s).receivedNotBilled.total),
+        600,
+      ) && near(n(position(hS1)?.receivedNotBilled?.total), n(grni[0]?.v)),
+      { position: position(hS1)?.receivedNotBilled, grni: grni[0]?.v },
+    );
+    const ownerTeam1 = (hS1?.team ?? []).reduce(
+      (t: number, r: any) => t + n(r.purchaseOrders?.count),
+      0,
+    );
+    const notRecorded = (hS1?.team ?? []).find((r: any) => r.userId === null);
+    ok(
+      'H13 the team table credits the 2 placed POs to a person',
+      ownerTeam1 - ownerTeam0 === 2 &&
+        n(notRecorded?.purchaseOrders?.count) ===
+          n(
+            (hS0?.team ?? []).find((r: any) => r.userId === null)
+              ?.purchaseOrders?.count,
+          ),
+      hS1?.team?.map((r: any) => [r.name, r.purchaseOrders]),
+    );
+    const drafts = await entries(`?type=drafts&limit=1000`);
+    const calledOff = await entries(`?type=cancelled&limit=1000`);
+    const poBook = await entries(`?type=purchase_order&limit=1000`);
+    const inBook = (page: any, id: string) =>
+      (page?.items ?? []).find((i: any) => i.id === id);
+    ok(
+      'H14 the Day Book: the draft under Drafts, the withdrawn PO under Cancelled as “withdrawn”, every PO dated today under POs',
+      !!inBook(drafts, draftPo.id) &&
+        inBook(calledOff, withdrawnPo.id)?.status === 'withdrawn' &&
+        !!inBook(poBook, sentPo.id) &&
+        !!inBook(poBook, partPo.id) &&
+        !!inBook(poBook, draftPo.id) &&
+        !inBook(poBook, latePo.id),
+      {
+        drafts: drafts?.items?.length,
+        cancelled: inBook(calledOff, withdrawnPo.id),
+      },
+    );
+
+    if (ST && staffId) {
+      const stH0 = await summary('', ST);
+      const asked = await po(3, {}, ST);
+      const approvedPo = await req(
+        'POST',
+        `/approvals/${asked?.requestId}/decide`,
+        { decision: 'approve' },
+      );
+      const madeId: string | undefined =
+        data(approvedPo)?.resultId ??
+        (
+          await sql(`SELECT result_id FROM approval_requests WHERE id = $1`, [
+            asked?.requestId,
+          ])
+        )[0]?.result_id;
+      const made = madeId
+        ? (data(await req('GET', `/purchase-orders/${madeId}`)) as any)
+        : null;
+      if (made?.id) {
+        await setStatus(made.id, 'sent', ST);
+        await receive(made, 2, ST);
+      }
+      const stH1 = await summary('', ST);
+      ok(
+        'H15 the PO the owner approved is the staff member’s: placed +1 / +900, received +600',
+        approvedPo.status < 300 &&
+          n(stH1?.headline?.purchaseOrders?.count) -
+            n(stH0?.headline?.purchaseOrders?.count) ===
+            1 &&
+          near(
+            n(stH1?.headline?.purchaseOrders?.total) -
+              n(stH0?.headline?.purchaseOrders?.total),
+            900,
+          ) &&
+          near(
+            n(stH1?.headline?.goodsReceived?.total) -
+              n(stH0?.headline?.goodsReceived?.total),
+            600,
+          ),
+        {
+          approved: approvedPo.status,
+          made: made?.id,
+          before: stH0?.headline?.purchaseOrders,
+          after: stH1?.headline?.purchaseOrders,
+          received: stH1?.headline?.goodsReceived,
+        },
+      );
+      ok(
+        'H16 staff get the day’s buying but not the company’s position',
+        stH1?.purchasing !== null && stH1?.purchasing?.position === null,
+        stH1?.purchasing,
+      );
+      const hS2 = await summary();
+      const staffTeam = (hS2?.team ?? []).find(
+        (r: any) => r.userId === staffId,
+      );
+      ok(
+        'H17 the owner’s team table shows the staff member’s PO',
+        n(staffTeam?.purchaseOrders?.count) >= 1,
+        staffTeam,
+      );
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
