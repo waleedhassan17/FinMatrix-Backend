@@ -60,6 +60,11 @@ export interface CreatePurchaseOrderOptions {
    * an account when they are billed instead.
    */
   allowUnclassifiedLines?: boolean;
+  /**
+   * Who raised it: the owner who entered it, or the staff member whose
+   * request was approved. Day Summary credits the PO to this person.
+   */
+  createdBy?: string | null;
 }
 
 @Injectable()
@@ -232,6 +237,7 @@ export class PurchaseOrdersService {
         total: subtotal.plus(tax).toFixed(4),
         status: 'draft',
         notes: dto.notes ?? null,
+        createdBy: opts.createdBy ?? null,
       });
       await manager.save(po);
       const lines = calc.map((l) =>

@@ -19,6 +19,8 @@ import {
   DayItemCompare,
   DayItemSheet,
   DayKpi,
+  DayPurchasePosition,
+  DayPurchasing,
   DayReorderRow,
   DaySummaryResponse,
   DaySummarySchedule,
@@ -41,6 +43,14 @@ export interface DaySummaryViewer {
   id: string;
   role: string;
 }
+
+/**
+ * A purchase order called off before anything arrived: closed with nothing
+ * received (the same rule as messaging's isPoWithdrawal).
+ */
+const PO_WITHDRAWN = `(x.status = 'closed' AND NOT EXISTS (
+  SELECT 1 FROM purchase_order_lines pol
+   WHERE pol.order_id = x.id AND pol.received_qty > 0))`;
 
 /**
  * How one document table maps onto a Day Book row. Every arm yields the same
@@ -70,9 +80,10 @@ interface Arm {
 }
 
 /**
- * Invoices, sales orders and estimates record their creator. Receipts, bills
- * and vendor payments do not, so the person comes from the journal entry the
- * document posted. Purchase orders post nothing and record no creator.
+ * Invoices, sales orders, estimates and purchase orders record their creator
+ * (purchase orders only since 1791300000000; older ones have none). Receipts,
+ * bills and vendor payments do not, so the person comes from the journal entry
+ * the document posted.
  *
  * Migrated documents (`source = 'migration'`) are the old books' open items:
  * they were dated long before they were imported, so counting them would put
@@ -174,14 +185,17 @@ const ARMS: Record<DayDocKind, Arm> = {
     dateCol: 'order_date',
     number: 'x.po_number',
     amount: 'x.total',
-    status: 'x.status',
+    // A purchase order has no cancelled status: one called off before anything
+    // arrived is closed with nothing received, and shows as withdrawn.
+    status: `CASE WHEN ${PO_WITHDRAWN} THEN 'withdrawn' ELSE x.status END`,
     method: 'NULL',
     partyCol: 'vendor_id',
     partyTable: 'vendors',
     partyName: 'p.company_name',
-    creator: 'NULL::uuid',
+    creator: 'x.created_by',
     joinJournal: false,
-    counted: 'true',
+    // Placed: issued to the supplier, and not called off.
+    counted: `x.status <> 'draft' AND NOT (${PO_WITHDRAWN})`,
     feature: 'purchaseOrders',
   },
   vendor_payment: {
@@ -214,6 +228,18 @@ const ARMS: Record<DayDocKind, Arm> = {
     feature: 'creditMemos',
   },
 };
+
+/** The document types whose drafts the owner is told about. */
+const DRAFT_KINDS: readonly DayDocKind[] = [
+  'invoice',
+  'bill',
+  'purchase_order',
+];
+const DRAFT_KINDS_SQL = `(${DRAFT_KINDS.map((k) => `'${k}'`).join(', ')})`;
+
+/** Orders called off: cancelled sales orders and withdrawn purchase orders. */
+const CALLED_OFF_SQL = `((d.kind = 'sales_order' AND d.status = 'cancelled')
+  OR (d.kind = 'purchase_order' AND d.status = 'withdrawn'))`;
 
 /** audit_trail resource types → the Day Book kind they are shown as. */
 const AUDIT_KINDS: Record<string, DayDocKind> = {
@@ -425,6 +451,7 @@ export class DaySummaryService {
     const bounds = localDayBounds(date, ctx.timezone);
     const day: DateFilter = { mode: 'dated', from: date, to: date };
     const has = (k: DayDocKind) => ctx.kinds.includes(k);
+    const buying = has('purchase_order');
 
     const [
       series,
@@ -438,6 +465,8 @@ export class DaySummaryService {
       profit,
       members,
       hourly,
+      receivedByDate,
+      buyingExtras,
     ] = await Promise.all([
       this.series(companyId, ctx.kinds, date, w.from, creatorId),
       this.backdatedCount(companyId, ctx.kinds, date, bounds, creatorId),
@@ -450,6 +479,13 @@ export class DaySummaryService {
       everyone ? this.reports.profitLoss(companyId, date, date) : null,
       owner ? this.members(companyId) : null,
       this.hourly(companyId, ctx.kinds, day, ctx.timezone, creatorId),
+      buying ? this.receivedSeries(companyId, w.from, date, creatorId) : null,
+      buying
+        ? this.purchasingExtras(companyId, ctx.kinds, day, creatorId, {
+            position: everyone,
+            today,
+          })
+        : null,
     ]);
 
     const kpi = (k: DayDocKind): DayKpi =>
@@ -458,6 +494,10 @@ export class DaySummaryService {
       const f = series.byKind.get(k)?.get(date);
       return { count: f?.count ?? 0, total: r2(f?.total ?? 0) };
     };
+
+    const goodsReceived = receivedByDate
+      ? buildKpi(receivedByDate, date)
+      : null;
 
     const methods = cash.methods;
     const received = r2(methods.reduce((t, m) => t + m.received, 0));
@@ -475,6 +515,8 @@ export class DaySummaryService {
         received: kpi('receipt'),
         orders: has('sales_order') ? kpi('sales_order') : null,
         purchases: kpi('bill'),
+        purchaseOrders: buying ? kpi('purchase_order') : null,
+        goodsReceived,
       },
       trendDates: w.trendDates,
       documents: ctx.kinds.map((kind) => ({ kind, ...figureOn(kind) })),
@@ -501,10 +543,22 @@ export class DaySummaryService {
         cancelledOrders: series.cancelled,
         voided,
       },
+      purchasing:
+        buyingExtras && goodsReceived
+          ? {
+              placed: figureOn('purchase_order'),
+              received: {
+                count: goodsReceived.count,
+                total: goodsReceived.total,
+              },
+              ...buyingExtras,
+            }
+          : null,
       isEmpty:
         series.rowsOnDate === 0 &&
         backdated === 0 &&
-        (voided?.count ?? 0) === 0,
+        (voided?.count ?? 0) === 0 &&
+        (goodsReceived?.count ?? 0) === 0,
       generatedAt: new Date().toISOString(),
     };
   }
@@ -530,9 +584,8 @@ export class DaySummaryService {
               COALESCE(sum(d.amount) FILTER (WHERE d.counted), 0) AS total,
               count(*)::int AS all_n,
               count(*) FILTER (WHERE d.status = 'draft'
-                                 AND d.kind IN ('invoice', 'bill'))::int AS drafts,
-              count(*) FILTER (WHERE d.status = 'cancelled'
-                                 AND d.kind = 'sales_order')::int AS cancelled
+                                 AND d.kind IN ${DRAFT_KINDS_SQL})::int AS drafts,
+              count(*) FILTER (WHERE ${CALLED_OFF_SQL})::int AS cancelled
          FROM (${docs}) d
         WHERE true ${this.creatorClause(p, creatorId)}
         GROUP BY d.kind, d.doc_date`,
@@ -610,6 +663,7 @@ export class DaySummaryService {
           salesOrders: zero(),
           estimates: zero(),
           receipts: zero(),
+          purchaseOrders: zero(),
           documents: 0,
         });
       }
@@ -620,6 +674,7 @@ export class DaySummaryService {
       else if (r.kind === 'sales_order') row.salesOrders = fig;
       else if (r.kind === 'estimate') row.estimates = fig;
       else if (r.kind === 'receipt') row.receipts = fig;
+      else if (r.kind === 'purchase_order') row.purchaseOrders = fig;
     }
     return [...people.values()].sort(
       (a, b) =>
@@ -628,6 +683,139 @@ export class DaySummaryService {
         b.documents - a.documents ||
         b.invoices.total - a.invoices.total,
     );
+  }
+
+  /**
+   * Stock received against purchase orders per date, at cost (the receipts'
+   * inventory value, net of corrections), with the number of purchase orders
+   * goods arrived on. Credited to whoever received them.
+   */
+  private async receivedSeries(
+    companyId: string,
+    from: string,
+    to: string,
+    creatorId: string | null,
+  ): Promise<Map<string, DayFigure>> {
+    const p = new Params();
+    const company = p.add(companyId);
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(
+      `SELECT to_char(m.date, 'YYYY-MM-DD') AS day,
+              count(DISTINCT m.source_id)::int AS n,
+              COALESCE(sum(m.value_change), 0) AS total
+         FROM inventory_movements m
+        WHERE m.company_id = ${company}
+          AND m.type = 'receipt' AND m.source_type = 'purchase_order'
+          AND m.date BETWEEN ${p.add(from)} AND ${p.add(to)}
+          ${creatorId ? `AND m.created_by = ${p.add(creatorId)}` : ''}
+        GROUP BY 1`,
+      p.values,
+    );
+    return new Map(
+      rows.map((r) => [
+        String(r.day),
+        { count: num(r.n), total: num(r.total) },
+      ]),
+    );
+  }
+
+  /**
+   * The buying side beyond the headline: suppliers ordered from, bills raised
+   * from purchase orders, and — for the owner's whole-company view — where
+   * the purchase orders stand now.
+   */
+  private async purchasingExtras(
+    companyId: string,
+    kinds: DayDocKind[],
+    day: DateFilter,
+    creatorId: string | null,
+    opts: { position: boolean; today: string },
+  ): Promise<Pick<DayPurchasing, 'billed' | 'topVendors' | 'position'>> {
+    const vendors = async () => {
+      const p = new Params();
+      const company = p.add(companyId);
+      const rows: Array<Record<string, unknown>> = await this.dataSource.query(
+        `SELECT d.party_id, d.party_name,
+                count(*)::int AS n, COALESCE(sum(d.amount), 0) AS total
+           FROM (${this.docs(['purchase_order'], p, company, day)}) d
+          WHERE d.counted ${this.creatorClause(p, creatorId)}
+          GROUP BY d.party_id, d.party_name
+          ORDER BY total DESC, n DESC
+          LIMIT 5`,
+        p.values,
+      );
+      return rows.map((r) => ({
+        id: String(r.party_id),
+        name: (r.party_name as string) || 'Unnamed supplier',
+        count: num(r.n),
+        total: r2(num(r.total)),
+      }));
+    };
+    const billed = async (): Promise<DayFigure> => {
+      if (!kinds.includes('bill')) return { count: 0, total: 0 };
+      const p = new Params();
+      const company = p.add(companyId);
+      const [r] = await this.dataSource.query(
+        `SELECT count(*)::int AS n, COALESCE(sum(d.amount), 0) AS total
+           FROM (${this.docs(['bill'], p, company, day)}) d
+           JOIN bills b ON b.id = d.id AND b.purchase_order_id IS NOT NULL
+          WHERE d.counted ${this.creatorClause(p, creatorId)}`,
+        p.values,
+      );
+      return { count: num(r?.n), total: r2(num(r?.total)) };
+    };
+    const [topVendors, billedFig, position] = await Promise.all([
+      vendors(),
+      billed(),
+      opts.position ? this.purchasePosition(companyId, opts.today) : null,
+    ]);
+    return { topVendors, billed: billedFig, position };
+  }
+
+  /**
+   * Where the company's purchase orders stand now: still to arrive, overdue,
+   * and received but not yet billed. Not tied to the day being viewed —
+   * received and billed quantities are kept as they stand, not by date.
+   */
+  private async purchasePosition(
+    companyId: string,
+    today: string,
+  ): Promise<DayPurchasePosition> {
+    const [r] = await this.dataSource.query(
+      `WITH po AS (
+         SELECT x.id, x.status, x.expected_date,
+                COALESCE(sum(GREATEST(l.ordered_qty - l.received_qty, 0)
+                              * l.unit_cost * (1 + COALESCE(l.tax_rate, 0) / 100)), 0) AS to_come,
+                COALESCE(sum(l.grni_accrued - l.grni_cleared), 0) AS grni
+           FROM purchase_orders x
+           LEFT JOIN purchase_order_lines l ON l.order_id = x.id
+          WHERE x.company_id = $1 AND x.status <> 'draft'
+          GROUP BY x.id
+       )
+       SELECT count(*) FILTER (WHERE status IN ('sent', 'partial'))::int AS open_n,
+              COALESCE(sum(to_come) FILTER (WHERE status IN ('sent', 'partial')), 0) AS open_total,
+              count(*) FILTER (WHERE status IN ('sent', 'partial')
+                                 AND expected_date < $2)::int AS overdue_n,
+              COALESCE(sum(to_come) FILTER (WHERE status IN ('sent', 'partial')
+                                              AND expected_date < $2), 0) AS overdue_total,
+              to_char(min(expected_date) FILTER (WHERE status IN ('sent', 'partial')
+                                                   AND expected_date < $2), 'YYYY-MM-DD') AS oldest,
+              count(*) FILTER (WHERE grni > 0.005)::int AS rnb_n,
+              COALESCE(sum(grni), 0) AS rnb_total
+         FROM po`,
+      [companyId, today],
+    );
+    return {
+      open: { count: num(r?.open_n), total: r2(num(r?.open_total)) },
+      overdue: {
+        count: num(r?.overdue_n),
+        total: r2(num(r?.overdue_total)),
+        oldest: (r?.oldest as string | null) ?? null,
+      },
+      receivedNotBilled: {
+        count: num(r?.rnb_n),
+        total: r2(num(r?.rnb_total)),
+      },
+    };
   }
 
   private async topCustomers(
@@ -1157,11 +1345,13 @@ export class DaySummaryService {
         before: date,
       };
     } else if (filter === 'drafts') {
-      kinds = kinds.filter((k) => k === 'invoice' || k === 'bill');
+      kinds = kinds.filter((k) => DRAFT_KINDS.includes(k));
       extra = `AND d.status = 'draft'`;
     } else if (filter === 'cancelled') {
-      kinds = kinds.filter((k) => k === 'sales_order');
-      extra = `AND d.status = 'cancelled'`;
+      kinds = kinds.filter(
+        (k) => k === 'sales_order' || k === 'purchase_order',
+      );
+      extra = `AND ${CALLED_OFF_SQL}`;
     } else if (filter !== 'all') {
       kinds = kinds.filter((k) => k === filter);
     }

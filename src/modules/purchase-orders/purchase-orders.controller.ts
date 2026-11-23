@@ -89,7 +89,9 @@ export class PurchaseOrdersController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePurchaseOrderDto,
   ) {
-    if (user.role === 'admin') return this.service.create(companyId, dto);
+    if (user.role === 'admin') {
+      return this.service.create(companyId, dto, { createdBy: user.id });
+    }
     // Refuse unclassified lines now, not when the owner tries to approve.
     await this.service.assertLinesValid(companyId, dto.lines);
     return this.approvals.createRequest(

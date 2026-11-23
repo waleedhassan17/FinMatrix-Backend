@@ -103,6 +103,8 @@ export interface DayUserRow {
   salesOrders: DayFigure;
   estimates: DayFigure;
   receipts: DayFigure;
+  /** Purchase orders placed (not drafts, not withdrawn). */
+  purchaseOrders: DayFigure;
   /** Every counted document this person prepared that day. */
   documents: number;
 }
@@ -110,12 +112,44 @@ export interface DayUserRow {
 export interface DayAttention {
   /** Entered on this day, dated earlier. */
   backdated: number;
-  /** Invoices and bills dated this day still in draft (not posted). */
+  /** Invoices, bills and purchase orders dated this day still in draft. */
   drafts: number;
-  /** Sales orders dated this day that are cancelled. */
+  /**
+   * Sales orders dated this day that are cancelled, and purchase orders
+   * withdrawn (closed with nothing received).
+   */
   cancelledOrders: number;
   /** Invoices, receipts, bills, … voided or deleted on this day. Owner only. */
   voided: DayFigure | null;
+}
+
+/** Where the company's purchase orders stand right now (not on the day). */
+export interface DayPurchasePosition {
+  /**
+   * Sent or partly received: how many, and the value still to arrive
+   * (ordered − received, at the PO's cost, tax included like its total).
+   */
+  open: DayFigure;
+  /** Of those, the ones expected before today; `oldest` is the earliest date. */
+  overdue: DayFigure & { oldest: string | null };
+  /**
+   * Goods received but not yet billed by the supplier — the purchase orders'
+   * GRNI balance, so it ties to the ledger. `count` is purchase orders.
+   */
+  receivedNotBilled: DayFigure;
+}
+
+export interface DayPurchasing {
+  /** Purchase orders dated the day: not drafts, not withdrawn. */
+  placed: DayFigure;
+  /** Same as headline.goodsReceived for the day. */
+  received: DayFigure;
+  /** Bills raised from purchase orders, dated the day. */
+  billed: DayFigure;
+  /** Suppliers by the value ordered from them on the day. */
+  topVendors: DayPartyRow[];
+  /** Owner, everyone's view only. */
+  position: DayPurchasePosition | null;
 }
 
 export interface DaySummaryResponse {
@@ -138,6 +172,13 @@ export interface DaySummaryResponse {
     /** Null when the plan has no sales orders. */
     orders: DayKpi | null;
     purchases: DayKpi;
+    /** Purchase orders placed. Null when the plan has no purchase orders. */
+    purchaseOrders: DayKpi | null;
+    /**
+     * Stock received against purchase orders, at cost; `count` is the number
+     * of purchase orders goods arrived on. Null without purchase orders.
+     */
+    goodsReceived: DayKpi | null;
   };
   /** The 7 dates `trend` arrays cover, oldest first. */
   trendDates: string[];
@@ -181,6 +222,8 @@ export interface DaySummaryResponse {
     netIncome: number;
   } | null;
   attention: DayAttention;
+  /** Buying: what was ordered, received and billed. Null without purchase orders. */
+  purchasing: DayPurchasing | null;
   /** Nothing at all was dated or entered on this day. */
   isEmpty: boolean;
   generatedAt: string;
