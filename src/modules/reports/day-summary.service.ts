@@ -16,13 +16,20 @@ import {
   DayEntrySort,
   DayFigure,
   DayHourRow,
+  DayItemCompare,
+  DayItemSheet,
   DayKpi,
+  DayReorderRow,
   DaySummaryResponse,
   DaySummarySchedule,
   DayUserRow,
 } from './day-summary.types';
 import {
+  bestSellers,
+  buildItemSheet,
   buildKpi,
+  comparePeriod,
+  ItemFigures,
   localDayBounds,
   num,
   r2,
@@ -263,6 +270,8 @@ export class DaySummaryService {
     timezone: string;
     currency: string;
     kinds: DayDocKind[];
+    /** The plan keeps stock (reorder alerts need it). */
+    inventory: boolean;
   }> {
     const [row] = await this.dataSource.query(
       `SELECT cs.timezone, cs.default_currency, c.home_currency
@@ -279,6 +288,7 @@ export class DaySummaryService {
         const f = ARMS[k].feature;
         return !f || features[f];
       }),
+      inventory: !!features.inventory,
     };
   }
 
@@ -421,7 +431,7 @@ export class DaySummaryService {
       backdated,
       team,
       topCustomers,
-      topItems,
+      itemsToday,
       cash,
       sales,
       voided,
@@ -433,9 +443,9 @@ export class DaySummaryService {
       this.backdatedCount(companyId, ctx.kinds, date, bounds, creatorId),
       everyone ? this.team(companyId, ctx.kinds, day) : null,
       this.topCustomers(companyId, day, creatorId),
-      this.topItems(companyId, day, creatorId),
+      this.itemFigures(companyId, ctx.kinds, day, creatorId),
       this.cash(companyId, day, creatorId),
-      this.invoiceBreakdown(companyId, day, creatorId),
+      this.invoiceBreakdown(companyId, ctx.kinds, day, creatorId),
       owner ? this.voidedFigure(companyId, bounds, creatorId) : null,
       everyone ? this.reports.profitLoss(companyId, date, date) : null,
       owner ? this.members(companyId) : null,
@@ -471,7 +481,8 @@ export class DaySummaryService {
       sales,
       cash: { methods, received, paid, net: r2(received - paid) },
       topCustomers,
-      topItems,
+      // The item-wise sheet's own figures, so the two always agree.
+      topItems: bestSellers(itemsToday),
       hourly,
       team,
       members,
@@ -644,43 +655,256 @@ export class DaySummaryService {
     }));
   }
 
+  // ── Item-wise sales ──────────────────────────────────────────────────────
+
   /**
-   * Best sellers by pre-tax value after the invoice's discount — the basis the
-   * item reports use. A line with no stock item is grouped by its wording.
+   * The item-wise sales sheet for one day or a range: per item (and per
+   * service or charge) the units sold, given free and returned, net units and
+   * net sales; for an owner also cost, profit and margin. With `compare`, each
+   * line carries its net sales in the comparison period too. Staff see the
+   * documents they prepared, exactly as in the rest of the Day Summary.
    */
-  private async topItems(
+  async items(
     companyId: string,
-    day: DateFilter,
+    viewer: DaySummaryViewer,
+    opts: {
+      from?: string;
+      to?: string;
+      createdBy?: string | null;
+      compare?: DayItemCompare | null;
+    } = {},
+  ): Promise<DayItemSheet> {
+    const ctx = await this.context(companyId);
+    const today = businessToday(ctx.timezone);
+    const from = opts.from || today;
+    const to = opts.to || from;
+    const scope = await this.scope(companyId, viewer, opts.createdBy);
+    const creatorId = scope.creator?.id ?? null;
+    const showCost = !scope.ownOnly;
+    const period: DateFilter = { mode: 'dated', from, to };
+    const compare = opts.compare ?? null;
+    const before = compare ? comparePeriod(from, to, compare) : null;
+
+    const [current, previous, tie] = await Promise.all([
+      this.itemFigures(companyId, ctx.kinds, period, creatorId),
+      before
+        ? this.itemFigures(
+            companyId,
+            ctx.kinds,
+            { mode: 'dated', ...before },
+            creatorId,
+          )
+        : null,
+      this.salesTie(companyId, ctx.kinds, period, creatorId),
+    ]);
+    const sheet = buildItemSheet(current, previous, showCost);
+    const moved = sheet.rows
+      .filter((r) => r.itemId && (r.sold > 0 || r.free > 0))
+      .map((r) => r.itemId!);
+    const netSales = r2(tie.sales - tie.returns);
+
+    return {
+      from,
+      to,
+      today,
+      currency: ctx.currency,
+      scope: { ownOnly: scope.ownOnly, createdBy: scope.creator },
+      compare,
+      compareFrom: before?.from ?? null,
+      compareTo: before?.to ?? null,
+      ...sheet,
+      showCost,
+      reconciliation: {
+        salesBeforeTax: r2(tie.sales),
+        returns: r2(tie.returns),
+        netSales,
+        matches: Math.abs(netSales - sheet.totals.value) < 0.05,
+      },
+      reorder: ctx.inventory ? await this.reorder(companyId, moved) : null,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Per item, and per service or charge, for the period: units sold, given
+   * free and returned, net sales and cost.
+   *
+   * The arithmetic is the item reports' (`ReportsService.itemSalesLinesSql`):
+   * a line's value is before tax and keeps only its share of the invoice's
+   * discount, returns are credit memo lines, and goods sold through the
+   * delivery flow come from what was delivered — the invoice a delivery
+   * raises carries the same goods as item-less lines, so those lines are left
+   * out rather than counted twice. The documents are the Day Summary's own
+   * (`docs`), so drafts, voids, migrated history, staff scope and approval
+   * crediting are exactly as on the rest of the page.
+   *
+   * A line at price 0 is a free unit (FinMatrix's free goods and samples).
+   */
+  private async itemFigures(
+    companyId: string,
+    kinds: DayDocKind[],
+    f: DateFilter,
     creatorId: string | null,
-  ) {
+  ): Promise<ItemFigures[]> {
+    const docKinds = (['invoice', 'credit_memo'] as const).filter((k) =>
+      kinds.includes(k),
+    );
     const p = new Params();
     const company = p.add(companyId);
+    const docs = this.docs(docKinds, p, company, f);
+    const creator = this.creatorClause(p, creatorId);
+    // The share of an invoice's pre-tax amount that survives its discount.
+    const kept = `(CASE WHEN i.subtotal::numeric > 0
+                        THEN 1 - COALESCE(i.discount_amount, 0)::numeric / i.subtotal::numeric
+                        ELSE 1 END)`;
     const rows: Array<Record<string, unknown>> = await this.dataSource.query(
-      `SELECT li.item_id,
-              COALESCE(max(it.name), max(btrim(li.description)), 'Item') AS name,
-              COALESCE(sum(li.quantity), 0) AS qty,
-              COALESCE(sum(
-                (li.line_total - COALESCE(li.tax_amount, 0)) *
-                (CASE WHEN i.subtotal::numeric > 0
-                      THEN 1 - COALESCE(i.discount_amount, 0)::numeric / i.subtotal::numeric
-                      ELSE 1 END)
-              ), 0) AS total
-         FROM (${this.docs(['invoice'], p, company, day)}) d
-         JOIN invoices i ON i.id = d.id
-         JOIN invoice_line_items li ON li.invoice_id = d.id
-         LEFT JOIN inventory_items it ON it.id = li.item_id
-        WHERE d.counted ${this.creatorClause(p, creatorId)}
-        GROUP BY li.item_id,
-                 (CASE WHEN li.item_id IS NULL THEN lower(btrim(li.description)) END)
-        ORDER BY total DESC
-        LIMIT 5`,
+      `WITH d AS (
+         SELECT d.kind, d.id FROM (${docs}) d WHERE d.counted ${creator}
+       ),
+       inv AS (
+         SELECT i.id, i.subtotal, i.discount_amount,
+                EXISTS (SELECT 1 FROM deliveries dl
+                         WHERE dl.company_id = ${company} AND dl.invoice_id = i.id
+                           AND dl.ledger_status = 'committed') AS from_delivery
+           FROM d JOIN invoices i ON d.kind = 'invoice' AND i.id = d.id
+       ),
+       lines AS (
+         SELECT li.item_id, btrim(li.description) AS label,
+                li.quantity::numeric AS qty,
+                (li.unit_price::numeric = 0) AS free,
+                false AS returned,
+                ((li.line_total - COALESCE(li.tax_amount, 0)) * ${kept})::numeric AS value,
+                COALESCE(li.cost_amount, 0)::numeric AS cost,
+                (li.item_id IS NOT NULL AND li.cost_amount IS NULL) AS cost_missing
+           FROM inv i JOIN invoice_line_items li ON li.invoice_id = i.id
+          WHERE li.item_id IS NOT NULL OR NOT i.from_delivery
+         UNION ALL
+         SELECT di.item_id, btrim(di.item_name), di.delivered_qty::numeric,
+                (di.unit_price::numeric = 0), false,
+                (di.delivered_qty * di.unit_price * ${kept})::numeric,
+                (di.delivered_qty * COALESCE(di.unit_cost, 0))::numeric,
+                (di.unit_cost IS NULL)
+           FROM inv i
+           -- The company first: deliveries.invoice_id has no index of its own.
+           JOIN deliveries dl ON dl.company_id = ${company} AND dl.invoice_id = i.id
+                             AND dl.ledger_status = 'committed'
+           JOIN delivery_items di ON di.delivery_id = dl.id
+          WHERE di.delivered_qty > 0
+         UNION ALL
+         SELECT cml.item_id, btrim(cml.description), cml.quantity::numeric,
+                (cml.unit_price::numeric = 0), true,
+                -(cml.quantity * cml.unit_price)::numeric,
+                -(cml.quantity * COALESCE(cml.restock_unit_cost, 0))::numeric,
+                (cml.item_id IS NOT NULL AND cml.restock_unit_cost IS NULL)
+           FROM d JOIN credit_memo_lines cml
+             ON d.kind = 'credit_memo' AND cml.credit_memo_id = d.id
+       ),
+       agg AS (
+         SELECT l.item_id,
+                (CASE WHEN l.item_id IS NULL
+                      THEN lower(regexp_replace(COALESCE(l.label, ''), '\\s+', ' ', 'g'))
+                 END) AS service_key,
+                max(l.label) AS label,
+                COALESCE(sum(l.qty) FILTER (WHERE NOT l.returned AND NOT l.free), 0) AS sold,
+                COALESCE(sum(l.qty) FILTER (WHERE NOT l.returned AND l.free), 0) AS free,
+                COALESCE(sum(l.qty) FILTER (WHERE l.returned), 0) AS returned,
+                COALESCE(sum(l.value), 0) AS value,
+                COALESCE(-sum(l.value) FILTER (WHERE l.returned), 0) AS returns_value,
+                COALESCE(sum(l.cost), 0) AS cost,
+                bool_or(l.cost_missing) AS cost_missing
+           FROM lines l
+          GROUP BY 1, 2
+       )
+       SELECT agg.*, it.sku, it.name AS item_name, it.unit_of_measure,
+              NULLIF(btrim(it.category), '') AS category, ag.name AS agency
+         FROM agg
+         LEFT JOIN inventory_items it ON it.id = agg.item_id
+         LEFT JOIN agencies ag ON ag.id = it.source_agency_id`,
       p.values,
     );
+    return rows.map((r) => {
+      const itemId = (r.item_id as string | null) ?? null;
+      return {
+        kind: itemId ? ('item' as const) : ('service' as const),
+        itemId,
+        serviceKey: itemId ? null : String(r.service_key ?? ''),
+        name:
+          (r.item_name as string) ||
+          (r.label as string) ||
+          (itemId ? 'Item' : 'Other charges'),
+        code: (r.sku as string | null) ?? null,
+        unit: (r.unit_of_measure as string | null) ?? null,
+        category: (r.category as string | null) ?? null,
+        agency: (r.agency as string | null) ?? null,
+        sold: num(r.sold),
+        free: num(r.free),
+        returned: num(r.returned),
+        value: num(r.value),
+        returnsValue: num(r.returns_value),
+        cost: num(r.cost),
+        costMissing: r.cost_missing === true,
+      };
+    });
+  }
+
+  /**
+   * What the period's documents say net sales are, for the sheet to tie to:
+   * invoices before tax and after their discounts, less returns before tax.
+   */
+  private async salesTie(
+    companyId: string,
+    kinds: DayDocKind[],
+    f: DateFilter,
+    creatorId: string | null,
+  ): Promise<{ sales: number; returns: number }> {
+    const docKinds = (['invoice', 'credit_memo'] as const).filter((k) =>
+      kinds.includes(k),
+    );
+    const p = new Params();
+    const company = p.add(companyId);
+    const [r] = await this.dataSource.query(
+      `SELECT COALESCE(sum(i.subtotal - COALESCE(i.discount_amount, 0)), 0) AS sales,
+              COALESCE(sum(cm.subtotal), 0) AS returns
+         FROM (${this.docs(docKinds, p, company, f)}) d
+         LEFT JOIN invoices i ON d.kind = 'invoice' AND i.id = d.id
+         LEFT JOIN credit_memos cm ON d.kind = 'credit_memo' AND cm.id = d.id
+        WHERE d.counted ${this.creatorClause(p, creatorId)}`,
+      p.values,
+    );
+    return { sales: num(r?.sales), returns: num(r?.returns) };
+  }
+
+  /**
+   * Of the items that left the shelves in the period, those that now need
+   * reordering: out of stock, or at or below their reorder point. Stock is as
+   * it stands now, which is what a reorder decision is made on.
+   */
+  private async reorder(
+    companyId: string,
+    itemIds: string[],
+  ): Promise<DayReorderRow[]> {
+    if (itemIds.length === 0) return [];
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(
+      `SELECT it.id, it.sku, it.name, it.unit_of_measure,
+              it.quantity_on_hand, it.reorder_point, it.reorder_quantity
+         FROM inventory_items it
+        WHERE it.company_id = $1 AND it.id = ANY($2::uuid[]) AND it.is_active
+          AND (it.quantity_on_hand <= 0
+               OR (it.reorder_point > 0 AND it.quantity_on_hand <= it.reorder_point))
+        ORDER BY (it.quantity_on_hand <= 0) DESC,
+                 it.quantity_on_hand - it.reorder_point, it.name
+        LIMIT 100`,
+      [companyId, itemIds],
+    );
     return rows.map((r) => ({
-      itemId: (r.item_id as string | null) ?? null,
-      name: String(r.name),
-      quantity: r2(num(r.qty)),
-      total: r2(num(r.total)),
+      itemId: String(r.id),
+      code: String(r.sku ?? ''),
+      name: String(r.name ?? 'Item'),
+      unit: (r.unit_of_measure as string | null) ?? null,
+      onHand: r2(num(r.quantity_on_hand)),
+      reorderPoint: r2(num(r.reorder_point)),
+      reorderQuantity: r2(num(r.reorder_quantity)),
+      outOfStock: num(r.quantity_on_hand) <= 0,
     }));
   }
 
@@ -769,11 +993,16 @@ export class DaySummaryService {
     };
   }
 
+  /** The day's posted invoices, broken down, and the returns against them. */
   private async invoiceBreakdown(
     companyId: string,
+    kinds: DayDocKind[],
     day: DateFilter,
     creatorId: string | null,
   ) {
+    const docKinds = (['invoice', 'credit_memo'] as const).filter((k) =>
+      kinds.includes(k),
+    );
     const p = new Params();
     const company = p.add(companyId);
     const [r] = await this.dataSource.query(
@@ -781,18 +1010,24 @@ export class DaySummaryService {
               COALESCE(sum(i.discount_amount), 0) AS discount,
               COALESCE(sum(i.tax_amount), 0) AS tax,
               COALESCE(sum(i.total), 0) AS total,
-              COALESCE(sum(i.balance), 0) AS unpaid
-         FROM (${this.docs(['invoice'], p, company, day)}) d
-         JOIN invoices i ON i.id = d.id
+              COALESCE(sum(i.balance), 0) AS unpaid,
+              COALESCE(sum(cm.total), 0) AS returns
+         FROM (${this.docs(docKinds, p, company, day)}) d
+         LEFT JOIN invoices i ON d.kind = 'invoice' AND i.id = d.id
+         LEFT JOIN credit_memos cm ON d.kind = 'credit_memo' AND cm.id = d.id
         WHERE d.counted ${this.creatorClause(p, creatorId)}`,
       p.values,
     );
+    const total = r2(num(r?.total));
+    const returns = r2(num(r?.returns));
     return {
       subtotal: r2(num(r?.subtotal)),
       discount: r2(num(r?.discount)),
       tax: r2(num(r?.tax)),
-      total: r2(num(r?.total)),
+      total,
       unpaid: r2(num(r?.unpaid)),
+      returns,
+      net: r2(total - returns),
     };
   }
 
