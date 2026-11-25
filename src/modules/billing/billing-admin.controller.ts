@@ -1,3 +1,4 @@
+import { PlanTermsDto } from '../super-admin/dto/update-company-status.dto';
 import {
   Body,
   Controller,
@@ -72,13 +73,19 @@ export class BillingAdminController {
     stream.pipe(res);
   }
 
+  /**
+   * Approve a submission. An ACTIVATION request needs the plan terms
+   * { plan?, startDate?, endDate } (plan defaults to the one requested);
+   * payments and trials ignore the body.
+   */
   @Patch(':id/approve')
   approve(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() terms: PlanTermsDto,
   ) {
     guardSuperAdmin(user);
-    return this.billing.approveSubmission(id, user.id);
+    return this.billing.approveSubmission(id, user.id, terms ?? {});
   }
 
   @Patch(':id/reject')

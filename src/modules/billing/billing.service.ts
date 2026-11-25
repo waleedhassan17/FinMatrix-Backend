@@ -14,15 +14,32 @@ import { UserCompany } from '../companies/entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
 import { StorageService } from '../../common/storage/storage.service';
 import { OperationalAuditService } from '../../common/audit/operational-audit.service';
+import { PlatformAuditService } from '../../common/audit/platform-audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
 import { reconcileRiderSeats } from '../delivery-personnel/rider-seats';
 import {
+  businessToday,
+  daysBetweenIso,
+} from '../../common/utils/business-date.util';
+import { trialReminderDays } from '../../config/launch.settings';
+import { TrialAttempt } from './entities/trial-attempt.entity';
+
+/** Customers are in Pakistan: trial days and reminder dates count in PKT. */
+export const BILLING_TIMEZONE = 'Asia/Karachi';
+import {
   PaymentSubmission,
   SubmissionKind,
+  SubmissionReviewSource,
   SubmissionStatus,
 } from './entities/payment-submission.entity';
+import {
+  AdminPlanTermsInput,
+  assertActivePlanTerms,
+  parseAdminPlanTerms,
+  requestedPlanLabel,
+} from './plan-terms';
 import { PlatformRevenue } from './entities/platform-revenue.entity';
 import { TrialClaim } from './entities/trial-claim.entity';
 import {
@@ -43,19 +60,26 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Days-remaining thresholds at which a trial-ending EMAIL goes out. In-app
- * reminders stay daily; three emails in the last week is enough to be heard
- * without becoming noise.
+ * The days-left thresholds at which a trial-ending reminder (email AND in-app)
+ * goes out — TRIAL_REMINDER_DAYS, default 7, 3, 1. Each is sent once per trial
+ * period.
  */
-export const TRIAL_EMAIL_MILESTONES = [7, 3, 1] as const;
+export function trialReminderMilestones(): number[] {
+  return trialReminderDays();
+}
 
 /**
  * The milestone a trial with `days` left has reached — the smallest threshold
  * that is still ≥ days — or null while it is further out than the largest.
  */
 export function trialEmailMilestone(days: number): number | null {
-  const reached = TRIAL_EMAIL_MILESTONES.filter((m) => days <= m);
+  const reached = trialReminderMilestones().filter((m) => days <= m);
   return reached.length ? Math.min(...reached) : null;
+}
+
+/** Calendar date (YYYY-MM-DD) of an instant in Asia/Karachi. */
+function karachiDate(d: Date): string {
+  return businessToday(BILLING_TIMEZONE, d);
 }
 
 /** Listing filter: a specific kind, or every non-trial payment. */
@@ -67,10 +91,25 @@ export interface SubmissionListFilters {
   order?: 'asc' | 'desc';
 }
 
-interface AdminRecipient {
+export interface AdminRecipient {
   userId: string;
   email: string | null;
   displayName: string;
+}
+
+/** Who is deciding a submission: a super-admin, or the system's instant approval. */
+export interface SubmissionReviewer {
+  userId: string | null;
+  source: SubmissionReviewSource;
+}
+
+/** Thrown when a decision would switch on a company a super-admin suspended. */
+export function companySuspendedError() {
+  return new ConflictException({
+    code: 'COMPANY_SUSPENDED',
+    message:
+      'This company is suspended. Reinstate it before switching a plan on.',
+  });
 }
 
 /** Add whole months to a date (clamps to end-of-month like most billing systems). */
@@ -93,10 +132,6 @@ function unpayablePlanMessage(plan: PlanKey): string {
     : 'The Free plan does not require a payment.';
 }
 
-function daysBetween(from: Date, to: Date): number {
-  return Math.ceil((to.getTime() - from.getTime()) / DAY_MS);
-}
-
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
@@ -115,6 +150,7 @@ export class BillingService {
     private readonly dataSource: DataSource,
     private readonly mail: MailService,
     private readonly audit: OperationalAuditService,
+    private readonly platformAudit: PlatformAuditService,
   ) {}
 
   /**
@@ -145,7 +181,10 @@ export class BillingService {
       ? new Date(company.subscriptionExpiryDate)
       : null;
     const accountStatus = normalizeCompanyStatus(company.status);
-    const daysRemaining = expiry ? daysBetween(now, expiry) : null;
+    // Calendar days in Asia/Karachi, the same count the reminders use.
+    const daysRemaining = expiry
+      ? daysBetweenIso(karachiDate(now), karachiDate(expiry))
+      : null;
 
     const lastSubmission = company.lastSubmissionId
       ? await this.submissionRepo.findOne({
@@ -176,7 +215,10 @@ export class BillingService {
         ? {
             id: lastSubmission.id,
             plan: lastSubmission.plan,
-            planLabel: getPlanConfig(lastSubmission.plan).label,
+            planLabel:
+              lastSubmission.kind === 'ACTIVATION'
+                ? requestedPlanLabel(lastSubmission.plan)
+                : getPlanConfig(lastSubmission.plan).label,
             kind: lastSubmission.kind,
             status: lastSubmission.status,
             amountMinorUnits: lastSubmission.amountMinorUnits,
@@ -199,6 +241,11 @@ export class BillingService {
       trialPending:
         lastSubmission?.kind === 'TRIAL' &&
         lastSubmission.status === 'submitted',
+      // An activation request is with the FinMatrix team.
+      activationPending:
+        lastSubmission?.kind === 'ACTIVATION' &&
+        lastSubmission.status === 'submitted',
+      suspended: !!company.suspendedAt,
     };
   }
 
@@ -501,7 +548,8 @@ export class BillingService {
       .orderBy('s.createdAt', filters.order === 'asc' ? 'ASC' : 'DESC');
     if (filters.status) qb.andWhere('s.status = :st', { st: filters.status });
     if (filters.kind === 'PAYMENT') {
-      qb.andWhere(`s.kind <> 'TRIAL'`);
+      // Real payments only: trials and activations carry no money.
+      qb.andWhere(`s.kind NOT IN ('TRIAL', 'ACTIVATION')`);
     } else if (filters.kind) {
       qb.andWhere('s.kind = :kind', { kind: filters.kind });
     }
@@ -526,7 +574,11 @@ export class BillingService {
    * Idempotent: re-approving an already-approved submission returns the same
    * result and records revenue only once (unique submission_id).
    */
-  async approveSubmission(submissionId: string, reviewerId: string) {
+  async approveSubmission(
+    submissionId: string,
+    reviewerId: string,
+    decision: AdminPlanTermsInput = {},
+  ) {
     // Emails and audit rows go out only once the transaction has COMMITTED:
     // telling an owner their trial is live, then rolling back, is worse than
     // telling them nothing.
@@ -552,11 +604,22 @@ export class BillingService {
       if (!company) throw new NotFoundException('Company not found');
 
       if (submission.kind === 'TRIAL') {
-        const outcome = await this.approveTrial(
+        const outcome = await this.approveTrialInTransaction(
+          em,
+          submission,
+          company,
+          { userId: reviewerId, source: 'admin' },
+        );
+        afterCommit = outcome.afterCommit;
+        return outcome.view;
+      }
+      if (submission.kind === 'ACTIVATION') {
+        const outcome = await this.approveActivation(
           em,
           submission,
           company,
           reviewerId,
+          decision,
         );
         afterCommit = outcome.afterCommit;
         return outcome.view;
@@ -570,6 +633,7 @@ export class BillingService {
       if (submission.status === 'rejected') {
         throw new BadRequestException('This submission was already rejected.');
       }
+      if (company.suspendedAt) throw companySuspendedError();
 
       const plan = normalizePlan(submission.plan);
       const config = getPlanConfig(plan);
@@ -609,11 +673,13 @@ export class BillingService {
       company.rejectionReason = null;
       // isTrial is deliberately left true: it is permanent trial history.
       if (convertingTrial) company.trialConvertedAt = now;
+      assertActivePlanTerms(company);
       await companyRepo.save(company);
 
       submission.status = 'approved';
       submission.reviewedBy = reviewerId;
       submission.reviewedAt = now;
+      submission.reviewSource = 'admin';
       submission.rejectionReason = null;
       await submissionRepo.save(submission);
 
@@ -662,35 +728,46 @@ export class BillingService {
   }
 
   /**
-   * TRIAL branch of approveSubmission — inside its transaction, with the
-   * submission and company rows already locked.
+   * Grant a free trial, INSIDE the caller's transaction, with the submission
+   * and company rows already locked by the caller.
+   *
+   * The one implementation behind every way a trial starts:
+   *   - a super-admin approving a held trial (approveSubmission, kind TRIAL);
+   *   - the instant approval of an eligible owner (TrialService.start), which
+   *     calls this in the SAME transaction that inserted the claim, so two
+   *     simultaneous requests can never both get a trial;
+   *   - a super-admin approving a path-B request as a trial, or granting one.
    *
    * An approved trial is an ordinary subscription on the trial plan: the same
    * columns, expiry mechanism, CompanyGuard check and cron as a paid one. The
-   * 30 days are counted from NOW — the approval — never from the request, so
-   * time spent waiting for review is not taken out of the trial.
+   * trial days are counted from NOW — the moment it is granted — never from
+   * the request, so time spent waiting for review is not taken out of it.
    *
-   * No platform_revenue row, on this path or the idempotent re-approve path.
+   * No platform_revenue row. Notifications, emails and audit run only after
+   * the caller's transaction commits (the returned afterCommit).
    */
-  private async approveTrial(
+  async approveTrialInTransaction(
     em: EntityManager,
     submission: PaymentSubmission,
     company: Company,
-    reviewerId: string,
+    reviewer: SubmissionReviewer,
   ): Promise<{
     view: ReturnType<BillingService['toSubmissionView']>;
     afterCommit: () => Promise<void>;
+    trialEndsAt: Date | null;
   }> {
     const noop = async () => undefined;
     if (submission.status === 'approved') {
       return {
         view: this.toSubmissionView(submission, company.name),
         afterCommit: noop,
+        trialEndsAt: company.subscriptionExpiryDate ?? null,
       };
     }
     if (submission.status === 'rejected') {
       throw new BadRequestException('This trial request was already rejected.');
     }
+    if (company.suspendedAt) throw companySuspendedError();
     // Something else activated the company while the request waited (a paid
     // submission, or a manual activation). Granting a trial now would
     // overwrite a real subscription's plan and expiry.
@@ -698,7 +775,9 @@ export class BillingService {
     if (
       company.isTrial ||
       company.paymentStatus === 'paid' ||
-      (accountStatus !== 'draft' && accountStatus !== 'pending')
+      (accountStatus !== 'draft' &&
+        accountStatus !== 'pending' &&
+        accountStatus !== 'rejected')
     ) {
       throw new BadRequestException({
         code: 'TRIAL_SUPERSEDED',
@@ -708,7 +787,8 @@ export class BillingService {
     }
 
     const now = new Date();
-    const trialEndsAt = new Date(now.getTime() + trialDurationDays() * DAY_MS);
+    const trialDays = trialDurationDays();
+    const trialEndsAt = new Date(now.getTime() + trialDays * DAY_MS);
     const config = getPlanConfig(TRIAL_PLAN_KEY);
 
     company.isTrial = true;
@@ -722,18 +802,25 @@ export class BillingService {
     company.subscriptionReminderOn = null;
     company.trialReminderMilestone = null;
     company.rejectionReason = null;
+    company.reviewedBy = reviewer.userId;
+    company.reviewedAt = now;
+    assertActivePlanTerms(company);
     await em.getRepository(Company).save(company);
 
     submission.status = 'approved';
-    submission.reviewedBy = reviewerId;
+    submission.reviewedBy = reviewer.userId;
     submission.reviewedAt = now;
+    submission.reviewSource = reviewer.source;
+    submission.autoApproved = reviewer.source === 'system:auto';
     submission.rejectionReason = null;
     await em.getRepository(PaymentSubmission).save(submission);
 
+    // Only the request's own pending claim becomes approved; a `granted`
+    // override keeps its status (it must stay outside the unique indexes).
     await em
       .getRepository(TrialClaim)
       .update(
-        { submissionId: submission.id },
+        { submissionId: submission.id, status: 'pending' },
         { status: 'approved', decidedAt: now },
       );
 
@@ -744,24 +831,36 @@ export class BillingService {
     );
 
     this.logger.log(
-      `Approved TRIAL ${submission.id} → company ${company.id} ends=${trialEndsAt.toISOString()} by ${reviewerId}`,
+      `Approved TRIAL ${submission.id} → company ${company.id} ends=${trialEndsAt.toISOString()} ` +
+        `by ${reviewer.userId ?? reviewer.source}`,
     );
-
-    await this.notifyCompanyAdmins(company.id, {
-      type: 'subscription_activated',
-      title: 'Your free trial is active',
-      message:
-        `Your 30-day free trial is active until ${trialEndsAt.toDateString()}. ` +
-        'Subscribe any time to add more delivery riders.',
-      data: { plan: TRIAL_PLAN_KEY, expiryDate: trialEndsAt, route: 'billing' },
-    });
 
     const companyName = company.name;
     const companyId = company.id;
     return {
       view: this.toSubmissionView(submission, companyName),
+      trialEndsAt,
       afterCommit: async () => {
-        await this.recordSeatChanges(companyId, reviewerId, seats, config);
+        await this.notifyCompanyAdmins(companyId, {
+          type: 'subscription_activated',
+          title: 'Your free trial is active',
+          message:
+            `Your ${trialDays}-day free trial is active until ${trialEndsAt.toDateString()}. ` +
+            'Bring your data in from your old system with the Migration Center.',
+          data: {
+            plan: TRIAL_PLAN_KEY,
+            expiryDate: trialEndsAt,
+            route: 'migration',
+          },
+        });
+        if (reviewer.userId) {
+          await this.recordSeatChanges(
+            companyId,
+            reviewer.userId,
+            seats,
+            config,
+          );
+        }
         for (const a of await this.adminRecipients(companyId)) {
           if (a.email) {
             await this.mail.sendTrialApprovedEmail(
@@ -772,6 +871,115 @@ export class BillingService {
             );
           }
         }
+      },
+    };
+  }
+
+  /**
+   * ACTIVATION branch of approveSubmission: switch a plan on WITHOUT a
+   * payment. The admin chooses the plan and dates (defaulting the plan to the
+   * one the owner asked for). A running trial ends here and is recorded as
+   * converted. No platform_revenue row and nothing on any company's books:
+   * this is access control, not a sale.
+   */
+  private async approveActivation(
+    em: EntityManager,
+    submission: PaymentSubmission,
+    company: Company,
+    reviewerId: string,
+    decision: AdminPlanTermsInput,
+  ): Promise<{
+    view: ReturnType<BillingService['toSubmissionView']>;
+    afterCommit: () => Promise<void>;
+  }> {
+    if (submission.status === 'approved') {
+      return {
+        view: this.toSubmissionView(submission, company.name),
+        afterCommit: async () => undefined,
+      };
+    }
+    if (submission.status === 'rejected') {
+      throw new BadRequestException('This request was already rejected.');
+    }
+    if (company.suspendedAt) throw companySuspendedError();
+
+    const terms = parseAdminPlanTerms({
+      plan: decision.plan ?? submission.plan,
+      startDate: decision.startDate,
+      endDate: decision.endDate,
+    });
+    const now = new Date();
+    const converting = company.isTrial && !company.trialConvertedAt;
+
+    company.subscriptionPlan = terms.plan;
+    company.subscriptionStartDate = terms.start;
+    company.subscriptionExpiryDate = terms.end;
+    company.subscriptionStatus = 'active';
+    company.paymentStatus = 'none';
+    company.status = 'active';
+    company.subscriptionReminderOn = null;
+    company.rejectionReason = null;
+    company.reviewedBy = reviewerId;
+    company.reviewedAt = now;
+    if (converting) company.trialConvertedAt = now;
+    assertActivePlanTerms(company);
+    await em.getRepository(Company).save(company);
+
+    submission.plan = terms.plan;
+    submission.status = 'approved';
+    submission.reviewedBy = reviewerId;
+    submission.reviewedAt = now;
+    submission.reviewSource = 'admin';
+    submission.rejectionReason = null;
+    await em.getRepository(PaymentSubmission).save(submission);
+
+    const config = getPlanConfig(terms.plan);
+    const seats = await reconcileRiderSeats(
+      em,
+      company.id,
+      config.deliveryPersonnelLimit,
+    );
+
+    const companyId = company.id;
+    const companyName = company.name;
+    return {
+      view: this.toSubmissionView(submission, companyName),
+      afterCommit: async () => {
+        await this.recordSeatChanges(companyId, reviewerId, seats, config);
+        await this.notifyCompanyAdmins(companyId, {
+          type: 'subscription_activated',
+          title: converting
+            ? 'Your plan is active — trial converted'
+            : 'Your plan is active',
+          message: `Your ${terms.planLabel} plan is active until ${terms.end.toDateString()}.`,
+          data: { plan: terms.plan, expiryDate: terms.end, route: 'billing' },
+        });
+        for (const a of await this.adminRecipients(companyId)) {
+          if (a.email) {
+            await this.mail.sendPlanActivatedEmail(
+              a.email,
+              a.displayName,
+              companyName,
+              terms.planLabel,
+              terms.end,
+            );
+          }
+        }
+        await this.platformAudit.record({
+          actorUserId: reviewerId,
+          action: 'activation_approved',
+          targetType: 'company',
+          targetId: companyId,
+          companyId,
+          companyName,
+          details: {
+            submissionId: submission.id,
+            plan: terms.plan,
+            start: terms.start.toISOString(),
+            end: terms.end.toISOString(),
+            trialConverted: converting,
+          },
+        });
       },
     };
   }
@@ -794,6 +1002,9 @@ export class BillingService {
         opts.blockFutureTrials === true,
       );
     }
+    if (peek.kind === 'ACTIVATION') {
+      return this.rejectActivation(submissionId, reviewerId, reason);
+    }
 
     const submission = await this.submissionRepo.findOne({
       where: { id: submissionId },
@@ -805,6 +1016,7 @@ export class BillingService {
     submission.status = 'rejected';
     submission.reviewedBy = reviewerId;
     submission.reviewedAt = new Date();
+    submission.reviewSource = 'admin';
     submission.rejectionReason = reason;
     await this.submissionRepo.save(submission);
 
@@ -865,6 +1077,7 @@ export class BillingService {
       submission.status = 'rejected';
       submission.reviewedBy = reviewerId;
       submission.reviewedAt = now;
+      submission.reviewSource = 'admin';
       submission.rejectionReason = reason;
       await em.getRepository(PaymentSubmission).save(submission);
 
@@ -888,6 +1101,7 @@ export class BillingService {
         { submissionId: submission.id },
         {
           status: blockFutureTrials ? 'blocked' : 'released',
+          releaseReason: blockFutureTrials ? null : 'rejected',
           decidedAt: now,
         },
       );
@@ -905,8 +1119,8 @@ export class BillingService {
       type: 'subscription_rejected',
       title: 'Free trial not activated',
       message:
-        `We couldn't activate a free trial: ${reason}. ` +
-        'You can still choose a plan and subscribe.',
+        `We couldn't start a free trial: ${reason}. ` +
+        'You can still request account approval.',
       data: { submissionId: submission.id, route: 'billing' },
     });
 
@@ -932,6 +1146,77 @@ export class BillingService {
    * this-month totals, per-plan breakdown, a 6-month trend, and per-company
    * totals. This is PLATFORM money, unrelated to any company's books.
    */
+  /** Reject an ACTIVATION request. The company keeps whatever access it had. */
+  private async rejectActivation(
+    submissionId: string,
+    reviewerId: string,
+    reason: string,
+  ) {
+    const result = await this.dataSource.transaction(async (em) => {
+      const submission = await em.getRepository(PaymentSubmission).findOne({
+        where: { id: submissionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (submission.status !== 'submitted') {
+        throw new BadRequestException(
+          `This request was already ${submission.status}.`,
+        );
+      }
+      submission.status = 'rejected';
+      submission.reviewedBy = reviewerId;
+      submission.reviewedAt = new Date();
+      submission.reviewSource = 'admin';
+      submission.rejectionReason = reason;
+      await em.getRepository(PaymentSubmission).save(submission);
+
+      const company = await em.getRepository(Company).findOne({
+        where: { id: submission.companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (
+        company &&
+        company.lastSubmissionId === submission.id &&
+        company.paymentStatus === 'submitted'
+      ) {
+        company.paymentStatus = 'none';
+        await em.getRepository(Company).save(company);
+      }
+      return { submission, companyName: company?.name ?? null };
+    });
+
+    const { submission, companyName } = result;
+    await this.runAfterCommit(async () => {
+      await this.notifyCompanyAdmins(submission.companyId, {
+        type: 'subscription_rejected',
+        title: 'Activation request not approved yet',
+        message: `We couldn't activate a plan yet: ${reason}.`,
+        data: { submissionId: submission.id, route: 'billing' },
+      });
+      for (const a of await this.adminRecipients(submission.companyId)) {
+        if (a.email) {
+          await this.mail.sendActivationRejectedEmail(
+            a.email,
+            a.displayName,
+            companyName ?? 'your company',
+            reason,
+          );
+        }
+      }
+      await this.platformAudit.record({
+        actorUserId: reviewerId,
+        action: 'activation_rejected',
+        targetType: 'company',
+        targetId: submission.companyId,
+        companyId: submission.companyId,
+        companyName,
+        reason,
+        details: { submissionId: submission.id },
+      });
+    });
+    return this.toSubmissionView(submission, companyName);
+  }
+
   async getRevenueSummary() {
     const { entities, raw } = await this.revenueRepo
       .createQueryBuilder('r')
@@ -1061,7 +1346,9 @@ export class BillingService {
    * Free plans are skipped entirely. Safe to run many times per day.
    */
   async runExpiryScan(now: Date = new Date()) {
-    const today = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    // Calendar days in Asia/Karachi — never UTC, never a rounded-up fraction.
+    // A trial ending at 3 pm today has 0 days left today, 1 day left yesterday.
+    const today = karachiDate(now);
     let remindersSent = 0;
     let expiringMarked = 0;
     let deactivated = 0;
@@ -1081,68 +1368,76 @@ export class BillingService {
       );
       const accountStatus = normalizeCompanyStatus(company.status);
       const trialing = company.isTrial && !company.trialConvertedAt;
+      const suspended = !!company.suspendedAt;
 
       if (expiry.getTime() > now.getTime()) {
         // Still active — reminder window?
-        const days = daysBetween(now, expiry);
+        const days = daysBetweenIso(today, karachiDate(expiry));
         if (days <= 10) {
           if (company.subscriptionStatus !== 'expiring') {
             company.subscriptionStatus = 'expiring';
             expiringMarked += 1;
           }
-          if (company.subscriptionReminderOn !== today) {
-            company.subscriptionReminderOn = today;
-            await this.notifyCompanyAdmins(
-              company.id,
-              trialing
-                ? {
-                    type: 'subscription_expiring',
-                    title: 'Free trial ending soon',
-                    message:
-                      `Your free trial ends in ${days} day${days === 1 ? '' : 's'}. ` +
-                      'Subscribe now to keep everything running without a break.',
-                    data: {
-                      daysRemaining: days,
-                      expiryDate: expiry,
-                      route: 'billing',
-                    },
-                  }
-                : {
-                    type: 'subscription_expiring',
-                    title: 'Subscription expiring soon',
-                    message:
-                      `Your ${getPlanConfig(company.subscriptionPlan).label} plan expires in ` +
-                      `${days} day${days === 1 ? '' : 's'}. Renew now to avoid interruption.`,
-                    data: {
-                      daysRemaining: days,
-                      expiryDate: expiry,
-                      route: 'billing',
-                    },
-                  },
-            );
-            remindersSent += 1;
-          }
-          // Trial-ending EMAIL only when a smaller milestone (7/3/1) is
-          // reached. Compared against the last one sent rather than exact day
-          // numbers, so a missed cron run still sends the next email.
-          const milestone = trialing ? trialEmailMilestone(days) : null;
-          const emailTrialEnding =
-            milestone !== null &&
-            (company.trialReminderMilestone === null ||
-              milestone < company.trialReminderMilestone);
-          if (emailTrialEnding) company.trialReminderMilestone = milestone;
-          await this.companyRepo.save(company);
-          if (emailTrialEnding) {
-            for (const a of await this.adminRecipients(company.id)) {
-              if (a.email) {
-                await this.mail.sendTrialEndingEmail(
-                  a.email,
-                  a.displayName,
-                  company.name,
-                  days,
-                );
+          // A suspended company gets no reminders: nobody can act on them.
+          if (trialing && !suspended) {
+            // Trials: ONE reminder (email + in-app) per milestone. Compared
+            // against the last one sent rather than exact day numbers, so a
+            // missed cron run still sends the next one.
+            const milestone = trialEmailMilestone(days);
+            const due =
+              milestone !== null &&
+              (company.trialReminderMilestone === null ||
+                milestone < company.trialReminderMilestone);
+            if (due) company.trialReminderMilestone = milestone;
+            await this.companyRepo.save(company);
+            if (due) {
+              remindersSent += 1;
+              await this.notifyCompanyAdmins(company.id, {
+                type: 'subscription_expiring',
+                title: 'Free trial ending soon',
+                message:
+                  days <= 0
+                    ? 'Your free trial ends today. Request activation to keep going without a break.'
+                    : `Your free trial ends in ${days} day${days === 1 ? '' : 's'}. ` +
+                      'Request activation to keep going without a break.',
+                data: {
+                  daysRemaining: days,
+                  expiryDate: expiry,
+                  route: 'billing',
+                },
+              });
+              for (const a of await this.adminRecipients(company.id)) {
+                if (a.email) {
+                  await this.mail.sendTrialEndingEmail(
+                    a.email,
+                    a.displayName,
+                    company.name,
+                    Math.max(days, 0),
+                  );
+                }
               }
             }
+          } else if (!suspended) {
+            // Paid plans keep the daily in-app reminder (unchanged).
+            if (company.subscriptionReminderOn !== today) {
+              company.subscriptionReminderOn = today;
+              await this.notifyCompanyAdmins(company.id, {
+                type: 'subscription_expiring',
+                title: 'Subscription expiring soon',
+                message:
+                  `Your ${getPlanConfig(company.subscriptionPlan).label} plan expires in ` +
+                  `${days} day${days === 1 ? '' : 's'}. Request activation to avoid interruption.`,
+                data: {
+                  daysRemaining: days,
+                  expiryDate: expiry,
+                  route: 'billing',
+                },
+              });
+              remindersSent += 1;
+            }
+            await this.companyRepo.save(company);
+          } else {
+            await this.companyRepo.save(company);
           }
         } else if (company.subscriptionStatus !== 'active') {
           // Moved back outside the window (e.g. after renewal) — normalize.
@@ -1151,6 +1446,19 @@ export class BillingService {
         }
       } else {
         // Expired. Deactivate the account ONCE — never delete data.
+        if (suspended) {
+          // A suspension outranks expiry: keep status 'suspended', and make
+          // reinstating land on the expired state rather than on 'active'.
+          if (
+            company.subscriptionStatus !== 'expired' ||
+            company.statusBeforeSuspension !== 'inactive'
+          ) {
+            company.subscriptionStatus = 'expired';
+            company.statusBeforeSuspension = 'inactive';
+            await this.companyRepo.save(company);
+          }
+          continue;
+        }
         const alreadyHandled =
           company.subscriptionStatus === 'expired' &&
           accountStatus === 'inactive';
@@ -1164,8 +1472,8 @@ export class BillingService {
               type: 'subscription_expired',
               title: 'Your free trial has ended',
               message:
-                'Your free trial has ended, so your account is paused. ' +
-                'Your data is safe. Subscribe to a plan to keep using FinMatrix.',
+                'Your free trial has ended, so your account is paused. Your data is safe: ' +
+                'download a backup any time, or request activation to keep using FinMatrix.',
               data: { route: 'billing' },
             });
             for (const a of await this.adminRecipients(company.id)) {
@@ -1179,16 +1487,24 @@ export class BillingService {
           } else {
             await this.notifyCompanyAdmins(company.id, {
               type: 'subscription_expired',
-              title: 'Account deactivated — renew to restore',
+              title: 'Plan ended — request activation to restore',
               message:
-                'Your subscription has expired and your account is now inactive. ' +
-                'Your data is safe. Renew your plan to restore full access.',
+                'Your plan has ended and your account is paused. Your data is safe. ' +
+                'Request activation to restore full access.',
               data: { route: 'billing' },
             });
           }
         }
       }
     }
+
+    // The per-IP trial-attempt counter only needs the last day; keep a month.
+    await this.dataSource
+      .getRepository(TrialAttempt)
+      .createQueryBuilder()
+      .delete()
+      .where(`created_at < now() - interval '30 days'`)
+      .execute();
 
     this.logger.log(
       `Expiry scan: ${expiringMarked} expiring, ${remindersSent} reminders, ${deactivated} deactivated`,
@@ -1262,7 +1578,7 @@ export class BillingService {
     }
   }
 
-  private async notifyCompanyAdmins(
+  async notifyCompanyAdmins(
     companyId: string,
     payload: {
       type: string;
@@ -1284,7 +1600,7 @@ export class BillingService {
   }
 
   /** Company admins who should hear about billing events, with their inbox. */
-  private async adminRecipients(companyId: string): Promise<AdminRecipient[]> {
+  async adminRecipients(companyId: string): Promise<AdminRecipient[]> {
     const admins = await this.userCompanyRepo.find({
       where: { companyId, role: 'admin' },
       relations: { user: true },
@@ -1300,9 +1616,7 @@ export class BillingService {
    * Post-commit side effects (email, audit). Never allowed to fail the call
    * that already committed — the decision stands; a lost email is logged.
    */
-  private async runAfterCommit(
-    fn: (() => Promise<void>) | null,
-  ): Promise<void> {
+  async runAfterCommit(fn: (() => Promise<void>) | null): Promise<void> {
     if (!fn) return;
     try {
       await fn();
@@ -1372,9 +1686,17 @@ export class BillingService {
       companyName: companyName ?? undefined,
       companyEmail: companyEmail ?? undefined,
       plan: s.plan,
-      planLabel: getPlanConfig(s.plan).label,
+      planLabel:
+        s.kind === 'ACTIVATION' && s.status === 'submitted'
+          ? requestedPlanLabel(s.plan)
+          : getPlanConfig(s.plan).label,
       kind: s.kind,
       status: s.status,
+      autoApproved: s.autoApproved ?? false,
+      reviewSource: s.reviewSource ?? null,
+      // Super-admin views only — the owner never sees why a trial was held.
+      holdReason: s.holdReason ?? null,
+      note: s.note ?? null,
       amountMinorUnits: s.amountMinorUnits,
       amountLabel: formatMinorUnits(s.amountMinorUnits, s.currency),
       currency: s.currency,

@@ -3,8 +3,11 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Optional,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
+import { ALLOW_WHEN_LAPSED_KEY } from '../decorators/allow-when-lapsed.decorator';
 import { DataSource } from 'typeorm';
 import { AuthenticatedUser } from '../decorators/current-user.decorator';
 import {
@@ -25,7 +28,10 @@ import { assertEmailVerified } from '../utils/email-verified.util';
  */
 @Injectable()
 export class CompanyGuard implements CanActivate {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    @Optional() private readonly reflector?: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context
@@ -55,16 +61,22 @@ export class CompanyGuard implements CanActivate {
     // (`plan_locked`, see delivery-personnel/rider-seats.ts) is refused on
     // every request, not only at sign-in. Still one query per request.
     const isRider = req.user?.role === 'delivery';
+    const companyColumns = `c.status, c.subscription_plan, c.subscription_expiry_date,
+                  c.subscription_status, c.is_trial, c.trial_converted_at,
+                  c.suspended_at, uc.role AS member_role`;
     const rows: Array<{
       status: string | null;
       subscription_plan: string | null;
       subscription_expiry_date: Date | null;
+      subscription_status: string | null;
+      is_trial: boolean | null;
+      trial_converted_at: Date | null;
+      suspended_at: Date | null;
       member_role: string | null;
       rider_status?: string | null;
     }> = isRider
       ? await this.dataSource.query(
-          `SELECT c.status, c.subscription_plan, c.subscription_expiry_date,
-                  uc.role AS member_role, p.status AS rider_status
+          `SELECT ${companyColumns}, p.status AS rider_status
              FROM companies c
              LEFT JOIN user_companies uc
                ON uc.company_id = c.id AND uc.user_id = $2
@@ -74,8 +86,7 @@ export class CompanyGuard implements CanActivate {
           [companyId, req.user?.id],
         )
       : await this.dataSource.query(
-          `SELECT c.status, c.subscription_plan, c.subscription_expiry_date,
-                  uc.role AS member_role
+          `SELECT ${companyColumns}
              FROM companies c
              LEFT JOIN user_companies uc
                ON uc.company_id = c.id AND uc.user_id = $2
@@ -83,39 +94,79 @@ export class CompanyGuard implements CanActivate {
           [companyId, req.user?.id],
         );
     const row = rows[0];
-    if (row && !row.member_role) {
+    // No row: the company no longer exists (deleted). A token naming it must
+    // not read as "legacy active" — it used to, because a missing status
+    // normalises to active.
+    if (!row || !row.member_role) {
       throw new ForbiddenException({
         code: 'NOT_COMPANY_MEMBER',
         message: 'You are no longer a member of this company.',
       });
     }
 
+    // A platform suspension outranks everything, for every member.
+    if (row.suspended_at) {
+      throw new ForbiddenException({
+        code: 'COMPANY_SUSPENDED',
+        message:
+          'This company account is suspended. Contact FinMatrix support.',
+        companyStatus: 'inactive',
+      });
+    }
+
     // effectiveCompanyStatus applies the LIVE subscription-expiry check, so a
-    // paid plan is cut off the moment it lapses — not at the next 1AM billing
-    // cron (which persists status='inactive' and sends the notification).
-    const acctStatus = effectiveCompanyStatus(
-      row
-        ? {
-            status: row.status,
-            subscriptionPlan: row.subscription_plan,
-            subscriptionExpiryDate: row.subscription_expiry_date,
-          }
-        : null,
-    );
+    // plan is cut off the moment it lapses — not at the next billing cron
+    // (which persists status='inactive' and sends the notification).
+    const acctStatus = effectiveCompanyStatus({
+      status: row.status,
+      subscriptionPlan: row.subscription_plan,
+      subscriptionExpiryDate: row.subscription_expiry_date,
+    });
     if (acctStatus !== 'active') {
-      const subscriptionLapsed =
-        row != null &&
-        normalizeCompanyStatus(row.status) === 'active' &&
-        acctStatus === 'inactive';
+      // Lapsed = had a plan that ended (live, or already persisted by the
+      // cron as status inactive + subscription expired).
+      const lapsed =
+        acctStatus === 'inactive' &&
+        (normalizeCompanyStatus(row.status) === 'active' ||
+          row.subscription_status === 'expired');
+      const trialEnded =
+        lapsed && row.is_trial === true && !row.trial_converted_at;
+      const isOwner = row.member_role === 'admin';
+
+      if (lapsed) {
+        // reflector?.… short-circuits (arguments unevaluated) without DI.
+        const allowed =
+          isOwner &&
+          this.reflector?.getAllAndOverride<boolean>(ALLOW_WHEN_LAPSED_KEY, [
+            context.getHandler(),
+            context.getClass(),
+          ]) === true;
+        if (allowed) {
+          req.user!.role = row.member_role as AuthenticatedUser['role'];
+          req.companyId = companyId;
+          return true;
+        }
+        throw new ForbiddenException({
+          code: trialEnded ? 'TRIAL_ENDED' : 'SUBSCRIPTION_EXPIRED',
+          message: isOwner
+            ? trialEnded
+              ? 'Your free trial has ended. Your data is safe — download a backup or request activation.'
+              : 'Your plan has ended. Your data is safe — download a backup or request activation.'
+            : trialEnded
+              ? "Your company's trial has ended — please contact the owner."
+              : "Your company's plan has ended — please contact the owner.",
+          companyStatus: acctStatus,
+          audience: isOwner ? 'owner' : 'member',
+        });
+      }
+
       throw new ForbiddenException({
         code: 'COMPANY_NOT_ACTIVE',
         message:
           acctStatus === 'rejected'
             ? 'Your company registration was rejected.'
             : acctStatus === 'inactive'
-              ? subscriptionLapsed
-                ? 'Your subscription has expired. Renew your plan to restore access.'
-                : 'Your company account has been deactivated.'
+              ? 'Your company account has been deactivated.'
               : // A draft has not been submitted, so "awaiting approval" would
                 // describe work the user has not done yet.
                 acctStatus === 'draft'

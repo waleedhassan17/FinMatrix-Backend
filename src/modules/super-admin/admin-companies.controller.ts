@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { SuperAdminService } from './super-admin.service';
+import { PlanTermsDto } from './dto/update-company-status.dto';
 import {
   CurrentUser,
   AuthenticatedUser,
@@ -29,6 +30,12 @@ class OptionalReasonDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+}
+
+class SuspendDto {
+  @IsString()
+  @MaxLength(500)
+  reason!: string;
 }
 
 function guardSuperAdmin(user: AuthenticatedUser) {
@@ -56,6 +63,8 @@ export class AdminCompaniesController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
     @Query('isTrial') isTrial?: string,
+    @Query('search') search?: string,
+    @Query('isDemo') isDemo?: string,
   ) {
     guardSuperAdmin(user);
     return this.service.getAllCompanies(
@@ -63,6 +72,8 @@ export class AdminCompaniesController {
       limit,
       status,
       SuperAdminService.parseTrialFilter(isTrial),
+      search,
+      SuperAdminService.parseTrialFilter(isDemo),
     );
   }
 
@@ -75,13 +86,19 @@ export class AdminCompaniesController {
     return this.service.getCompanyDetail(id);
   }
 
+  /** Approve with { plan, startDate?, endDate } or { asTrial: true }. */
   @Patch(':id/approve')
   async approve(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() terms: PlanTermsDto,
   ) {
     guardSuperAdmin(user);
-    return this.service.updateCompanyStatus(id, { status: 'active' }, user.id);
+    return this.service.updateCompanyStatus(
+      id,
+      { ...(terms ?? {}), status: 'active' },
+      user.id,
+    );
   }
 
   @Patch(':id/reject')
@@ -100,13 +117,39 @@ export class AdminCompaniesController {
     );
   }
 
+  /** Reinstate a suspended company, or activate a plan (plan + end date). */
   @Patch(':id/activate')
   async activate(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() terms: PlanTermsDto,
   ) {
     guardSuperAdmin(user);
-    return this.service.updateCompanyStatus(id, { status: 'active' }, user.id);
+    return this.service.updateCompanyStatus(
+      id,
+      { ...(terms ?? {}), status: 'active' },
+      user.id,
+    );
+  }
+
+  /** Suspend: every member is refused until reinstated. Reason required. */
+  @Patch(':id/suspend')
+  async suspend(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SuspendDto,
+  ) {
+    guardSuperAdmin(user);
+    return this.service.suspendCompany(id, user.id, dto?.reason ?? '');
+  }
+
+  @Patch(':id/reinstate')
+  async reinstate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    guardSuperAdmin(user);
+    return this.service.reinstateCompany(id, user.id);
   }
 
   @Patch(':id/deactivate')
@@ -118,7 +161,7 @@ export class AdminCompaniesController {
     guardSuperAdmin(user);
     return this.service.updateCompanyStatus(
       id,
-      { status: 'inactive', rejectionReason: dto?.reason },
+      { status: 'inactive', reason: dto?.reason },
       user.id,
     );
   }

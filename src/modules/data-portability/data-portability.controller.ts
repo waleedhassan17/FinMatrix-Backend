@@ -15,6 +15,7 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { AllowWhenLapsed } from '../../common/decorators/allow-when-lapsed.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CompanyExportService } from './company-export.service';
@@ -33,6 +34,7 @@ export class DataPortabilityController {
   constructor(private readonly exports: CompanyExportService) {}
 
   @Post()
+  @AllowWhenLapsed()
   @HttpCode(202)
   @Roles('admin')
   @ApiOperation({
@@ -47,6 +49,7 @@ export class DataPortabilityController {
   }
 
   @Get()
+  @AllowWhenLapsed()
   @Roles('admin')
   @ApiOperation({ summary: 'Backups of this company, newest first.' })
   list(@CurrentCompany() companyId: string) {
@@ -54,6 +57,7 @@ export class DataPortabilityController {
   }
 
   @Get(':id')
+  @AllowWhenLapsed()
   @Roles('admin')
   @ApiOperation({ summary: 'One backup, with its error when it failed.' })
   get(
