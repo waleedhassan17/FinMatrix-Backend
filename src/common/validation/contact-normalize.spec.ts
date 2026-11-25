@@ -1,4 +1,11 @@
-import { normalizeEmail, normalizePhone } from './contact-normalize';
+import {
+  emailDomain,
+  normalizeEmail,
+  normalizePhone,
+  normalizeTaxId,
+  trialEmailKey,
+} from './contact-normalize';
+import { isBlockedEmailDomain } from './disposable-email';
 
 describe('normalizePhone', () => {
   it('reduces every way of writing the same mobile to ONE string', () => {
@@ -66,7 +73,7 @@ describe('normalizeEmail', () => {
     expect(normalizeEmail('  Owner@Example.COM ')).toBe('owner@example.com');
   });
 
-  it('keeps Gmail dots and +tags — they may be different people', () => {
+  it('keeps Gmail dots and +tags — sign-in identity is exact', () => {
     expect(normalizeEmail('first.last@gmail.com')).toBe('first.last@gmail.com');
     expect(normalizeEmail('firstlast+shop@gmail.com')).toBe(
       'firstlast+shop@gmail.com',
@@ -90,5 +97,78 @@ describe('normalizeEmail', () => {
     }
     expect(normalizeEmail(null)).toBeNull();
     expect(normalizeEmail(42)).toBeNull();
+  });
+});
+
+describe('trialEmailKey (trial claims only)', () => {
+  it('folds Gmail dots, +tags and googlemail into one key', () => {
+    const variants = [
+      'ab@gmail.com',
+      'a.b@gmail.com',
+      'A.B+trial2@GMAIL.com',
+      'ab+x@googlemail.com',
+      '  a.b@GoogleMail.com ',
+    ];
+    expect(new Set(variants.map(trialEmailKey))).toEqual(
+      new Set(['ab@gmail.com']),
+    );
+  });
+
+  it('strips +tags for every provider but keeps dots outside Gmail', () => {
+    expect(trialEmailKey('ali+shop@company.pk')).toBe('ali@company.pk');
+    expect(trialEmailKey('first.last@outlook.com')).toBe(
+      'first.last@outlook.com',
+    );
+    expect(trialEmailKey('first.last+x@outlook.com')).toBe(
+      'first.last@outlook.com',
+    );
+  });
+
+  it('never yields an empty local part', () => {
+    expect(trialEmailKey('+tag@company.pk')).toBe('+tag@company.pk');
+    expect(trialEmailKey('...@gmail.com')).toBeNull();
+    expect(trialEmailKey('not-an-email')).toBeNull();
+  });
+
+  it('reads the domain', () => {
+    expect(emailDomain('X@Mail.Example.COM')).toBe('mail.example.com');
+    expect(emailDomain('bad')).toBeNull();
+  });
+});
+
+describe('normalizeTaxId', () => {
+  it('keeps digits only', () => {
+    expect(normalizeTaxId('NTN 1234567-8')).toBe('12345678');
+    expect(normalizeTaxId('1234567-8')).toBe(normalizeTaxId('12345678'));
+  });
+
+  it('treats a too-short or empty value as absent', () => {
+    for (const v of ['', '0', 'N/A', '1234', null, 42]) {
+      expect(normalizeTaxId(v)).toBeNull();
+    }
+  });
+});
+
+describe('isBlockedEmailDomain', () => {
+  const saved = process.env.TRIAL_BLOCKED_EMAIL_DOMAINS;
+  afterEach(() => {
+    process.env.TRIAL_BLOCKED_EMAIL_DOMAINS = saved;
+  });
+
+  it('blocks bundled disposable providers, including subdomains', () => {
+    expect(isBlockedEmailDomain('x@mailinator.com')).toBe(true);
+    expect(isBlockedEmailDomain('x@sub.mailinator.com')).toBe(true);
+  });
+
+  it('never blocks the major mailbox providers', () => {
+    for (const d of ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com']) {
+      expect(isBlockedEmailDomain(`someone@${d}`)).toBe(false);
+    }
+  });
+
+  it('adds TRIAL_BLOCKED_EMAIL_DOMAINS at runtime', () => {
+    process.env.TRIAL_BLOCKED_EMAIL_DOMAINS = 'spam.example';
+    expect(isBlockedEmailDomain('a@spam.example')).toBe(true);
+    expect(isBlockedEmailDomain('a@company.pk')).toBe(false);
   });
 });
