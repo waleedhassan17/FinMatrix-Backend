@@ -15,6 +15,7 @@
  * enforced anywhere is `deliveryPersonnelLimit`.
  */
 import { BILLING_DISABLED_BUILD } from '../../common/feature-flags';
+import { trialDays } from '../../config/launch.settings';
 
 /**
  * Legacy keys (free|standard|pro) predate the three-tier model. They stay in
@@ -255,23 +256,35 @@ export const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   // from the company's type, so the trial runs the whole warehouse system; the
   // only restriction is ONE active delivery rider. Every plan on sale allows
   // more, so converting a trial to any paid plan never locks a rider.
+  //
+  // The length is TRIAL_DAYS (config/launch.settings.ts), read through getters
+  // so the value set in .env is honoured — this object is built at import,
+  // before ConfigModule has loaded .env.
   warehouse_trial: {
     key: 'warehouse_trial',
-    label: 'Free trial — 30 days',
+    get label() {
+      return `Free trial — ${trialDays()} days`;
+    },
     companyType: null,
     priceMinorUnits: 0,
     monthlyMinorUnits: 0,
     durationMonths: null,
-    durationDays: 30,
+    get durationDays() {
+      return trialDays();
+    },
     deliveryPersonnelLimit: 1,
     currency: 'PKR',
   },
 };
 
 export const TRIAL_PLAN_KEY: TrialPlanKey = 'warehouse_trial';
-/** The trial runs this many days from the moment it is APPROVED. */
-export const TRIAL_DURATION_DAYS = PLAN_CONFIG.warehouse_trial
-  .durationDays as number;
+/**
+ * The trial runs this many days from the moment it is GRANTED (TRIAL_DAYS).
+ * A function, not a constant: see the note on PLAN_CONFIG.warehouse_trial.
+ */
+export function trialDurationDays(): number {
+  return trialDays();
+}
 
 export function isTrialPlan(raw: string | null | undefined): boolean {
   return raw === TRIAL_PLAN_KEY;

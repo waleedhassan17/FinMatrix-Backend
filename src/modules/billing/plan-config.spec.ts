@@ -7,7 +7,7 @@ import {
   normalizePlan,
   PLAN_CONFIG,
   plansForType,
-  TRIAL_DURATION_DAYS,
+  trialDurationDays,
   TRIAL_PLAN_KEY,
 } from './plan-config';
 
@@ -195,7 +195,7 @@ describe('free trial plan', () => {
   });
 
   it('runs 30 days and allows exactly one delivery rider', () => {
-    expect(TRIAL_DURATION_DAYS).toBe(30);
+    expect(trialDurationDays()).toBe(30);
     expect(PLAN_CONFIG.warehouse_trial.durationMonths).toBeNull();
     expect(PLAN_CONFIG.warehouse_trial.deliveryPersonnelLimit).toBe(1);
   });

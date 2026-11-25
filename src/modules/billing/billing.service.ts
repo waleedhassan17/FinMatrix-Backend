@@ -36,7 +36,7 @@ import {
   type PlanConfig,
   plansForType,
   riderSeatLimit,
-  TRIAL_DURATION_DAYS,
+  trialDurationDays,
   TRIAL_PLAN_KEY,
 } from './plan-config';
 
@@ -708,7 +708,7 @@ export class BillingService {
     }
 
     const now = new Date();
-    const trialEndsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * DAY_MS);
+    const trialEndsAt = new Date(now.getTime() + trialDurationDays() * DAY_MS);
     const config = getPlanConfig(TRIAL_PLAN_KEY);
 
     company.isTrial = true;

@@ -214,6 +214,38 @@ export const envValidationSchema = Joi.object({
   // Server-side refusal fallback (beta). Set false for a model that does not support it.
   MIGRATION_AI_SERVER_FALLBACK: Joi.boolean().default(true),
 
+  // ── Launch: sign-up paths and the free trial (config/launch.settings.ts) ──
+  // trial    → company setup offers "Start my free trial" AND "Request
+  //            approval" (production default).
+  // approval → "Request approval" only; every company waits for an admin, who
+  //            must still set a plan and an end date.
+  SIGNUP_MODE: Joi.string().valid('trial', 'approval').default('trial'),
+  // false sends every trial request to the admin queue instead of starting it
+  // at once — the emergency switch if abuse appears. No redeploy needed.
+  TRIAL_AUTO_APPROVE: Joi.boolean().default(true),
+  // Trial length in days, counted from the moment the trial is granted.
+  TRIAL_DAYS: Joi.number().integer().min(1).max(90).default(30),
+  // Days-left thresholds for the trial-ending reminder (email + in-app).
+  TRIAL_REMINDER_DAYS: Joi.string()
+    .pattern(/^\s*\d{1,2}(\s*,\s*\d{1,2})*\s*$/)
+    .default('7,3,1'),
+  // More start-trial attempts than this from one IP within 24 hours holds the
+  // request for manual review instead of auto-approving it.
+  TRIAL_RISK_MAX_IP_ATTEMPTS_24H: Joi.number().integer().min(1).default(3),
+  // Extra email domains refused a free trial, comma-separated, on top of the
+  // bundled disposable-email list.
+  TRIAL_BLOCKED_EMAIL_DOMAINS: Joi.string().allow('').default(''),
+  // Public demo booking page and endpoints.
+  DEMO_BOOKING_ENABLED: Joi.boolean().default(true),
+  // Contact shown to customers. SUPPORT_EMAIL falls back to ADMIN_EMAIL.
+  SUPPORT_EMAIL: Joi.string().email().allow('').optional(),
+  SUPPORT_WHATSAPP: Joi.string()
+    .pattern(/^\+\d{8,15}$/)
+    .allow('')
+    .optional(),
+  // The customer web app; links in emails (verification, trial, demo invite).
+  WEB_APP_URL: Joi.string().uri().optional(),
+
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {
     is: 'production',
