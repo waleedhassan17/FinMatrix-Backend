@@ -196,6 +196,13 @@ export class AccountAdminController {
     return this.accounts.deletedAccounts();
   }
 
+  /** Manual trigger for the hourly final-backup expiry sweep (ops + tests). */
+  @Post('deleted-accounts/run-backup-sweep')
+  async sweep(@CurrentUser() user: AuthenticatedUser) {
+    assertSuperAdmin(user);
+    return { deleted: await this.accounts.sweepExpiredFinalBackups() };
+  }
+
   @Get('deleted-accounts/backups/:id/download')
   async download(
     @CurrentUser() user: AuthenticatedUser,

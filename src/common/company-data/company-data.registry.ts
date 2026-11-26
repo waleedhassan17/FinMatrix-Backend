@@ -167,6 +167,9 @@ export const COMPANY_DATA_REGISTRY: CompanyDataEntry[] = [
   // ── Platform-owned, kept ──
   { table: 'platform_revenue', scope: 'platform', handling: 'retain' },
   { table: 'platform_audit_events', scope: 'platform', handling: 'retain' },
+  // The deletion job and its final backup must outlive the company.
+  { table: 'company_deletions', scope: 'platform', handling: 'retain' },
+  { table: 'platform_final_backups', scope: 'platform', handling: 'retain' },
   {
     table: 'trial_attempts',
     scope: 'platform',
@@ -198,8 +201,6 @@ export const NON_COMPANY_TABLES: string[] = [
   'subscription_plans',
   'plan_overrides',
   'migrations',
-  'company_deletions',
-  'platform_final_backups',
   'demo_request_notes',
 ];
 
