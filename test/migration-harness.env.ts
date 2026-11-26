@@ -12,6 +12,8 @@
 process.env.EXPORT_WORKER_ENABLED = 'false';
 process.env.MESSAGING_WORKER_ENABLED = 'false';
 process.env.MIGRATION_READ_WORKER_ENABLED = 'false';
+process.env.ACCOUNT_DELETION_WORKER_ENABLED = 'false';
+process.env.DEMO_WORKER_ENABLED = 'false';
 process.env.EMAIL_ENABLED = 'false';
 for (const k of [
   'CLOUDINARY_CLOUD_NAME',

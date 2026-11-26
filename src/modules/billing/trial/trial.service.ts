@@ -940,8 +940,9 @@ function mapClaimViolation(err: unknown): HttpException | null {
 
 function reasonOf(err: unknown): string | null {
   if (err instanceof HttpException) {
-    const body = err.getResponse() as { reason?: string; code?: string };
-    if (body && typeof body === 'object' && body.reason) return body.reason;
+    const body = err.getResponse() as { details?: { reason?: string } };
+    if (body && typeof body === 'object' && body.details?.reason)
+      return body.details.reason;
   }
   return null;
 }

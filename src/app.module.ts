@@ -70,6 +70,7 @@ import { HealthModule } from './modules/health/health.module';
 import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { PublicModule } from './modules/public/public.module';
+import { AccountAdminModule } from './modules/account-admin/account-admin.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { envValidationSchema } from './config/env.validation';
@@ -159,6 +160,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     SuperAdminModule,
     BillingModule,
     PublicModule,
+    AccountAdminModule,
     ScheduleModule.forRoot(),
     LoggerModule.forRootAsync({
       inject: [ConfigService],

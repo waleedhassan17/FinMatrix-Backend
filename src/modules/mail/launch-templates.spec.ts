@@ -18,6 +18,9 @@ const customer = () => [
   t.activationRequested(evil, evil),
   t.planActivated(evil, evil, evil, end, 'https://app.example.com'),
   t.activationRejected(evil, evil, evil),
+  t.accountSuspended(evil, evil),
+  t.accountReinstated(evil, 'https://app.example.com'),
+  t.companySuspended(evil, evil, evil),
 ];
 
 /** Internal, to the platform admin — English only is fine. */

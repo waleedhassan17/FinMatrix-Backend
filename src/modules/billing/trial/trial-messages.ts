@@ -105,10 +105,10 @@ export const TRIAL_CLAIM_CONSTRAINT_REASONS: Record<
 /** The body of a 409 TRIAL_NOT_ELIGIBLE answer. */
 export function trialNotEligibleBody(reason: TrialIneligibleReason) {
   const m = TRIAL_INELIGIBLE_MESSAGES[reason];
+  // Only `code`, `message` and `details` survive the exception filter.
   return {
     code: 'TRIAL_NOT_ELIGIBLE',
-    reason,
     message: m.en,
-    messageUr: m.ur,
+    details: { reason, messageUr: m.ur },
   };
 }

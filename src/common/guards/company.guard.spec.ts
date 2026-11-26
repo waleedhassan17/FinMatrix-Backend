@@ -137,7 +137,7 @@ describe('CompanyGuard', () => {
     await expect(
       run({}, { ...live, member_role: 'admin' }),
     ).rejects.toMatchObject({
-      response: { code: 'TRIAL_ENDED', audience: 'owner' },
+      response: { code: 'TRIAL_ENDED', details: { audience: 'owner' } },
     });
   });
 
@@ -147,7 +147,7 @@ describe('CompanyGuard', () => {
     ).rejects.toMatchObject({
       response: {
         code: 'TRIAL_ENDED',
-        audience: 'member',
+        details: { audience: 'member' },
         message: "Your company's trial has ended — please contact the owner.",
       },
     });

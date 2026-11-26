@@ -440,6 +440,41 @@ export class MailService implements OnModuleInit {
 
   // ── Low-level send ──────────────────────────────────────────────────────
 
+  // ── Suspension ──────────────────────────────────────────────────────────
+
+  async sendAccountSuspendedEmail(
+    to: string,
+    displayName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.accountSuspended(displayName, reason));
+  }
+
+  async sendAccountReinstatedEmail(
+    to: string,
+    displayName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.accountReinstated(
+        displayName,
+        this.webAppUrl() || undefined,
+      ),
+    );
+  }
+
+  async sendCompanySuspendedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.companySuspended(displayName, companyName, reason),
+    );
+  }
+
   /**
    * Low-level send, exposed for modules that render their own RenderedEmail
    * (demo requests). Never throws: a mail failure must not break the caller.

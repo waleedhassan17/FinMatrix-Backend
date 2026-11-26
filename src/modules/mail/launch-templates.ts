@@ -398,4 +398,71 @@ export const launchEmailTemplates = {
         `Note from our team: ${reason}\n\nYour data is safe.`,
     };
   },
+
+  // ── Suspension (super-admin) ────────────────────────────────────────────
+
+  accountSuspended(displayName: string, reason: string): RenderedEmail {
+    return {
+      subject: 'Your FinMatrix account has been suspended',
+      html: layout(
+        'Your account has been suspended',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Your FinMatrix account has been suspended by our team, so it cannot be used to sign in for now.</p>
+         <p><strong>Reason:</strong><br/>${esc(reason)}</p>
+         <p>If you think this is a mistake, reply to this email or contact support.</p>` +
+          urduSection(
+            `<p>${esc(displayName)} صاحب/صاحبہ،</p>
+             <p>ہماری ٹیم نے آپ کا FinMatrix اکاؤنٹ معطل کر دیا ہے، اس لیے فی الحال اس سے سائن اِن نہیں کیا جا سکتا۔</p>
+             <p><strong>وجہ:</strong><br/>${esc(reason)}</p>
+             <p>اگر آپ کے خیال میں یہ غلطی ہے تو اس ای میل کا جواب دیں یا سپورٹ سے رابطہ کریں۔</p>`,
+          ),
+      ),
+      text:
+        `Hi ${displayName},\n\nYour FinMatrix account has been suspended by our team.\n\n` +
+        `Reason: ${reason}\n\nIf you think this is a mistake, contact support.`,
+    };
+  },
+
+  accountReinstated(displayName: string, appUrl?: string): RenderedEmail {
+    return {
+      subject: 'Your FinMatrix account is active again',
+      html: layout(
+        'Your account is active again',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Your FinMatrix account has been reinstated. You can sign in again.</p>
+         ${cta(appUrl, 'Sign in to FinMatrix')}` +
+          urduSection(
+            `<p>${esc(displayName)} صاحب/صاحبہ،</p>
+             <p>آپ کا FinMatrix اکاؤنٹ بحال کر دیا گیا ہے۔ آپ دوبارہ سائن اِن کر سکتے ہیں۔</p>`,
+          ),
+      ),
+      text: `Hi ${displayName},\n\nYour FinMatrix account has been reinstated. You can sign in again.`,
+    };
+  },
+
+  companySuspended(
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): RenderedEmail {
+    return {
+      subject: `${companyName}: account suspended`,
+      html: layout(
+        'Your company account has been suspended',
+        `<p>Hi ${esc(displayName)},</p>
+         <p>Access to <strong>${esc(companyName)}</strong> on FinMatrix has been suspended by our team, so you and your team cannot use it for now.</p>
+         <p><strong>Reason:</strong><br/>${esc(reason)}</p>
+         <p>Your data is safe and untouched. Reply to this email or contact support to restore access.</p>` +
+          urduSection(
+            `<p>${esc(displayName)} صاحب/صاحبہ،</p>
+             <p>ہماری ٹیم نے FinMatrix پر <strong>${esc(companyName)}</strong> تک رسائی معطل کر دی ہے، اس لیے فی الحال آپ اور آپ کی ٹیم اسے استعمال نہیں کر سکتے۔</p>
+             <p><strong>وجہ:</strong><br/>${esc(reason)}</p>
+             <p>آپ کا ڈیٹا محفوظ ہے۔ رسائی بحال کروانے کے لیے اس ای میل کا جواب دیں یا سپورٹ سے رابطہ کریں۔</p>`,
+          ),
+      ),
+      text:
+        `Hi ${displayName},\n\nAccess to ${companyName} on FinMatrix has been suspended by our team.\n\n` +
+        `Reason: ${reason}\n\nYour data is safe. Contact support to restore access.`,
+    };
+  },
 };

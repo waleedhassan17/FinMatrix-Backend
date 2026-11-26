@@ -20,6 +20,11 @@ export interface JwtPayload {
    * LEGACY_ACCESS_MAX_LIFETIME_S for how those are told apart.
    */
   typ?: 'access' | 'refresh';
+  /**
+   * The user's token version when the token was issued. A mismatch means the
+   * user's sessions were revoked (suspension). Absent on older tokens = 0.
+   */
+  tv?: number;
   iat?: number;
   exp?: number;
 }
@@ -77,10 +82,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       });
     }
     const user = await this.users.findById(payload.sub);
+    // Suspension takes effect on the NEXT request, not when the token expires.
+    if (user?.suspendedAt) {
+      throw new UnauthorizedException({
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended. Contact support.',
+      });
+    }
     if (!user || !user.isActive) {
       throw new UnauthorizedException({
         code: 'INVALID_TOKEN',
         message: 'Invalid or expired token',
+      });
+    }
+    if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) {
+      throw new UnauthorizedException({
+        code: 'SESSION_REVOKED',
+        message: 'Your session has ended. Please sign in again.',
       });
     }
     return {

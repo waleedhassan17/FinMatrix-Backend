@@ -751,10 +751,11 @@ export class SuperAdminService {
         company.name,
       );
     } else if (what === 'suspended') {
-      await this.mail.sendDeactivatedEmail(
+      await this.mail.sendCompanySuspendedEmail(
         owner.email,
         owner.displayName,
         company.name,
+        company.suspensionReason ?? 'No reason given',
       );
     } else {
       await this.mail.sendRejectionEmail(

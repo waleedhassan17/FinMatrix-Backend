@@ -110,7 +110,7 @@ export class CompanyGuard implements CanActivate {
         code: 'COMPANY_SUSPENDED',
         message:
           'This company account is suspended. Contact FinMatrix support.',
-        companyStatus: 'inactive',
+        details: { companyStatus: 'inactive' },
       });
     }
 
@@ -155,8 +155,10 @@ export class CompanyGuard implements CanActivate {
             : trialEnded
               ? "Your company's trial has ended — please contact the owner."
               : "Your company's plan has ended — please contact the owner.",
-          companyStatus: acctStatus,
-          audience: isOwner ? 'owner' : 'member',
+          details: {
+            companyStatus: acctStatus,
+            audience: isOwner ? 'owner' : 'member',
+          },
         });
       }
 

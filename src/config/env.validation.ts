@@ -246,6 +246,24 @@ export const envValidationSchema = Joi.object({
   // The customer web app; links in emails (verification, trial, demo invite).
   WEB_APP_URL: Joi.string().uri().optional(),
 
+  // ── Account control (modules/account-admin) ──
+  // false stops this process from running company deletion jobs and the
+  // final-backup expiry sweep (tests that must not pick up others' work).
+  ACCOUNT_DELETION_WORKER_ENABLED: Joi.boolean().default(true),
+  // Days a deleted company's automatic final backup stays downloadable by
+  // super-admins before it is deleted.
+  DELETION_BACKUP_RETENTION_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(365)
+    .default(30),
+  // Days an untouched draft migration batch is kept before the cleanup sweep.
+  MIGRATION_DRAFT_RETENTION_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(365)
+    .default(30),
+
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {
     is: 'production',

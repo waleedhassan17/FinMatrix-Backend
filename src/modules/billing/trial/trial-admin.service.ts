@@ -133,9 +133,11 @@ export class TrialAdminService {
         : new Map<string, unknown[]>();
     const today = businessToday(BILLING_TIMEZONE);
 
+    // `items`, not `data`: the response envelope unwraps a top-level `data`
+    // and would drop `pagination`.
     return {
       view: opts.view,
-      data: rows.map((r) => {
+      items: rows.map((r) => {
         const endsAt = r.subscription_expiry_date
           ? new Date(r.subscription_expiry_date)
           : null;
