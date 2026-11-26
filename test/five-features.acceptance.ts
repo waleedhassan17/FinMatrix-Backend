@@ -149,7 +149,7 @@ async function main() {
     token: token0,
     companyId: cid,
   });
-  await req('PATCH', `/admin/companies/${cid}/approve`, { token: superToken });
+  await req('PATCH', `/admin/companies/${cid}/approve`, { token: superToken, json: { plan: 'warehouse_scale_1yr', endDate: new Date(Date.now() + 365 * 86_400_000).toISOString() } });
   const relogin = await signin(email, 'Qa@12345');
   const T = data(relogin)?.tokens?.accessToken;
   ok('company admin ready', !!T && !!cid);

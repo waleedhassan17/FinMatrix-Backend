@@ -116,8 +116,7 @@ async function signupApprovedAdmin(pg: any, superToken: string, tag: string) {
     companyId,
   });
   await req('PATCH', `/admin/companies/${companyId}/approve`, {
-    token: superToken,
-  });
+    token: superToken, json: { plan: 'warehouse_scale_1yr', endDate: new Date(Date.now() + 365 * 86_400_000).toISOString() } });
   await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
     userId,
   ]);

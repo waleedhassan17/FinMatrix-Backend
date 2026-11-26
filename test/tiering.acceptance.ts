@@ -510,6 +510,10 @@ async function main() {
   });
   const approveCo = await req('PATCH', `/admin/companies/${newCid}/approve`, {
     token: superU.token,
+    json: {
+      plan: 'warehouse_scale_1yr',
+      endDate: new Date(Date.now() + 365 * 86_400_000).toISOString(),
+    },
   });
   ok('company approved', approveCo.status < 300, approveCo.status);
   const approvePay = await req(
