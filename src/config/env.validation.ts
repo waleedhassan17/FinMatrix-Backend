@@ -237,6 +237,25 @@ export const envValidationSchema = Joi.object({
   TRIAL_BLOCKED_EMAIL_DOMAINS: Joi.string().allow('').default(''),
   // Public demo booking page and endpoints.
   DEMO_BOOKING_ENABLED: Joi.boolean().default(true),
+  // Bookable demo slots, in Asia/Karachi: days ahead, day start/end (HH:MM),
+  // slot length, ISO weekdays (1=Mon … 7=Sun) and demos per slot.
+  DEMO_SLOT_DAYS_AHEAD: Joi.number().integer().min(1).max(60).default(14),
+  DEMO_SLOT_DAY_START: Joi.string()
+    .pattern(/^\d{1,2}:\d{2}$/)
+    .default('10:00'),
+  DEMO_SLOT_DAY_END: Joi.string()
+    .pattern(/^\d{1,2}:\d{2}$/)
+    .default('18:00'),
+  DEMO_SLOT_MINUTES: Joi.number().integer().min(15).max(120).default(30),
+  DEMO_SLOT_WEEKDAYS: Joi.string()
+    .pattern(/^\s*[1-7](\s*,\s*[1-7])*\s*$/)
+    .default('1,2,3,4,5,6'),
+  DEMO_SLOT_CAPACITY: Joi.number().integer().min(1).max(20).default(1),
+  // Optional Cloudflare Turnstile on the booking form (both or neither).
+  TURNSTILE_SECRET: Joi.string().allow('').optional(),
+  TURNSTILE_SITE_KEY: Joi.string().allow('').optional(),
+  // false stops this process from sending the 2-hours-before demo reminder.
+  DEMO_WORKER_ENABLED: Joi.boolean().default(true),
   // Contact shown to customers. SUPPORT_EMAIL falls back to ADMIN_EMAIL.
   SUPPORT_EMAIL: Joi.string().email().allow('').optional(),
   SUPPORT_WHATSAPP: Joi.string()

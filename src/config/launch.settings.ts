@@ -110,6 +110,54 @@ export function deletionBackupRetentionDays(): number {
   return Math.max(1, int(process.env.DELETION_BACKUP_RETENTION_DAYS, 30));
 }
 
+// ── Demo booking slots (Asia/Karachi) ──────────────────────────────────────
+
+/** How many days ahead a prospect may book (today excluded). */
+export function demoSlotDaysAhead(): number {
+  return Math.min(Math.max(int(process.env.DEMO_SLOT_DAYS_AHEAD, 14), 1), 60);
+}
+
+/** "HH:MM" → minutes after midnight, or the fallback. */
+function hhmm(raw: string | undefined, fallback: number): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim());
+  if (!m) return fallback;
+  const v = Number(m[1]) * 60 + Number(m[2]);
+  return v >= 0 && v <= 24 * 60 ? v : fallback;
+}
+
+/** First slot start, minutes after midnight PKT (default 10:00). */
+export function demoSlotDayStart(): number {
+  return hhmm(process.env.DEMO_SLOT_DAY_START, 10 * 60);
+}
+
+/** End of the booking day, minutes after midnight PKT (default 18:00). */
+export function demoSlotDayEnd(): number {
+  return hhmm(process.env.DEMO_SLOT_DAY_END, 18 * 60);
+}
+
+/** Length of one slot in minutes (default 30). */
+export function demoSlotMinutes(): number {
+  return Math.min(Math.max(int(process.env.DEMO_SLOT_MINUTES, 30), 15), 120);
+}
+
+/** Bookable ISO weekdays (1 = Monday … 7 = Sunday), default Mon–Sat. */
+export function demoSlotWeekdays(): number[] {
+  const days = list(process.env.DEMO_SLOT_WEEKDAYS)
+    .map((d) => Number.parseInt(d, 10))
+    .filter((d) => d >= 1 && d <= 7);
+  return days.length ? [...new Set(days)] : [1, 2, 3, 4, 5, 6];
+}
+
+/** Demos that may share one slot (default 1). */
+export function demoSlotCapacity(): number {
+  return Math.min(Math.max(int(process.env.DEMO_SLOT_CAPACITY, 1), 1), 20);
+}
+
+/** Cloudflare Turnstile secret; empty = Turnstile not checked. */
+export function turnstileSecret(): string {
+  return (process.env.TURNSTILE_SECRET ?? '').trim();
+}
+
 /** What GET /public/config returns: everything a client needs, nothing secret. */
 export function publicLaunchConfig() {
   return {

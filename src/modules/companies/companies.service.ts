@@ -9,6 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { BillingService } from '../billing/billing.service';
+import { DemoRequestsService } from '../demo-requests/demo-requests.service';
 import { PaymentSubmission } from '../billing/entities/payment-submission.entity';
 import { plansForType } from '../billing/plan-config';
 import { requestedPlanLabel, UNSURE_PLAN } from '../billing/plan-terms';
@@ -57,6 +58,7 @@ export class CompaniesService {
     @InjectRepository(PaymentSubmission)
     private readonly submissionRepo: Repository<PaymentSubmission>,
     private readonly billing: BillingService,
+    private readonly demos: DemoRequestsService,
   ) {}
 
   async create(userId: string, dto: CreateCompanyDto): Promise<Company> {
@@ -108,6 +110,10 @@ export class CompaniesService {
       }
 
       await this.seedDefaultChartOfAccounts(manager, company.id);
+      // An owner who signed up from a demo's trial invite: link the demo.
+      if (user?.signupRef) {
+        await this.demos.convertFromSignup(manager, user.signupRef, company.id);
+      }
       return company;
     });
   }

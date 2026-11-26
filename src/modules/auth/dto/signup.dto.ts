@@ -7,6 +7,7 @@ import {
   Matches,
   MinLength,
   ValidateIf,
+  MaxLength,
 } from 'class-validator';
 import { IsPkPhone } from '../../../common/validation/phone';
 
@@ -56,4 +57,13 @@ export class SignupDto {
   @IsString()
   @MinLength(4)
   companyCode?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Where the sign-up came from, e.g. demo_<id> from a demo trial invite.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  ref?: string;
 }

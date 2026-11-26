@@ -197,6 +197,10 @@ export class AuthService implements OnModuleInit {
         phone: dto.phone ?? null,
         role: dto.role,
         isActive: true,
+        // Only a well-formed demo reference is kept; anything else is noise.
+        signupRef: /^demo_[0-9a-f-]{36}$/i.test(dto.ref ?? '')
+          ? (dto.ref as string)
+          : null,
         isEmailVerified: !isAdmin,
         emailVerifiedAt: isAdmin ? null : new Date(),
         defaultCompanyId: null,

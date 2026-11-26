@@ -24,6 +24,7 @@
     "test:subscription": "ts-node -r tsconfig-paths/register test/subscription.acceptance.ts",
     "test:trial": "ts-node -r tsconfig-paths/register test/trial.acceptance.ts",
     "test:account-admin": "ts-node -r tsconfig-paths/register test/account-admin.acceptance.ts",
+    "test:demo": "ts-node -r tsconfig-paths/register test/demo-requests.acceptance.ts",
     "typeorm": "typeorm-ts-node-commonjs -d src/database/data-source.ts",
     "migration:generate": "npm run typeorm -- migration:generate",
     "migration:run": "npm run typeorm -- migration:run",

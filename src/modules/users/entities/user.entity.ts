@@ -61,6 +61,13 @@ export class User extends BaseEntity {
   @Column({ type: 'integer', default: 0, name: 'token_version' })
   tokenVersion!: number;
 
+  /**
+   * Where the sign-up came from, e.g. `demo_<uuid>` from a demo's "Start your
+   * free trial" invite. Links the demo to the company this owner creates.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true, name: 'signup_ref' })
+  signupRef!: string | null;
+
   @OneToMany(() => UserCompany, (uc) => uc.user)
   memberships!: UserCompany[];
 }

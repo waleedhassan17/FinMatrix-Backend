@@ -71,6 +71,7 @@ import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { PublicModule } from './modules/public/public.module';
 import { AccountAdminModule } from './modules/account-admin/account-admin.module';
+import { DemoRequestsModule } from './modules/demo-requests/demo-requests.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { envValidationSchema } from './config/env.validation';
@@ -161,6 +162,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     BillingModule,
     PublicModule,
     AccountAdminModule,
+    DemoRequestsModule,
     ScheduleModule.forRoot(),
     LoggerModule.forRootAsync({
       inject: [ConfigService],

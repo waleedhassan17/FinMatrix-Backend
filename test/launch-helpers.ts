@@ -56,7 +56,7 @@ export function finish(suite: string): never {
   process.exit(0);
 }
 
-let ipSeq = Math.floor(Math.random() * 200);
+let ipSeq = Math.floor(Math.random() * 16_000_000);
 /** A fresh client IP (X-Forwarded-For) so per-IP risk checks stay per test. */
 export function freshIp(): string {
   ipSeq += 1;
