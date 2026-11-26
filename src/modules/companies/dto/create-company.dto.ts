@@ -177,6 +177,11 @@ export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional()
   @IsBoolean()
   inventoryEnabled?: boolean;
+
+  /** Hide the dashboard's "Bring your data from your old system" card. */
+  @IsOptional()
+  @IsBoolean()
+  migrationPromptDismissed?: boolean;
 }
 
 /**

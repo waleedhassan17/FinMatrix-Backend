@@ -107,6 +107,46 @@ jobs:
       - name: Ledger invariants
         run: npm run test:qa
 
+      # ── Launch: sign-up paths, free trial, Book a Demo, account control ──
+      # HTTP suites against the API booted above. Each creates its own
+      # throwaway super-admin in the database; none needs credentials.
+      - name: Free trial and sign-up paths
+        run: npm run test:trial
+
+      - name: Book a Demo
+        run: npm run test:demo
+
+      - name: Suspend and delete accounts
+        run: npm run test:account-admin
+
+      # ── Migration Center and company backup ──
+      # HTTP suites first (they use the running API), then the in-process
+      # suites, which boot their own isolated Nest context (workers, mail and
+      # Cloudinary off — test/migration-harness.env.ts).
+      - name: Migration Center over HTTP
+        run: npm run test:migration
+
+      - name: Migration Center with trials, and commit concurrency
+        run: npm run test:migration-trial
+
+      - name: Company backup (data export)
+        run: npm run test:data-export
+
+      - name: Migration Center in process (books, formats, launch matrix, AI, uploads)
+        run: |
+          npm run test:migration-books
+          npm run test:migration-formats
+          npm run test:migration-launch-matrix
+          npm run test:migration-ai
+          npm run test:migration-uploads
+
+      # 200 random books in CI (about a minute); run N=5000 locally before a
+      # release: `N=5000 npm run test:migration-property`.
+      - name: Migration property test (N=200)
+        env:
+          N: '200'
+        run: npm run test:migration-property
+
       # The two role matrices are the product's authorisation model -- who may
       # act directly, who must raise a request, and that a pending request
       # writes no ledger rows. `test:conformance` has existed since the staff

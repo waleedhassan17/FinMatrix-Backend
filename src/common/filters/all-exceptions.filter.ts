@@ -89,6 +89,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       // Error monitoring — no-op unless SENTRY_DSN is configured in main.ts.
       Sentry.withScope((scope) => {
         scope.setTag('route', `${req.method} ${req.path}`);
+        // Migration Center and backups: tag the batch / export so support can
+        // find it (the id is in the path; nothing from the files is sent).
+        const m =
+          /\/(migrations|data-portability\/exports)\/([0-9a-f-]{36})/i.exec(
+            req.path,
+          );
+        if (m) {
+          scope.setTag('area', m[1] === 'migrations' ? 'migration' : 'export');
+          scope.setTag(m[1] === 'migrations' ? 'batch_id' : 'export_id', m[2]);
+        }
         scope.setContext('request', {
           method: req.method,
           url: req.url,

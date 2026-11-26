@@ -4241,11 +4241,25 @@ export class ReportsService {
       `SELECT COUNT(*) v FROM tax_rates WHERE company_id=$1`,
     );
     const company = await this.dataSource.query(
-      `SELECT setup_completed AS "v" FROM companies WHERE id=$1`,
+      `SELECT setup_completed AS "v",
+              migration_prompt_dismissed_at AS "dismissed"
+         FROM companies WHERE id=$1`,
       [companyId],
     );
+    // The Migration Center card: "Bring your data from your old system".
+    const migration = (
+      await this.dataSource.query(
+        `SELECT count(*) FILTER (WHERE status = 'closed')::int AS closed,
+                count(*) FILTER (WHERE status IN ('committed', 'closed'))::int AS imported,
+                count(*) FILTER (WHERE status IN ('draft','uploaded','mapped','validated','ready'))::int AS open
+           FROM migration_batches WHERE company_id = $1`,
+        [companyId],
+      )
+    )[0] ?? { closed: 0, imported: 0, open: 0 };
 
     const steps = {
+      // First, for a new company: bring the old books in.
+      migration: Number(migration.closed) > 0,
       openingBalance: openingBalance > 0,
       chartOfAccounts: customAccounts > 0,
       inventory: itemCount > 0,
@@ -4256,6 +4270,12 @@ export class ReportsService {
     return {
       completed: company[0]?.v === true,
       steps,
+      migrationPrompt: {
+        // Hidden once a migration is closed or the owner dismissed the card.
+        visible: Number(migration.closed) === 0 && !company[0]?.dismissed,
+        imported: Number(migration.imported) > 0,
+        inProgress: Number(migration.open) > 0,
+      },
     };
   }
 

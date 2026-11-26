@@ -175,6 +175,13 @@ export class CompaniesService {
         : {}),
       ...(dto.address !== undefined ? { address: dto.address } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+      ...(dto.migrationPromptDismissed !== undefined
+        ? {
+            migrationPromptDismissedAt: dto.migrationPromptDismissed
+              ? new Date()
+              : null,
+          }
+        : {}),
       ...(dto.email !== undefined ? { email: dto.email } : {}),
       ...(dto.website !== undefined ? { website: dto.website } : {}),
       ...(dto.taxId !== undefined ? { taxId: dto.taxId } : {}),

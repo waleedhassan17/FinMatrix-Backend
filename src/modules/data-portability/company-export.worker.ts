@@ -1,3 +1,4 @@
+import { reportFailure } from '../../common/monitoring/report-failure';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression, Interval } from '@nestjs/schedule';
@@ -180,6 +181,12 @@ export class CompanyExportWorker {
     } catch (err) {
       const message = (err as Error).message ?? 'Unknown error';
       this.logger.error(`export ${job.id} failed: ${message}`);
+      reportFailure({
+        area: 'export',
+        id: job.id,
+        companyId: job.companyId,
+        error: err,
+      });
       await sink.abort().catch(() => undefined);
       await this.dataSource.manager.update(
         CompanyExport,
