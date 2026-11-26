@@ -13,7 +13,11 @@ services:
     ports:
       - "${API_HOST_PORT:-3000}:3000"
     volumes:
-      - ./storage:/app/storage
+      # A NAMED volume, not a bind mount: it survives container restarts and
+      # re-creation, and Docker creates it owned by the image's nodejs user
+      # (the Dockerfile pre-creates /app/storage with that owner). Company
+      # backup ZIPs land here when Cloudinary is not configured.
+      - finmatrix_prod_storage:/app/storage
 
   postgres:
     image: postgres:15-alpine
@@ -37,3 +41,4 @@ services:
 
 volumes:
   finmatrix_prod_pgdata:
+  finmatrix_prod_storage:

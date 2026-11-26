@@ -197,6 +197,9 @@ export const envValidationSchema = Joi.object({
   // The background reader for uploaded backups. Off only in tests that must
   // not pick up another process's work.
   MIGRATION_READ_WORKER_ENABLED: Joi.boolean().default(true),
+  // The nightly sweep of abandoned draft migrations and closed batches'
+  // staging rows (MIGRATION_DRAFT_RETENTION_DAYS).
+  MIGRATION_CLEANUP_ENABLED: Joi.boolean().default(true),
   // Optional AI mapping assistant. Off by default; with it off (or without a
   // key or model) the Migration Center maps with its deterministic rules only.
   // The model is configuration, never code: e.g. MIGRATION_AI_MODEL=claude-opus-5-5.

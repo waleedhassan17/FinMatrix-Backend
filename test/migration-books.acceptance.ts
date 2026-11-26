@@ -82,7 +82,10 @@ function booksWithIncome(cutoverDate: string): BooksSpec {
       { number: '3100', name: 'Retained Earnings', credit: '1,24,250.50' },
       { number: '4000', name: 'Sales', credit: '9,00,000' },
       { number: '5000', name: 'Cost of Goods Sold', debit: '5,00,000' },
-      { number: '6000', name: 'Operating Expenses', debit: '1,20,000' },
+      // FinMatrix's own 6000 is Rent Expense: the same number AND meaning, so
+      // it merges (account-clash rule). A different name would — rightly —
+      // ask the owner what the account is.
+      { number: '6000', name: 'Rent Expense', debit: '1,20,000' },
     ],
   };
 }

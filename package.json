@@ -76,6 +76,8 @@
     "test:migration-peachtree": "ts-node -r tsconfig-paths/register test/migration-peachtree.acceptance.ts",
     "test:migration-uploads": "ts-node -r tsconfig-paths/register test/migration-uploads.acceptance.ts",
     "test:migration-ptb-http": "ts-node -r tsconfig-paths/register test/migration-ptb-http.acceptance.ts",
+    "test:migration-books": "ts-node -r tsconfig-paths/register test/migration-books.acceptance.ts",
+    "test:migration-formats": "ts-node -r tsconfig-paths/register test/migration-formats.acceptance.ts",
     "test:legacy-roles": "ts-node -r tsconfig-paths/register test/legacy-roles.acceptance.ts",
     "fixtures:migration": "ts-node -r tsconfig-paths/register test/fixtures/migration/build-fixtures.ts",
     "perf:export": "ts-node -r tsconfig-paths/register scripts/perf-export.ts",

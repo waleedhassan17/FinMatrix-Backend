@@ -104,6 +104,25 @@ export class StorageService {
         ? 'Storage backend: Cloudinary (authenticated delivery)'
         : 'Storage backend: Postgres bytea (Cloudinary env vars not set)',
     );
+    // Without Cloudinary, STREAMED files (company backup ZIPs, a deleted
+    // company's final backup) go to local disk. On ECS/Fargate that disk is
+    // replaced on every deploy and differs between tasks, so a backup could
+    // vanish before its owner downloads it. Say so loudly in production.
+    if (
+      !this.cloudinaryEnabled &&
+      this.config.get<string>('NODE_ENV') === 'production'
+    ) {
+      this.logger.error(
+        `Cloudinary is not configured: company backups are written to local disk at ${this.root}. ` +
+          'That disk must be a persistent volume shared by every API task, or backups will be lost. ' +
+          'Set CLOUDINARY_* (recommended) or mount a persistent volume at UPLOAD_STORAGE_PATH.',
+      );
+    }
+  }
+
+  /** True when streamed files land somewhere that outlives this container. */
+  hasDurableStreamStorage(): boolean {
+    return this.cloudinaryEnabled;
   }
 
   /**
