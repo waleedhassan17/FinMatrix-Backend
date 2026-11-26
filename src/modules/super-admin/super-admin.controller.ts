@@ -127,6 +127,7 @@ export class SuperAdminController {
     @Query('status') status?: string,
     @Query('isTrial') isTrial?: string,
     @Query('search') search?: string,
+    @Query('isDemo') isDemo?: string,
   ) {
     guardSuperAdmin(user);
     return this.service.getAllCompanies(
@@ -135,6 +136,7 @@ export class SuperAdminController {
       status,
       SuperAdminService.parseTrialFilter(isTrial),
       search,
+      SuperAdminService.parseTrialFilter(isDemo),
     );
   }
 

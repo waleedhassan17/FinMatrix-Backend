@@ -1,27 +1,34 @@
 /**
  * FinMatrix — Auth / Account-Status Gate Acceptance (Phase1.md)
  * ============================================================
- * Verifies the server-side login gate and the Super-Admin company-review
- * endpoints against a running API. Non-destructive: it deactivates then
- * reactivates the ADMIN's company, leaving it active.
+ * Verifies the server-side login gate and the super-admin company-review
+ * endpoints against a running API, on accounts it creates for the run: a
+ * throwaway super-admin and an owner with a company on a trial.
  *
- * Usage:
- *   API_BASE=https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1 \
- *   ADMIN_EMAIL=metromatrix@gmail.com ADMIN_PASSWORD=123456 \
- *   SUPER_ADMIN_EMAIL=waleedhassansfd@gmail.com SUPER_ADMIN_PASSWORD='Waleed@104' \
- *   npx ts-node -r tsconfig-paths/register test/auth-gate.acceptance.ts
+ * Usage (a scratch database — never production):
+ *   API_BASE=http://localhost:3101/api/v1 \
+ *   DATABASE_URL=postgres://finmatrix_user:…@localhost:5432/finmatrix_launch \
+ *   npm run test:authgate
  *
- * Exits non-zero if any check fails.
+ * It used to default to the production API and sign in to real accounts
+ * with passwords written in this file, then deactivate a real company. The
+ * defaults are local now, and there are no credentials in the file.
+ *
+ * Since launch, "deactivate" is a suspension: the owner is refused at sign-in
+ * with COMPANY_SUSPENDED and every live session is refused at the next
+ * request; "activate" reinstates it. Exits non-zero if any check fails.
  */
-export {}; // isolate module scope (shares a tsconfig with acceptance.ts)
-
-const API =
-  process.env.API_BASE ||
-  'https://finmatrix-api-prod-665c6b5cb6a1.herokuapp.com/api/v1';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'metromatrix@gmail.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '123456';
-const SA_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'waleedhassansfd@gmail.com';
-const SA_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Waleed@104';
+import {
+  BASE,
+  code,
+  data,
+  Db,
+  owner,
+  PASSWORD,
+  req,
+  startTrial,
+  superAdmin,
+} from './launch-helpers';
 
 let pass = 0;
 let fail = 0;
@@ -34,131 +41,123 @@ const ok = (name: string, cond: boolean, detail = '') => {
     console.log(`  ✗ ${name} ${detail}`);
   }
 };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function req(
-  method: string,
-  path: string,
-  body?: unknown,
-  headers: Record<string, string> = {},
-): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = null;
-  try {
-    json = await res.json();
-  } catch {
-    /* no body */
-  }
-  return { status: res.status, body: json };
-}
-
-const tokenOf = (b: any) => b?.data?.tokens?.accessToken ?? '';
-const codeOf = (b: any) => b?.error?.code ?? b?.code ?? '';
-const signin = (email: string, password: string) =>
-  req('POST', '/auth/signin', { email, password });
-
-// Retry signin to ride out the login throttle window during the test.
-async function signinRetry(email: string, password: string, tries = 6) {
-  for (let i = 0; i < tries; i++) {
-    const r = await signin(email, password);
-    if (r.status !== 429 && codeOf(r.body) !== 'INTERNAL_ERROR') return r;
-    await sleep(6000);
-  }
-  return signin(email, password);
-}
 
 async function main() {
-  console.log(`\nAuth-gate acceptance → ${API}\n`);
+  console.log(`\nAuth-gate acceptance → ${BASE}\n`);
+  const db = await new Db().open();
 
-  const sa = await signinRetry(SA_EMAIL, SA_PASSWORD);
-  ok('super-admin can sign in', !!tokenOf(sa.body), `status=${sa.status}`);
-  const saTok = tokenOf(sa.body);
-  const saHdr = { Authorization: `Bearer ${saTok}` };
+  const sa = await superAdmin(db);
+  ok('super-admin can sign in', !!sa.token);
 
-  const adminLogin = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
-  ok('active company admin can sign in', !!tokenOf(adminLogin.body));
-  const adminTok = tokenOf(adminLogin.body);
-  const companyId = adminLogin.body?.data?.companyId;
-  ok('admin login returns a companyId', !!companyId);
+  const o = await owner(db);
+  const trial = await startTrial(o);
+  ok(
+    'owner starts a trial (company active)',
+    trial.status === 201 || trial.status === 200,
+    `got ${trial.status}`,
+  );
 
-  // Role guard: a company admin token must be rejected by /admin/companies.
-  const forbid = await req('GET', '/admin/companies', undefined, {
-    Authorization: `Bearer ${adminTok}`,
+  const first = await req('POST', '/auth/signin', {
+    ip: o.ip,
+    json: { email: o.email, password: PASSWORD },
   });
+  const adminTok = data(first)?.tokens?.accessToken as string;
+  ok('active company owner can sign in', !!adminTok);
+  ok('sign-in returns the companyId', data(first)?.companyId === o.companyId);
+
+  // Role guard: a company owner's token is refused on the console endpoints.
+  const forbid = await req('GET', '/admin/companies', { token: adminTok });
   ok(
     'non-super-admin → 403 on /admin/companies',
     forbid.status === 403,
     `got ${forbid.status}`,
   );
 
-  // Super-admin can list companies.
-  const list = await req(
-    'GET',
-    '/admin/companies?status=all&limit=50',
-    undefined,
-    saHdr,
+  const list = await req('GET', '/admin/companies?status=all&limit=50', {
+    token: sa.token,
+  });
+  ok(
+    'super-admin can list companies',
+    list.status === 200,
+    `got ${list.status}`,
   );
-  ok('super-admin can list companies', list.status === 200);
 
-  // Deactivate → sign-in survives but lands in renew-only; business endpoints blocked.
+  // Deactivate = suspend.
   const deact = await req(
     'PATCH',
-    `/admin/companies/${companyId}/deactivate`,
-    {},
-    saHdr,
+    `/admin/companies/${o.companyId}/deactivate`,
+    {
+      token: sa.token,
+      json: { reason: 'Auth-gate acceptance' },
+    },
   );
   ok(
-    'super-admin can deactivate a company',
+    'super-admin can deactivate (suspend) a company',
     deact.status === 200,
     `got ${deact.status}`,
   );
 
-  // This used to assert a BLOCKED login with code COMPANY_INACTIVE. That code exists
-  // nowhere in src/ and the design deliberately changed: 'pending' and 'rejected' are
-  // refused at sign-in (COMPANY_PENDING / COMPANY_REJECTED), but 'inactive' — a
-  // deactivation or a lapsed subscription — is let IN so the user can reach the
-  // renew-only flow, while CompanyGuard refuses every business endpoint with
-  // COMPANY_NOT_ACTIVE. Asserting the old contract hid what actually protects the
-  // tenant, which is the 403 immediately below.
-  const blocked = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
-  const blockedStatus =
-    blocked.body?.data?.companyStatus ?? blocked.body?.data?.company?.status;
-  ok(
-    'deactivated company signs in to renew-only, reported as inactive',
-    blocked.status === 200 && blockedStatus === 'inactive',
-    `status=${blocked.status} companyStatus=${blockedStatus} code=${codeOf(blocked.body)}`,
-  );
-
-  const guarded = await req('GET', '/accounts?search=1000', undefined, {
-    Authorization: `Bearer ${adminTok}`,
-    'x-company-id': companyId,
+  const blocked = await req('POST', '/auth/signin', {
+    ip: o.ip,
+    json: { email: o.email, password: PASSWORD },
   });
   ok(
-    'existing session blocked on business endpoint (403)',
-    guarded.status === 403,
-    `got ${guarded.status}`,
+    'suspended company: sign-in refused with COMPANY_SUSPENDED',
+    blocked.status === 403 && code(blocked) === 'COMPANY_SUSPENDED',
+    `status=${blocked.status} code=${code(blocked)}`,
   );
 
-  // Reactivate → login restored.
-  const react = await req(
-    'PATCH',
-    `/admin/companies/${companyId}/activate`,
-    {},
-    saHdr,
-  );
-  ok('super-admin can reactivate a company', react.status === 200);
-
-  const restored = await signinRetry(ADMIN_EMAIL, ADMIN_PASSWORD);
+  const guarded = await req('GET', '/accounts?search=1000', {
+    token: adminTok,
+    companyId: o.companyId,
+  });
   ok(
-    'reactivated company can log in again',
-    !!tokenOf(restored.body),
-    `code=${codeOf(restored.body)}`,
+    'existing session refused on a business endpoint (403 COMPANY_SUSPENDED)',
+    guarded.status === 403 && code(guarded) === 'COMPANY_SUSPENDED',
+    `got ${guarded.status} ${code(guarded)}`,
   );
 
+  // Activate = reinstate.
+  const react = await req('PATCH', `/admin/companies/${o.companyId}/activate`, {
+    token: sa.token,
+    json: {},
+  });
+  ok(
+    'super-admin can reactivate (reinstate) the company',
+    react.status === 200,
+    `got ${react.status}`,
+  );
+
+  const restored = await req('POST', '/auth/signin', {
+    ip: o.ip,
+    json: { email: o.email, password: PASSWORD },
+  });
+  ok(
+    'reinstated company can sign in again',
+    !!data(restored)?.tokens?.accessToken,
+    `code=${code(restored)}`,
+  );
+  const back = await req('GET', '/accounts?search=1000', {
+    token: data(restored)?.tokens?.accessToken,
+    companyId: o.companyId,
+  });
+  ok(
+    '…and use the books again',
+    back.status === 200,
+    `got ${back.status} ${code(back)}`,
+  );
+
+  const row = await db.one(
+    `SELECT status, suspended_at FROM companies WHERE id = $1`,
+    [o.companyId],
+  );
+  ok(
+    'status restored, suspension cleared',
+    row.status !== 'suspended' && row.suspended_at === null,
+    JSON.stringify(row),
+  );
+
+  await db.close();
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
 }

@@ -133,6 +133,11 @@ async function run() {
       );
     }
 
+    // A seeded company is a demo/test account (bulk-deletable, no final backup).
+    await m.query(`UPDATE companies SET is_demo = true WHERE id = $1`, [
+      company.id,
+    ]);
+
     // Memberships
     const memberships: Array<{ user: User; role: 'admin' | 'delivery' }> = [
       { user: admin, role: 'admin' },

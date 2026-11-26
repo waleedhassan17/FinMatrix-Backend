@@ -1036,6 +1036,46 @@ export class MigrationAnalysisService {
           confidence = 1;
           reason = 'a new account, with your number and name';
         }
+        // The assistant has a suggestion it is not sure of (below
+        // MAPPING_CONFIDENT): ask the owner to confirm IT, rather than
+        // dropping it and asking a blank "unknown account" question.
+        if (
+          !target &&
+          aiAcct?.target &&
+          validAccountTarget(aiAcct.target, existing)
+        ) {
+          const suggested = aiAcct.target;
+          // Placed provisionally on the suggestion; the blocking question
+          // below keeps it from importing until the owner confirms.
+          accountTargets.set(nk, finalOf(suggested));
+          const options = [
+            ...NEW_ACCOUNT_OPTIONS.map((t) => ({
+              value: `NEW:${t}`,
+              label: `Create ${src.number}${src.name ? ` ${src.name}` : ''} as a new ${t} account`,
+            })),
+            ...existing.accounts
+              .filter((a) => a.isActive)
+              .map((a) => ({
+                value: a.accountNumber,
+                label: `${finalOf(a.accountNumber)} ${a.name}`,
+              })),
+          ];
+          const first = options.find((o) => o.value === suggested);
+          addIssue({
+            code: MIGRATION_CODES.MAPPING_UNCONFIRMED,
+            severity: 'blocking',
+            sheet: 'Trial Balance',
+            field: `account::${src.number}`,
+            message:
+              `Account ${src.number}${src.name ? ` (${src.name})` : ''}: we suggest ` +
+              `${first?.label ?? suggested} (${Math.round(aiAcct.confidence * 100)}% sure — ${aiAcct.reason}). ` +
+              'Confirm it or choose another.',
+            options: first
+              ? [first, ...options.filter((o) => o !== first)]
+              : options,
+          });
+          continue;
+        }
         if (target) {
           accountTargets.set(nk, target);
           if (origin === 'rule')

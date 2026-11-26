@@ -88,7 +88,8 @@ async function run() {
        company_type='large_org', inventory_enabled=false, all_features_unlocked=false,
        subscription_plan=$2, subscription_status='active',
        subscription_start_date=$3, subscription_expiry_date=$4,
-       payment_status='paid', status='approved', setup_completed=true
+       payment_status='paid', status='approved', setup_completed=true,
+       is_demo=true
      WHERE id=$1`,
     [company.id, PLAN, start, expiry],
   );

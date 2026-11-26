@@ -176,7 +176,7 @@ async function run() {
          company_type=$2, subscription_plan=$3, subscription_status='active',
          subscription_start_date=$4, subscription_expiry_date=$5,
          payment_status='paid', status='approved', setup_completed=true,
-         all_features_unlocked=false
+         all_features_unlocked=false, is_demo=true
        WHERE id=$1`,
       [company.id, companyType, plan, start, expiry],
     );

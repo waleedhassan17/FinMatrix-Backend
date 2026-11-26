@@ -149,6 +149,8 @@ export class MailService implements OnModuleInit {
   async sendCompanySubmittedNotice(
     companyName: string,
     ownerEmail: string,
+    requestedPlan: string | null = null,
+    note: string | null = null,
   ): Promise<void> {
     const adminEmail = this.config.get<string>('mail.platformAdminEmail');
     if (!adminEmail) {
@@ -159,7 +161,12 @@ export class MailService implements OnModuleInit {
     }
     await this.send(
       adminEmail,
-      emailTemplates.companySubmitted(companyName, ownerEmail),
+      emailTemplates.companySubmitted(
+        companyName,
+        ownerEmail,
+        requestedPlan,
+        note,
+      ),
     );
   }
 
@@ -207,6 +214,23 @@ export class MailService implements OnModuleInit {
 
   // ── Free trial ──────────────────────────────────────────────────────────
 
+  /** The platform admin inbox, or '' (callers skip with a warning). */
+  private adminInbox(what: string): string {
+    const adminEmail = this.config.get<string>('mail.platformAdminEmail');
+    if (!adminEmail) {
+      this.logger.warn(`No ADMIN_EMAIL configured — skipping ${what}.`);
+      return '';
+    }
+    return adminEmail;
+  }
+
+  /** The Migration Center guide on the customer web app. */
+  migrationGuideUrl(): string {
+    const app = this.webAppUrl();
+    return app ? `${app}/settings/migration/guide` : '';
+  }
+
+  /** The trial is held for review (risk signal, or auto-approve off). */
   async sendTrialRequestedEmail(
     to: string,
     displayName: string,
@@ -218,22 +242,43 @@ export class MailService implements OnModuleInit {
     );
   }
 
-  /** Tells the platform admin a trial is waiting (the user was promised 24 hours). */
+  /** Tells the platform admin a trial is waiting for a decision. */
   async sendTrialRequestedAdminNotice(
     companyName: string,
     ownerEmail: string,
     ownerPhone: string | null,
+    holdReason: string | null = null,
   ): Promise<void> {
-    const adminEmail = this.config.get<string>('mail.platformAdminEmail');
-    if (!adminEmail) {
-      this.logger.warn(
-        'No ADMIN_EMAIL configured — skipping trial request notice.',
-      );
-      return;
-    }
+    const to = this.adminInbox('trial request notice');
+    if (!to) return;
     await this.send(
-      adminEmail,
-      emailTemplates.trialRequestedAdmin(companyName, ownerEmail, ownerPhone),
+      to,
+      emailTemplates.trialRequestedAdmin(
+        companyName,
+        ownerEmail,
+        ownerPhone,
+        holdReason,
+      ),
+    );
+  }
+
+  /** FYI to the platform admin: a trial started automatically. */
+  async sendTrialAutoApprovedAdminNotice(
+    companyName: string,
+    ownerEmail: string,
+    ownerPhone: string | null,
+    trialEndsAt: Date,
+  ): Promise<void> {
+    const to = this.adminInbox('auto-approved trial notice');
+    if (!to) return;
+    await this.send(
+      to,
+      emailTemplates.trialAutoApprovedAdmin(
+        companyName,
+        ownerEmail,
+        ownerPhone,
+        trialEndsAt,
+      ),
     );
   }
 
@@ -245,7 +290,10 @@ export class MailService implements OnModuleInit {
   ): Promise<void> {
     await this.send(
       to,
-      emailTemplates.trialApproved(displayName, companyName, trialEndsAt),
+      emailTemplates.trialApproved(displayName, companyName, trialEndsAt, {
+        app: this.webAppUrl() || undefined,
+        migrationGuide: this.migrationGuideUrl() || undefined,
+      }),
     );
   }
 
@@ -269,7 +317,12 @@ export class MailService implements OnModuleInit {
   ): Promise<void> {
     await this.send(
       to,
-      emailTemplates.trialEnding(displayName, companyName, daysRemaining),
+      emailTemplates.trialEnding(
+        displayName,
+        companyName,
+        daysRemaining,
+        this.webAppUrl() || undefined,
+      ),
     );
   }
 
@@ -278,7 +331,103 @@ export class MailService implements OnModuleInit {
     displayName: string,
     companyName: string,
   ): Promise<void> {
-    await this.send(to, emailTemplates.trialEnded(displayName, companyName));
+    await this.send(
+      to,
+      emailTemplates.trialEnded(
+        displayName,
+        companyName,
+        this.webAppUrl() || undefined,
+      ),
+    );
+  }
+
+  async sendTrialEndedEarlyEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.trialEndedEarly(displayName, companyName, reason),
+    );
+  }
+
+  async sendTrialExtendedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    newEnd: Date,
+    extraDays: number,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.trialExtended(displayName, companyName, newEnd, extraDays),
+    );
+  }
+
+  // ── Activation (no payment gateway) ─────────────────────────────────────
+
+  async sendActivationRequestedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.activationRequested(displayName, companyName),
+    );
+  }
+
+  async sendActivationRequestedAdminNotice(
+    companyName: string,
+    ownerEmail: string,
+    requestedPlan: string,
+    note: string | null,
+  ): Promise<void> {
+    const to = this.adminInbox('activation request notice');
+    if (!to) return;
+    await this.send(
+      to,
+      emailTemplates.activationRequestedAdmin(
+        companyName,
+        ownerEmail,
+        requestedPlan,
+        note,
+      ),
+    );
+  }
+
+  /** A plan was switched on: an activation request or a path-B approval. */
+  async sendPlanActivatedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    planLabel: string,
+    endsAt: Date,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.planActivated(
+        displayName,
+        companyName,
+        planLabel,
+        endsAt,
+        this.webAppUrl() || undefined,
+      ),
+    );
+  }
+
+  async sendActivationRejectedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.activationRejected(displayName, companyName, reason),
+    );
   }
 
   /** The owner's end-of-day digest (reports/day-summary-cron.service.ts). */
@@ -291,12 +440,59 @@ export class MailService implements OnModuleInit {
 
   // ── Low-level send ──────────────────────────────────────────────────────
 
+  // ── Suspension ──────────────────────────────────────────────────────────
+
+  async sendAccountSuspendedEmail(
+    to: string,
+    displayName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(to, emailTemplates.accountSuspended(displayName, reason));
+  }
+
+  async sendAccountReinstatedEmail(
+    to: string,
+    displayName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.accountReinstated(
+        displayName,
+        this.webAppUrl() || undefined,
+      ),
+    );
+  }
+
+  async sendCompanySuspendedEmail(
+    to: string,
+    displayName: string,
+    companyName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      emailTemplates.companySuspended(displayName, companyName, reason),
+    );
+  }
+
+  /**
+   * Low-level send, exposed for modules that render their own RenderedEmail
+   * (demo requests). Never throws: a mail failure must not break the caller.
+   */
+  async sendRendered(to: string, email: RenderedEmail): Promise<void> {
+    await this.send(to, email);
+  }
+
   private async send(to: string, email: RenderedEmail): Promise<void> {
     const from = this.config.get<string>('mail.from');
     if (!this.transport) {
       // Dev/console transport — surface everything needed to test the flow.
       this.logger.log(
-        `\n──────── [DEV EMAIL] ────────\nTo: ${to}\nFrom: ${from}\nSubject: ${email.subject}\n\n${email.text}\n─────────────────────────────`,
+        `\n──────── [DEV EMAIL] ────────\nTo: ${to}\nFrom: ${from}\nSubject: ${email.subject}\n\n${email.text}` +
+          (email.attachments?.length
+            ? `\n\nAttachments: ${email.attachments.map((a) => a.filename).join(', ')}`
+            : '') +
+          `\n─────────────────────────────`,
       );
       return;
     }
@@ -311,6 +507,15 @@ export class MailService implements OnModuleInit {
         subject: email.subject.replace(/[\r\n]+/g, ' ').trim(),
         text: email.text,
         html: email.html,
+        ...(email.attachments?.length
+          ? {
+              attachments: email.attachments.map((a) => ({
+                filename: a.filename,
+                content: a.content,
+                contentType: a.contentType,
+              })),
+            }
+          : {}),
         headers: {
           // RFC 3834: generated by a system, not written by a person. Stops
           // out-of-office replies and is how filters expect transactional

@@ -44,6 +44,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
       if (typeof body === 'string') {
         message = body;
+        // A string body (the throttler's "ThrottlerException: Too Many
+        // Requests", a bare `new HttpException('…', 4xx)`) still gets the code
+        // for its status — not INTERNAL_ERROR, which reads as a crash.
+        code = this.defaultCodeForStatus(status);
       } else if (body && typeof body === 'object') {
         const b = body as Record<string, unknown>;
         message =
@@ -73,6 +77,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.error(`Non-Error thrown: ${JSON.stringify(exception)}`);
     }
 
+    // The throttler's own text is a class name, not a sentence for a person.
+    if (
+      status === HttpStatus.TOO_MANY_REQUESTS &&
+      /^ThrottlerException/i.test(message)
+    ) {
+      message = 'Too many attempts. Please wait a few minutes and try again.';
+    }
+
     const envelope: ErrorEnvelope = {
       success: false,
       error: {
@@ -89,6 +101,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       // Error monitoring — no-op unless SENTRY_DSN is configured in main.ts.
       Sentry.withScope((scope) => {
         scope.setTag('route', `${req.method} ${req.path}`);
+        // Migration Center and backups: tag the batch / export so support can
+        // find it (the id is in the path; nothing from the files is sent).
+        const m =
+          /\/(migrations|data-portability\/exports)\/([0-9a-f-]{36})/i.exec(
+            req.path,
+          );
+        if (m) {
+          scope.setTag('area', m[1] === 'migrations' ? 'migration' : 'export');
+          scope.setTag(m[1] === 'migrations' ? 'batch_id' : 'export_id', m[2]);
+        }
         scope.setContext('request', {
           method: req.method,
           url: req.url,

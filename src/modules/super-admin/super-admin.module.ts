@@ -10,6 +10,7 @@ import { CompanySubscription } from './entities/company-subscription.entity';
 import { Company } from '../companies/entities/company.entity';
 import { UserCompany } from '../companies/entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -21,6 +22,8 @@ import { User } from '../users/entities/user.entity';
       UserCompany,
       User,
     ]),
+    // TrialService: "approve as a trial" goes through the one-trial rules.
+    BillingModule,
   ],
   controllers: [SuperAdminController, AdminCompaniesController],
   providers: [SuperAdminService, PlanOverrideService],

@@ -251,6 +251,60 @@ async function main() {
         !ask.includes('"Gahak List" (best guess'),
       ask.slice(0, 400),
     );
+    // What left the server: only headers, at most 20 sample rows per sheet,
+    // column statistics and the chart list — never a whole file.
+    const sent: any[] = [];
+    for (const call of model.calls) {
+      for (const m of call.messages as any[]) {
+        const parts = Array.isArray(m.content) ? m.content : [m.content];
+        for (const part of parts) {
+          if (part?.type === 'tool_result') {
+            const text = Array.isArray(part.content)
+              ? part.content.map((c: any) => c.text ?? '').join('')
+              : String(part.content ?? '');
+            try {
+              sent.push(JSON.parse(text));
+            } catch {
+              sent.push(text);
+            }
+          }
+        }
+      }
+    }
+    const sheetsSent = sent
+      .flatMap((x) =>
+        Array.isArray(x) ? x : Array.isArray(x?.sheets) ? x.sheets : [x],
+      )
+      .filter((x) => x && typeof x === 'object' && 'sampleRows' in x);
+    const allowedSheetKeys = new Set([
+      'name',
+      'headers',
+      'sampleRows',
+      'rowCount',
+      'stats',
+      'currentTarget',
+      'currentConfidence',
+    ]);
+    ok(
+      'only headers, ≤ 20 sample rows per sheet and column stats were sent to the model',
+      sheetsSent.length > 0 &&
+        sheetsSent.every(
+          (sh: any) =>
+            sh.sampleRows.length <= 20 &&
+            Object.keys(sh).every((k) => allowedSheetKeys.has(k)),
+        ),
+      sheetsSent.map((sh: any) => ({
+        name: sh.name,
+        rows: sh.sampleRows?.length,
+        keys: Object.keys(sh),
+      })),
+    );
+    const whole = JSON.stringify(model.calls);
+    ok(
+      'no file bytes or extracts were sent (no ZIP/XLSX signatures, no base64 blobs)',
+      !/UEsDB|PK\u0003\u0004|[A-Za-z0-9+/]{400,}/.test(whole),
+      whole.length,
+    );
     const stored = (await ds.query(
       `SELECT kind, source, target, confidence::text, origin FROM migration_mappings WHERE batch_id = $1 AND origin = 'ai' ORDER BY kind, source`,
       [b.id],

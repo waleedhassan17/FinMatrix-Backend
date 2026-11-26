@@ -40,8 +40,10 @@ const ROLES: Array<{ name: string; email?: string; password?: string }> = [
   },
   {
     name: 'super admin',
-    email: process.env.SUPER_ADMIN_EMAIL || 'waleedhassansfd@gmail.com',
-    password: process.env.SUPER_ADMIN_PASSWORD || 'Waleed@104',
+    // No default: a real account's password used to sit here. Set both to
+    // include the super-admin; otherwise the role is skipped.
+    email: process.env.SUPER_ADMIN_EMAIL,
+    password: process.env.SUPER_ADMIN_PASSWORD,
   },
 ];
 

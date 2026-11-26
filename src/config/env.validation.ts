@@ -197,6 +197,9 @@ export const envValidationSchema = Joi.object({
   // The background reader for uploaded backups. Off only in tests that must
   // not pick up another process's work.
   MIGRATION_READ_WORKER_ENABLED: Joi.boolean().default(true),
+  // The nightly sweep of abandoned draft migrations and closed batches'
+  // staging rows (MIGRATION_DRAFT_RETENTION_DAYS).
+  MIGRATION_CLEANUP_ENABLED: Joi.boolean().default(true),
   // Optional AI mapping assistant. Off by default; with it off (or without a
   // key or model) the Migration Center maps with its deterministic rules only.
   // The model is configuration, never code: e.g. MIGRATION_AI_MODEL=claude-opus-5-5.
@@ -213,6 +216,75 @@ export const envValidationSchema = Joi.object({
   MIGRATION_AI_MAX_CALLS: Joi.number().integer().min(0).max(50).default(10),
   // Server-side refusal fallback (beta). Set false for a model that does not support it.
   MIGRATION_AI_SERVER_FALLBACK: Joi.boolean().default(true),
+
+  // ── Launch: sign-up paths and the free trial (config/launch.settings.ts) ──
+  // trial    → company setup offers "Start my free trial" AND "Request
+  //            approval" (production default).
+  // approval → "Request approval" only; every company waits for an admin, who
+  //            must still set a plan and an end date.
+  SIGNUP_MODE: Joi.string().valid('trial', 'approval').default('trial'),
+  // false sends every trial request to the admin queue instead of starting it
+  // at once — the emergency switch if abuse appears. No redeploy needed.
+  TRIAL_AUTO_APPROVE: Joi.boolean().default(true),
+  // Trial length in days, counted from the moment the trial is granted.
+  TRIAL_DAYS: Joi.number().integer().min(1).max(90).default(30),
+  // Days-left thresholds for the trial-ending reminder (email + in-app).
+  TRIAL_REMINDER_DAYS: Joi.string()
+    .pattern(/^\s*\d{1,2}(\s*,\s*\d{1,2})*\s*$/)
+    .default('7,3,1'),
+  // More start-trial attempts than this from one IP within 24 hours holds the
+  // request for manual review instead of auto-approving it.
+  TRIAL_RISK_MAX_IP_ATTEMPTS_24H: Joi.number().integer().min(1).default(3),
+  // Extra email domains refused a free trial, comma-separated, on top of the
+  // bundled disposable-email list.
+  TRIAL_BLOCKED_EMAIL_DOMAINS: Joi.string().allow('').default(''),
+  // Public demo booking page and endpoints.
+  DEMO_BOOKING_ENABLED: Joi.boolean().default(true),
+  // Bookable demo slots, in Asia/Karachi: days ahead, day start/end (HH:MM),
+  // slot length, ISO weekdays (1=Mon … 7=Sun) and demos per slot.
+  DEMO_SLOT_DAYS_AHEAD: Joi.number().integer().min(1).max(60).default(14),
+  DEMO_SLOT_DAY_START: Joi.string()
+    .pattern(/^\d{1,2}:\d{2}$/)
+    .default('10:00'),
+  DEMO_SLOT_DAY_END: Joi.string()
+    .pattern(/^\d{1,2}:\d{2}$/)
+    .default('18:00'),
+  DEMO_SLOT_MINUTES: Joi.number().integer().min(15).max(120).default(30),
+  DEMO_SLOT_WEEKDAYS: Joi.string()
+    .pattern(/^\s*[1-7](\s*,\s*[1-7])*\s*$/)
+    .default('1,2,3,4,5,6'),
+  DEMO_SLOT_CAPACITY: Joi.number().integer().min(1).max(20).default(1),
+  // Optional Cloudflare Turnstile on the booking form (both or neither).
+  TURNSTILE_SECRET: Joi.string().allow('').optional(),
+  TURNSTILE_SITE_KEY: Joi.string().allow('').optional(),
+  // false stops this process from sending the 2-hours-before demo reminder.
+  DEMO_WORKER_ENABLED: Joi.boolean().default(true),
+  // Contact shown to customers. SUPPORT_EMAIL falls back to ADMIN_EMAIL.
+  SUPPORT_EMAIL: Joi.string().email().allow('').optional(),
+  SUPPORT_WHATSAPP: Joi.string()
+    .pattern(/^\+\d{8,15}$/)
+    .allow('')
+    .optional(),
+  // The customer web app; links in emails (verification, trial, demo invite).
+  WEB_APP_URL: Joi.string().uri().optional(),
+
+  // ── Account control (modules/account-admin) ──
+  // false stops this process from running company deletion jobs and the
+  // final-backup expiry sweep (tests that must not pick up others' work).
+  ACCOUNT_DELETION_WORKER_ENABLED: Joi.boolean().default(true),
+  // Days a deleted company's automatic final backup stays downloadable by
+  // super-admins before it is deleted.
+  DELETION_BACKUP_RETENTION_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(365)
+    .default(30),
+  // Days an untouched draft migration batch is kept before the cleanup sweep.
+  MIGRATION_DRAFT_RETENTION_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(365)
+    .default(30),
 
   // API docs are public when on, so production has to opt in.
   SWAGGER_ENABLED: Joi.boolean().when('NODE_ENV', {

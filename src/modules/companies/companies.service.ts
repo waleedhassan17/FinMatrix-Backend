@@ -7,26 +7,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  EntityManager,
-  QueryFailedError,
-  Repository,
-} from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { BillingService } from '../billing/billing.service';
+import { DemoRequestsService } from '../demo-requests/demo-requests.service';
 import { PaymentSubmission } from '../billing/entities/payment-submission.entity';
-import { TrialClaim } from '../billing/entities/trial-claim.entity';
-import {
-  getPlanConfig,
-  plansForType,
-  TRIAL_PLAN_KEY,
-} from '../billing/plan-config';
+import { plansForType } from '../billing/plan-config';
+import { requestedPlanLabel, UNSURE_PLAN } from '../billing/plan-terms';
+import { SubmitForApprovalDto } from './dto/signup-paths.dto';
 import { normalizeCompanyStatus } from '../../common/utils/company-status.util';
 import { BILLING_DISABLED_BUILD } from '../../common/feature-flags';
-import {
-  normalizeEmail,
-  normalizePhone,
-} from '../../common/validation/contact-normalize';
 import { Company } from './entities/company.entity';
 import { UserCompany } from './entities/user-company.entity';
 import { User } from '../users/entities/user.entity';
@@ -49,14 +38,6 @@ import {
   businessToday,
 } from '../../common/utils/business-date.util';
 
-/** Hours the owner is told a trial request takes to review. */
-export const TRIAL_ACTIVATION_HOURS = 24;
-
-const TRIAL_EMAIL_USED_MESSAGE =
-  'A free trial has already been used with this email address.';
-const TRIAL_PHONE_USED_MESSAGE =
-  'A free trial has already been used with this phone number.';
-
 @Injectable()
 export class CompaniesService {
   private readonly logger = new Logger(CompaniesService.name);
@@ -77,6 +58,7 @@ export class CompaniesService {
     @InjectRepository(PaymentSubmission)
     private readonly submissionRepo: Repository<PaymentSubmission>,
     private readonly billing: BillingService,
+    private readonly demos: DemoRequestsService,
   ) {}
 
   async create(userId: string, dto: CreateCompanyDto): Promise<Company> {
@@ -128,6 +110,10 @@ export class CompaniesService {
       }
 
       await this.seedDefaultChartOfAccounts(manager, company.id);
+      // An owner who signed up from a demo's trial invite: link the demo.
+      if (user?.signupRef) {
+        await this.demos.convertFromSignup(manager, user.signupRef, company.id);
+      }
       return company;
     });
   }
@@ -189,6 +175,13 @@ export class CompaniesService {
         : {}),
       ...(dto.address !== undefined ? { address: dto.address } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+      ...(dto.migrationPromptDismissed !== undefined
+        ? {
+            migrationPromptDismissedAt: dto.migrationPromptDismissed
+              ? new Date()
+              : null,
+          }
+        : {}),
       ...(dto.email !== undefined ? { email: dto.email } : {}),
       ...(dto.website !== undefined ? { website: dto.website } : {}),
       ...(dto.taxId !== undefined ? { taxId: dto.taxId } : {}),
@@ -332,7 +325,20 @@ export class CompaniesService {
   }
 
   // ── Submit onboarding for platform-admin approval (Step C) ─────────────────
-  async submitForApproval(userId: string, companyId: string) {
+  /**
+   * Sign-up path B — "Request account approval". The company becomes
+   * `pending_approval`; a super-admin approves it with a plan, a start and an
+   * end date (or as a trial, if it is still eligible), or rejects it.
+   *
+   * Only a draft (never submitted) or a rejected company (resubmitting) may
+   * be submitted. An expired or suspended company used to be able to call
+   * this and lock itself into "pending"; it now asks for activation instead.
+   */
+  async submitForApproval(
+    userId: string,
+    companyId: string,
+    input: SubmitForApprovalDto = {},
+  ) {
     await this.assertAdmin(userId, companyId);
     const company = await this.companyRepo.findOneBy({ id: companyId });
     if (!company) {
@@ -342,8 +348,17 @@ export class CompaniesService {
       });
     }
 
+    const requestedPlan = this.validRequestedPlan(company, input.requestedPlan);
+    const note = (input.note ?? '').trim().slice(0, 1000) || null;
+
     if (company.status === COMPANY_STATUS.PENDING_APPROVAL) {
-      return this.toStatusResult(company); // idempotent
+      // Idempotent; a resend may add the plan or note the first call lacked.
+      if (input.requestedPlan !== undefined || input.note !== undefined) {
+        company.requestedPlan = requestedPlan ?? company.requestedPlan;
+        company.approvalNote = note ?? company.approvalNote;
+        await this.companyRepo.save(company);
+      }
+      return this.toStatusResult(company);
     }
     if (
       company.status === COMPANY_STATUS.APPROVED ||
@@ -352,6 +367,24 @@ export class CompaniesService {
       throw new BadRequestException({
         code: 'ALREADY_APPROVED',
         message: 'This company has already been approved',
+      });
+    }
+    const state = normalizeCompanyStatus(company.status);
+    if ((state !== 'draft' && state !== 'rejected') || company.suspendedAt) {
+      throw new ConflictException({
+        code: 'COMPANY_NOT_SUBMITTABLE',
+        message:
+          'This company cannot be submitted for approval now. If its trial or plan has ended, request activation instead.',
+      });
+    }
+    if (
+      await this.submissionRepo.exist({
+        where: { companyId, status: 'submitted' },
+      })
+    ) {
+      throw new ConflictException({
+        code: 'REQUEST_PENDING_REVIEW',
+        message: 'You already have a request awaiting review.',
       });
     }
 
@@ -379,6 +412,8 @@ export class CompaniesService {
     company.status = COMPANY_STATUS.PENDING_APPROVAL;
     company.submittedAt = new Date();
     company.rejectionReason = null;
+    company.requestedPlan = requestedPlan;
+    company.approvalNote = note;
     await this.companyRepo.save(company);
 
     // Notify the platform admin (best-effort).
@@ -386,255 +421,28 @@ export class CompaniesService {
     await this.mail.sendCompanySubmittedNotice(
       company.name,
       owner?.email ?? 'unknown',
+      requestedPlanLabel(requestedPlan),
+      note,
     );
 
     return this.toStatusResult(company);
   }
 
-  // ── Free trial REQUEST ──────────────────────────────────────────────────────
-  /**
-   * Ask for the 30-day free trial. This STARTS NOTHING — it files a
-   * kind='TRIAL' request in the same review queue as bank-transfer payments,
-   * and the company stays locked out (effectiveCompanyStatus reports
-   * `pending`) until a super-admin approves it. The 30 days are counted from
-   * that approval (BillingService.approveSubmission), never from here.
-   *
-   * The owner must already have done what every registration requires: a
-   * verified email and a company set up with a valid phone number. Those are
-   * checked here, server-side, so no client can skip them.
-   */
-  async requestTrial(userId: string, companyId: string) {
-    // a. The company exists.
-    const company = await this.companyRepo.findOneBy({ id: companyId });
-    if (!company) {
-      throw new NotFoundException({
-        code: 'COMPANY_NOT_FOUND',
-        message: 'Company not found',
-      });
+  /** 'unsure', an offered plan key, or null when none was given. */
+  private validRequestedPlan(
+    company: Company,
+    raw: string | undefined,
+  ): string | null {
+    const value = (raw ?? '').trim();
+    if (!value) return null;
+    if (value === UNSURE_PLAN) return value;
+    if (plansForType(company.companyType).some((p) => p.key === value)) {
+      return value;
     }
-    // b. Only the company's own admin may ask.
-    await this.assertAdmin(userId, companyId);
-
-    // c–e. The company is still an unsubmitted draft with nothing in review
-    // and no trial in its history.
-    this.assertTrialStillPossible(company);
-    if (
-      await this.submissionRepo.exist({
-        where: { companyId, status: 'submitted' },
-      })
-    ) {
-      throw new ConflictException({
-        code: 'REQUEST_PENDING_REVIEW',
-        message: 'You already have a request awaiting review.',
-      });
-    }
-
-    // f. The company can buy a plan once the trial ends — otherwise a trial
-    // would lead nowhere.
-    if (plansForType(company.companyType).length === 0) {
-      throw new BadRequestException({
-        code: 'NO_PLANS_FOR_COMPANY_TYPE',
-        message: 'Free trials are not available for this type of company.',
-      });
-    }
-
-    // g. A verified email — the identity the trial is tied to.
-    const user = await this.userRepo.findOneBy({ id: userId });
-    const email = normalizeEmail(user?.email);
-    if (!user || !email || !user.isEmailVerified) {
-      throw new ForbiddenException({
-        code: 'EMAIL_NOT_VERIFIED',
-        message:
-          'Please verify your email address before requesting a free trial.',
-      });
-    }
-
-    // h. A valid phone. REQUIRED, not "checked if present": skipping the check
-    // for a missing phone would let anyone dodge the one-trial-per-number
-    // rule by leaving the field blank.
-    const phone = normalizePhone(company.phone);
-    if (!phone) {
-      throw new BadRequestException({
-        code: 'TRIAL_PHONE_REQUIRED',
-        message: 'A valid phone number is required to request a free trial.',
-      });
-    }
-
-    const now = new Date();
-    let submissionId: string;
-    try {
-      submissionId = await this.dataSource.transaction(async (em) => {
-        // Lock the company row so two requests for the SAME company serialize,
-        // then re-check what may have changed while we were validating.
-        const locked = await em.getRepository(Company).findOne({
-          where: { id: companyId },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!locked) {
-          throw new NotFoundException({
-            code: 'COMPANY_NOT_FOUND',
-            message: 'Company not found',
-          });
-        }
-        this.assertTrialStillPossible(locked);
-        if (
-          await em
-            .getRepository(PaymentSubmission)
-            .exist({ where: { companyId, status: 'submitted' } })
-        ) {
-          throw new ConflictException({
-            code: 'REQUEST_PENDING_REVIEW',
-            message: 'You already have a request awaiting review.',
-          });
-        }
-
-        // 1. Friendly pre-check. It only chooses the MESSAGE; the partial
-        //    unique indexes on trial_claims are the guarantee (see catch).
-        //    Never names the other company or user.
-        const existing = await em
-          .getRepository(TrialClaim)
-          .createQueryBuilder('t')
-          .where(`t.status <> 'released'`)
-          .andWhere(
-            '(t.emailNormalized = :email OR t.phoneNormalized = :phone)',
-            { email, phone },
-          )
-          .getMany();
-        if (existing.some((c) => c.emailNormalized === email)) {
-          throw new ForbiddenException({
-            code: 'TRIAL_EMAIL_USED',
-            message: TRIAL_EMAIL_USED_MESSAGE,
-          });
-        }
-        if (existing.length > 0) {
-          throw new ForbiddenException({
-            code: 'TRIAL_PHONE_USED',
-            message: TRIAL_PHONE_USED_MESSAGE,
-          });
-        }
-
-        // 2. The claim.
-        const claimRepo = em.getRepository(TrialClaim);
-        const claim = await claimRepo.save(
-          claimRepo.create({
-            emailNormalized: email,
-            phoneNormalized: phone,
-            companyId,
-            userId,
-            status: 'pending',
-            submissionId: null,
-            decidedAt: null,
-          }),
-        );
-
-        // 3. The review-queue row, shaped like createSubmission's: server-set
-        //    plan and amount, submitter recorded — minus the screenshot, since
-        //    there is nothing to pay.
-        const trialConfig = getPlanConfig(TRIAL_PLAN_KEY);
-        const submissionRepo = em.getRepository(PaymentSubmission);
-        const submission = await submissionRepo.save(
-          submissionRepo.create({
-            companyId,
-            plan: TRIAL_PLAN_KEY,
-            kind: 'TRIAL',
-            status: 'submitted',
-            amountMinorUnits: 0,
-            currency: trialConfig.currency,
-            screenshotKey: null,
-            screenshotMime: null,
-            submittedBy: userId,
-          }),
-        );
-
-        // 4. Link them.
-        await claimRepo.update(
-          { id: claim.id },
-          { submissionId: submission.id },
-        );
-
-        // 5. Mark the company as awaiting review — exactly what uploading a
-        //    payment receipt does. Status stays draft; NOTHING that grants or
-        //    times access is set here (no isTrial, no trialStartedAt, no
-        //    expiry, no plan).
-        locked.paymentStatus = 'submitted';
-        locked.lastSubmissionId = submission.id;
-        locked.trialRequestedAt = now;
-        await em.getRepository(Company).save(locked);
-
-        return submission.id;
-      });
-    } catch (err) {
-      // Two requests with the same email/phone that both passed the pre-check
-      // race to insert; the unique index lets exactly one through. Answer the
-      // loser exactly as the pre-check would have — never with a driver error.
-      if (
-        err instanceof QueryFailedError &&
-        (err as any).driverError?.code === '23505'
-      ) {
-        const constraint = String((err as any).driverError?.constraint ?? '');
-        throw new ForbiddenException(
-          constraint === 'ux_trial_claims_phone'
-            ? { code: 'TRIAL_PHONE_USED', message: TRIAL_PHONE_USED_MESSAGE }
-            : { code: 'TRIAL_EMAIL_USED', message: TRIAL_EMAIL_USED_MESSAGE },
-        );
-      }
-      throw err;
-    }
-
-    this.logger.log(
-      `Trial requested: company ${companyId} by ${userId} (submission ${submissionId})`,
-    );
-
-    // After commit, best-effort: mail must never undo or block the request.
-    try {
-      await this.mail.sendTrialRequestedEmail(
-        user.email as string,
-        user.displayName,
-        company.name,
-      );
-    } catch (err) {
-      this.logger.error(
-        `Trial requested email failed: ${(err as Error).message}`,
-      );
-    }
-    try {
-      await this.mail.sendTrialRequestedAdminNotice(
-        company.name,
-        user.email as string,
-        phone,
-      );
-    } catch (err) {
-      this.logger.error(
-        `Trial request admin notice failed: ${(err as Error).message}`,
-      );
-    }
-
-    return {
-      status: 'pending_approval' as const,
-      submissionId,
-      requestedPlanKey: TRIAL_PLAN_KEY,
-      requestedPlanLabel: getPlanConfig(TRIAL_PLAN_KEY).label,
-      requestedAt: now,
-      estimatedActivationHours: TRIAL_ACTIVATION_HOURS,
-      // The same shape GET /billing/status returns, so clients need one type.
-      billing: await this.billing.getStatus(companyId),
-    };
-  }
-
-  /** Preconditions c and e — shared by the pre-check and the locked re-check. */
-  private assertTrialStillPossible(company: Company) {
-    if (company.isTrial) {
-      throw new ForbiddenException({
-        code: 'TRIAL_ALREADY_USED',
-        message: 'This company has already used its free trial.',
-      });
-    }
-    if (normalizeCompanyStatus(company.status) !== 'draft') {
-      throw new BadRequestException({
-        code: 'COMPANY_ALREADY_ACTIVE',
-        message: 'This company has already been activated.',
-      });
-    }
+    throw new BadRequestException({
+      code: 'INVALID_PLAN',
+      message: 'Choose one of the plans on offer, or "Not sure".',
+    });
   }
 
   private toStatusResult(company: Company) {

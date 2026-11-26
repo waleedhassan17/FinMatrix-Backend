@@ -69,12 +69,16 @@ import { SearchModule } from './modules/search/search.module';
 import { HealthModule } from './modules/health/health.module';
 import { SuperAdminModule } from './modules/super-admin/super-admin.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { PublicModule } from './modules/public/public.module';
+import { AccountAdminModule } from './modules/account-admin/account-admin.module';
+import { DemoRequestsModule } from './modules/demo-requests/demo-requests.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { envValidationSchema } from './config/env.validation';
 import { StorageModule } from './common/storage/storage.module';
 import { MailModule } from './modules/mail/mail.module';
 import { OperationalAuditModule } from './common/audit/operational-audit.module';
+import { PlatformAuditModule } from './common/audit/platform-audit.module';
 import { FinancialAuditModule } from './common/audit/financial-audit.module';
 import { SentryModule } from '@sentry/nestjs/setup';
 
@@ -115,6 +119,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
     }),
     MailModule,
     OperationalAuditModule,
+    PlatformAuditModule,
     FinancialAuditModule,
     UsersModule,
     TypeOrmModule.forFeature([IdempotencyRecord]),
@@ -155,6 +160,9 @@ import { SentryModule } from '@sentry/nestjs/setup';
     StorageModule,
     SuperAdminModule,
     BillingModule,
+    PublicModule,
+    AccountAdminModule,
+    DemoRequestsModule,
     ScheduleModule.forRoot(),
     LoggerModule.forRootAsync({
       inject: [ConfigService],

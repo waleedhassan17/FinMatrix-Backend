@@ -37,10 +37,26 @@ export interface UpdatePlanDto {
 }
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { CreateSubscriptionPlanDto } from './dto/create-subscription-plan.dto';
-import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
+import {
+  PlanTermsDto,
+  UpdateCompanyStatusDto,
+} from './dto/update-company-status.dto';
+import { PlatformAuditService } from '../../common/audit/platform-audit.service';
+import {
+  effectiveCompanyStatus,
+  isSubscriptionExpired,
+  normalizeCompanyStatus,
+} from '../../common/utils/company-status.util';
+import { TrialService } from '../billing/trial/trial.service';
+import { companySuspendedError } from '../billing/billing.service';
+import {
+  assertActivePlanTerms,
+  parseAdminPlanTerms,
+} from '../billing/plan-terms';
+import { reconcileRiderSeats } from '../delivery-personnel/rider-seats';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { MailService } from '../mail/mail.service';
-import { COMPANY_STATUS, isCompanyApproved } from '../../types';
+import { COMPANY_STATUS } from '../../types';
 
 const PLAN_TIER_FEATURES: Record<string, string[]> = {
   small_business: [
@@ -82,6 +98,8 @@ export class SuperAdminService {
     private readonly dataSource: DataSource,
     private readonly mail: MailService,
     private readonly planOverrides: PlanOverrideService,
+    private readonly trials: TrialService,
+    private readonly platformAudit: PlatformAuditService,
   ) {}
 
   // ─── Seed Super Admin ───────────────────────────────────────────────────────
@@ -230,6 +248,7 @@ export class SuperAdminService {
     status?: string,
     isTrial?: boolean,
     search?: string,
+    isDemo?: boolean,
   ) {
     const qb = this.companyRepo
       .createQueryBuilder('c')
@@ -245,7 +264,9 @@ export class SuperAdminService {
         qb.where('c.status IN (:...s)', {
           s: ['pending', 'pending_approval', 'email_verified', 'unverified'],
         });
-      } else if (status === 'inactive' || status === 'suspended') {
+      } else if (status === 'suspended') {
+        qb.where('c.suspendedAt IS NOT NULL');
+      } else if (status === 'inactive') {
         qb.where('c.status IN (:...s)', { s: ['inactive', 'suspended'] });
       } else {
         qb.where('c.status = :s', { s: status });
@@ -255,6 +276,9 @@ export class SuperAdminService {
     // (isTrial is never cleared), false = companies that never trialed.
     if (isTrial !== undefined) {
       qb.andWhere('c.isTrial = :isTrial', { isTrial });
+    }
+    if (isDemo !== undefined) {
+      qb.andWhere('c.isDemo = :isDemo', { isDemo });
     }
     // Finding one company among many is most of what an administrator does
     // before deciding on it, and they know it by whatever they were told: the
@@ -328,6 +352,14 @@ export class SuperAdminService {
         isTrial: c.isTrial,
         trialStartedAt: c.trialStartedAt,
         trialConvertedAt: c.trialConvertedAt,
+        accountStatus: effectiveCompanyStatus(c),
+        subscriptionPlan: c.subscriptionPlan,
+        subscriptionPlanLabel: getPlanConfig(c.subscriptionPlan).label,
+        subscriptionExpiryDate: c.subscriptionExpiryDate,
+        requestedPlan: c.requestedPlan,
+        isDemo: c.isDemo,
+        suspendedAt: c.suspendedAt,
+        suspensionReason: c.suspensionReason,
         // Who to call about it. The company's own email is often blank; the
         // owner's is the address every approval email goes to.
         ownerName: owner?.displayName ?? null,
@@ -377,6 +409,8 @@ export class SuperAdminService {
     return {
       ...company,
       status: company.status ?? 'active',
+      accountStatus: effectiveCompanyStatus(company),
+      subscriptionPlanLabel: getPlanConfig(company.subscriptionPlan).label,
       owner: owner
         ? {
             id: owner.id,
@@ -434,6 +468,24 @@ export class SuperAdminService {
     };
   }
 
+  /**
+   * Every company decision the consoles make — approve, reject, activate,
+   * deactivate — behind PATCH /super-admin/companies/:id/status and the
+   * granular /admin/companies/:id/* routes.
+   *
+   *   active    — on a SUSPENDED company: reinstate (restores what it was).
+   *               On a pending/draft/rejected company: APPROVE, which needs a
+   *               plan + end date, or asTrial (eligibility rules apply).
+   *               On a lapsed (inactive) company: "Activate plan" — plan + end
+   *               date needed unless its old plan is still valid (a legacy
+   *               deactivation), which is then simply reactivated.
+   *               On an active company with plan terms: change its plan terms.
+   *   inactive / suspended — SUSPEND (reversible; reason recorded).
+   *   rejected  — reject with a reason.
+   *
+   * No path leaves a company active without a plan and an end date unless it
+   * already was (legacy rows are restored, never created).
+   */
   async updateCompanyStatus(
     companyId: string,
     dto: UpdateCompanyStatusDto,
@@ -444,78 +496,290 @@ export class SuperAdminService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    // Normalise onto stored values: "active" == approved (reads as active);
-    // "suspended" (legacy) == "inactive" (deactivated).
-    const newStatus =
-      dto.status === 'active'
-        ? COMPANY_STATUS.APPROVED
-        : dto.status === 'suspended'
-          ? 'inactive'
-          : dto.status;
-
-    if (newStatus === COMPANY_STATUS.REJECTED && !dto.rejectionReason) {
-      throw new BadRequestException('Rejection reason is required');
+    if (dto.status === 'inactive' || dto.status === 'suspended') {
+      return this.suspendCompany(
+        companyId,
+        reviewerId,
+        dto.reason ??
+          dto.rejectionReason ??
+          'Deactivated by a FinMatrix administrator',
+      );
     }
 
-    const wasApproved = isCompanyApproved(company.status);
-    const wasInactive =
-      company.status === 'inactive' || company.status === 'suspended';
+    if (dto.status === 'active') {
+      if (company.suspendedAt) {
+        return this.reinstateCompany(companyId, reviewerId);
+      }
+      const state = normalizeCompanyStatus(company.status);
+      const hasTerms = !!(dto.plan || dto.endDate);
 
-    company.status = newStatus;
-    company.rejectionReason =
-      newStatus === COMPANY_STATUS.REJECTED
-        ? (dto.rejectionReason ?? null)
-        : null;
+      if (state === 'draft' || state === 'pending' || state === 'rejected') {
+        if (dto.asTrial) {
+          const result = await this.trials.startForAdmin(
+            companyId,
+            reviewerId,
+            'approve',
+            null,
+          );
+          return this.statusResult(
+            await this.companyRepo.findOneOrFail({ where: { id: companyId } }),
+            { trialEndsAt: result.trialEndsAt },
+          );
+        }
+        return this.activateWithTerms(company, dto, reviewerId, 'approved');
+      }
+
+      if (state === 'inactive') {
+        if (hasTerms || isSubscriptionExpired(company)) {
+          return this.activateWithTerms(company, dto, reviewerId, 'activated');
+        }
+        // A legacy deactivation whose plan is still valid: restore it.
+        company.status = COMPANY_STATUS.APPROVED;
+        company.rejectionReason = null;
+        company.reviewedBy = reviewerId;
+        company.reviewedAt = new Date();
+        await this.companyRepo.save(company);
+        await this.notifyOwner(company, 'reactivated');
+        await this.platformAudit.record({
+          actorUserId: reviewerId,
+          action: 'company_reactivated',
+          targetType: 'company',
+          targetId: companyId,
+          companyId,
+          companyName: company.name,
+        });
+        return this.statusResult(company);
+      }
+
+      // Already active.
+      if (hasTerms) {
+        return this.activateWithTerms(company, dto, reviewerId, 'activated');
+      }
+      return this.statusResult(company);
+    }
+
+    if (dto.status === 'rejected') {
+      if (!dto.rejectionReason) {
+        throw new BadRequestException('Rejection reason is required');
+      }
+      company.status = COMPANY_STATUS.REJECTED;
+      company.rejectionReason = dto.rejectionReason;
+      company.reviewedBy = reviewerId;
+      company.reviewedAt = new Date();
+      await this.companyRepo.save(company);
+      await this.notifyOwner(company, 'rejected');
+      await this.platformAudit.record({
+        actorUserId: reviewerId,
+        action: 'company_rejected',
+        targetType: 'company',
+        targetId: companyId,
+        companyId,
+        companyName: company.name,
+        reason: dto.rejectionReason,
+      });
+      return this.statusResult(company);
+    }
+
+    // 'pending' — a raw status some old scripts set.
+    company.status = dto.status;
     company.reviewedBy = reviewerId;
     company.reviewedAt = new Date();
     await this.companyRepo.save(company);
+    return this.statusResult(company);
+  }
 
-    // Security/audit log.
-    this.logger.log(
-      `Company ${company.id} (${company.name}) -> ${newStatus} by reviewer ${reviewerId}`,
-    );
+  /**
+   * Switch a plan on with admin-chosen terms (approval of path B, or
+   * "Activate plan" on a lapsed/active company). A running trial converts.
+   * No money is recorded anywhere.
+   */
+  private async activateWithTerms(
+    company: Company,
+    dto: PlanTermsDto,
+    reviewerId: string,
+    kind: 'approved' | 'activated',
+  ) {
+    const terms = parseAdminPlanTerms({
+      plan: dto.plan ?? company.requestedPlan,
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+    });
+    const now = new Date();
+    const saved = await this.dataSource.transaction(async (em) => {
+      const c = await em.getRepository(Company).findOne({
+        where: { id: company.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!c) throw new NotFoundException('Company not found');
+      if (c.suspendedAt) throw companySuspendedError();
+      const converting = c.isTrial && !c.trialConvertedAt;
+      c.subscriptionPlan = terms.plan;
+      c.subscriptionStartDate = terms.start;
+      c.subscriptionExpiryDate = terms.end;
+      c.subscriptionStatus = 'active';
+      c.subscriptionReminderOn = null;
+      if (c.paymentStatus === 'submitted') c.paymentStatus = 'none';
+      c.status = kind === 'approved' ? COMPANY_STATUS.APPROVED : 'active';
+      c.rejectionReason = null;
+      c.reviewedBy = reviewerId;
+      c.reviewedAt = now;
+      if (converting) c.trialConvertedAt = now;
+      assertActivePlanTerms(c);
+      await em.getRepository(Company).save(c);
+      await reconcileRiderSeats(
+        em,
+        c.id,
+        getPlanConfig(terms.plan).deliveryPersonnelLimit,
+      );
+      return { company: c, converting };
+    });
 
-    // Notify the company owner (best-effort).
-    const owner = await this.userRepo.findOneBy({ id: company.createdBy });
-    // An owner-created (username-only) account has no address to notify.
-    // Each transition gets the email that describes it. Reactivating an
-    // inactive company used to send "has been approved 🎉", and deactivating
-    // one sent nothing — the owner learned of it from a failed sign-in.
+    const owner = await this.userRepo.findOneBy({
+      id: saved.company.createdBy,
+    });
     if (owner?.email) {
-      if (isCompanyApproved(newStatus) && wasInactive) {
-        await this.mail.sendReactivatedEmail(
-          owner.email,
-          owner.displayName,
-          company.name,
-        );
-      } else if (isCompanyApproved(newStatus) && !wasApproved) {
-        await this.mail.sendApprovalEmail(
-          owner.email,
-          owner.displayName,
-          company.name,
-        );
-      } else if (newStatus === 'inactive' && wasApproved) {
-        await this.mail.sendDeactivatedEmail(
-          owner.email,
-          owner.displayName,
-          company.name,
-        );
-      } else if (newStatus === COMPANY_STATUS.REJECTED) {
-        await this.mail.sendRejectionEmail(
-          owner.email,
-          owner.displayName,
-          company.name,
-          company.rejectionReason ?? 'No reason provided',
-        );
-      }
+      await this.mail.sendPlanActivatedEmail(
+        owner.email,
+        owner.displayName,
+        saved.company.name,
+        terms.planLabel,
+        terms.end,
+      );
     }
+    await this.platformAudit.record({
+      actorUserId: reviewerId,
+      action: kind === 'approved' ? 'company_approved' : 'plan_activated',
+      targetType: 'company',
+      targetId: saved.company.id,
+      companyId: saved.company.id,
+      companyName: saved.company.name,
+      details: {
+        plan: terms.plan,
+        start: terms.start.toISOString(),
+        end: terms.end.toISOString(),
+        trialConverted: saved.converting,
+        requestedPlan: saved.company.requestedPlan,
+      },
+    });
+    this.logger.log(
+      `Company ${saved.company.id} ${kind} on ${terms.plan} until ${terms.end.toISOString()} by ${reviewerId}`,
+    );
+    return this.statusResult(saved.company);
+  }
 
+  /** Reversible platform block: every member is refused until reinstated. */
+  async suspendCompany(companyId: string, reviewerId: string, reason: string) {
+    const trimmed = (reason ?? '').trim();
+    if (!trimmed) {
+      throw new BadRequestException({
+        code: 'REASON_REQUIRED',
+        message: 'Give a reason for suspending this company.',
+      });
+    }
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    if (!company.suspendedAt) {
+      company.statusBeforeSuspension = company.status ?? null;
+      company.status = 'suspended';
+      company.suspendedAt = new Date();
+      company.suspendedBy = reviewerId;
+      company.suspensionReason = trimmed.slice(0, 500);
+      company.reviewedBy = reviewerId;
+      company.reviewedAt = new Date();
+      await this.companyRepo.save(company);
+      await this.notifyOwner(company, 'suspended');
+      await this.platformAudit.record({
+        actorUserId: reviewerId,
+        action: 'company_suspended',
+        targetType: 'company',
+        targetId: companyId,
+        companyId,
+        companyName: company.name,
+        reason: trimmed,
+        details: { statusBefore: company.statusBeforeSuspension },
+      });
+    }
+    return this.statusResult(company);
+  }
+
+  /** Undo a suspension: the company goes back to exactly what it was. */
+  async reinstateCompany(companyId: string, reviewerId: string) {
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    if (company.suspendedAt) {
+      // Old releases wrote 'inactive' for a deactivation with no "before".
+      const restored =
+        company.statusBeforeSuspension || COMPANY_STATUS.APPROVED;
+      company.status =
+        restored === 'suspended' ? COMPANY_STATUS.APPROVED : restored;
+      company.suspendedAt = null;
+      company.suspendedBy = null;
+      company.suspensionReason = null;
+      company.statusBeforeSuspension = null;
+      company.reviewedBy = reviewerId;
+      company.reviewedAt = new Date();
+      await this.companyRepo.save(company);
+      await this.notifyOwner(company, 'reactivated');
+      await this.platformAudit.record({
+        actorUserId: reviewerId,
+        action: 'company_reinstated',
+        targetType: 'company',
+        targetId: companyId,
+        companyId,
+        companyName: company.name,
+        details: { restoredStatus: company.status },
+      });
+    }
+    return this.statusResult(company);
+  }
+
+  /** The owner's email for each decision; username-only owners are skipped. */
+  private async notifyOwner(
+    company: Company,
+    what: 'reactivated' | 'suspended' | 'rejected',
+  ) {
+    const owner = await this.userRepo.findOneBy({ id: company.createdBy });
+    if (!owner?.email) return;
+    if (what === 'reactivated') {
+      await this.mail.sendReactivatedEmail(
+        owner.email,
+        owner.displayName,
+        company.name,
+      );
+    } else if (what === 'suspended') {
+      await this.mail.sendCompanySuspendedEmail(
+        owner.email,
+        owner.displayName,
+        company.name,
+        company.suspensionReason ?? 'No reason given',
+      );
+    } else {
+      await this.mail.sendRejectionEmail(
+        owner.email,
+        owner.displayName,
+        company.name,
+        company.rejectionReason ?? 'No reason provided',
+      );
+    }
+  }
+
+  private statusResult(company: Company, extra: Record<string, unknown> = {}) {
     return {
       id: company.id,
       name: company.name,
       status: company.status,
+      accountStatus: effectiveCompanyStatus(company),
       rejectionReason: company.rejectionReason,
       reviewedAt: company.reviewedAt,
+      subscriptionPlan: company.subscriptionPlan,
+      subscriptionExpiryDate: company.subscriptionExpiryDate,
+      suspendedAt: company.suspendedAt,
+      suspensionReason: company.suspensionReason,
+      ...extra,
     };
   }
 

@@ -1,3 +1,9 @@
+import { MigrationAdminService } from './migration-admin.service';
+import {
+  AdminMigrationsController,
+  MigrationHelpController,
+} from './migration-support.controller';
+import { MigrationCleanupService } from './migration-cleanup.service';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -55,7 +61,12 @@ import { MigrationChecksService } from './validation/migration-checks.service';
     InventoryModule,
     JournalEntriesModule,
   ],
-  controllers: [MigrationsController, MigrationUploadsController],
+  controllers: [
+    MigrationsController,
+    MigrationUploadsController,
+    MigrationHelpController,
+    AdminMigrationsController,
+  ],
   providers: [
     // The Anthropic client exists only when a key is configured; without one
     // the assistant reports itself disabled and nothing is ever sent out.
@@ -77,6 +88,8 @@ import { MigrationChecksService } from './validation/migration-checks.service';
     MigrationRollbackService,
     MigrationUploadsService,
     MigrationReadWorker,
+    MigrationCleanupService,
+    MigrationAdminService,
   ],
   exports: [MigrationBatchService],
 })

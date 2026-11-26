@@ -33,6 +33,7 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { AllowWhenLapsed } from '../../common/decorators/allow-when-lapsed.decorator';
 import { CompanyGuard } from '../../common/guards/company.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import {
@@ -105,6 +106,7 @@ export class MigrationsController {
   }
 
   @Get()
+  @AllowWhenLapsed()
   @ApiOperation({ summary: 'Migration batches, newest first.' })
   list(@CurrentCompany() companyId: string) {
     return this.svc.list(companyId);
@@ -129,6 +131,7 @@ export class MigrationsController {
   }
 
   @Get(':id')
+  @AllowWhenLapsed()
   @ApiOperation({
     summary: 'One batch: step, readiness, counts, files, checks.',
   })
@@ -268,6 +271,7 @@ export class MigrationsController {
   }
 
   @Post(':id/rollback')
+  @AllowWhenLapsed()
   @HttpCode(200)
   @ApiOperation({ summary: 'Undo a committed batch (before close only).' })
   rollback(
@@ -290,6 +294,7 @@ export class MigrationsController {
   }
 
   @Get(':id/certificate')
+  @AllowWhenLapsed()
   @ApiOperation({
     summary: 'Reconciliation certificate PDF (a preview before commit).',
   })

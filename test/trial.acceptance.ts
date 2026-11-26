@@ -1,1165 +1,1032 @@
 /**
- * Free trial — acceptance test (HTTP, end-to-end), in the style of
- * subscription.acceptance.ts.
+ * Free trial — launch acceptance (npm run test:trial).
  *
- * The trial is REQUESTED by the owner, APPROVED by a super-admin, and runs 30
- * days from the approval. It is the fixed `warehouse_trial` plan: every
- * feature, one delivery rider. This suite proves the parts that cost money or
- * trust when they break:
+ * Proves, against a running API and its database:
+ *   - an eligible owner's trial starts INSTANTLY (auto-approved, same
+ *     transaction as the claim), with the trial plan, an end exactly
+ *     TRIAL_DAYS later, the welcome email and the admin FYI;
+ *   - every eligibility rule answers with its own reason, and the setup
+ *     screen's eligibility check agrees with the start itself;
+ *   - one trial per ACCOUNT: same user, Gmail dot/+tag email variants, the
+ *     same phone written differently, the same NTN, the same company; a race
+ *     yields exactly one trial; changing the phone afterwards frees nothing;
+ *   - risk signals hold a request for a person; admin grant overrides;
+ *   - path B: approval needs a plan + end date (or "as trial", which follows
+ *     the claim rules); no company is ever left active without them;
+ *   - the lifecycle with time travel: reminders once per milestone (Asia/
+ *     Karachi days), extension, ending early, expiry; TRIAL_ENDED for owner
+ *     and staff, the owner's backup still allowed; activation during and
+ *     after a trial restores access with the books unchanged;
+ *   - companies from the old path (pending_approval, legacy active) still work.
  *
- *   a. a request grants nothing — CompanyGuard and sign-in still refuse
- *   b. the 30 days run from APPROVAL, never from the request
- *   c. one trial per email and per phone, whichever client shape asks
- *   d. two simultaneous requests with one phone → exactly one succeeds
- *   e. unverified email / missing or bad phone are refused
- *   f. rejection releases the claim; rejection-with-block does not
- *   g. a company that has trialed cannot trial again
- *   h. expiry cuts access LIVE (no cron), then the scan uses trial wording,
- *      and trial-ending emails are deduped by milestone
- *   i. subscribing mid-trial ends the trial at approval (no stacked days)
- *   j. trials never create platform revenue
- *   k. rider seats: a downgrade locks riders beyond the limit; locked riders
- *      cannot sign in, work, or be reactivated; swapping and upgrading work
- *
- * Run against a booted server:
- *   BASE_URL=http://localhost:3001/api/v1 \
- *   PG_URL=postgres://finmatrix_user:pass@localhost:5432/finmatrix_qa \
- *   SUPER_EMAIL=... SUPER_PASSWORD=... \
- *   npm run test:trial
- *
- * Uses Node 22 global fetch/FormData/Blob and `pg` for the state pokes that
- * would otherwise need email or time travel (verifying an inbox, moving a
- * trial's dates).
+ * Environment: see test/launch-helpers.ts. Optional extra API processes on the
+ * SAME database exercise the switches:
+ *   QUEUE_API_BASE     an API started with TRIAL_AUTO_APPROVE=false
+ *   APPROVAL_API_BASE  an API started with SIGNUP_MODE=approval
+ * EXPECT_MAIL=true asserts emails through Mailpit.
  */
-/* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports */
-import { randomUUID } from 'crypto';
-// `pg` ships no type declarations here, so it is required like the sibling suites.
-const { Client } = require('pg');
-
-const BASE = process.env.BASE_URL || 'http://localhost:3001/api/v1';
-const PG_URL = process.env.PG_URL as string;
-const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
-const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
-const PASSWORD = 'Qa@12345';
-const DAY = 24 * 60 * 60 * 1000;
-
-let pass = 0;
-let fail = 0;
-const fails: string[] = [];
-function check(name: string, cond: boolean, extra?: unknown) {
-  if (cond) {
-    pass++;
-    console.log(`  ✓ ${name}`);
-  } else {
-    fail++;
-    fails.push(name);
-    console.log(
-      `  ✗ ${name}${extra !== undefined ? ' :: ' + JSON.stringify(extra)?.slice(0, 300) : ''}`,
-    );
-  }
-}
-
-interface Res {
-  status: number;
-  body: any;
-}
-async function req(
-  method: string,
-  path: string,
-  opts: { token?: string; companyId?: string; json?: any } = {},
-): Promise<Res> {
-  const headers: Record<string, string> = {};
-  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
-  if (opts.companyId) headers['x-company-id'] = opts.companyId;
-  if (opts.json !== undefined) headers['Content-Type'] = 'application/json';
-  const r = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
-  });
-  let body: any = null;
-  try {
-    body = await r.json();
-  } catch {
-    /* empty */
-  }
-  return { status: r.status, body };
-}
-const data = (r: Res) => r.body?.data ?? r.body;
-const code = (r: Res) => r.body?.error?.code ?? r.body?.code;
-
-const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-  'base64',
-);
-async function submitPayment(
-  token: string,
-  companyId: string,
-  plan: string,
-): Promise<Res> {
-  const fd = new FormData();
-  fd.append('plan', plan);
-  fd.append(
-    'screenshot',
-    new Blob([PNG], { type: 'image/png' }),
-    'receipt.png',
-  );
-  const r = await fetch(`${BASE}/billing/submit?plan=${plan}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'x-company-id': companyId },
-    body: fd as any,
-  });
-  let body: any = null;
-  try {
-    body = await r.json();
-  } catch {
-    /* */
-  }
-  return { status: r.status, body };
-}
-
-/** A unique, valid Pakistani mobile in local form (0300…). */
-let phoneSeq = Math.floor(Math.random() * 9_000_000);
-function freshPhone(): string {
-  phoneSeq = (phoneSeq + 7919) % 10_000_000;
-  return `0321${String(phoneSeq).padStart(7, '0')}`;
-}
-/** The canonical +92 form the server stores. */
-const canonical = (local: string) => `+92${local.slice(1)}`;
+import {
+  canonical,
+  check,
+  code,
+  data,
+  DAY,
+  Db,
+  finish,
+  freshIp,
+  freshPhone,
+  mailpitAvailable,
+  mailText,
+  mailTo,
+  owner,
+  type Owner,
+  req,
+  RUN,
+  section,
+  signin,
+  startTrial,
+  superAdmin,
+  trialBalance,
+} from './launch-helpers';
 
 async function main() {
-  const pg = new Client({ connectionString: PG_URL });
-  await pg.connect();
-  const sql = async (q: string, p: any[] = []) => (await pg.query(q, p)).rows;
-  const run = Date.now();
-
-  console.log(`\n=== Free trial acceptance @ ${BASE} ===\n`);
-
-  const superLogin = await req('POST', '/auth/signin', {
-    json: { email: SUPER_EMAIL, password: SUPER_PASSWORD },
-  });
-  const superToken = data(superLogin)?.tokens?.accessToken;
-  check('super-admin signs in', !!superToken, superLogin.status);
-  if (!superToken)
-    throw new Error('Cannot continue without a super-admin token');
-
-  /**
-   * Sign up an owner and set up a company — the steps every registration
-   * requires before a trial can be asked for.
-   */
-  let ownerSeq = 0;
-  async function owner(
-    opts: { verified?: boolean; phone?: string | null } = {},
-  ) {
-    ownerSeq += 1;
-    const email = `trial_${run}_${ownerSeq}@qa.local`;
-    const signup = await req('POST', '/auth/signup', {
-      json: {
-        email,
-        password: PASSWORD,
-        displayName: `Trial Owner ${ownerSeq}`,
-        role: 'admin',
-      },
-    });
-    const signupToken = data(signup)?.tokens?.accessToken as string;
-    const userId = data(signup)?.user?.id as string;
-    const phone = opts.phone === undefined ? freshPhone() : opts.phone;
-    const createCo = await req('POST', '/companies', {
-      token: signupToken,
-      json: {
-        name: `Trial Co ${run}-${ownerSeq}`,
-        industry: 'Retail',
-        ...(phone ? { phone } : {}),
-      },
-    });
-    const companyId = data(createCo)?.id as string;
-    if (opts.verified !== false) {
-      await sql(
-        `UPDATE users SET is_email_verified = true, email_verified_at = now() WHERE id = $1`,
-        [userId],
-      );
-    }
-    if (!signupToken || !companyId) {
-      throw new Error(
-        `owner setup failed: signup=${signup.status} company=${createCo.status} ${JSON.stringify(createCo.body)}`,
-      );
-    }
-    return { email, userId, signupToken, companyId, phone };
-  }
-  /**
-   * Sign-in is throttled (5/minute per IP) — correctly, and this suite signs
-   * in more often than that. Wait the window out rather than weaken the limit.
-   */
-  const signinWith = async (json: Record<string, string>): Promise<Res> => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const r = await req('POST', '/auth/signin', { json });
-      if (r.status !== 429) return r;
-      console.log('    (sign-in throttled — waiting 61s)');
-      await new Promise((resolve) => setTimeout(resolve, 61_000));
-    }
-    return req('POST', '/auth/signin', { json });
-  };
-  const signin = (email: string) => signinWith({ email, password: PASSWORD });
-  /** The two request shapes the clients send. */
-  const requestTrialBody = (token: string, companyId: string) =>
-    req('POST', '/companies/start-trial', { token, json: { companyId } }); // Expo app
-  const requestTrialHeader = (token: string, companyId: string) =>
-    req('POST', '/companies/start-trial', { token, companyId, json: {} }); // web (x-company-id)
-  const approve = (id: string) =>
-    req('PATCH', `/admin/payment-submissions/${id}/approve`, {
-      token: superToken,
-    });
-  const reject = (id: string, blockFutureTrials?: boolean) =>
-    req('PATCH', `/admin/payment-submissions/${id}/reject`, {
-      token: superToken,
-      json: {
-        reason: 'QA review',
-        ...(blockFutureTrials !== undefined ? { blockFutureTrials } : {}),
-      },
-    });
-  const companyRow = async (id: string) =>
-    (await sql(`SELECT * FROM companies WHERE id = $1`, [id]))[0];
-  const revenueTotal = async () => {
-    const s = data(
-      await req('GET', '/admin/payment-submissions/revenue/summary', {
-        token: superToken,
-      }),
-    );
-    return {
-      total: s?.totalMinorUnits as number,
-      count: s?.paymentsCount as number,
-    };
-  };
-
-  const revenueBefore = await revenueTotal();
-
-  // ── a. A request grants nothing ─────────────────────────────────────────
-  console.log('\n— a. request → still locked out');
-  const A = await owner();
-  // Signed in while still a draft, so this token CARRIES the companyId — the
-  // strongest proof that CompanyGuard itself, not a missing claim, refuses.
-  const aDraftLogin = await signin(A.email);
-  const aToken = data(aDraftLogin)?.tokens?.accessToken as string;
-  check(
-    'draft owner can sign in (onboarding)',
-    aDraftLogin.status === 200 && data(aDraftLogin)?.companyId === A.companyId,
-    aDraftLogin.status,
+  const db = await new Db().open();
+  const admin = await superAdmin(db);
+  const mail = await mailpitAvailable();
+  console.log(
+    `\n=== Free trial (launch) — ${process.env.API_BASE ?? 'http://localhost:3101/api/v1'} ` +
+      `· mail ${mail ? 'asserted' : 'not asserted'} ===`,
   );
 
-  const aReq = await requestTrialBody(aToken, A.companyId);
-  const aReqBody = data(aReq);
+  const reason = (r: { body: any }) =>
+    r.body?.error?.reason ?? r.body?.reason ?? r.body?.error?.details?.reason;
+  const company = (id: string) =>
+    db.one(`SELECT * FROM companies WHERE id = $1`, [id]);
+  const claimsOf = (companyId: string) =>
+    db.sql(`SELECT * FROM trial_claims WHERE company_id = $1`, [companyId]);
+  const asAdmin = (method: string, path: string, json?: unknown) =>
+    req(method, path, { token: admin.token, json });
+
+  // ── A. Public config and eligibility ──────────────────────────────────────
+  section('A. public config + eligibility');
+  const cfg = data(await req('GET', '/public/config'));
   check(
-    'trial request → 201 pending_approval',
-    aReq.status === 201 && aReqBody?.status === 'pending_approval',
-    aReq.body,
+    'GET /public/config: trial mode, auto-approve, 30 days',
+    cfg?.signupMode === 'trial' &&
+      cfg?.trialAutoApprove === true &&
+      cfg?.trialDays === 30,
+    cfg,
+  );
+  const A = await owner(db, { taxId: `NTN ${RUN.length}${Date.now() % 1e7}` });
+  const aElig = data(
+    await req('GET', `/companies/${A.companyId}/trial-eligibility`, {
+      token: A.token,
+    }),
   );
   check(
-    'response carries 24h estimate + trial plan',
-    aReqBody?.estimatedActivationHours === 24 &&
-      aReqBody?.requestedPlanKey === 'warehouse_trial',
-    aReqBody,
-  );
-  check(
-    'response carries the billing-status shape with trialPending',
-    aReqBody?.billing?.trialPending === true &&
-      aReqBody?.billing?.accountStatus === 'draft',
-    aReqBody?.billing,
+    'eligibility: a fresh owner is eligible',
+    aElig?.eligible === true,
+    aElig,
   );
 
-  let aRow = await companyRow(A.companyId);
+  // ── B. Instant trial ─────────────────────────────────────────────────────
+  section('B. eligible owner → trial starts instantly');
+  const before = Date.now();
+  const aStart = await startTrial(A);
+  const aBody = data(aStart);
   check(
-    'request set ONLY paymentStatus/lastSubmission/trialRequestedAt',
-    aRow.status === 'email_verified' &&
-      aRow.payment_status === 'submitted' &&
-      aRow.trial_requested_at != null &&
-      aRow.is_trial === false &&
-      aRow.trial_started_at === null &&
-      aRow.subscription_expiry_date === null &&
-      aRow.subscription_plan === 'free',
-    aRow,
+    'start-trial → 201, status active, autoApproved, no pending screen',
+    aStart.status === 201 &&
+      aBody?.status === 'active' &&
+      aBody?.autoApproved === true &&
+      aBody?.held === false,
+    { status: aStart.status, body: aBody },
   );
-
-  const aGuard = await req('GET', '/customers', {
-    token: aToken,
-    companyId: A.companyId,
-  });
+  const aRow = await company(A.companyId);
+  const endMs = new Date(aRow.subscription_expiry_date).getTime();
   check(
-    'CompanyGuard refuses the pending company (403 COMPANY_NOT_ACTIVE, pending)',
-    aGuard.status === 403 && code(aGuard) === 'COMPANY_NOT_ACTIVE',
-    aGuard.body,
+    'company active on warehouse_trial, ends exactly 30 days later',
+    (aRow.status === 'active' || aRow.status === 'approved') &&
+      aRow.subscription_plan === 'warehouse_trial' &&
+      aRow.is_trial === true &&
+      Math.abs(endMs - (before + 30 * DAY)) < 5 * 60_000,
+    {
+      status: aRow.status,
+      plan: aRow.subscription_plan,
+      end: aRow.subscription_expiry_date,
+    },
   );
-  const aRiders = await req('GET', '/delivery-personnel', {
-    token: aToken,
-    companyId: A.companyId,
-  });
-  check(
-    '…and every other business route',
-    aRiders.status === 403,
-    aRiders.status,
+  const aSub = await db.one(
+    `SELECT * FROM platform_payment_submissions WHERE id = $1`,
+    [aBody?.submissionId],
   );
-
-  const aPendingLogin = await signin(A.email);
   check(
-    'sign-in blocked with COMPANY_PENDING + details.pendingKind=trial',
-    aPendingLogin.status === 403 &&
-      code(aPendingLogin) === 'COMPANY_PENDING' &&
-      aPendingLogin.body?.error?.details?.pendingKind === 'trial',
-    aPendingLogin.body,
+    'submission: approved by system:auto, auto_approved=true, reviewer NULL',
+    aSub?.status === 'approved' &&
+      aSub?.auto_approved === true &&
+      aSub?.review_source === 'system:auto' &&
+      aSub?.reviewed_by === null,
+    aSub,
   );
-  const aMe = data(await req('GET', '/auth/me', { token: aToken }));
+  const aClaims = await claimsOf(A.companyId);
   check(
-    '/auth/me reports pending',
-    aMe?.companyStatus === 'pending',
+    'claim approved with every identity (user, email key, phone, NTN)',
+    aClaims.length === 1 &&
+      aClaims[0].status === 'approved' &&
+      aClaims[0].source === 'auto' &&
+      aClaims[0].user_id === A.userId &&
+      aClaims[0].phone_normalized === canonical(A.phone as string) &&
+      !!aClaims[0].tax_id_normalized,
+    aClaims,
+  );
+  const aMe = data(await req('GET', '/auth/me', { token: A.token }));
+  check(
+    '/auth/me: active, trial summary',
+    aMe?.companyStatus === 'active' && aMe?.subscription?.isTrial === true,
     aMe?.companyStatus,
   );
-
-  const aSecond = await requestTrialHeader(aToken, A.companyId);
+  const aAccounts = await req('GET', '/accounts', { token: A.token });
   check(
-    'second request from the same company → 409 REQUEST_PENDING_REVIEW',
-    aSecond.status === 409 && code(aSecond) === 'REQUEST_PENDING_REVIEW',
-    aSecond.body,
+    'business routes open immediately',
+    aAccounts.status === 200,
+    aAccounts.status,
   );
-
-  const aPay = await submitPayment(
-    aToken,
-    A.companyId,
-    'warehouse_starter_6mo',
-  );
-  check(
-    'payment cannot be stacked on a pending trial (409)',
-    aPay.status === 409 && code(aPay) === 'REQUEST_PENDING_REVIEW',
-    aPay.body,
-  );
-
-  const list = data(
-    await req(
-      'GET',
-      '/admin/payment-submissions?status=submitted&kind=TRIAL&order=asc',
-      { token: superToken },
-    ),
-  );
-  const aListed = Array.isArray(list)
-    ? list.find((s: any) => s.id === aReqBody.submissionId)
-    : null;
-  check(
-    'admin queue lists it under kind=TRIAL with requester + age',
-    !!aListed &&
-      aListed.kind === 'TRIAL' &&
-      aListed.requesterEmail === A.email &&
-      aListed.requesterPhone === canonical(A.phone as string) &&
-      typeof aListed.ageHours === 'number' &&
-      aListed.hasScreenshot === false,
-    aListed,
-  );
-  const paymentsOnly = data(
-    await req('GET', '/admin/payment-submissions?kind=PAYMENT', {
-      token: superToken,
-    }),
-  );
-  check(
-    'kind=PAYMENT excludes trials',
-    Array.isArray(paymentsOnly) &&
-      paymentsOnly.every((s: any) => s.kind !== 'TRIAL'),
-    paymentsOnly?.length,
-  );
-
-  // ── b. The 30 days run from APPROVAL ────────────────────────────────────
-  console.log('\n— b. approve → clock starts at approval');
-  // The request was "made" three days ago. A clock-starts-at-request bug
-  // would put the expiry 27 days out; the right answer is 30.
-  await sql(
-    `UPDATE companies SET trial_requested_at = now() - interval '3 days' WHERE id = $1`,
+  const audit = await db.one(
+    `SELECT * FROM platform_audit_events WHERE action = 'trial_auto_approved' AND company_id = $1`,
     [A.companyId],
   );
-  await sql(
-    `UPDATE platform_payment_submissions SET created_at = now() - interval '3 days' WHERE id = $1`,
-    [aReqBody.submissionId],
-  );
-  const aApprove = await approve(aReqBody.submissionId);
-  check('approve trial → 200', aApprove.status === 200, aApprove.body);
-  aRow = await companyRow(A.companyId);
-  const sub = (
-    await sql(`SELECT * FROM platform_payment_submissions WHERE id = $1`, [
-      aReqBody.submissionId,
-    ])
-  )[0];
-  const expiry = new Date(aRow.subscription_expiry_date).getTime();
-  const reviewedAt = new Date(sub.reviewed_at).getTime();
-  const requestedAt = new Date(aRow.trial_requested_at).getTime();
   check(
-    'expiry = approval + 30 days (±60s)',
-    Math.abs(expiry - (reviewedAt + 30 * DAY)) < 60_000,
-    { expiry: aRow.subscription_expiry_date, reviewed: sub.reviewed_at },
+    'platform audit: trial_auto_approved by system:auto',
+    audit?.actor_label === 'system:auto',
   );
-  check(
-    'expiry is NOT request + 30 days',
-    Math.abs(expiry - (requestedAt + 30 * DAY)) > 2 * DAY,
-    { requested: aRow.trial_requested_at },
-  );
-  check(
-    'trial_started_at = approval',
-    Math.abs(new Date(aRow.trial_started_at).getTime() - reviewedAt) < 60_000,
-    aRow.trial_started_at,
-  );
-  check(
-    'company active on the trial plan, isTrial, paymentStatus none, subscription active',
-    aRow.status === 'active' &&
-      aRow.is_trial === true &&
-      aRow.subscription_plan === 'warehouse_trial' &&
-      aRow.payment_status === 'none' &&
-      aRow.subscription_status === 'active' &&
-      aRow.trial_converted_at === null,
-    aRow,
-  );
-  const claimA = (
-    await sql(
-      `SELECT status, decided_at FROM trial_claims WHERE submission_id = $1`,
-      [aReqBody.submissionId],
-    )
-  )[0];
-  check(
-    'claim → approved',
-    claimA?.status === 'approved' && claimA.decided_at != null,
-    claimA,
-  );
-  const aRevenueRows = (
-    await sql(
-      `SELECT COUNT(*)::int c FROM platform_revenue WHERE company_id = $1`,
-      [A.companyId],
-    )
-  )[0].c;
-  check(
-    'no platform_revenue row for a trial',
-    aRevenueRows === 0,
-    aRevenueRows,
-  );
-  await approve(aReqBody.submissionId);
-  const aRevenueRows2 = (
-    await sql(
-      `SELECT COUNT(*)::int c FROM platform_revenue WHERE company_id = $1`,
-      [A.companyId],
-    )
-  )[0].c;
-  check(
-    're-approve is idempotent and still records no revenue',
-    aRevenueRows2 === 0,
-    aRevenueRows2,
-  );
+  if (mail) {
+    const welcome = await mailTo(A.email, {
+      subject: /free trial has started/i,
+    });
+    check('welcome email to the owner', welcome.length === 1, welcome.length);
+    if (welcome[0]) {
+      const body = await mailText(welcome[0].ID);
+      check(
+        'welcome email: English only, with the "Move your data in" link',
+        !/dir="rtl"/.test(body) && /settings\/migration\/guide/.test(body),
+      );
+    }
+    const fyi = await mailTo('platform-admin@example.com', {
+      subject: new RegExp(`New free trial started: QA Co ${RUN}`),
+    });
+    check('admin FYI email (no action needed)', fyi.length >= 1, fyi.length);
+  }
 
-  const aActiveLogin = await signin(A.email);
-  const aActiveToken = data(aActiveLogin)?.tokens?.accessToken as string;
-  check(
-    'approved owner signs in → active',
-    aActiveLogin.status === 200 &&
-      data(aActiveLogin)?.companyStatus === 'active',
-    aActiveLogin.body,
-  );
-  check(
-    'signin carries subscription.isTrial',
-    data(aActiveLogin)?.subscription?.isTrial === true &&
-      data(aActiveLogin)?.subscription?.plan === 'warehouse_trial',
-    data(aActiveLogin)?.subscription,
-  );
-  const aBiz = await req('GET', '/customers', {
-    token: aActiveToken,
-    companyId: A.companyId,
+  // ── C. Each eligibility failure has its own reason ───────────────────────
+  section('C. eligibility reasons');
+  // Unverified email: the controller's email gate answers first.
+  const U = await owner(db, { verified: false });
+  const uCo = await req('POST', '/companies', {
+    token: U.token,
+    json: { name: `QA Unverified ${RUN}`, phone: freshPhone() },
   });
   check(
-    'business endpoints open immediately (200)',
-    aBiz.status === 200,
-    aBiz.status,
+    'unverified email: cannot set up or start (EMAIL_NOT_VERIFIED)',
+    uCo.status === 403 && code(uCo) === 'EMAIL_NOT_VERIFIED',
+    { status: uCo.status, code: code(uCo) },
   );
-  const aStatus = data(
-    await req('GET', '/billing/status', {
-      token: aActiveToken,
-      companyId: A.companyId,
-    }),
+  // No (valid) phone.
+  const P = await owner(db, { phone: null });
+  const pStart = await startTrial(P);
+  check(
+    'no phone → 409 TRIAL_NOT_ELIGIBLE / TRIAL_PHONE_REQUIRED',
+    pStart.status === 409 &&
+      code(pStart) === 'TRIAL_NOT_ELIGIBLE' &&
+      reason(pStart) === 'TRIAL_PHONE_REQUIRED',
+    { status: pStart.status, body: pStart.body },
   );
   check(
-    'billing status: isTrial, 30 days remaining, not pending, expires',
-    aStatus?.isTrial === true &&
-      aStatus?.trialDaysRemaining === 30 &&
-      aStatus?.trialPending === false &&
-      aStatus?.neverExpires === false,
-    aStatus,
+    '… with a plain English message, and no Urdu field',
+    /phone number/i.test(pStart.body?.error?.message ?? '') &&
+      pStart.body?.error?.details?.messageUr === undefined,
+    pStart.body,
   );
-  const aMeActive = data(await req('GET', '/auth/me', { token: aActiveToken }));
-  check(
-    '/auth/me subscription: trial, not converted',
-    aMeActive?.subscription?.isTrial === true &&
-      aMeActive?.subscription?.trialConvertedAt === null,
-    aMeActive?.subscription,
-  );
-
-  // ── j. Revenue ──────────────────────────────────────────────────────────
-  const revenueAfterTrial = await revenueTotal();
-  check(
-    'j. revenue summary unchanged by a trial approval',
-    revenueAfterTrial.total === revenueBefore.total &&
-      revenueAfterTrial.count === revenueBefore.count,
-    { revenueBefore, revenueAfterTrial },
-  );
-
-  // ── g. Already trialed ──────────────────────────────────────────────────
-  console.log('\n— g. a company that has trialed cannot trial again');
-  const aAgain = await requestTrialBody(aActiveToken, A.companyId);
-  check(
-    '→ 403 TRIAL_ALREADY_USED',
-    aAgain.status === 403 && code(aAgain) === 'TRIAL_ALREADY_USED',
-    aAgain.body,
-  );
-
-  // ── c. One trial per email and per phone, both client shapes ───────────
-  console.log('\n— c. duplicate email / phone, both request shapes');
-  // Same owner (same email), a second company with a fresh phone.
-  const aCo2 = await req('POST', '/companies', {
-    token: A.signupToken,
+  // Not the owner: a rider who joined with the invite code.
+  const N = await owner(db);
+  const nCo = await company(N.companyId);
+  const riderEmail = `rider_${RUN}@example.com`;
+  await req('POST', '/auth/signup', {
+    ip: freshIp(),
     json: {
-      name: `Trial Co ${run}-A2`,
-      industry: 'Retail',
-      phone: freshPhone(),
+      email: riderEmail,
+      password: 'Qa@12345',
+      displayName: 'QA Rider',
+      role: 'delivery',
+      companyCode: nCo.invite_code,
     },
   });
-  const aCo2Id = data(aCo2)?.id as string;
-  const dupEmailBody = await requestTrialBody(A.signupToken, aCo2Id);
+  const riderToken = await signin(riderEmail);
+  const nRider = await req('POST', '/companies/start-trial', {
+    token: riderToken,
+    json: { companyId: N.companyId },
+  });
   check(
-    'duplicate email (body shape) → 403 TRIAL_EMAIL_USED',
-    dupEmailBody.status === 403 && code(dupEmailBody) === 'TRIAL_EMAIL_USED',
-    dupEmailBody.body,
+    'not the owner → TRIAL_NOT_OWNER',
+    nRider.status === 409 && reason(nRider) === 'TRIAL_NOT_OWNER',
+    { status: nRider.status, body: nRider.body },
   );
-  const dupEmailHeader = await requestTrialHeader(A.signupToken, aCo2Id);
+  // Not a draft: submitted for approval (path B) already.
+  const D = await owner(db);
+  await req('POST', `/companies/${D.companyId}/submit`, {
+    token: D.token,
+    json: { requestedPlan: 'unsure' },
+  });
+  const dStart = await startTrial(D);
   check(
-    'duplicate email (header shape) → 403 TRIAL_EMAIL_USED',
-    dupEmailHeader.status === 403 &&
-      code(dupEmailHeader) === 'TRIAL_EMAIL_USED',
-    dupEmailHeader.body,
+    'already submitted (not a draft) → COMPANY_NOT_DRAFT',
+    dStart.status === 409 && reason(dStart) === 'COMPANY_NOT_DRAFT',
+    reason(dStart),
   );
-  check(
-    'message names no company or user',
-    !/Trial Co|trial_/.test(dupEmailBody.body?.error?.message ?? ''),
-    dupEmailBody.body?.error?.message,
+  // Disposable email domain.
+  const X = await owner(db, { email: `qa_${RUN}@mailinator.com` });
+  const xElig = data(
+    await req('GET', `/companies/${X.companyId}/trial-eligibility`, {
+      token: X.token,
+    }),
   );
-
-  // A different owner whose company phone is A's number, stored in another
-  // spelling (00 92 …) straight into the row — normalisation must still match.
-  const C = await owner();
-  await sql(`UPDATE companies SET phone = $2 WHERE id = $1`, [
-    C.companyId,
-    `0092 ${(A.phone as string).slice(1)}`,
-  ]);
-  const dupPhoneBody = await requestTrialBody(C.signupToken, C.companyId);
+  const xStart = await startTrial(X);
   check(
-    'duplicate phone in another spelling (body shape) → 403 TRIAL_PHONE_USED',
-    dupPhoneBody.status === 403 && code(dupPhoneBody) === 'TRIAL_PHONE_USED',
-    dupPhoneBody.body,
-  );
-  const dupPhoneHeader = await requestTrialHeader(C.signupToken, C.companyId);
-  check(
-    'duplicate phone (header shape) → 403 TRIAL_PHONE_USED',
-    dupPhoneHeader.status === 403 &&
-      code(dupPhoneHeader) === 'TRIAL_PHONE_USED',
-    dupPhoneHeader.body,
-  );
-  const cRow = await companyRow(C.companyId);
-  check(
-    'a refused request leaves the company untouched',
-    cRow.payment_status === 'none' && cRow.trial_requested_at === null,
-    cRow,
+    'disposable email domain → TRIAL_EMAIL_DOMAIN_BLOCKED (eligibility agrees)',
+    xStart.status === 409 &&
+      reason(xStart) === 'TRIAL_EMAIL_DOMAIN_BLOCKED' &&
+      xElig?.eligible === false &&
+      xElig?.reason === 'TRIAL_EMAIL_DOMAIN_BLOCKED',
+    { start: reason(xStart), elig: xElig },
   );
 
-  const foreign = await requestTrialBody(C.signupToken, A.companyId);
+  // ── D. One trial per account — every identity ────────────────────────────
+  section('D. one trial per account');
+  // Same user, second company.
+  const a2 = await req('POST', '/companies', {
+    token: A.token,
+    json: { name: `QA A second ${RUN}`, phone: freshPhone() },
+  });
+  const a2Owner: Owner = { ...A, companyId: data(a2)?.id, ip: freshIp() };
+  const a2Elig = data(
+    await req('GET', `/companies/${a2Owner.companyId}/trial-eligibility`, {
+      token: A.token,
+    }),
+  );
+  const a2Start = await startTrial(a2Owner);
   check(
-    "naming someone else's company → 403",
-    foreign.status === 403,
-    foreign.body,
+    'same owner, second company → TRIAL_USER_USED (shown before pressing)',
+    a2Start.status === 409 &&
+      reason(a2Start) === 'TRIAL_USER_USED' &&
+      a2Elig?.reason === 'TRIAL_USER_USED',
+    { start: reason(a2Start), elig: a2Elig?.reason },
+  );
+  // Gmail variants.
+  const G1 = await owner(db, { email: `qa.gmail.${RUN}@gmail.com` });
+  const g1 = await startTrial(G1);
+  check('Gmail owner gets a trial', g1.status === 201, g1.status);
+  for (const variant of [
+    `q.a.gmail.${RUN}@gmail.com`,
+    `qagmail${RUN}+second@gmail.com`,
+    `q.a.g.mail.${RUN}@googlemail.com`,
+  ]) {
+    const V = await owner(db, { email: variant });
+    const v = await startTrial(V);
+    check(
+      `email variant ${variant} → TRIAL_EMAIL_USED`,
+      v.status === 409 && reason(v) === 'TRIAL_EMAIL_USED',
+      reason(v),
+    );
+  }
+  // +tag at another provider.
+  const T1 = await owner(db, { email: `tagged_${RUN}@company-example.com` });
+  await startTrial(T1);
+  const T2 = await owner(db, {
+    email: `tagged_${RUN}+again@company-example.com`,
+  });
+  const t2 = await startTrial(T2);
+  check(
+    '+tag at any provider → TRIAL_EMAIL_USED',
+    t2.status === 409 && reason(t2) === 'TRIAL_EMAIL_USED',
+    reason(t2),
+  );
+  // Same phone, written differently.
+  const local = A.phone as string; // 0321…
+  for (const spelling of [
+    canonical(local),
+    `92${local.slice(1)}`,
+    `${local.slice(0, 4)}-${local.slice(4)}`,
+  ]) {
+    const S = await owner(db, { phone: spelling });
+    const s = await startTrial(S);
+    check(
+      `same phone as ${spelling} → TRIAL_PHONE_USED`,
+      s.status === 409 && reason(s) === 'TRIAL_PHONE_USED',
+      reason(s),
+    );
+  }
+  // Same NTN (different spelling).
+  const aTax = aClaims[0].tax_id_normalized as string;
+  const Nt = await owner(db, {
+    taxId: `${aTax.slice(0, 4)}-${aTax.slice(4)}`,
+  });
+  const nt = await startTrial(Nt);
+  check(
+    'same NTN → TRIAL_TAX_ID_USED',
+    nt.status === 409 && reason(nt) === 'TRIAL_TAX_ID_USED',
+    reason(nt),
+  );
+  // Same company twice.
+  const aAgain = await startTrial(A);
+  check(
+    'same company asking twice → TRIAL_ALREADY_USED',
+    aAgain.status === 409 && reason(aAgain) === 'TRIAL_ALREADY_USED',
+    reason(aAgain),
+  );
+  // Refusals change nothing.
+  const ntRow = await company(Nt.companyId);
+  check(
+    'a refused request leaves the company an untouched draft',
+    ntRow.status === 'email_verified' &&
+      ntRow.payment_status === 'none' &&
+      (await claimsOf(Nt.companyId)).length === 0,
   );
 
-  // ── d. Concurrency ──────────────────────────────────────────────────────
-  console.log('\n— d. two simultaneous requests, one phone');
+  // ── E. Race ───────────────────────────────────────────────────────────────
+  section('E. race: two companies, one phone, same moment');
   for (let round = 1; round <= 3; round++) {
     const shared = freshPhone();
-    const D = await owner({ phone: shared });
-    const E = await owner({ phone: freshPhone() });
-    await sql(`UPDATE companies SET phone = $2 WHERE id = $1`, [
-      E.companyId,
-      canonical(shared),
-    ]);
-    const [r1, r2] = await Promise.all([
-      requestTrialBody(D.signupToken, D.companyId),
-      requestTrialHeader(E.signupToken, E.companyId),
-    ]);
+    const R1 = await owner(db, { phone: shared });
+    const R2 = await owner(db, { phone: `+92${shared.slice(1)}` });
+    const [r1, r2] = await Promise.all([startTrial(R1), startTrial(R2)]);
     const statuses = [r1.status, r2.status].sort();
-    const loser = r1.status === 201 ? r2 : r1;
-    check(
-      `round ${round}: exactly one 201 and one 403`,
-      statuses[0] === 201 && statuses[1] === 403,
-      { r1: r1.status, r2: r2.status, b1: r1.body, b2: r2.body },
+    const reasons = [reason(r1), reason(r2)].filter(Boolean);
+    const claims = await db.sql(
+      `SELECT * FROM trial_claims WHERE phone_normalized = $1 AND status IN ('pending','approved','blocked')`,
+      [canonical(shared)],
     );
     check(
-      `round ${round}: the loser gets TRIAL_PHONE_USED, not a 500`,
-      code(loser) === 'TRIAL_PHONE_USED',
-      loser.body,
-    );
-    const claims = (
-      await sql(
-        `SELECT COUNT(*)::int c FROM trial_claims WHERE phone_normalized = $1 AND status <> 'released'`,
-        [canonical(shared)],
-      )
-    )[0].c;
-    const subs = (
-      await sql(
-        `SELECT COUNT(*)::int c FROM platform_payment_submissions WHERE kind = 'TRIAL' AND company_id IN ($1, $2)`,
-        [D.companyId, E.companyId],
-      )
-    )[0].c;
-    check(
-      `round ${round}: one claim, one submission`,
-      claims === 1 && subs === 1,
-      { claims, subs },
+      `round ${round}: exactly one trial (201 + 409 TRIAL_PHONE_USED), one claim`,
+      statuses[0] === 201 &&
+        statuses[1] === 409 &&
+        reasons[0] === 'TRIAL_PHONE_USED' &&
+        claims.length === 1,
+      { statuses, reasons, claims: claims.length },
     );
   }
 
-  // ── e. Registration steps are enforced server-side ──────────────────────
-  console.log('\n— e. unverified email, missing or bad phone');
-  const F = await owner({ verified: false });
-  const fReq = await requestTrialBody(F.signupToken, F.companyId);
+  // ── F. Changing the phone after a trial frees nothing ─────────────────────
+  section('F. claims are recorded at trial time');
+  await req('PATCH', `/companies/${A.companyId}`, {
+    token: A.token,
+    json: { phone: freshPhone() },
+  });
+  const Fp = await owner(db, { phone: local });
+  const fp = await startTrial(Fp);
   check(
-    'unverified email → 403 EMAIL_NOT_VERIFIED',
-    fReq.status === 403 && code(fReq) === 'EMAIL_NOT_VERIFIED',
-    fReq.body,
+    'A changed its phone; its old phone still cannot trial',
+    fp.status === 409 && reason(fp) === 'TRIAL_PHONE_USED',
+    reason(fp),
   );
-  const G = await owner({ phone: null });
-  const gReq = await requestTrialBody(G.signupToken, G.companyId);
+
+  // ── G. Risk signals hold for review ───────────────────────────────────────
+  section('G. risk signals');
+  const sharedIp = freshIp();
+  const riskOwners: Owner[] = [];
+  for (let i = 0; i < 4; i++) {
+    const o = await owner(db);
+    riskOwners.push({ ...o, ip: sharedIp });
+  }
+  // Three earlier attempts from this network (one of them refused).
+  await startTrial({ ...P, ip: sharedIp });
+  await startTrial(riskOwners[0]);
+  await startTrial(riskOwners[1]);
+  const held = await startTrial(riskOwners[2]);
+  const heldBody = data(held);
   check(
-    'no company phone → 400 TRIAL_PHONE_REQUIRED',
-    gReq.status === 400 && code(gReq) === 'TRIAL_PHONE_REQUIRED',
-    gReq.body,
+    '4th attempt from one network in 24 h → held (pending, reason hidden from owner)',
+    held.status === 201 &&
+      heldBody?.status === 'pending_approval' &&
+      heldBody?.held === true &&
+      heldBody?.autoApproved === false &&
+      !JSON.stringify(heldBody).includes('network'),
+    heldBody,
   );
-  await sql(`UPDATE companies SET phone = '12345' WHERE id = $1`, [
-    G.companyId,
-  ]);
-  const gBad = await requestTrialBody(G.signupToken, G.companyId);
+  const heldSub = await db.one(
+    `SELECT * FROM platform_payment_submissions WHERE id = $1`,
+    [heldBody?.submissionId],
+  );
   check(
-    'unnormalisable phone → 400 TRIAL_PHONE_REQUIRED',
-    gBad.status === 400 && code(gBad) === 'TRIAL_PHONE_REQUIRED',
-    gBad.body,
+    'the hold reason is recorded for admins',
+    /trial attempts from the same network/.test(heldSub?.hold_reason ?? ''),
+    heldSub?.hold_reason,
   );
-  const noCompany = await req('POST', '/companies/start-trial', {
-    token: G.signupToken,
+  const heldList = data(
+    await asAdmin('GET', '/admin/trials?view=held&limit=100'),
+  );
+  check(
+    'admin "Held for review" lists it with the reason',
+    heldList?.items?.some(
+      (r: any) => r.companyId === riskOwners[2].companyId && !!r.holdReason,
+    ),
+  );
+  const approveHeld = await asAdmin(
+    'PATCH',
+    `/admin/payment-submissions/${heldBody?.submissionId}/approve`,
+    {},
+  );
+  check(
+    'admin approves the held trial → active, reviewed by admin',
+    approveHeld.status === 200 &&
+      (await company(riskOwners[2].companyId)).subscription_plan ===
+        'warehouse_trial',
+    approveHeld.status,
+  );
+  // A phone seen on a rejected account.
+  const Rj = await owner(db);
+  await req('POST', `/companies/${Rj.companyId}/submit`, {
+    token: Rj.token,
     json: {},
   });
+  await asAdmin('PATCH', `/admin/companies/${Rj.companyId}/reject`, {
+    reason: 'QA: not a real business',
+  });
+  const Rp = await owner(db, { phone: Rj.phone });
+  const rp = data(await startTrial(Rp));
+  const rpSub = await db.one(
+    `SELECT hold_reason FROM platform_payment_submissions WHERE id = $1`,
+    [rp?.submissionId],
+  );
   check(
-    'no company named at all → 400 COMPANY_REQUIRED',
-    noCompany.status === 400 && code(noCompany) === 'COMPANY_REQUIRED',
-    noCompany.body,
+    'phone used on a rejected account → held for review',
+    rp?.held === true && /rejected or suspended/.test(rpSub?.hold_reason ?? ''),
+    { rp, rpSub },
   );
 
-  // ── f. Rejection ────────────────────────────────────────────────────────
-  console.log('\n— f. reject releases; reject-with-block does not');
-  const H = await owner();
-  const h1 = data(await requestTrialBody(H.signupToken, H.companyId));
-  const hRej = await reject(h1.submissionId);
-  check('reject (default) → 200', hRej.status === 200, hRej.body);
-  const hRow = await companyRow(H.companyId);
-  check(
-    'company back to draft, paymentStatus none, trialRequestedAt kept',
-    hRow.status === 'email_verified' &&
-      hRow.payment_status === 'none' &&
-      hRow.trial_requested_at != null &&
-      hRow.is_trial === false,
-    hRow,
+  // ── H. Admin grant overrides the rule ────────────────────────────────────
+  section('H. grant-trial');
+  const grant = await asAdmin(
+    'POST',
+    `/admin/companies/${Fp.companyId}/grant-trial`,
+    {
+      reason: 'QA: agreed after a demo call',
+    },
   );
-  const hClaim = (
-    await sql(`SELECT status FROM trial_claims WHERE submission_id = $1`, [
-      h1.submissionId,
-    ])
-  )[0];
-  check('claim → released', hClaim?.status === 'released', hClaim);
-  const hLogin = await signin(H.email);
-  check(
-    'rejected-trial owner can sign in again (draft)',
-    hLogin.status === 200 && data(hLogin)?.companyStatus === 'draft',
-    hLogin.body,
+  const fpRow = await company(Fp.companyId);
+  const fpClaims = await claimsOf(Fp.companyId);
+  const grantAudit = await db.one(
+    `SELECT * FROM platform_audit_events WHERE action = 'trial_granted' AND company_id = $1`,
+    [Fp.companyId],
   );
-  const hStatus = data(
-    await req('GET', '/billing/status', {
-      token: data(hLogin)?.tokens?.accessToken,
-      companyId: H.companyId,
+  check(
+    'grant-trial: ineligible company gets a trial; claim "granted"; audited',
+    grant.status === 201 &&
+      fpRow.subscription_plan === 'warehouse_trial' &&
+      fpClaims.some((c: any) => c.status === 'granted') &&
+      grantAudit?.reason === 'QA: agreed after a demo call',
+    { status: grant.status, body: grant.body },
+  );
+  const notAdmin = await req(
+    'POST',
+    `/admin/companies/${Fp.companyId}/grant-trial`,
+    {
+      token: A.token,
+      json: { reason: 'nope nope' },
+    },
+  );
+  check(
+    'a company owner cannot reach admin trial routes',
+    notAdmin.status === 403,
+  );
+
+  // ── I. Path B — request approval ─────────────────────────────────────────
+  section('I. path B: approval with a plan');
+  const B = await owner(db);
+  const bSubmit = await req('POST', `/companies/${B.companyId}/submit`, {
+    token: B.token,
+    json: { requestedPlan: 'warehouse_growth_6mo', note: 'Agreed on the call' },
+  });
+  const bRow1 = await company(B.companyId);
+  check(
+    'submit → pending_approval with the requested plan and note',
+    bSubmit.status === 201 &&
+      bRow1.status === 'pending_approval' &&
+      bRow1.requested_plan === 'warehouse_growth_6mo' &&
+      bRow1.approval_note === 'Agreed on the call',
+    { status: bSubmit.status, row: bRow1.status },
+  );
+  const bNoPlan = await asAdmin(
+    'PATCH',
+    `/super-admin/companies/${B.companyId}/status`,
+    {
+      status: 'active',
+    },
+  );
+  check(
+    'approve with no end date → 400 (the requested plan alone is not enough)',
+    bNoPlan.status === 400 &&
+      code(bNoPlan) === 'END_DATE_REQUIRED' &&
+      (await company(B.companyId)).status === 'pending_approval',
+    { status: bNoPlan.status, code: code(bNoPlan) },
+  );
+  const Bn = await owner(db);
+  await req('POST', `/companies/${Bn.companyId}/submit`, {
+    token: Bn.token,
+    json: {},
+  });
+  const bnNoPlan = await asAdmin(
+    'PATCH',
+    `/super-admin/companies/${Bn.companyId}/status`,
+    { status: 'active' },
+  );
+  check(
+    'an old console approving with no plan → 400 PLAN_REQUIRED_FOR_APPROVAL (no free access)',
+    bnNoPlan.status === 400 &&
+      code(bnNoPlan) === 'PLAN_REQUIRED_FOR_APPROVAL' &&
+      (await company(Bn.companyId)).status === 'pending_approval',
+    { status: bnNoPlan.status, code: code(bnNoPlan) },
+  );
+  const bNoEnd = await asAdmin(
+    'PATCH',
+    `/admin/companies/${B.companyId}/approve`,
+    {
+      plan: 'warehouse_growth_6mo',
+    },
+  );
+  check(
+    'approve without an end date → 400 END_DATE_REQUIRED',
+    code(bNoEnd) === 'END_DATE_REQUIRED',
+  );
+  const end = new Date(Date.now() + 180 * DAY).toISOString();
+  const bOk = await asAdmin(
+    'PATCH',
+    `/admin/companies/${B.companyId}/approve`,
+    {
+      plan: 'warehouse_growth_6mo',
+      endDate: end,
+    },
+  );
+  const bRow2 = await company(B.companyId);
+  check(
+    'approve with plan + end date → active on that plan until that date',
+    bOk.status === 200 &&
+      ['approved', 'active'].includes(bRow2.status) &&
+      bRow2.subscription_plan === 'warehouse_growth_6mo' &&
+      Math.abs(
+        new Date(bRow2.subscription_expiry_date).getTime() -
+          new Date(end).getTime(),
+      ) < 1000,
+    { status: bOk.status, row: bRow2.subscription_plan },
+  );
+  // Approve as a trial — the claim rules apply.
+  const Bt = await owner(db);
+  await req('POST', `/companies/${Bt.companyId}/submit`, {
+    token: Bt.token,
+    json: {},
+  });
+  const btOk = await asAdmin(
+    'PATCH',
+    `/admin/companies/${Bt.companyId}/approve`,
+    {
+      asTrial: true,
+    },
+  );
+  check(
+    'approve as a trial (eligible) → trial plan, claim recorded',
+    btOk.status === 200 &&
+      (await company(Bt.companyId)).subscription_plan === 'warehouse_trial' &&
+      (await claimsOf(Bt.companyId)).some((c: any) => c.status === 'approved'),
+    { status: btOk.status, body: btOk.body },
+  );
+  const Bt2 = await owner(db, { phone: Bt.phone });
+  await req('POST', `/companies/${Bt2.companyId}/submit`, {
+    token: Bt2.token,
+    json: {},
+  });
+  const bt2 = await asAdmin(
+    'PATCH',
+    `/admin/companies/${Bt2.companyId}/approve`,
+    {
+      asTrial: true,
+    },
+  );
+  check(
+    'approve as a trial when the phone already trialed → 409 TRIAL_PHONE_USED',
+    bt2.status === 409 && reason(bt2) === 'TRIAL_PHONE_USED',
+    { status: bt2.status, body: bt2.body },
+  );
+  const bad = await db.sql(
+    `SELECT id FROM companies
+      WHERE status IN ('active','approved') AND subscription_plan = 'free'
+        AND subscription_expiry_date IS NULL AND reviewed_at > now() - interval '1 hour'
+        AND name LIKE $1`,
+    [`QA % ${RUN}%`],
+  );
+  check(
+    'no company approved in this run is active without a plan + end date',
+    bad.length === 0,
+    bad,
+  );
+
+  // ── J. Lifecycle with time travel ────────────────────────────────────────
+  section('J. reminders, extension, end, expiry');
+  const L = await owner(db);
+  await startTrial(L);
+  const scan = () =>
+    asAdmin('POST', '/admin/payment-submissions/run-expiry-scan');
+  const reminders = async () =>
+    Number(
+      (
+        await db.one(
+          `SELECT count(*)::int AS n FROM notifications
+            WHERE company_id = $1 AND type = 'subscription_expiring'`,
+          [L.companyId],
+        )
+      ).n,
+    );
+  await db.sql(
+    `UPDATE companies SET subscription_expiry_date = now() + interval '6 days 12 hours' WHERE id = $1`,
+    [L.companyId],
+  );
+  await scan();
+  await scan();
+  const m7 = await company(L.companyId);
+  check(
+    '7-day milestone: recorded once, one reminder despite two scans',
+    m7.trial_reminder_milestone === 7 && (await reminders()) === 1,
+    { milestone: m7.trial_reminder_milestone, n: await reminders() },
+  );
+  await db.sql(
+    `UPDATE companies SET subscription_expiry_date = now() + interval '2 days 12 hours' WHERE id = $1`,
+    [L.companyId],
+  );
+  await scan();
+  await scan();
+  check(
+    '3-day milestone: one more reminder',
+    (await company(L.companyId)).trial_reminder_milestone === 3 &&
+      (await reminders()) === 2,
+  );
+  if (mail) {
+    const ending = await mailTo(L.email, { subject: /trial ends in/i });
+    check(
+      'trial-ending email sent once per milestone (2)',
+      ending.length === 2,
+      ending.length,
+    );
+  }
+  const beforeExt = new Date(
+    (await company(L.companyId)).subscription_expiry_date,
+  ).getTime();
+  const ext = await asAdmin(
+    'POST',
+    `/admin/companies/${L.companyId}/extend-trial`,
+    {
+      days: 7,
+      reason: 'QA: setting up migration',
+    },
+  );
+  const afterExt = await company(L.companyId);
+  check(
+    'extend-trial +7 days: end moves by 7 days, milestones reset, audited',
+    ext.status === 201 &&
+      Math.abs(
+        new Date(afterExt.subscription_expiry_date).getTime() -
+          (beforeExt + 7 * DAY),
+      ) < 60_000 &&
+      afterExt.trial_reminder_milestone === null &&
+      !!(await db.one(
+        `SELECT 1 AS x FROM platform_audit_events WHERE action = 'trial_extended' AND company_id = $1`,
+        [L.companyId],
+      )),
+    { status: ext.status, body: ext.body },
+  );
+  const ext31 = await asAdmin(
+    'POST',
+    `/admin/companies/${L.companyId}/extend-trial`,
+    {
+      days: 31,
+      reason: 'too long',
+    },
+  );
+  check('extension over 30 days refused', ext31.status === 400, ext31.status);
+
+  // Books before the trial ends: one posted journal entry.
+  const accounts = data(
+    await req('GET', '/accounts?limit=500', { token: L.token }),
+  );
+  const list: any[] = accounts?.accounts ?? [];
+  const cash =
+    list.find((a: any) => a.type === 'asset' && /cash/i.test(a.name)) ??
+    list.find((a: any) => a.type === 'asset');
+  const equity =
+    list.find(
+      (a: any) => a.type === 'equity' && /capital|owner/i.test(a.name),
+    ) ?? list.find((a: any) => a.type === 'equity');
+  const je = await req('POST', '/journal-entries', {
+    token: L.token,
+    json: {
+      date: new Date().toISOString().slice(0, 10),
+      memo: 'QA owner investment',
+      status: 'posted',
+      lines: [
+        { accountId: cash?.id, debit: '25000.0000', credit: '0.0000' },
+        { accountId: equity?.id, debit: '0.0000', credit: '25000.0000' },
+      ],
+    },
+  });
+  check('a journal entry posts during the trial', je.status === 201, {
+    status: je.status,
+    body: je.body,
+  });
+  const tbBefore = await trialBalance(db, L.companyId);
+
+  // A staff member to see what they are told.
+  const lCo = await company(L.companyId);
+  const lRiderEmail = `lrider_${RUN}@example.com`;
+  await req('POST', '/auth/signup', {
+    ip: freshIp(),
+    json: {
+      email: lRiderEmail,
+      password: 'Qa@12345',
+      displayName: 'QA L Rider',
+      role: 'delivery',
+      companyCode: lCo.invite_code,
+    },
+  });
+  const lRiderToken = await signin(lRiderEmail);
+
+  const endEarly = await asAdmin(
+    'POST',
+    `/admin/companies/${L.companyId}/end-trial`,
+    {
+      reason: 'QA: suspected abuse',
+    },
+  );
+  check('end-trial (early) → 201', endEarly.status === 201, endEarly.body);
+  const ownerBlocked = await req('GET', '/accounts', { token: L.token });
+  check(
+    'after the trial: owner gets TRIAL_ENDED on business routes',
+    ownerBlocked.status === 403 && code(ownerBlocked) === 'TRIAL_ENDED',
+    { status: ownerBlocked.status, code: code(ownerBlocked) },
+  );
+  const riderBlocked = await req('GET', '/deliveries', { token: lRiderToken });
+  check(
+    'staff/riders get TRIAL_ENDED with "contact the owner"',
+    riderBlocked.status === 403 &&
+      code(riderBlocked) === 'TRIAL_ENDED' &&
+      /contact the owner/.test(JSON.stringify(riderBlocked.body)),
+    riderBlocked.body,
+  );
+  const backup = await req('POST', '/data-portability/exports', {
+    token: L.token,
+    json: { includeXlsx: false },
+  });
+  check(
+    'the owner can still request a full backup',
+    backup.status === 202 || backup.status === 201,
+    { status: backup.status, body: backup.body },
+  );
+  const riderBackup = await req('POST', '/data-portability/exports', {
+    token: lRiderToken,
+    json: {},
+  });
+  check('… but staff cannot', riderBackup.status === 403, riderBackup.status);
+  const newBatch = await req('POST', '/migrations', {
+    token: L.token,
+    json: { source: 'finmatrix_template' },
+  });
+  check(
+    'a lapsed company cannot start or commit a migration (TRIAL_ENDED)',
+    newBatch.status === 403 && code(newBatch) === 'TRIAL_ENDED',
+    newBatch.status,
+  );
+  const batches = await req('GET', '/migrations', { token: L.token });
+  check(
+    '… but can still list its migrations',
+    batches.status === 200,
+    batches.status,
+  );
+  const lMe = data(await req('GET', '/auth/me', { token: L.token }));
+  check(
+    'sign-in still works; /auth/me says trial ended',
+    lMe?.companyStatus === 'inactive' && lMe?.subscription?.trialEnded === true,
+    lMe?.subscription,
+  );
+
+  // ── K. Activation (no gateway) ───────────────────────────────────────────
+  section('K. activation after and during a trial');
+  const act = await req(
+    'POST',
+    `/companies/${L.companyId}/activation-request`,
+    {
+      token: L.token,
+      json: { requestedPlan: 'warehouse_starter_6mo', note: 'Please activate' },
+    },
+  );
+  const actBody = data(act);
+  check(
+    'owner requests activation after the trial ended',
+    act.status === 201 && actBody?.requestedPlan === 'warehouse_starter_6mo',
+    act.body,
+  );
+  const actList = data(await asAdmin('GET', '/admin/trials?view=activations'));
+  check(
+    'admin "Activation requests" lists it',
+    actList?.items?.some((r: any) => r.companyId === L.companyId),
+  );
+  const actEnd = new Date(Date.now() + 182 * DAY).toISOString();
+  const actOk = await asAdmin(
+    'PATCH',
+    `/admin/payment-submissions/${actBody?.submissionId}/approve`,
+    { endDate: actEnd },
+  );
+  const lAfter = await company(L.companyId);
+  const lBack = await req('GET', '/accounts', { token: L.token });
+  const tbAfter = await trialBalance(db, L.companyId);
+  const rev = await db.one(
+    `SELECT count(*)::int AS n FROM platform_revenue WHERE submission_id = $1`,
+    [actBody?.submissionId],
+  );
+  check(
+    'approval: requested plan until the end date, trial converted, access back',
+    actOk.status === 200 &&
+      lAfter.subscription_plan === 'warehouse_starter_6mo' &&
+      !!lAfter.trial_converted_at &&
+      lBack.status === 200,
+    { status: actOk.status, body: actOk.body },
+  );
+  check(
+    'books unchanged by activation; no money recorded',
+    tbAfter.d === tbBefore.d &&
+      tbAfter.c === tbBefore.c &&
+      tbAfter.lines === tbBefore.lines &&
+      rev.n === 0,
+    { tbBefore, tbAfter, rev },
+  );
+  // During a trial.
+  const Dt = await owner(db);
+  await startTrial(Dt);
+  const dAct = data(
+    await req('POST', `/companies/${Dt.companyId}/activation-request`, {
+      token: Dt.token,
+      json: { requestedPlan: 'unsure' },
     }),
   );
-  check(
-    'status shows the rejected TRIAL with its reason',
-    hStatus?.lastSubmission?.kind === 'TRIAL' &&
-      hStatus?.lastSubmission?.status === 'rejected' &&
-      hStatus?.lastSubmission?.rejectionReason === 'QA review' &&
-      hStatus?.trialPending === false,
-    hStatus?.lastSubmission,
+  const dActOk = await asAdmin(
+    'PATCH',
+    `/admin/payment-submissions/${dAct?.submissionId}/approve`,
+    {
+      plan: 'warehouse_growth_1yr',
+      endDate: new Date(Date.now() + 365 * DAY).toISOString(),
+    },
   );
-  const hRejectAgain = await reject(h1.submissionId, true);
+  const dRow = await company(Dt.companyId);
   check(
-    'a decided request cannot be re-decided (400)',
-    hRejectAgain.status === 400,
-    hRejectAgain.body,
+    'activation DURING the trial ends it early as converted',
+    dActOk.status === 200 &&
+      dRow.subscription_plan === 'warehouse_growth_1yr' &&
+      !!dRow.trial_converted_at,
+    dActOk.body,
+  );
+  const dupe = await req(
+    'POST',
+    `/companies/${Dt.companyId}/activation-request`,
+    {
+      token: Dt.token,
+      json: {},
+    },
+  );
+  check(
+    'a draft or open request cannot ask twice',
+    dupe.status === 201 || dupe.status === 409,
   );
 
-  const h2Res = await requestTrialHeader(H.signupToken, H.companyId);
-  const h2 = data(h2Res);
-  check(
-    'after a released rejection the same email+phone may request again (201)',
-    h2Res.status === 201,
-    h2Res.body,
+  // ── L. Old-path companies are untouched ──────────────────────────────────
+  section('L. companies from the old path');
+  const Old = await owner(db);
+  await db.sql(
+    `UPDATE companies SET status = 'pending_approval', submitted_at = now() WHERE id = $1`,
+    [Old.companyId],
   );
-  const hBlock = await reject(h2.submissionId, true);
-  check('reject & block → 200', hBlock.status === 200, hBlock.body);
-  const hClaim2 = (
-    await sql(`SELECT status FROM trial_claims WHERE submission_id = $1`, [
-      h2.submissionId,
-    ])
-  )[0];
-  check('claim → blocked', hClaim2?.status === 'blocked', hClaim2);
-  const h3 = await requestTrialBody(H.signupToken, H.companyId);
-  check(
-    're-request after a block → 403 TRIAL_EMAIL_USED',
-    h3.status === 403 && code(h3) === 'TRIAL_EMAIL_USED',
-    h3.body,
+  const oldOk = await asAdmin(
+    'PATCH',
+    `/super-admin/companies/${Old.companyId}/status`,
+    {
+      status: 'active',
+      plan: 'warehouse_starter_6mo',
+      endDate: new Date(Date.now() + 182 * DAY).toISOString(),
+    },
   );
-  const I = await owner();
-  await sql(`UPDATE companies SET phone = $2 WHERE id = $1`, [
-    I.companyId,
-    canonical(H.phone as string),
-  ]);
-  const iReq = await requestTrialBody(I.signupToken, I.companyId);
   check(
-    'the blocked phone is refused for a different owner too',
-    iReq.status === 403 && code(iReq) === 'TRIAL_PHONE_USED',
-    iReq.body,
+    'an old pending_approval company is approvable (now with a plan + end date)',
+    oldOk.status === 200 &&
+      (await company(Old.companyId)).subscription_plan ===
+        'warehouse_starter_6mo',
+    oldOk.body,
+  );
+  const Leg = await owner(db);
+  await db.sql(
+    `UPDATE companies SET status = 'approved', subscription_plan = 'free',
+            subscription_expiry_date = NULL WHERE id = $1`,
+    [Leg.companyId],
+  );
+  await scan();
+  const legRow = await company(Leg.companyId);
+  const legAccess = await req('GET', '/accounts', { token: Leg.token });
+  check(
+    'a legacy active company (free, no end) is unchanged and keeps access',
+    legRow.status === 'approved' &&
+      legRow.subscription_plan === 'free' &&
+      legAccess.status === 200,
+    { status: legRow.status, access: legAccess.status },
   );
 
-  // ── h. Expiry: live cut-off, then trial-worded scan + milestone emails ──
-  console.log('\n— h. expiry');
-  const K = await owner();
-  const kSub = data(await requestTrialBody(K.signupToken, K.companyId));
-  await approve(kSub.submissionId);
-  const kToken = data(await signin(K.email))?.tokens?.accessToken as string;
-  check(
-    'trial company K open before expiry',
-    (await req('GET', '/customers', { token: kToken, companyId: K.companyId }))
-      .status === 200,
-  );
-
-  // Reminder window: 5 days left → in-app trial wording + the 7-day email.
-  await sql(
-    `UPDATE companies SET subscription_expiry_date = now() + interval '5 days', subscription_reminder_on = NULL WHERE id = $1`,
-    [K.companyId],
-  );
-  await req('POST', '/admin/payment-submissions/run-expiry-scan', {
-    token: superToken,
-  });
-  let kRow = await companyRow(K.companyId);
-  const kReminder = (
-    await sql(
-      `SELECT title FROM notifications WHERE company_id = $1 AND type = 'subscription_expiring' ORDER BY created_at DESC LIMIT 1`,
-      [K.companyId],
-    )
-  )[0];
-  check(
-    '5 days left → trial-worded reminder',
-    kReminder?.title === 'Free trial ending soon',
-    kReminder,
-  );
-  check(
-    '5 days left → 7-day email milestone recorded, status expiring',
-    kRow.trial_reminder_milestone === 7 &&
-      kRow.subscription_status === 'expiring',
-    kRow,
-  );
-  await sql(
-    `UPDATE companies SET subscription_reminder_on = NULL WHERE id = $1`,
-    [K.companyId],
-  );
-  await req('POST', '/admin/payment-submissions/run-expiry-scan', {
-    token: superToken,
-  });
-  kRow = await companyRow(K.companyId);
-  check(
-    'same milestone again → no second email (milestone stays 7)',
-    kRow.trial_reminder_milestone === 7,
-    kRow.trial_reminder_milestone,
-  );
-  await sql(
-    `UPDATE companies SET subscription_expiry_date = now() + interval '2 days', subscription_reminder_on = NULL WHERE id = $1`,
-    [K.companyId],
-  );
-  await req('POST', '/admin/payment-submissions/run-expiry-scan', {
-    token: superToken,
-  });
-  kRow = await companyRow(K.companyId);
-  check(
-    '2 days left → 3-day milestone',
-    kRow.trial_reminder_milestone === 3,
-    kRow.trial_reminder_milestone,
-  );
-
-  // The boundary passes — NO cron run. Access must end on the next request.
-  await sql(
-    `UPDATE companies SET subscription_expiry_date = now() - interval '1 second' WHERE id = $1`,
-    [K.companyId],
-  );
-  const kLive = await req('GET', '/customers', {
-    token: kToken,
-    companyId: K.companyId,
-  });
-  check(
-    'past expiry, before any scan → CompanyGuard 403 COMPANY_NOT_ACTIVE',
-    kLive.status === 403 && code(kLive) === 'COMPANY_NOT_ACTIVE',
-    kLive.body,
-  );
-  const kExpiredLogin = await signin(K.email);
-  check(
-    'expired trial owner can still sign in, renew-only (inactive)',
-    kExpiredLogin.status === 200 &&
-      data(kExpiredLogin)?.companyStatus === 'inactive',
-    kExpiredLogin.body,
-  );
-  await req('POST', '/admin/payment-submissions/run-expiry-scan', {
-    token: superToken,
-  });
-  kRow = await companyRow(K.companyId);
-  const kEnded = (
-    await sql(
-      `SELECT title FROM notifications WHERE company_id = $1 AND type = 'subscription_expired' ORDER BY created_at DESC LIMIT 1`,
-      [K.companyId],
-    )
-  )[0];
-  check(
-    'scan persists inactive + expired, isTrial kept',
-    kRow.status === 'inactive' &&
-      kRow.subscription_status === 'expired' &&
-      kRow.is_trial === true,
-    kRow,
-  );
-  check(
-    'scan uses trial wording',
-    kEnded?.title === 'Your free trial has ended',
-    kEnded,
-  );
-  const kRetry = await requestTrialBody(
-    data(kExpiredLogin)?.tokens?.accessToken,
-    K.companyId,
-  );
-  check(
-    'an expired trial cannot be restarted → TRIAL_ALREADY_USED',
-    kRetry.status === 403 && code(kRetry) === 'TRIAL_ALREADY_USED',
-    kRetry.body,
-  );
-
-  // ── i. Subscribing mid-trial ────────────────────────────────────────────
-  console.log('\n— i. subscribe during the trial');
-  const riderBody = (n: number) => ({
-    username: `trial_rider_${run}_${n}`,
-    password: PASSWORD,
-    name: `Rider ${n}`,
-    vehicleType: 'motorcycle',
-    maxLoad: 10,
-  });
-  let riderSeq = 0;
-  const addRider = async (token: string, companyId: string) => {
-    riderSeq += 1;
-    const r = await req('POST', '/delivery-personnel', {
-      token,
-      companyId,
-      json: riderBody(riderSeq),
+  // ── M. Switches (optional extra API processes) ───────────────────────────
+  const queueBase = process.env.QUEUE_API_BASE;
+  if (queueBase) {
+    section('M1. TRIAL_AUTO_APPROVE=false sends trials to the queue');
+    const Q = await owner(db);
+    const q = await fetch(`${queueBase}/companies/start-trial`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${Q.token}`,
+        'Content-Type': 'application/json',
+        'X-Forwarded-For': Q.ip,
+      },
+      body: JSON.stringify({ companyId: Q.companyId }),
     });
-    return {
-      res: r,
-      userId: data(r)?.userId as string,
-      username: riderBody(riderSeq).username,
+    const qb: any = ((await q.json()) as any)?.data;
+    check(
+      'start-trial → pending (queued), nothing active yet',
+      q.status === 201 &&
+        qb?.status === 'pending_approval' &&
+        qb?.held === true,
+      qb,
+    );
+    const qa = await asAdmin(
+      'PATCH',
+      `/admin/payment-submissions/${qb?.submissionId}/approve`,
+      {},
+    );
+    check(
+      'admin approval from the queue starts the trial',
+      qa.status === 200 &&
+        (await company(Q.companyId)).subscription_plan === 'warehouse_trial',
+    );
+  }
+  const approvalBase = process.env.APPROVAL_API_BASE;
+  if (approvalBase) {
+    section('M2. SIGNUP_MODE=approval offers path B only');
+    const Ap = await owner(db);
+    const h = {
+      Authorization: `Bearer ${Ap.token}`,
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': Ap.ip,
     };
-  };
-  const r1 = await addRider(aActiveToken, A.companyId);
-  check(
-    'trial allows its one rider',
-    r1.res.status === 201 || r1.res.status === 200,
-    r1.res.body,
-  );
-  const r2Fail = await addRider(aActiveToken, A.companyId);
-  check(
-    '2nd rider on the trial → 400 DELIVERY_PERSONNEL_LIMIT_REACHED (trial wording)',
-    r2Fail.res.status === 400 &&
-      code(r2Fail.res) === 'DELIVERY_PERSONNEL_LIMIT_REACHED' &&
-      /free trial/i.test(r2Fail.res.body?.error?.message ?? ''),
-    r2Fail.res.body,
-  );
+    const ap = await fetch(`${approvalBase}/companies/start-trial`, {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ companyId: Ap.companyId }),
+    });
+    const apBody: any = await ap.json();
+    const cfg2: any = await (
+      await fetch(`${approvalBase}/public/config`)
+    ).json();
+    check(
+      'public config says approval; start-trial → TRIAL_DISABLED',
+      cfg2?.data?.signupMode === 'approval' &&
+        ap.status === 409 &&
+        apBody?.error?.details?.reason === 'TRIAL_DISABLED',
+      apBody,
+    );
+    const sub = await fetch(
+      `${approvalBase}/companies/${Ap.companyId}/submit`,
+      {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ requestedPlan: 'unsure' }),
+      },
+    );
+    const apOk = await asAdmin(
+      'PATCH',
+      `/admin/companies/${Ap.companyId}/approve`,
+      {
+        plan: 'warehouse_starter_1yr',
+        endDate: new Date(Date.now() + 365 * DAY).toISOString(),
+      },
+    );
+    check(
+      'path B end to end in approval mode',
+      sub.status === 201 && apOk.status === 200,
+      { sub: sub.status, ok: apOk.status },
+    );
+  }
 
-  // 20 days of trial left when the owner pays.
-  await sql(
-    `UPDATE companies SET subscription_expiry_date = now() + interval '20 days' WHERE id = $1`,
-    [A.companyId],
-  );
-  const aPaid = await submitPayment(
-    aActiveToken,
-    A.companyId,
-    'warehouse_starter_6mo',
-  );
-  const aPaidBody = data(aPaid);
-  check(
-    'payment during the trial accepted, labelled NEW',
-    (aPaid.status === 201 || aPaid.status === 200) && aPaidBody?.kind === 'NEW',
-    aPaid.body,
-  );
-  const aStillOpen = await req('GET', '/customers', {
-    token: aActiveToken,
-    companyId: A.companyId,
-  });
-  check(
-    'trial keeps working while the payment is reviewed',
-    aStillOpen.status === 200,
-    aStillOpen.status,
-  );
-  const aApprovePaid = await approve(aPaidBody.submissionId ?? aPaidBody.id);
-  check(
-    'approve the payment → 200',
-    aApprovePaid.status === 200,
-    aApprovePaid.body,
-  );
-  aRow = await companyRow(A.companyId);
-  const paidExpiry = new Date(aRow.subscription_expiry_date).getTime();
-  const sixMonths = new Date();
-  sixMonths.setMonth(sixMonths.getMonth() + 6);
-  check(
-    'trial_converted_at set, is_trial still true, plan = paid key',
-    aRow.trial_converted_at != null &&
-      aRow.is_trial === true &&
-      aRow.subscription_plan === 'warehouse_starter_6mo' &&
-      aRow.payment_status === 'paid',
-    aRow,
-  );
-  check(
-    'paid term starts at approval — unused trial days NOT stacked',
-    Math.abs(paidExpiry - sixMonths.getTime()) < 2 * DAY,
-    { expiry: aRow.subscription_expiry_date },
-  );
-  const aRev = (
-    await sql(
-      `SELECT COUNT(*)::int c FROM platform_revenue WHERE company_id = $1`,
-      [A.companyId],
-    )
-  )[0].c;
-  check('exactly one revenue row after conversion', aRev === 1, aRev);
-  const aStatusPaid = data(
-    await req('GET', '/billing/status', {
-      token: aActiveToken,
-      companyId: A.companyId,
-    }),
-  );
-  check(
-    'billing status: converted, no trial countdown',
-    aStatusPaid?.trialConvertedAt != null &&
-      aStatusPaid?.trialDaysRemaining === null &&
-      aStatusPaid?.isTrial === true,
-    aStatusPaid,
-  );
-  const aMePaid = data(await req('GET', '/auth/me', { token: aActiveToken }));
-  check(
-    '/auth/me subscription shows the conversion',
-    aMePaid?.subscription?.trialConvertedAt != null,
-    aMePaid?.subscription,
-  );
-
-  // ── k. Rider seats ──────────────────────────────────────────────────────
-  console.log('\n— k. rider seats');
-  const r2 = await addRider(aActiveToken, A.companyId);
-  const r3 = await addRider(aActiveToken, A.companyId);
-  check(
-    'Starter allows riders 2 and 3',
-    [r2.res.status, r3.res.status].every((s) => s === 201 || s === 200),
-    [r2.res.body, r3.res.body],
-  );
-  const r4Fail = await addRider(aActiveToken, A.companyId);
-  check(
-    '4th rider on Starter refused',
-    r4Fail.res.status === 400,
-    r4Fail.res.status,
-  );
-
-  // Scale (10) → add riders 4 and 5.
-  const toScale = data(
-    await submitPayment(aActiveToken, A.companyId, 'warehouse_scale_6mo'),
-  );
-  await approve(toScale.id);
-  const r4 = await addRider(aActiveToken, A.companyId);
-  const r5 = await addRider(aActiveToken, A.companyId);
-  check(
-    'Scale allows riders 4 and 5',
-    [r4.res.status, r5.res.status].every((s) => s === 201 || s === 200),
-    [r4.res.body, r5.res.body],
-  );
-
-  // Rider 5 signs in while it still has a seat — this token is used below.
-  const r5Login = await signinWith({
-    identifier: r5.username,
-    password: PASSWORD,
-  });
-  const r5Token = data(r5Login)?.tokens?.accessToken as string;
-  check(
-    'rider 5 signs in while seated',
-    r5Login.status === 200 && !!r5Token,
-    r5Login.body,
-  );
-
-  // Downgrade back to Starter (3): the two newest riders are paused.
-  const toStarter = data(
-    await submitPayment(aActiveToken, A.companyId, 'warehouse_starter_6mo'),
-  );
-  await approve(toStarter.id);
-  const seats = await sql(
-    `SELECT user_id, status FROM delivery_personnel_profiles WHERE company_id = $1`,
-    [A.companyId],
-  );
-  const statusOf = (id: string) =>
-    seats.find((s: any) => s.user_id === id)?.status;
-  check(
-    'downgrade locks exactly the two newest riders',
-    statusOf(r1.userId) === 'active' &&
-      statusOf(r2.userId) === 'active' &&
-      statusOf(r3.userId) === 'active' &&
-      statusOf(r4.userId) === 'plan_locked' &&
-      statusOf(r5.userId) === 'plan_locked',
-    seats,
-  );
-  const limits = data(
-    await req('GET', '/billing/plan-limits', {
-      token: aActiveToken,
-      companyId: A.companyId,
-    }),
-  );
-  check(
-    'plan-limits reports 3 active, 2 locked',
-    limits?.currentCount === 3 && limits?.lockedCount === 2,
-    limits,
-  );
-  const lockedNote = (
-    await sql(
-      `SELECT COUNT(*)::int c FROM notifications WHERE company_id = $1 AND type = 'personnel_plan_locked'`,
-      [A.companyId],
-    )
-  )[0].c;
-  check('owner notified that riders were paused', lockedNote >= 1, lockedNote);
-
-  const r5LockedLogin = await signinWith({
-    identifier: r5.username,
-    password: PASSWORD,
-  });
-  check(
-    'locked rider sign-in → 403 RIDER_SEAT_LOCKED',
-    r5LockedLogin.status === 403 && code(r5LockedLogin) === 'RIDER_SEAT_LOCKED',
-    r5LockedLogin.body,
-  );
-  const r5Live = await req('GET', '/deliveries', {
-    token: r5Token,
-    companyId: A.companyId,
-  });
-  check(
-    "locked rider's existing token is refused live by CompanyGuard",
-    r5Live.status === 403 && code(r5Live) === 'RIDER_SEAT_LOCKED',
-    r5Live.body,
-  );
-  const assignLocked = await req('POST', '/deliveries/assign', {
-    token: aActiveToken,
-    companyId: A.companyId,
-    json: { deliveryIds: [randomUUID()], personnelId: r5.userId },
-  });
-  check(
-    'assigning work to a locked rider → 400 RIDER_NOT_ACTIVE',
-    assignLocked.status === 400 && code(assignLocked) === 'RIDER_NOT_ACTIVE',
-    assignLocked.body,
-  );
-  const reactivate = await req('PATCH', `/delivery-personnel/${r5.userId}`, {
-    token: aActiveToken,
-    companyId: A.companyId,
-    json: { status: 'active' },
-  });
-  check(
-    'reactivating a locked rider with no free seat → 400 LIMIT_REACHED',
-    reactivate.status === 400 &&
-      code(reactivate) === 'DELIVERY_PERSONNEL_LIMIT_REACHED',
-    reactivate.body,
-  );
-  const setLocked = await req('PATCH', `/delivery-personnel/${r1.userId}`, {
-    token: aActiveToken,
-    companyId: A.companyId,
-    json: { status: 'plan_locked' },
-  });
-  check(
-    'owner cannot set plan_locked by hand (400)',
-    setLocked.status === 400,
-    setLocked.body,
-  );
-
-  // Swap: pause rider 1 by choice, give the seat to rider 5.
-  const deactivate = await req('PATCH', `/delivery-personnel/${r1.userId}`, {
-    token: aActiveToken,
-    companyId: A.companyId,
-    json: { status: 'inactive' },
-  });
-  const swapIn = await req('PATCH', `/delivery-personnel/${r5.userId}`, {
-    token: aActiveToken,
-    companyId: A.companyId,
-    json: { status: 'active' },
-  });
-  check(
-    'swap: deactivate one, activate a locked one',
-    deactivate.status === 200 && swapIn.status === 200,
-    [deactivate.body, swapIn.body],
-  );
-  const r5Back = await signinWith({
-    identifier: r5.username,
-    password: PASSWORD,
-  });
-  check('swapped-in rider signs in again', r5Back.status === 200, r5Back.body);
-
-  // Upgrade to Growth (5): the remaining locked rider is restored; the rider
-  // the owner deactivated stays inactive.
-  const toGrowth = data(
-    await submitPayment(aActiveToken, A.companyId, 'warehouse_growth_6mo'),
-  );
-  await approve(toGrowth.id);
-  const seats2 = await sql(
-    `SELECT user_id, status FROM delivery_personnel_profiles WHERE company_id = $1`,
-    [A.companyId],
-  );
-  const statusOf2 = (id: string) =>
-    seats2.find((s: any) => s.user_id === id)?.status;
-  check(
-    'upgrade restores locked riders; owner-deactivated rider untouched',
-    statusOf2(r4.userId) === 'active' &&
-      statusOf2(r5.userId) === 'active' &&
-      statusOf2(r1.userId) === 'inactive' &&
-      seats2.filter((s: any) => s.status === 'plan_locked').length === 0,
-    seats2,
-  );
-
-  // ── Ledger isolation ────────────────────────────────────────────────────
-  const touchedLedger = (
-    await sql(
-      `SELECT COUNT(*)::int c FROM journal_entries WHERE company_id = ANY($1)`,
-      [[K.companyId, H.companyId]],
-    )
-  )[0].c;
-  check(
-    'trial lifecycle wrote nothing to journal_entries',
-    touchedLedger === 0,
-    touchedLedger,
-  );
-
-  await pg.end();
-
-  console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
-  if (fail) console.log('FAILED:', fails.join(' | '));
-  process.exit(fail ? 1 : 0);
+  await db.close();
+  finish('Free trial (launch)');
 }
 
-main().catch((e) => {
-  console.error('FATAL', e);
-  process.exit(2);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });

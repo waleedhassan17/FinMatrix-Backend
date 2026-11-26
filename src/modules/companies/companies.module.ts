@@ -11,6 +11,7 @@ import { PaymentSubmission } from '../billing/entities/payment-submission.entity
 import { TrialClaim } from '../billing/entities/trial-claim.entity';
 import { CompaniesService } from './companies.service';
 import { CompaniesController } from './companies.controller';
+import { DemoRequestsModule } from '../demo-requests/demo-requests.module';
 
 @Module({
   imports: [
@@ -26,6 +27,8 @@ import { CompaniesController } from './companies.controller';
     // with billing's status shape. BillingModule imports nothing from
     // companies, so the dependency is one-way — no forwardRef.
     BillingModule,
+    // Linking a demo when its invited prospect creates their company.
+    DemoRequestsModule,
     TypeOrmModule.forFeature([PaymentSubmission, TrialClaim]),
   ],
   controllers: [CompaniesController],

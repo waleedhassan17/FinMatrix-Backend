@@ -86,7 +86,19 @@ export interface SubscriptionSummary {
   isTrial: boolean;
   trialStartedAt: Date | null;
   trialConvertedAt: Date | null;
+  /** active | expiring | expired */
+  subscriptionStatus: string;
+  /** A free trial that is over (not converted). */
+  trialEnded: boolean;
+  /** The company is suspended by FinMatrix. */
+  suspended: boolean;
 }
+
+/** The generic answer for a suspended account, everywhere it is refused. */
+export const ACCOUNT_SUSPENDED_BODY = {
+  code: 'ACCOUNT_SUSPENDED',
+  message: 'This account is suspended. Contact support.',
+} as const;
 
 function subscriptionSummary(
   company: Company | null | undefined,
@@ -100,6 +112,13 @@ function subscriptionSummary(
     isTrial: company.isTrial === true,
     trialStartedAt: company.trialStartedAt ?? null,
     trialConvertedAt: company.trialConvertedAt ?? null,
+    subscriptionStatus: company.subscriptionStatus ?? 'active',
+    trialEnded:
+      company.isTrial === true &&
+      !company.trialConvertedAt &&
+      !!company.subscriptionExpiryDate &&
+      new Date(company.subscriptionExpiryDate).getTime() <= Date.now(),
+    suspended: !!company.suspendedAt,
   };
 }
 
@@ -178,6 +197,10 @@ export class AuthService implements OnModuleInit {
         phone: dto.phone ?? null,
         role: dto.role,
         isActive: true,
+        // Only a well-formed demo reference is kept; anything else is noise.
+        signupRef: /^demo_[0-9a-f-]{36}$/i.test(dto.ref ?? '')
+          ? (dto.ref as string)
+          : null,
         isEmailVerified: !isAdmin,
         emailVerifiedAt: isAdmin ? null : new Date(),
         defaultCompanyId: null,
@@ -286,6 +309,12 @@ export class AuthService implements OnModuleInit {
       dto.password,
       user?.passwordHash ?? (await this.getDummyHash()),
     );
+    // A platform suspension is said out loud — but only to someone who knows
+    // the password, so it reveals nothing to a stranger.
+    if (user && ok && user.suspendedAt) {
+      this.logger.warn(`Login blocked (account suspended): ${identifier}`);
+      throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
+    }
     if (!user || !user.isActive || !ok) {
       this.logger.warn(
         `Failed login (${!user ? 'no user' : !user.isActive ? 'inactive' : 'bad password'}): ${identifier}`,
@@ -297,6 +326,16 @@ export class AuthService implements OnModuleInit {
     }
 
     const membership = await this.resolveMembership(user);
+    // Every company this person belongs to is suspended: nothing to sign in to.
+    if (user.role !== 'super_admin' && membership?.company?.suspendedAt) {
+      this.logger.warn(`Login blocked (company suspended): ${identifier}`);
+      throw new ForbiddenException({
+        code: 'COMPANY_SUSPENDED',
+        message:
+          'This company account is suspended. Contact FinMatrix support.',
+        details: { companyStatus: 'inactive' },
+      });
+    }
 
     // super_admin is a platform-level role — never let a company membership override it
     const isSuperAdmin = user.role === 'super_admin';
@@ -480,6 +519,9 @@ export class AuthService implements OnModuleInit {
     }
 
     const user = await this.users.getByIdOrFail(payload.sub);
+    if (user.suspendedAt) {
+      throw new UnauthorizedException(ACCOUNT_SUSPENDED_BODY);
+    }
     if (!user.isActive) {
       throw new UnauthorizedException({
         code: 'INVALID_TOKEN',
@@ -550,6 +592,24 @@ export class AuthService implements OnModuleInit {
           relations: { company: true },
         })
       : null;
+
+    // A suspended company blocks only itself: a member of another, unsuspended
+    // company signs in to that one instead.
+    if (membership?.company?.suspendedAt) {
+      const other = await this.userCompanyRepo
+        .createQueryBuilder('uc')
+        .innerJoinAndSelect('uc.company', 'c')
+        .where('uc.userId = :uid', { uid: user.id })
+        .andWhere('c.suspendedAt IS NULL')
+        .getOne();
+      if (other) {
+        membership = other;
+        user.defaultCompanyId = other.companyId;
+        await this.dataSource
+          .getRepository(User)
+          .update(user.id, { defaultCompanyId: other.companyId });
+      }
+    }
 
     if (!membership) {
       membership = await this.userCompanyRepo.findOne({
@@ -683,6 +743,7 @@ export class AuthService implements OnModuleInit {
       });
     }
     const user = await this.users.getByIdOrFail(record.userId);
+    if (user.suspendedAt) throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
 
     if (!user.isEmailVerified) {
       user.isEmailVerified = true;
@@ -713,6 +774,7 @@ export class AuthService implements OnModuleInit {
     // Don't leak whether the email exists or is already verified. A
     // username-only account has no address to resend to and never needed
     // verifying in the first place.
+    if (user?.suspendedAt) throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
     if (!user || !user.email || user.isEmailVerified || user.role !== 'admin') {
       return { delivered: true };
     }
@@ -745,6 +807,7 @@ export class AuthService implements OnModuleInit {
 
     // Always respond positively to avoid user enumeration.
     if (!user) return { delivered: true };
+    if (user.suspendedAt) throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
 
     // Owner-created accounts have no self-service recovery: no inbox to send
     // an OTP to, and recovery is deliberately the owner's job.
@@ -792,6 +855,7 @@ export class AuthService implements OnModuleInit {
       message: 'The code is invalid or has expired',
     });
     if (!user) throw genericError;
+    if (user.suspendedAt) throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
 
     const record = await this.otpRepo.findOne({
       where: {
@@ -855,6 +919,7 @@ export class AuthService implements OnModuleInit {
       message: 'Reset session is invalid or expired. Please start again.',
     });
     if (!user) throw invalid;
+    if (user.suspendedAt) throw new ForbiddenException(ACCOUNT_SUSPENDED_BODY);
 
     const record = await this.otpRepo.findOne({
       where: {
@@ -907,6 +972,8 @@ export class AuthService implements OnModuleInit {
     companyId: string | null;
     company: { id: string; name: string; status: string | null } | null;
     companyStatus: string | null;
+    /** While pending: a held free trial, a path-B approval, or a payment. */
+    pendingKind: 'trial' | 'approval' | 'payment' | null;
     companyType: string | null;
     features: Record<string, boolean> | null;
     subscription: SubscriptionSummary | null;
@@ -926,6 +993,15 @@ export class AuthService implements OnModuleInit {
       memberships[0] ??
       null;
     const companyId = primary?.companyId ?? user.defaultCompanyId ?? null;
+    const status = primary?.company
+      ? effectiveCompanyStatus(primary.company)
+      : null;
+    const pendingKind =
+      status === 'pending' && primary?.company
+        ? primary.company.status === 'pending_approval'
+          ? ('approval' as const)
+          : await this.pendingKindOf(primary.company)
+        : null;
     return {
       user: this.toPublicUser(user, companyId),
       companies: memberships.map((m) => ({
@@ -947,9 +1023,8 @@ export class AuthService implements OnModuleInit {
       // deactivation (status → inactive) AND a lapsed paid subscription (live
       // expiry check, ahead of the daily cron) surface here and route the
       // user out to the renew-only flow.
-      companyStatus: primary?.company
-        ? effectiveCompanyStatus(primary.company)
-        : null,
+      companyStatus: status,
+      pendingKind,
       companyType: primary?.company?.companyType ?? null,
       features: primary?.company
         ? computeFeatures({
@@ -997,7 +1072,14 @@ export class AuthService implements OnModuleInit {
     companyId: string | null,
     role: UserRole,
   ): Promise<TokenPair> {
-    const payload: JwtPayload = { sub: user.id, companyId, role };
+    // tv = the user's token version: bumping it (suspension) revokes every
+    // access token at once (JwtStrategy compares it on each request).
+    const payload: JwtPayload = {
+      sub: user.id,
+      companyId,
+      role,
+      tv: user.tokenVersion ?? 0,
+    };
 
     const secret = this.config.getOrThrow<string>('jwt.secret');
     // A separate secret (and `typ`) so a refresh token can never be presented

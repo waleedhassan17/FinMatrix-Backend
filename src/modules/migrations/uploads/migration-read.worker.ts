@@ -1,3 +1,4 @@
+import { reportFailure } from '../../../common/monitoring/report-failure';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
@@ -297,6 +298,15 @@ export class MigrationReadWorker {
               false,
             );
       const retry = !f.final && upload.attempts < MAX_ATTEMPTS;
+      if (!retry) {
+        reportFailure({
+          area: 'migration',
+          id: upload.batchId,
+          companyId: upload.companyId,
+          code: f.code,
+          error: f,
+        });
+      }
       this.logger.warn(
         `upload ${upload.id}: ${f.code} ${retry ? '(will retry)' : ''} ${f.message}`,
       );

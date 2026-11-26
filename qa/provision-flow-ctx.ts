@@ -151,23 +151,33 @@ async function main() {
     );
     const userId = must('admin user id', data(signup)?.user?.id, signup);
 
+    // Company setup needs a verified inbox (EmailVerifiedGuard), and there is
+    // no inbox to open here — verify directly, then sign in again so the
+    // session reflects it.
+    await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
+      userId,
+    ]);
+    const verified = await signin(adminEmail, ADMIN_PASSWORD);
+    const setupToken = must(
+      'admin signed in after verifying',
+      data(verified)?.tokens?.accessToken ?? signupToken,
+      verified,
+    );
+
     const createCo = await req('POST', '/companies', {
-      token: signupToken,
+      token: setupToken,
       json: { name: `FlowTest Warehouse ${RUN}`, industry: 'Retail' },
     });
     const companyId = must('company created', data(createCo)?.id, createCo);
 
     await req('POST', `/companies/${companyId}/submit`, {
-      token: signupToken,
+      token: setupToken,
       companyId,
     });
 
-    // CompanyGuard 403s every business request unless the company is active
-    // and the signer's email is verified, and FeatureGuard needs a real plan.
-    // None of that is reachable over the API as this user, so set it directly.
-    await pg.query(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
-      userId,
-    ]);
+    // CompanyGuard 403s every business request unless the company is active,
+    // and FeatureGuard needs a real plan. Approval needs a super-admin, which
+    // this user is not, so set it directly.
     await pg.query(
       `UPDATE companies SET status = 'active', subscription_plan = 'standard',
               subscription_status = 'active' WHERE id = $1`,

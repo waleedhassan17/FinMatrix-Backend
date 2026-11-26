@@ -9,15 +9,22 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { isUUID } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
 import { StartTrialDto } from './dto/start-trial.dto';
+import {
+  ActivationRequestDto,
+  SubmitForApprovalDto,
+} from './dto/signup-paths.dto';
 import { CompaniesService } from './companies.service';
+import { TrialService } from '../billing/trial/trial.service';
 import {
   ClosePeriodDto,
   CreateCompanyDto,
@@ -40,7 +47,10 @@ import {
 @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
 @Controller('companies')
 export class CompaniesController {
-  constructor(private readonly companies: CompaniesService) {}
+  constructor(
+    private readonly companies: CompaniesService,
+    private readonly trials: TrialService,
+  ) {}
 
   @Post()
   @ApiOperation({
@@ -60,13 +70,15 @@ export class CompaniesController {
   }
 
   /**
-   * Request the admin-approved 30-day free trial. Grants nothing by itself —
-   * the company stays pending until a super-admin approves.
+   * Sign-up path A: "Start my free trial". An eligible owner's trial starts
+   * at once (TRIAL_AUTO_APPROVE=true) — the response says `status: 'active'`
+   * and the client goes straight to the dashboard. A risk signal (or
+   * auto-approve off) holds it for a person: `status: 'pending_approval'`.
+   * Not eligible → 409 TRIAL_NOT_ELIGIBLE {reason}, and nothing changes.
    *
    * companyId resolves the way `subscribe` does: body, then x-company-id
    * header, then the token (a freshly signed-up owner's token has none). The
-   * service verifies the caller is that company's admin, so naming someone
-   * else's company gets a 403.
+   * service verifies the caller is that company's owner.
    *
    * Throttled per session: the global throttler runs before authentication,
    * so the bearer token (not req.user) is the tracker, with the IP as a
@@ -86,11 +98,13 @@ export class CompaniesController {
     },
   })
   @ApiOperation({
-    summary: 'Request the admin-approved 30-day free trial (owner only).',
+    summary:
+      'Start the free trial (owner only). Instant when eligible; held for review on a risk signal.',
   })
   startTrial(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: StartTrialDto,
+    @Req() req: Request,
     @Headers('x-company-id') headerCompanyId?: string,
   ) {
     const companyId =
@@ -98,10 +112,10 @@ export class CompaniesController {
     if (!companyId || !isUUID(companyId)) {
       throw new BadRequestException({
         code: 'COMPANY_REQUIRED',
-        message: 'Set up your company before requesting a free trial.',
+        message: 'Set up your company before starting a free trial.',
       });
     }
-    return this.companies.requestTrial(user.id, companyId);
+    return this.trials.start(user.id, companyId, req.ip ?? null);
   }
 
   @Get(':companyId')
@@ -201,14 +215,52 @@ export class CompaniesController {
     return this.companies.selfSubscribe(companyId, dto.planId, user.id);
   }
 
+  /**
+   * Whether "Start my free trial" will work for this company, and if not why
+   * — so the setup screen shows path A disabled with the reason BEFORE the
+   * owner presses it. The same rules the start itself applies.
+   */
+  @Get(':companyId/trial-eligibility')
+  @ApiOperation({ summary: 'Can this company start the free trial? (owner)' })
+  trialEligibility(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+  ) {
+    return this.trials.eligibilityFor(user.id, companyId);
+  }
+
+  /**
+   * Sign-up path B: "Request account approval". The company waits for a
+   * super-admin, who approves it with a plan, a start and an end date (or as a
+   * trial, if still eligible), or rejects it with a reason. The body is
+   * optional: older clients send none.
+   */
   @Post(':companyId/submit')
   @ApiOperation({
-    summary: 'Submit company onboarding for platform-admin approval (Step C).',
+    summary:
+      'Request account approval (path B): optional requested plan and note.',
   })
   submit(
     @CurrentUser() user: AuthenticatedUser,
     @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body() dto: SubmitForApprovalDto,
   ) {
-    return this.companies.submitForApproval(user.id, companyId);
+    return this.companies.submitForApproval(user.id, companyId, dto ?? {});
+  }
+
+  /**
+   * "Request activation": the owner asks FinMatrix to switch a plan on — no
+   * payment gateway. Available during a trial (converts it on approval),
+   * after it ended, or after a plan expired. Allowed for a lapsed company, so
+   * this controller carries no CompanyGuard.
+   */
+  @Post(':companyId/activation-request')
+  @ApiOperation({ summary: 'Ask FinMatrix to activate a plan (owner).' })
+  activationRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body() dto: ActivationRequestDto,
+  ) {
+    return this.trials.requestActivation(user.id, companyId, dto ?? {});
   }
 }

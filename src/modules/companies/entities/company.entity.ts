@@ -236,6 +236,57 @@ export class Company extends BaseEntity {
   })
   trialReminderMilestone!: number | null;
 
+  // ── Sign-up path B: "Request account approval" ─────────────────────────────
+  // The plan the owner says they agreed with FinMatrix ('unsure' = "FinMatrix
+  // will contact me"), and their note. Informational: the admin sets the real
+  // plan, start and end date when approving.
+  @Column({
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+    name: 'requested_plan',
+  })
+  requestedPlan!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'approval_note' })
+  approvalNote!: string | null;
+
+  // The owner dismissed the "Bring your data from your old system" card on the
+  // dashboard setup checklist.
+  @Column({
+    type: 'timestamptz',
+    nullable: true,
+    name: 'migration_prompt_dismissed_at',
+  })
+  migrationPromptDismissedAt!: Date | null;
+
+  // Demo / test account (seeded or flagged by a super-admin). Only demo
+  // accounts may be bulk-deleted, and their deletion may skip the final backup.
+  @Column({ type: 'boolean', default: false, name: 'is_demo' })
+  isDemo!: boolean;
+
+  // ── Platform suspension (super-admin) ─────────────────────────────────────
+  // Set = suspended: every member is refused (CompanyGuard COMPANY_SUSPENDED),
+  // whatever `status` says. `status` is 'suspended' meanwhile, and
+  // statusBeforeSuspension is what reinstating restores. The expiry scan never
+  // overwrites a suspended company's status.
+  @Column({ type: 'timestamptz', nullable: true, name: 'suspended_at' })
+  suspendedAt!: Date | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'suspended_by' })
+  suspendedBy!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'suspension_reason' })
+  suspensionReason!: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'status_before_suspension',
+  })
+  statusBeforeSuspension!: string | null;
+
   // GST/Sales-tax registered: when true, input tax on bills is posted to a
   // recoverable asset (Sales Tax Recoverable 1300) instead of being rolled into
   // the expense/inventory line, so remittance = output tax − input tax
