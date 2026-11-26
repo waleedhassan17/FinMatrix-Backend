@@ -82,18 +82,30 @@ async function main() {
   // ── A. Slots + happy path ────────────────────────────────────────────────
   section('A. slots and a booking');
   const s0 = await slots();
-  const first = new Date(s0?.slots?.[0]?.at);
-  const pktHour = new Date(first.getTime() + 5 * 3600_000).getUTCHours();
+  // Booked slots drop out (capacity 1), so on a database earlier runs used
+  // the first free slot may be later than 10:00. The rule: every slot is on
+  // the half hour between 10:00 and 18:00 PKT, and some day still opens at 10.
+  const pkt = (at: string) => new Date(new Date(at).getTime() + 5 * 3600_000);
+  const inHours = (s0?.slots ?? []).every((s: any) => {
+    const d = pkt(s.at);
+    return (
+      d.getUTCHours() >= 10 &&
+      d.getUTCHours() < 18 &&
+      d.getUTCMinutes() % 30 === 0
+    );
+  });
+  const opensAtTen = (s0?.slots ?? []).some((s: any) => s.time === '10:00');
   const weekdays = new Set(
     (s0?.slots ?? []).map((s: any) =>
       new Date(new Date(s.at).getTime() + 5 * 3600_000).getUTCDay(),
     ),
   );
   check(
-    'slots: Asia/Karachi, 30 minutes, from 10:00, never on Sunday, never today',
+    'slots: Asia/Karachi, 30 minutes, 10:00–18:00, never on Sunday, never today',
     s0?.timezone === 'Asia/Karachi' &&
       s0?.minutes === 30 &&
-      pktHour === 10 &&
+      inHours &&
+      opensAtTen &&
       !weekdays.has(0) &&
       s0?.slots?.[0]?.date >
         new Date(Date.now() + 5 * 3600_000).toISOString().slice(0, 10),
