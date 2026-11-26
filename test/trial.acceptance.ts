@@ -718,8 +718,9 @@ async function main() {
     list.find((a: any) => a.type === 'asset' && /cash/i.test(a.name)) ??
     list.find((a: any) => a.type === 'asset');
   const equity =
-    list.find((a: any) => a.type === 'equity' && /capital|owner/i.test(a.name)) ??
-    list.find((a: any) => a.type === 'equity');
+    list.find(
+      (a: any) => a.type === 'equity' && /capital|owner/i.test(a.name),
+    ) ?? list.find((a: any) => a.type === 'equity');
   const je = await req('POST', '/journal-entries', {
     token: L.token,
     json: {
