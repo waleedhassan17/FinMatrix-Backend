@@ -44,6 +44,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
       if (typeof body === 'string') {
         message = body;
+        // A string body (the throttler's "ThrottlerException: Too Many
+        // Requests", a bare `new HttpException('…', 4xx)`) still gets the code
+        // for its status — not INTERNAL_ERROR, which reads as a crash.
+        code = this.defaultCodeForStatus(status);
       } else if (body && typeof body === 'object') {
         const b = body as Record<string, unknown>;
         message =
@@ -71,6 +75,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message = 'An unexpected error occurred';
     } else {
       this.logger.error(`Non-Error thrown: ${JSON.stringify(exception)}`);
+    }
+
+    // The throttler's own text is a class name, not a sentence for a person.
+    if (status === HttpStatus.TOO_MANY_REQUESTS && /^ThrottlerException/i.test(message)) {
+      message = 'Too many attempts. Please wait a few minutes and try again.';
     }
 
     const envelope: ErrorEnvelope = {
