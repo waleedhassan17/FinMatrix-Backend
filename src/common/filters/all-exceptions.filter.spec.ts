@@ -1,4 +1,9 @@
-import { ArgumentsHost, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ThrottlerException } from '@nestjs/throttler';
 
 import { AllExceptionsFilter } from './all-exceptions.filter';
@@ -6,7 +11,12 @@ import { AllExceptionsFilter } from './all-exceptions.filter';
 /** Runs the filter on one exception and returns the status and envelope sent. */
 function send(exception: unknown) {
   let status = 0;
-  let body: { success: boolean; error: { code: string; message: string; details?: unknown } } | undefined;
+  let body:
+    | {
+        success: boolean;
+        error: { code: string; message: string; details?: unknown };
+      }
+    | undefined;
   const res = {
     status(s: number) {
       status = s;
@@ -17,7 +27,12 @@ function send(exception: unknown) {
       return this;
     },
   };
-  const req = { method: 'POST', url: '/api/v1/public/demo-requests', path: '/api/v1/public/demo-requests', headers: {} };
+  const req = {
+    method: 'POST',
+    url: '/api/v1/public/demo-requests',
+    path: '/api/v1/public/demo-requests',
+    headers: {},
+  };
   const host = {
     switchToHttp: () => ({ getResponse: () => res, getRequest: () => req }),
   } as unknown as ArgumentsHost;
@@ -30,11 +45,15 @@ describe('AllExceptionsFilter', () => {
     const { status, body } = send(new ThrottlerException());
     expect(status).toBe(HttpStatus.TOO_MANY_REQUESTS);
     expect(body.error.code).toBe('RATE_LIMIT');
-    expect(body.error.message).toBe('Too many attempts. Please wait a few minutes and try again.');
+    expect(body.error.message).toBe(
+      'Too many attempts. Please wait a few minutes and try again.',
+    );
   });
 
   it('a string-bodied HttpException gets the code for its status', () => {
-    expect(send(new HttpException('Nope', HttpStatus.FORBIDDEN)).body.error).toMatchObject({
+    expect(
+      send(new HttpException('Nope', HttpStatus.FORBIDDEN)).body.error,
+    ).toMatchObject({
       code: 'FORBIDDEN',
       message: 'Nope',
     });
@@ -43,11 +62,19 @@ describe('AllExceptionsFilter', () => {
   it('keeps a thrown code, message and details as they are', () => {
     const { body } = send(
       new HttpException(
-        { code: 'EXPORT_RATE_LIMITED', message: 'Up to 3 an hour.', details: { limit: 3 } },
+        {
+          code: 'EXPORT_RATE_LIMITED',
+          message: 'Up to 3 an hour.',
+          details: { limit: 3 },
+        },
         HttpStatus.TOO_MANY_REQUESTS,
       ),
     );
-    expect(body.error).toEqual({ code: 'EXPORT_RATE_LIMITED', message: 'Up to 3 an hour.', details: { limit: 3 } });
+    expect(body.error).toEqual({
+      code: 'EXPORT_RATE_LIMITED',
+      message: 'Up to 3 an hour.',
+      details: { limit: 3 },
+    });
   });
 
   it('a validation failure lists its fields', () => {
@@ -57,8 +84,13 @@ describe('AllExceptionsFilter', () => {
   });
 
   it('never leaks an internal error text', () => {
-    const { status, body } = send(new Error('relation "secret_table" does not exist'));
+    const { status, body } = send(
+      new Error('relation "secret_table" does not exist'),
+    );
     expect(status).toBe(500);
-    expect(body.error).toMatchObject({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' });
+    expect(body.error).toMatchObject({
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred',
+    });
   });
 });

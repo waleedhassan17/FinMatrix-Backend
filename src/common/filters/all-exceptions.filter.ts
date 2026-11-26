@@ -78,7 +78,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     // The throttler's own text is a class name, not a sentence for a person.
-    if (status === HttpStatus.TOO_MANY_REQUESTS && /^ThrottlerException/i.test(message)) {
+    if (
+      status === HttpStatus.TOO_MANY_REQUESTS &&
+      /^ThrottlerException/i.test(message)
+    ) {
       message = 'Too many attempts. Please wait a few minutes and try again.';
     }
 

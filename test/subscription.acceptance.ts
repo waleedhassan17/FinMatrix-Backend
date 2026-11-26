@@ -2,23 +2,29 @@
  * phase2.md — Subscription lifecycle acceptance test (HTTP, end-to-end).
  * Exercises all three flows + limits + expiry(data-intact) + idempotency + gate.
  *
- * Run against a booted server:
- *   BASE_URL=http://localhost:3001/api/v1 \
- *   PG_URL=postgres://finmatrix_user:pass@localhost:5432/finmatrix_qa \
- *   SUPER_EMAIL=... SUPER_PASSWORD=... \
- *   node -r ts-node/register test/subscription.acceptance.ts
+ * Run against a booted server on a scratch database (never production):
+ *   API_BASE=http://localhost:3101/api/v1 \
+ *   DATABASE_URL=postgres://finmatrix_user:pass@localhost:5432/finmatrix_launch \
+ *   npm run test:subscription
  *
  * Uses Node 22 global fetch/FormData/Blob and `pg` for a few state pokes
  * (email-verify, force-expiry) that would otherwise need email/time travel.
+ * The super-admin is a throwaway one created for the run.
+ *
+ * KNOWN STALE (before the launch branch): the flows below use the legacy
+ * Free/Standard plans, which no company type offers any more, and create
+ * riders without the username every rider has needed since staff sign-in
+ * moved to usernames — so most checks after setup fail on main too. Kept
+ * runnable and credential-free; rewrite or retire it with the billing
+ * screens (disabled in this build).
+ *
+ * Since launch, an approval needs a plan and an end date, so no new company
+ * starts on Free. The company here is turned into a LEGACY Free company (as
+ * every pre-launch approval left one) to keep the upgrade/renew paths tested.
  */
-/* eslint-disable @typescript-eslint/no-var-requires */
-export {};
-const { Client } = require('pg');
+import { BASE, Db, freshIp, superAdmin } from './launch-helpers';
 
-const BASE = process.env.BASE_URL || 'http://localhost:3001/api/v1';
-const PG_URL = process.env.PG_URL as string;
-const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
-const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
+const IP = freshIp();
 
 let pass = 0;
 let fail = 0;
@@ -48,6 +54,7 @@ async function req(
   const headers: Record<string, string> = {};
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.companyId) headers['x-company-id'] = opts.companyId;
+  headers['X-Forwarded-For'] = IP;
   if (opts.json !== undefined) headers['Content-Type'] = 'application/json';
   const r = await fetch(`${BASE}${path}`, {
     method,
@@ -96,18 +103,16 @@ async function submitPayment(
 }
 
 async function main() {
-  const pg = new Client({ connectionString: PG_URL });
-  await pg.connect();
-  const sql = (q: string, p: any[] = []) => pg.query(q, p);
+  const db = await new Db().open();
+  const sql = async (q: string, p: any[] = []) => ({
+    rows: await db.sql(q, p),
+  });
 
   console.log(`\n=== Subscription acceptance @ ${BASE} ===\n`);
 
-  // ── Super-admin login ──
-  const superLogin = await req('POST', '/auth/signin', {
-    json: { email: SUPER_EMAIL, password: SUPER_PASSWORD },
-  });
-  const superToken = data(superLogin)?.tokens?.accessToken;
-  check('super-admin signs in', !!superToken, superLogin.status);
+  // ── A throwaway super-admin for this run ──
+  const superToken = (await superAdmin(db)).token;
+  check('super-admin signs in', !!superToken);
 
   // ── Admin signup + company create + approve ──
   const email = `qa_admin_${Date.now()}@qa.local`;
@@ -123,6 +128,10 @@ async function main() {
   const adminToken0 = data(signup)?.tokens?.accessToken;
   const adminUserId = data(signup)?.user?.id;
   check('admin signs up', !!adminToken0 && !!adminUserId, signup.status);
+  // Email disabled in QA → mark verified (company setup needs a verified inbox).
+  await sql(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
+    adminUserId,
+  ]);
 
   const createCo = await req('POST', '/companies', {
     token: adminToken0,
@@ -138,14 +147,27 @@ async function main() {
   const approveCo = await req(
     'PATCH',
     `/admin/companies/${companyId}/approve`,
-    { token: superToken },
+    {
+      token: superToken,
+      json: {
+        plan: 'warehouse_scale_1yr',
+        endDate: new Date(Date.now() + 365 * 86_400_000).toISOString(),
+      },
+    },
   );
-  check('super approves company', approveCo.status === 200, approveCo.status);
-
-  // Email disabled in QA → mark verified so we can re-login with a companyId JWT.
-  await sql(`UPDATE users SET is_email_verified = true WHERE id = $1`, [
-    adminUserId,
-  ]);
+  check(
+    'super approves company (plan + end date)',
+    approveCo.status === 200,
+    approveCo.status,
+  );
+  // A legacy Free company, as every pre-launch approval left one.
+  await sql(
+    `UPDATE companies
+        SET subscription_plan = 'free', subscription_start_date = NULL,
+            subscription_expiry_date = NULL, payment_status = 'none'
+      WHERE id = $1`,
+    [companyId],
+  );
   const relogin = await req('POST', '/auth/signin', {
     json: { email, password: 'Qa@12345' },
   });
@@ -523,7 +545,7 @@ async function main() {
     { remA, remB },
   );
 
-  await pg.end();
+  await db.close();
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   if (fail) console.log('FAILED:', fails.join(' | '));
