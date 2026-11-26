@@ -79,10 +79,6 @@ export class DemoRequest extends BaseEntity {
   })
   currentSystem!: string | null;
 
-  /** 'en' | 'ur' — the language every email to the prospect uses. */
-  @Column({ type: 'varchar', length: 2, default: 'en' })
-  language!: 'en' | 'ur';
-
   @Column({ type: 'timestamptz', name: 'preferred_slot_at' })
   preferredSlotAt!: Date;
 

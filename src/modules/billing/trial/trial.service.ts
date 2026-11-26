@@ -87,7 +87,7 @@ export interface StartTrialResult {
   held: boolean;
   submissionId: string;
   trial: { endsAt: Date; days: number } | null;
-  message: { en: string; ur: string } | null;
+  message: string | null;
   requestedPlanKey: string;
   estimatedActivationHours: number | null;
   billing: Awaited<ReturnType<BillingService['getStatus']>>;
@@ -136,8 +136,7 @@ export class TrialService {
     return {
       eligible: result.eligible,
       reason,
-      message: reason ? TRIAL_INELIGIBLE_MESSAGES[reason].en : null,
-      messageUr: reason ? TRIAL_INELIGIBLE_MESSAGES[reason].ur : null,
+      message: reason ? TRIAL_INELIGIBLE_MESSAGES[reason] : null,
       signupMode: signupMode(),
       trialDays: trialDays(),
       trialAutoApprove: trialAutoApprove(),
@@ -250,7 +249,7 @@ export class TrialService {
     return {
       eligible: result.eligible,
       reason,
-      message: reason ? TRIAL_INELIGIBLE_MESSAGES[reason].en : null,
+      message: reason ? TRIAL_INELIGIBLE_MESSAGES[reason] : null,
     };
   }
 

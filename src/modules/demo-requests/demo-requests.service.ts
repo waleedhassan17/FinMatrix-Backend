@@ -56,7 +56,6 @@ export interface BookDemoInput {
   businessType: string;
   teamSize?: string | null;
   currentSystem?: string | null;
-  language: 'en' | 'ur';
   slot: string;
   message?: string | null;
   consent: boolean;
@@ -238,7 +237,6 @@ export class DemoRequestsService {
           businessType: input.businessType,
           teamSize: input.teamSize ?? null,
           currentSystem: input.currentSystem ?? null,
-          language: input.language === 'ur' ? 'ur' : 'en',
           preferredSlotAt: slot,
           message: (input.message ?? '').trim() || null,
           consentAt: new Date(),
@@ -270,7 +268,6 @@ export class DemoRequestsService {
           businessType: saved.businessType,
           teamSize: saved.teamSize,
           currentSystem: saved.currentSystem,
-          language: saved.language,
           preferredAt: slot,
           message: saved.message,
         }),
@@ -417,7 +414,6 @@ export class DemoRequestsService {
         business_type: d.businessType,
         team_size: d.teamSize ?? '',
         current_system: d.currentSystem ?? '',
-        language: d.language,
         preferred_slot_pkt: `${pktDate(d.preferredSlotAt)} ${pktTime(d.preferredSlotAt)}`,
         scheduled_pkt: d.scheduledAt
           ? `${pktDate(d.scheduledAt)} ${pktTime(d.scheduledAt)}`
@@ -824,7 +820,6 @@ export class DemoRequestsService {
       businessType: d.businessType,
       teamSize: d.teamSize,
       currentSystem: d.currentSystem,
-      language: d.language,
       preferredSlotAt: d.preferredSlotAt,
       message: d.message,
       utm: d.utm,
@@ -847,7 +842,6 @@ function person(d: DemoRequest): DemoMailPerson {
   return {
     fullName: d.fullName,
     businessName: d.businessName,
-    language: d.language,
   };
 }
 

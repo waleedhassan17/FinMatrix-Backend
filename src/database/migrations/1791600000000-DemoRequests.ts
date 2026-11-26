@@ -30,7 +30,6 @@ export class DemoRequests1791600000000 implements MigrationInterface {
         "business_type" varchar(32) NOT NULL,
         "team_size" varchar(8),
         "current_system" varchar(24),
-        "language" varchar(2) NOT NULL DEFAULT 'en',
         "preferred_slot_at" TIMESTAMPTZ NOT NULL,
         "message" text,
         "consent_at" TIMESTAMPTZ NOT NULL,
@@ -51,8 +50,7 @@ export class DemoRequests1791600000000 implements MigrationInterface {
         "ics_sequence" integer NOT NULL DEFAULT 0,
         CONSTRAINT "pk_demo_requests" PRIMARY KEY ("id"),
         CONSTRAINT "CHK_demo_requests_status" CHECK ("status" IN
-          ('new','contacted','scheduled','rescheduled','completed','no_show','converted','lost')),
-        CONSTRAINT "CHK_demo_requests_language" CHECK ("language" IN ('en','ur'))
+          ('new','contacted','scheduled','rescheduled','completed','no_show','converted','lost'))
       )
     `);
     for (const [name, cols] of [

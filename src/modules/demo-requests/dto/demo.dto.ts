@@ -54,9 +54,6 @@ export class BookDemoDto {
   @IsIn(DEMO_CURRENT_SYSTEMS)
   currentSystem?: string;
 
-  @IsIn(['en', 'ur'])
-  language!: 'en' | 'ur';
-
   /** One of the slot instants GET /public/demo-slots offered (ISO, UTC). */
   @IsDateString()
   slot!: string;

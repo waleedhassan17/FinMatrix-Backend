@@ -49,15 +49,6 @@ export function layout(title: string, bodyHtml: string): string {
 </html>`;
 }
 
-/**
- * The Urdu half of a bilingual email: right-to-left, marked `lang="ur"` so
- * screen readers and mail clients shape it correctly, set off from the
- * English above it.
- */
-export function urduSection(bodyHtml: string): string {
-  return `<div dir="rtl" lang="ur" style="margin:24px 0 0;padding:16px 0 0;border-top:1px solid #e5e7eb;font-family:'Noto Nastaliq Urdu','Jameel Noori Nastaleeq',Tahoma,sans-serif;font-size:15px;line-height:1.9;text-align:right;">${bodyHtml}</div>`;
-}
-
 export function button(href: string, label: string): string {
   return `<a href="${href}" style="display:inline-block;background:${BRAND};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">${label}</a>`;
 }
@@ -85,16 +76,6 @@ export function longDate(d: Date): string {
   });
 }
 
-/** The same date for the Urdu half of an email. */
-export function longDateUr(d: Date): string {
-  return d.toLocaleDateString('ur-PK', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'Asia/Karachi',
-  });
-}
-
 /** "Wed 3 Dec 2026, 11:30 am" in Asia/Karachi — for demo times. */
 export function dateTimePk(d: Date): string {
   return d.toLocaleString('en-GB', {
@@ -102,18 +83,6 @@ export function dateTimePk(d: Date): string {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'Asia/Karachi',
-  });
-}
-
-export function dateTimePkUr(d: Date): string {
-  return d.toLocaleString('ur-PK', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,

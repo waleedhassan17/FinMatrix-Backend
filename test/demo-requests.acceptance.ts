@@ -62,7 +62,6 @@ async function main() {
       businessType: 'wholesale_distribution',
       teamSize: '6-20',
       currentSystem: 'tally',
-      language: 'en',
       slot: at,
       message: 'Interested in moving from Tally.',
       consent: true,
@@ -115,7 +114,7 @@ async function main() {
   let slotIdx = 0;
   const nextSlot = () => pool[slotIdx++];
   await sleep(3200); // the minimum fill time
-  const happy = body(s0.formToken, nextSlot(), { language: 'ur' });
+  const happy = body(s0.formToken, nextSlot());
   const b1 = await book(happy);
   const row1 = await rowByEmail(happy.email as string);
   check(
@@ -126,15 +125,16 @@ async function main() {
       row1?.status === 'new' &&
       row1?.phone_e164?.startsWith('+923') &&
       row1?.utm?.source === 'google' &&
-      row1?.language === 'ur' &&
       !!row1?.ip_hash,
     { status: b1.status, body: b1.body, row: row1?.status },
   );
   if (mail) {
     const conf = await mailTo(happy.email as string);
     check(
-      'the prospect is emailed in Urdu (their chosen language)',
-      conf.length === 1 && /[؀-ۿ]/.test(conf[0].Subject),
+      'the prospect is emailed a confirmation (English)',
+      conf.length === 1 &&
+        /demo request/i.test(conf[0].Subject) &&
+        !/[\u0600-\u06FF]/.test(conf[0].Subject),
       conf.map((m) => m.Subject),
     );
     const adm = await mailTo('platform-admin@example.com', {
@@ -454,7 +454,7 @@ async function main() {
   );
   if (mail) {
     const invMail = await mailTo(happy.email as string, {
-      subject: /free trial|مفت ٹرائل/,
+      subject: /free trial/i,
     });
     if (invMail[0])
       check(

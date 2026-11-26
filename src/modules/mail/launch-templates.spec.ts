@@ -3,7 +3,7 @@ import { launchEmailTemplates as t } from './launch-templates';
 const evil = '<a href="https://phish.example">Click</a>';
 const end = new Date('2026-12-26T06:00:00Z');
 
-/** Customer-facing emails — each must carry an Urdu section. */
+/** Customer-facing emails. */
 const customer = () => [
   t.trialRequested(evil, evil),
   t.trialApproved(evil, evil, end, {
@@ -23,7 +23,7 @@ const customer = () => [
   t.companySuspended(evil, evil, evil),
 ];
 
-/** Internal, to the platform admin — English only is fine. */
+/** Internal, to the platform admin. */
 const admin = () => [
   t.trialRequestedAdmin(evil, evil, '+923001234567', evil),
   t.trialAutoApprovedAdmin(evil, evil, null, end),
@@ -41,10 +41,12 @@ describe('launch email templates', () => {
     }
   });
 
-  it('every customer email is bilingual: an RTL Urdu section', () => {
-    for (const email of customer()) {
-      expect(email.html).toContain('dir="rtl" lang="ur"');
-      expect(email.html).toMatch(/[؀-ۿ]/);
+  it('every email is English only — no Urdu section', () => {
+    for (const email of [...customer(), ...admin()]) {
+      expect(email.html).not.toContain('dir="rtl"');
+      expect(`${email.subject}${email.html}${email.text}`).not.toMatch(
+        /[\u0600-\u06FF]/,
+      );
     }
   });
 

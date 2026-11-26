@@ -167,8 +167,8 @@ async function main() {
     if (welcome[0]) {
       const body = await mailText(welcome[0].ID);
       check(
-        'welcome email: Urdu section and "Move your data in" link',
-        /dir="rtl"/.test(body) && /settings\/migration\/guide/.test(body),
+        'welcome email: English only, with the "Move your data in" link',
+        !/dir="rtl"/.test(body) && /settings\/migration\/guide/.test(body),
       );
     }
     const fyi = await mailTo('platform-admin@example.com', {
@@ -201,8 +201,9 @@ async function main() {
     { status: pStart.status, body: pStart.body },
   );
   check(
-    '… with an Urdu message',
-    /[؀-ۿ]/.test(pStart.body?.error?.details?.messageUr ?? ''),
+    '… with a plain English message, and no Urdu field',
+    /phone number/i.test(pStart.body?.error?.message ?? '') &&
+      pStart.body?.error?.details?.messageUr === undefined,
     pStart.body,
   );
   // Not the owner: a rider who joined with the invite code.
