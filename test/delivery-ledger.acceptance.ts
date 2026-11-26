@@ -34,13 +34,12 @@
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 import { businessToday } from '../src/common/utils/business-date.util';
+import { superAdminCredentials } from './support/super-admin';
 export {};
 const { Client } = require('pg');
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001/api/v1';
 const PG_URL = process.env.PG_URL as string;
-const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
-const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
 // The business day the server dates documents by (Asia/Karachi unless
 // BUSINESS_TIMEZONE says otherwise). The UTC date differs from it between
 // 00:00 and 05:00 PKT, which failed these checks depending on the hour CI ran.
@@ -117,8 +116,9 @@ async function main() {
 
   // ── Setup: fresh approved company + admin + rider ────────────────────────
   console.log('— Setup');
+  const sa = await superAdminCredentials(PG_URL);
   const superLogin = await req('POST', '/auth/signin', {
-    json: { email: SUPER_EMAIL, password: SUPER_PASSWORD },
+    json: { email: sa.email, password: sa.password },
   });
   const superToken = data(superLogin)?.tokens?.accessToken;
   check('super-admin signs in', !!superToken, superLogin.status);

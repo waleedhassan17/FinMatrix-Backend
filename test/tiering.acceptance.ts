@@ -29,14 +29,13 @@
  *   npm run test:tiering
  */
 import { businessToday } from '../src/common/utils/business-date.util';
+import { superAdminCredentials } from './support/super-admin';
 export {};
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { Client } = require('pg');
 
 const API = process.env.API_BASE || 'http://localhost:3001/api/v1';
 const PG_URL = process.env.PG_URL as string | undefined;
-const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
-const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
 const SB_EMAIL = process.env.SB_EMAIL || 'sukoon@gmail.com';
 const LO_EMAIL = process.env.LO_EMAIL || 'metromatrix@gmail.com';
 const WH_EMAIL = process.env.WH_EMAIL || 'warehouse@gmail.com';
@@ -149,7 +148,8 @@ async function main() {
 
   // ── Sign in the cast ──
   console.log('— Setup: demo company sign-ins');
-  const superU = await signin(SUPER_EMAIL, SUPER_PASSWORD);
+  const sa = await superAdminCredentials(PG_URL);
+  const superU = await signin(sa.email, sa.password);
   ok('super-admin signs in', !!superU.token);
   const sb = await signin(SB_EMAIL, PASSWORD);
   const lo = await signin(LO_EMAIL, PASSWORD);

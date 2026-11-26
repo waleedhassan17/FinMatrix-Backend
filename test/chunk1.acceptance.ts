@@ -25,12 +25,11 @@
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 export {};
+import { superAdminCredentials } from './support/super-admin';
 const { Client } = require('pg');
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001/api/v1';
 const PG_URL = process.env.PG_URL as string;
-const SUPER_EMAIL = process.env.SUPER_EMAIL || 'waleedhassansfd@gmail.com';
-const SUPER_PASSWORD = process.env.SUPER_PASSWORD || 'Waleed@104';
 
 let pass = 0;
 let fail = 0;
@@ -141,8 +140,9 @@ async function main() {
 
   // ── Setup: super admin + two companies ─────────────────────────────────
   console.log('— Setup');
+  const sa = await superAdminCredentials(PG_URL);
   const superLogin = await req('POST', '/auth/signin', {
-    json: { email: SUPER_EMAIL, password: SUPER_PASSWORD },
+    json: { email: sa.email, password: sa.password },
   });
   const superToken = data(superLogin)?.tokens?.accessToken;
   check('super-admin signs in', !!superToken, superLogin.status);
